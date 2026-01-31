@@ -76,8 +76,15 @@ function clearSelection() {
           @click="selectTamer(tamer.id)"
         >
           <div class="flex items-center gap-4">
-            <div class="w-16 h-16 bg-digimon-dark-700 rounded-full flex items-center justify-center text-3xl">
-              👤
+            <div class="w-16 h-16 bg-digimon-dark-700 rounded-full overflow-hidden flex items-center justify-center">
+              <img
+                v-if="tamer.spriteUrl"
+                :src="tamer.spriteUrl"
+                :alt="tamer.name"
+                class="w-full h-full object-cover"
+                @error="($event.target as HTMLImageElement).style.display = 'none'"
+              />
+              <span v-else class="text-3xl text-digimon-dark-500">👤</span>
             </div>
             <div>
               <h2 class="font-display text-xl font-semibold text-white group-hover:text-digimon-orange-400 transition-colors">

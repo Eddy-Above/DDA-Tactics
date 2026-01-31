@@ -63,7 +63,19 @@ async function handleDelete(id: string, name: string) {
         class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700
                hover:border-digimon-dark-600 transition-colors"
       >
-        <div class="flex justify-between items-start">
+        <div class="flex justify-between items-start gap-4">
+          <!-- Portrait -->
+          <div class="w-16 h-16 bg-digimon-dark-700 rounded-lg overflow-hidden flex-shrink-0 flex items-center justify-center">
+            <img
+              v-if="tamer.spriteUrl"
+              :src="tamer.spriteUrl"
+              :alt="tamer.name"
+              class="w-full h-full object-cover"
+              @error="($event.target as HTMLImageElement).style.display = 'none'"
+            />
+            <span v-else class="text-2xl text-digimon-dark-500">👤</span>
+          </div>
+
           <div class="flex-1">
             <div class="flex items-center gap-3 mb-2">
               <h2 class="font-display text-xl font-semibold text-white">{{ tamer.name }}</h2>

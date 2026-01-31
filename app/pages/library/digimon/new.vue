@@ -570,6 +570,17 @@ function editAttack(index: number) {
 type Quality = NonNullable<CreateDigimonData['qualities']>[0]
 
 function handleAddQuality(quality: Quality) {
+  // Check if adding this quality would exceed the budget
+  const qualityCost = (quality.dpCost || 0) * (quality.ranks || 1)
+  const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
+  const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
+  const newTotalUsed = dpUsedOnQualities.value + qualityCost
+
+  if (newTotalUsed > totalDPForQualitiesVal) {
+    // Would exceed budget - don't add
+    return
+  }
+
   form.qualities = [...(form.qualities || []), quality]
 }
 

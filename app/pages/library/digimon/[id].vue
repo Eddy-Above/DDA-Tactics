@@ -866,6 +866,32 @@ onMounted(async () => {
   initialLoading.value = false
 })
 
+// Watch for evolvesFromId changes - sync bonus DP if enabled
+watch(() => form.evolvesFromId, async (newId) => {
+  if (newId && form.syncBonusDP) {
+    const linkedDigimon = await fetchDigimonById(newId)
+    if (linkedDigimon && linkedDigimon.bonusDP) {
+      form.bonusDP = linkedDigimon.bonusDP
+      form.bonusStats = { ...(linkedDigimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 } }
+      form.bonusDPForQualities = (linkedDigimon as any).bonusDPForQualities || 0
+      prevBonusStats.value = { ...form.bonusStats }
+    }
+  }
+})
+
+// Watch for evolutionPathIds changes - sync bonus DP if enabled and no evolvesFrom set
+watch(() => form.evolutionPathIds, async (newIds) => {
+  if (newIds.length > 0 && !form.evolvesFromId && form.syncBonusDP) {
+    const linkedDigimon = await fetchDigimonById(newIds[0])
+    if (linkedDigimon && linkedDigimon.bonusDP) {
+      form.bonusDP = linkedDigimon.bonusDP
+      form.bonusStats = { ...(linkedDigimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 } }
+      form.bonusDPForQualities = (linkedDigimon as any).bonusDPForQualities || 0
+      prevBonusStats.value = { ...form.bonusStats }
+    }
+  }
+}, { deep: true })
+
 // Watch for stage changes - adjust quality ranks and attack tags to new max
 watch(() => form.stage, (newStage) => {
   if (!form.qualities) return

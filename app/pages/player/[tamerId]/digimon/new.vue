@@ -514,6 +514,17 @@ function editAttack(index: number) {
 type Quality = NonNullable<CreateDigimonData['qualities']>[0]
 
 function handleAddQuality(quality: Quality) {
+  // Check if adding this quality would exceed the budget
+  const qualityCost = (quality.dpCost || 0) * (quality.ranks || 1)
+  const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
+  const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
+  const newTotalUsed = dpUsedOnQualities.value + qualityCost
+
+  if (newTotalUsed > totalDPForQualitiesVal) {
+    // Would exceed budget - don't add
+    return
+  }
+
   form.qualities = [...(form.qualities || []), quality]
 }
 
@@ -1123,6 +1134,11 @@ function handleCancel() {
                   class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
                          text-white focus:border-digimon-orange-500 focus:outline-none"
                 />
+                <p class="text-xs text-digimon-dark-500 mt-1">
+                  {{ minBonusDPForQualities > 0 ? `Min ${minBonusDPForQualities} required` : '' }}
+                  {{ minBonusDPForQualities > 0 && maxBonusDPForQualities < (form.bonusDP || 0) ? ' · ' : '' }}
+                  {{ maxBonusDPForQualities < (form.bonusDP || 0) ? `Max ${maxBonusDPForQualities} (stats using ${bonusStatsTotal})` : '' }}
+                </p>
               </div>
             </div>
 

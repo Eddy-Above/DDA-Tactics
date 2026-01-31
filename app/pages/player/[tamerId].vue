@@ -3,6 +3,7 @@ import type { Tamer, Digimon, Encounter } from '../../server/db/schema'
 import type { CombatParticipant } from '../../composables/useEncounters'
 import type { EvolutionLine } from '../../server/db/schema'
 import type { EvolutionChainEntry, EvolutionProgress } from '../../composables/useEvolution'
+import { skillsByAttribute, skillLabels } from '../../constants/tamer-skills'
 import type { DigimonStage } from '../../types'
 import { STAGE_CONFIG } from '../../types'
 import { getStageColor } from '../../utils/displayHelpers'
@@ -133,6 +134,7 @@ function switchCharacter() {
   selectedTamerId.value = null
   navigateTo('/player')
 }
+
 
 // Parse rank from tag with roman or arabic numerals (e.g., "Weapon II" = 2, "Weapon 3" = 3)
 function parseTagRank(tag: string, prefix: string): number {
@@ -607,8 +609,15 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             <!-- Tamer Card -->
             <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
               <div class="flex items-start gap-4 mb-4">
-                <div class="w-20 h-20 bg-digimon-dark-700 rounded-full flex items-center justify-center text-4xl shrink-0">
-                  👤
+                <div class="w-20 h-20 bg-digimon-dark-700 rounded-full overflow-hidden flex items-center justify-center shrink-0">
+                  <img
+                    v-if="tamer.spriteUrl"
+                    :src="tamer.spriteUrl"
+                    :alt="tamer.name"
+                    class="w-full h-full object-cover"
+                    @error="($event.target as HTMLImageElement).style.display = 'none'"
+                  />
+                  <span v-else class="text-4xl">👤</span>
                 </div>
                 <div>
                   <div class="flex items-center gap-3">
@@ -636,9 +645,27 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
               <!-- Attributes -->
               <div class="grid grid-cols-5 gap-2 mb-4">
-                <div v-for="(value, attr) in tamer.attributes" :key="attr" class="text-center bg-digimon-dark-700 rounded-lg p-2">
+                <div
+                  v-for="(value, attr) in tamer.attributes"
+                  :key="attr"
+                  class="relative group text-center bg-digimon-dark-700 rounded-lg p-2 cursor-help"
+                >
                   <div class="text-xs text-digimon-dark-400 uppercase">{{ attr }}</div>
                   <div class="text-lg font-semibold text-white">{{ value }}</div>
+
+                  <!-- Skill hover box -->
+                  <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+                    <div class="bg-digimon-dark-800 border border-digimon-dark-600 rounded-lg p-2 shadow-lg whitespace-nowrap">
+                      <div
+                        v-for="skill in skillsByAttribute[attr as keyof typeof skillsByAttribute]"
+                        :key="skill"
+                        class="text-sm flex justify-between gap-3"
+                      >
+                        <span class="text-digimon-dark-400">{{ skillLabels[skill] }}:</span>
+                        <span class="text-white font-medium">{{ tamer.skills[skill as keyof typeof tamer.skills] }}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 

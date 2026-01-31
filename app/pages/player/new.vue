@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { CreateTamerData } from '../../composables/useTamers'
 import { getTormentBoxCount, type TormentSeverity } from '../../types'
+import { skillsByAttribute, skillLabels } from '../../constants/tamer-skills'
+import { specialOrderThresholds, specialOrdersData } from '../../data/special-orders'
 
 definePageMeta({
   layout: 'player',
@@ -27,6 +29,88 @@ interface TormentEntry {
 const torments = ref<TormentEntry[]>([])
 const showAddTorment = ref(false)
 const newTormentSeverity = ref<TormentSeverity>('minor')
+
+// XP & Inspiration management (collapsed by default in new)
+const xpSectionCollapsed = ref(true)
+
+// XP Spending System - Direct spend/refund (not session-based)
+
+// XP Cost Functions
+function getNextAttributeCost(currentVal: number): number {
+  return (currentVal + 1) * 2  // new rating × 2
+}
+
+function getNextSkillCost(currentVal: number): number {
+  return currentVal + 1  // new rating
+}
+
+function getNextInspirationCost(currentInspiration: number): number {
+  return currentInspiration * 2  // 2 × current inspiration
+}
+
+// Spend/Refund functions for attributes (modifies xpBonuses, not form)
+function spendXPOnAttribute(attr: keyof typeof form.attributes) {
+  const currentTotal = getTotalAttribute(attr)
+  const cost = (currentTotal + 1) * 2
+  if (form.xp >= cost && currentTotal < campaignConfig.value.finalCap) {
+    form.xp -= cost
+    xpBonuses.attributes[attr]++
+  }
+}
+
+function refundXPFromAttribute(attr: keyof typeof form.attributes) {
+  if (xpBonuses.attributes[attr] > 0) {
+    const currentTotal = getTotalAttribute(attr)
+    const refund = currentTotal * 2  // refund is current total rating × 2
+    form.xp += refund
+    xpBonuses.attributes[attr]--
+  }
+}
+
+// Spend/Refund functions for skills (modifies xpBonuses, not form)
+function spendXPOnSkill(skill: keyof typeof form.skills) {
+  const currentTotal = getTotalSkill(skill)
+  const cost = currentTotal + 1
+  if (form.xp >= cost && currentTotal < campaignConfig.value.finalCap) {
+    form.xp -= cost
+    xpBonuses.skills[skill]++
+  }
+}
+
+function refundXPFromSkill(skill: keyof typeof form.skills) {
+  if (xpBonuses.skills[skill] > 0) {
+    const currentTotal = getTotalSkill(skill)
+    const refund = currentTotal  // refund is current total rating
+    form.xp += refund
+    xpBonuses.skills[skill]--
+  }
+}
+
+// Spend/Refund functions for inspiration (modifies xpBonuses, not form)
+function spendXPOnInspiration() {
+  const currentTotal = totalInspiration.value
+  const cost = currentTotal * 2
+  if (form.xp >= cost && currentTotal < maxInspiration.value) {
+    form.xp -= cost
+    xpBonuses.inspiration++
+  }
+}
+
+function refundXPFromInspiration() {
+  if (xpBonuses.inspiration > 0) {
+    const currentTotal = totalInspiration.value
+    const refund = (currentTotal - 1) * 2  // refund cost of buying current point
+    form.xp += refund
+    xpBonuses.inspiration--
+  }
+}
+
+// Sprite preview
+const spriteError = ref(false)
+
+function handleSpriteError() {
+  spriteError.value = true
+}
 
 // Creation limits for marking torment boxes
 const tormentMarkingLimits: Record<TormentSeverity, number> = {
@@ -115,18 +199,48 @@ const form = reactive<CreateTamerData>({
   },
   aspects: [],
   torments: [],
+  xp: 0,
+  inspiration: 1, // Every character starts with 1 free Inspiration
   notes: '',
+  spriteUrl: '',
 })
+
+// XP Bonuses - tracked separately from CP-allocated values
+// This ensures XP spending doesn't affect CP calculations
+const xpBonuses = reactive({
+  attributes: { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0 },
+  skills: {
+    dodge: 0, fight: 0, stealth: 0,
+    athletics: 0, endurance: 0, featsOfStrength: 0,
+    manipulate: 0, perform: 0, persuasion: 0,
+    computer: 0, survival: 0, knowledge: 0,
+    perception: 0, decipherIntent: 0, bravery: 0,
+  },
+  inspiration: 0,
+})
+
+// Get total attribute value (CP + XP bonuses)
+function getTotalAttribute(attr: keyof typeof form.attributes): number {
+  return form.attributes[attr] + xpBonuses.attributes[attr]
+}
+
+// Get total skill value (CP + XP bonuses)
+function getTotalSkill(skill: keyof typeof form.skills): number {
+  return form.skills[skill] + xpBonuses.skills[skill]
+}
+
+// Get total inspiration (CP + XP bonuses)
+const totalInspiration = computed(() => (form.inspiration ?? 1) + (xpBonuses.inspiration ?? 0))
 
 // Campaign level configuration based on official rules
 const campaignConfig = computed(() => {
   switch (form.campaignLevel) {
     case 'enhanced':
-      return { startingCP: 40, attrCap: 18, skillCap: 22, startingCap: 5 }
+      return { startingCP: 40, attrCap: 18, skillCap: 22, startingCap: 5, finalCap: 7 }
     case 'extreme':
-      return { startingCP: 50, attrCap: 22, skillCap: 28, startingCap: 7 }
+      return { startingCP: 50, attrCap: 22, skillCap: 28, startingCap: 7, finalCap: 10 }
     default: // standard
-      return { startingCP: 30, attrCap: 12, skillCap: 18, startingCap: 3 }
+      return { startingCP: 30, attrCap: 12, skillCap: 18, startingCap: 3, finalCap: 5 }
   }
 })
 
@@ -195,84 +309,52 @@ const skillsExceedingAttribute = computed(() => {
   return violations
 })
 
-const skillsByAttribute = {
-  agility: ['dodge', 'fight', 'stealth'],
-  body: ['athletics', 'endurance', 'featsOfStrength'],
-  charisma: ['manipulate', 'perform', 'persuasion'],
-  intelligence: ['computer', 'survival', 'knowledge'],
-  willpower: ['perception', 'decipherIntent', 'bravery'],
-}
 
-const skillLabels: Record<string, string> = {
-  dodge: 'Dodge',
-  fight: 'Fight',
-  stealth: 'Stealth',
-  athletics: 'Athletics',
-  endurance: 'Endurance',
-  featsOfStrength: 'Feats of Strength',
-  manipulate: 'Manipulate',
-  perform: 'Perform',
-  persuasion: 'Persuasion',
-  computer: 'Computer',
-  survival: 'Survival',
-  knowledge: 'Knowledge',
-  perception: 'Perception',
-  decipherIntent: 'Decipher Intent',
-  bravery: 'Bravery',
-}
-
-// Derived stats calculated from attributes and skills
+// Derived stats calculated from total attributes and skills (CP + XP)
 const derivedStats = computed(() => ({
-  woundBoxes: Math.max(2, form.attributes.body + form.skills.endurance),
-  speed: form.attributes.agility + form.skills.survival,
-  accuracyPool: form.attributes.agility + form.skills.fight,
-  dodgePool: form.attributes.agility + form.skills.dodge,
-  armor: form.attributes.body + form.skills.endurance,
-  damage: form.attributes.body + form.skills.fight,
+  woundBoxes: Math.max(2, getTotalAttribute('body') + getTotalSkill('endurance')),
+  speed: getTotalAttribute('agility') + getTotalSkill('survival'),
+  accuracyPool: getTotalAttribute('agility') + getTotalSkill('fight'),
+  dodgePool: getTotalAttribute('agility') + getTotalSkill('dodge'),
+  armor: getTotalAttribute('body') + getTotalSkill('endurance'),
+  damage: getTotalAttribute('body') + getTotalSkill('fight'),
 }))
 
-// Special Orders data
-const specialOrderThresholds = {
-  standard: [3, 4, 5],
-  enhanced: [5, 6, 7],
-  extreme: [6, 8, 10],
+// Max inspiration = Willpower (min 1) - uses total attribute
+const maxInspiration = computed(() => Math.max(1, getTotalAttribute('willpower')))
+
+// Affordability checks (uses total values)
+function canAffordAttributeIncrease(attr: keyof typeof form.attributes): boolean {
+  const currentTotal = getTotalAttribute(attr)
+  const nextCost = (currentTotal + 1) * 2
+  return form.xp >= nextCost && currentTotal < campaignConfig.value.finalCap
 }
 
-const specialOrdersData: Record<string, { name: string; type: string; effect: string }[]> = {
-  agility: [
-    { name: 'Strike First!', type: 'Passive', effect: '+1 Initiative and 2 Base Movement' },
-    { name: 'Strike Fast!', type: 'Once Per Day / Complex', effect: 'Target\'s Dodge Pools halved for one attack (no Huge Power/Overkill)' },
-    { name: 'Strike Last!', type: 'Once Per Day / Intercede', effect: 'Counter Blow on any attack, hit or miss (no Huge Power/Overkill)' },
-  ],
-  body: [
-    { name: 'Energy Burst', type: 'Once Per Day / Complex', effect: 'Digimon recovers 5 wound boxes' },
-    { name: 'Enduring Soul', type: 'Passive', effect: 'Survive one fatal blow with 1 Wound Box (once per battle)' },
-    { name: 'Finishing Touch', type: 'Once Per Day / Simple', effect: '4s count as successes on Accuracy Roll (no Huge Power/Overkill)' },
-  ],
-  charisma: [
-    { name: 'Swagger', type: 'Once Per Battle / Simple', effect: 'Taunt for 3 rounds, auto-aggro at CPUx2' },
-    { name: 'Peak Performance', type: 'Once Per Day / Complex', effect: 'Bastion buff: +2 to all stats except health for 1 round' },
-    { name: 'Guiding Light', type: 'Passive', effect: '+2 Accuracy to allies in burst radius, +1 Dodge per ally in radius' },
-  ],
-  intelligence: [
-    { name: 'Quick Reaction', type: 'Once Per Day / Intercede', effect: 'Gain Stage Bonus+2 Dodge Dice for the round (diminishing)' },
-    { name: 'Enemy Scan', type: 'Once Per Battle / Complex', effect: 'Debilitate: -2 to all stats except health for 1 round' },
-    { name: 'Decimation', type: 'Once Per Day / Complex', effect: 'Use Signature Move on Round 2 instead of Round 3' },
-  ],
-  willpower: [
-    { name: 'Tough it Out!', type: 'Once Per Battle / Complex', effect: 'Purify: cure one negative effect' },
-    { name: 'Challenger', type: 'Passive', effect: 'Gain 2 + (enemy stage difference) temporary Wound Boxes (max 5)' },
-    { name: 'Fateful Intervention', type: 'Free Action', effect: 'See Inspiration / Fateful Intervention mechanic' },
-  ],
+function canAffordSkillIncrease(skill: keyof typeof form.skills): boolean {
+  const currentTotal = getTotalSkill(skill)
+  const nextCost = currentTotal + 1
+  return form.xp >= nextCost && currentTotal < campaignConfig.value.finalCap
 }
 
-// Compute unlocked Special Orders based on attributes
+const canAffordInspiration = computed(() => {
+  const currentTotal = totalInspiration.value
+  const cost = currentTotal * 2
+  return form.xp >= cost && currentTotal < maxInspiration.value
+})
+
+// Reset sprite error when URL changes
+watch(() => form.spriteUrl, () => {
+  spriteError.value = false
+})
+
+
+// Compute unlocked Special Orders based on total attributes (CP + XP)
 const unlockedSpecialOrders = computed(() => {
   const thresholds = specialOrderThresholds[form.campaignLevel]
   const unlocked: { attribute: string; orders: { name: string; type: string; effect: string; tier: number }[] }[] = []
 
   for (const [attr, orders] of Object.entries(specialOrdersData)) {
-    const attrValue = form.attributes[attr as keyof typeof form.attributes]
+    const attrValue = getTotalAttribute(attr as keyof typeof form.attributes)
     const unlockedOrders: { name: string; type: string; effect: string; tier: number }[] = []
 
     orders.forEach((order, index) => {
@@ -310,10 +392,9 @@ async function handleSubmit() {
       usesRemaining: 2,
     })
   }
-  form.aspects = aspects
 
   // Build torments array
-  form.torments = torments.value.map(t => ({
+  const tormentData = torments.value.map(t => ({
     id: t.id,
     name: t.name,
     description: t.description,
@@ -323,7 +404,18 @@ async function handleSubmit() {
     cpMarkedBoxes: t.markedBoxes, // Lock boxes marked at creation with CP
   }))
 
-  const created = await createTamer(form)
+  // Save base values and xpBonuses separately - do NOT combine them
+  // This allows users to reallocate XP at any time
+  const created = await createTamer({
+    ...form,
+    aspects,
+    torments: tormentData,
+    xpBonuses: {
+      attributes: { ...xpBonuses.attributes },
+      skills: { ...xpBonuses.skills },
+      inspiration: xpBonuses.inspiration,
+    },
+  })
   if (created) {
     selectedTamerId.value = created.id
     router.push(`/player/${created.id}`)
@@ -675,6 +767,147 @@ async function handleSubmit() {
         </div>
       </div>
 
+      <!-- XP & Inspiration -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <div
+          class="flex justify-between items-center cursor-pointer select-none"
+          :class="{ 'mb-4': !xpSectionCollapsed }"
+          @click="xpSectionCollapsed = !xpSectionCollapsed"
+        >
+          <div class="flex items-center gap-2">
+            <svg
+              class="w-5 h-5 text-digimon-dark-400 transition-transform"
+              :class="{ '-rotate-90': xpSectionCollapsed }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            <h2 class="font-display text-xl font-semibold text-white">Experience & Inspiration</h2>
+          </div>
+          <span class="text-sm text-digimon-dark-400">{{ form.xp }} XP · {{ totalInspiration }}/{{ maxInspiration }} Insp</span>
+        </div>
+
+        <div v-show="!xpSectionCollapsed">
+          <p class="text-xs text-digimon-dark-500 mb-4">
+            XP can be spent to improve beyond your starting CP allocation. Inspiration starts at 1 for free.
+          </p>
+
+          <!-- XP Display -->
+          <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
+            <div class="text-2xl font-bold text-white">{{ form.xp }}</div>
+            <div class="text-sm text-digimon-dark-400">Available XP</div>
+          </div>
+
+          <!-- Set XP -->
+          <div class="flex items-center gap-4 mb-4">
+            <label class="text-sm text-digimon-dark-400">Starting XP:</label>
+            <input
+              v-model.number="form.xp"
+              type="number"
+              min="0"
+              class="w-24 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2
+                     text-white text-center focus:border-digimon-orange-500 focus:outline-none"
+            />
+            <span class="text-xs text-digimon-dark-500">(Set by GM for non-fresh characters)</span>
+          </div>
+
+          <!-- Spend XP Section -->
+          <div v-if="form.xp > 0" class="border-t border-digimon-dark-600 pt-4 space-y-4">
+            <h3 class="text-sm font-semibold text-digimon-dark-300">Spend XP</h3>
+
+            <!-- Attributes -->
+            <div class="bg-digimon-dark-700/50 rounded-lg p-3">
+              <div class="text-xs text-digimon-dark-400 mb-2">Attributes <span class="text-digimon-dark-500">(Cost: new rating × 2)</span></div>
+              <div class="grid grid-cols-5 gap-2">
+                <div v-for="attr in (['agility', 'body', 'charisma', 'intelligence', 'willpower'] as const)" :key="attr" class="text-center">
+                  <div class="text-xs text-digimon-dark-400 capitalize mb-1">{{ attr.slice(0, 3) }}</div>
+                  <div class="flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      class="w-6 h-6 rounded bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      :disabled="xpBonuses.attributes[attr] <= 0"
+                      @click="refundXPFromAttribute(attr)"
+                    >-</button>
+                    <span class="w-6 text-center text-white text-sm">{{ getTotalAttribute(attr) }}</span>
+                    <button
+                      type="button"
+                      class="w-6 h-6 rounded text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      :class="canAffordAttributeIncrease(attr) ? 'bg-digimon-orange-500 hover:bg-digimon-orange-600' : 'bg-digimon-dark-600'"
+                      :disabled="!canAffordAttributeIncrease(attr)"
+                      @click="spendXPOnAttribute(attr)"
+                    >+</button>
+                  </div>
+                  <div v-if="getTotalAttribute(attr) < campaignConfig.finalCap" class="text-xs mt-1" :class="canAffordAttributeIncrease(attr) ? 'text-digimon-orange-400' : 'text-red-400'">
+                    {{ (getTotalAttribute(attr) + 1) * 2 }} XP
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skills -->
+            <div class="bg-digimon-dark-700/50 rounded-lg p-3">
+              <div class="text-xs text-digimon-dark-400 mb-2">Skills <span class="text-digimon-dark-500">(Cost: new rating)</span></div>
+              <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                <div v-for="(skills, attrGroup) in skillsByAttribute" :key="attrGroup">
+                  <div class="text-xs text-digimon-orange-400 mb-1 capitalize">{{ attrGroup }}</div>
+                  <div class="space-y-1">
+                    <div v-for="skill in skills" :key="skill" class="flex items-center justify-between gap-1">
+                      <span class="text-xs text-digimon-dark-300 truncate flex-1">{{ skillLabels[skill] }}</span>
+                      <div class="flex items-center gap-1">
+                        <button
+                          type="button"
+                          class="w-5 h-5 rounded bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                          :disabled="xpBonuses.skills[skill as keyof typeof xpBonuses.skills] <= 0"
+                          @click="refundXPFromSkill(skill as keyof typeof form.skills)"
+                        >-</button>
+                        <span class="w-4 text-center text-white text-xs">{{ getTotalSkill(skill as keyof typeof form.skills) }}</span>
+                        <button
+                          type="button"
+                          class="w-5 h-5 rounded text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                          :class="canAffordSkillIncrease(skill as keyof typeof form.skills) ? 'bg-digimon-orange-500 hover:bg-digimon-orange-600' : 'bg-digimon-dark-600'"
+                          :disabled="!canAffordSkillIncrease(skill as keyof typeof form.skills)"
+                          @click="spendXPOnSkill(skill as keyof typeof form.skills)"
+                        >+</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Inspiration -->
+            <div class="bg-digimon-dark-700/50 rounded-lg p-3">
+              <div class="text-xs text-digimon-dark-400 mb-2">Inspiration <span class="text-digimon-dark-500">(Cost: current × 2)</span></div>
+              <div class="flex items-center gap-3">
+                <button
+                  type="button"
+                  class="w-6 h-6 rounded bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="xpBonuses.inspiration <= 0"
+                  @click="refundXPFromInspiration()"
+                >-</button>
+                <span class="text-white">{{ totalInspiration }} / {{ maxInspiration }}</span>
+                <button
+                  type="button"
+                  class="w-6 h-6 rounded text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  :class="canAffordInspiration ? 'bg-digimon-orange-500 hover:bg-digimon-orange-600' : 'bg-digimon-dark-600'"
+                  :disabled="!canAffordInspiration"
+                  @click="spendXPOnInspiration()"
+                >+</button>
+                <span v-if="totalInspiration < maxInspiration" class="text-xs" :class="canAffordInspiration ? 'text-digimon-orange-400' : 'text-red-400'">
+                  Next: {{ totalInspiration * 2 }} XP
+                </span>
+                <span v-else class="text-xs text-green-400">Max reached</span>
+              </div>
+              <p class="text-xs text-digimon-dark-500 mt-2">
+                Inspiration can be spent to re-roll dice or bolster rolls. Max = Willpower.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Derived Stats -->
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
         <h2 class="font-display text-xl font-semibold text-white mb-4">Derived Stats</h2>
@@ -731,6 +964,46 @@ async function handleSubmit() {
                 </div>
                 <p class="text-sm text-digimon-dark-300">{{ order.effect }}</p>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Portrait / Image -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Portrait / Image</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label class="block text-sm text-digimon-dark-400 mb-1">Image URL</label>
+            <input
+              v-model="form.spriteUrl"
+              type="url"
+              placeholder="https://example.com/portrait.png"
+              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                     text-white focus:border-digimon-orange-500 focus:outline-none"
+            />
+            <p class="text-xs text-digimon-dark-500 mt-1">
+              Enter a URL to an image for your tamer's portrait.
+            </p>
+          </div>
+          <div class="flex items-center justify-center">
+            <div
+              v-if="form.spriteUrl && !spriteError"
+              class="w-32 h-32 bg-digimon-dark-700 rounded-lg overflow-hidden flex items-center justify-center"
+            >
+              <img
+                :src="form.spriteUrl"
+                :alt="form.name || 'Tamer portrait'"
+                class="max-w-full max-h-full object-contain"
+                @error="handleSpriteError"
+              />
+            </div>
+            <div
+              v-else
+              class="w-32 h-32 bg-digimon-dark-700 rounded-lg flex items-center justify-center text-digimon-dark-500"
+            >
+              <span v-if="spriteError" class="text-red-400 text-xs text-center px-2">Failed to load image</span>
+              <span v-else class="text-4xl">?</span>
             </div>
           </div>
         </div>

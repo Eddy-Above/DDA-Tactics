@@ -631,6 +631,17 @@ function editAttack(index: number) {
 }
 
 function handleAddQuality(quality: FormQuality) {
+  // Check if adding this quality would exceed the budget
+  const qualityCost = (quality.dpCost || 0) * (quality.ranks || 1)
+  const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
+  const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
+  const newTotalUsed = dpUsedOnQualities.value + qualityCost
+
+  if (newTotalUsed > totalDPForQualitiesVal) {
+    // Would exceed budget - don't add
+    return
+  }
+
   form.qualities = [...(form.qualities || []), quality]
 }
 
@@ -745,6 +756,13 @@ watch(() => form.evolvesFromId, async (newId, oldId) => {
     const linkedDigimon = await fetchDigimonById(newId)
     if (linkedDigimon) {
       linkedEvolvesFrom.value = linkedDigimon
+      // Sync bonus DP if enabled
+      if (form.syncBonusDP && linkedDigimon.bonusDP) {
+        form.bonusDP = linkedDigimon.bonusDP
+        form.bonusStats = { ...(linkedDigimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 } }
+        form.bonusDPForQualities = (linkedDigimon as any).bonusDPForQualities || 0
+        prevBonusStats.value = { ...form.bonusStats }
+      }
     }
     // Also update full chain ancestors
     fullChainAncestors.value = await fetchAllAncestors(newId)
@@ -765,6 +783,16 @@ watch(() => form.evolutionPathIds, async (newIds, oldIds) => {
       linkedEvolvesTo.value = fetched
       // Also update full chain descendants tree
       fullChainDescendantsTree.value = await fetchDescendantsTree(newIds)
+      // Sync bonus DP if enabled and no evolvesFrom is set
+      if (!form.evolvesFromId && form.syncBonusDP && fetched.length > 0) {
+        const linkedDigimon = fetched[0]
+        if (linkedDigimon.bonusDP) {
+          form.bonusDP = linkedDigimon.bonusDP
+          form.bonusStats = { ...(linkedDigimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 } }
+          form.bonusDPForQualities = (linkedDigimon as any).bonusDPForQualities || 0
+          prevBonusStats.value = { ...form.bonusStats }
+        }
+      }
     } else {
       linkedEvolvesTo.value = []
       fullChainDescendantsTree.value = []

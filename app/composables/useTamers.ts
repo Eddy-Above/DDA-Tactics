@@ -30,7 +30,10 @@ export interface CreateTamerData {
   }
   aspects?: Tamer['aspects']
   torments?: Tamer['torments']
+  xp?: number
+  inspiration?: number
   notes?: string
+  spriteUrl?: string
 }
 
 export function useTamers() {

@@ -65,11 +65,25 @@ export const tamers = sqliteTable('tamers', {
   inspiration: integer('inspiration').notNull().default(1),
   xp: integer('xp').notNull().default(0),
 
+  // XP Bonuses - stored separately from base values for reallocation
+  xpBonuses: text('xp_bonuses', { mode: 'json' }).notNull().default('{"attributes":{"agility":0,"body":0,"charisma":0,"intelligence":0,"willpower":0},"skills":{"dodge":0,"fight":0,"stealth":0,"athletics":0,"endurance":0,"featsOfStrength":0,"manipulate":0,"perform":0,"persuasion":0,"computer":0,"survival":0,"knowledge":0,"perception":0,"decipherIntent":0,"bravery":0},"inspiration":0}').$type<{
+    attributes: { agility: number; body: number; charisma: number; intelligence: number; willpower: number }
+    skills: {
+      dodge: number; fight: number; stealth: number
+      athletics: number; endurance: number; featsOfStrength: number
+      manipulate: number; perform: number; persuasion: number
+      computer: number; survival: number; knowledge: number
+      perception: number; decipherIntent: number; bravery: number
+    }
+    inspiration: number
+  }>(),
+
   // Equipment (array of item names/descriptions)
   equipment: text('equipment', { mode: 'json' }).notNull().$type<string[]>(),
 
   currentWounds: integer('current_wounds').notNull().default(0),
   notes: text('notes').notNull().default(''),
+  spriteUrl: text('sprite_url'),
 
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
