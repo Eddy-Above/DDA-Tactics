@@ -5,6 +5,7 @@ import type { EvolutionLine } from '../../server/db/schema'
 import type { EvolutionChainEntry, EvolutionProgress } from '../../composables/useEvolution'
 import type { DigimonStage } from '../../types'
 import { STAGE_CONFIG } from '../../types'
+import { getStageColor } from '../../utils/displayHelpers'
 
 definePageMeta({
   layout: 'player',
@@ -110,19 +111,6 @@ const isMyTurn = computed(() => {
   if (!currentTurnParticipant.value || !tamer.value) return false
   return myParticipants.value.some((p) => p.id === currentTurnParticipant.value!.id)
 })
-
-function getStageColor(stage: DigimonStage): string {
-  const colors: Record<DigimonStage, string> = {
-    fresh: 'text-digimon-stage-fresh',
-    'in-training': 'text-digimon-stage-intraining',
-    rookie: 'text-digimon-stage-rookie',
-    champion: 'text-digimon-stage-champion',
-    ultimate: 'text-digimon-stage-ultimate',
-    mega: 'text-digimon-stage-mega',
-    ultra: 'text-digimon-stage-ultra',
-  }
-  return colors[stage] || 'text-gray-400'
-}
 
 function getParticipantName(participant: CombatParticipant): string {
   if (participant.type === 'tamer') {
@@ -690,19 +678,6 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                       <span :class="['text-sm capitalize', getStageColor(getCurrentForm(chain.chainId)!.stage as DigimonStage)]">
                         {{ getCurrentForm(chain.chainId)!.stage }}
                       </span>
-                      <!-- Evolution path breadcrumb for chains -->
-                      <div v-if="hasMultipleForms(chain.chainId) && getEvolutionPath(chain.chainId).length > 1" class="flex items-center gap-1 text-xs text-digimon-dark-500">
-                        <template v-for="(pathMember, idx) in getEvolutionPath(chain.chainId)" :key="pathMember.id">
-                          <span v-if="idx > 0" class="text-digimon-dark-600">→</span>
-                          <button
-                            class="hover:text-digimon-orange-400 transition-colors"
-                            :class="pathMember.id === getCurrentForm(chain.chainId)?.id ? 'text-digimon-orange-400' : ''"
-                            @click="currentDigimonId[chain.chainId] = pathMember.id; showEvolutionPicker = null"
-                          >
-                            {{ pathMember.name }}
-                          </button>
-                        </template>
-                      </div>
                     </div>
                     <div class="flex items-center gap-3 text-sm">
                       <p class="text-digimon-dark-400">{{ getCurrentForm(chain.chainId)!.species }} • {{ getCurrentForm(chain.chainId)!.attribute }}</p>

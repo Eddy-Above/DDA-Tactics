@@ -2,6 +2,9 @@
 import type { Digimon } from '../../../server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../../../types'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../../../data/qualities'
+import { EFFECT_ALIGNMENT, TAG_RESTRICTIONS, getTagPatternForQuality } from '../../../data/attackConstants'
+import { useDigimonDP } from '../../../composables/useDigimonDP'
+import { useAttackTags, type Attack, type NewAttack } from '../../../composables/useAttackTags'
 
 definePageMeta({
   title: 'Edit Digimon',
@@ -257,22 +260,8 @@ const newAttack = reactive({
   description: '',
 })
 
-// Effect alignment: P = Support only, N = Damage only, NA = Both
-const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
-  'Vigor': 'P', 'Fury': 'P', 'Cleanse': 'P', 'Haste': 'P', 'Revitalize': 'P', 'Shield': 'P',
-  'Poison': 'N', 'Confuse': 'N', 'Stun': 'N', 'Fear': 'N', 'Immobilize': 'N',
-  'Lifesteal': 'NA', 'Knockback': 'NA', 'Pull': 'NA', 'Taunt': 'NA',
-}
-
-// Tag restrictions: which range/type they require
-const TAG_RESTRICTIONS: Record<string, { range?: 'melee' | 'ranged'; type?: 'damage' | 'support' }> = {
-  'Charge Attack': { range: 'melee' },
-  'Mighty Blow': { range: 'melee' },
-  'Area Attack: Pass': { range: 'melee' },
-  'Area Attack: Blast': { range: 'ranged' },
-}
-
 // Watch for attack type changes - clear invalid effects
+// Note: EFFECT_ALIGNMENT and TAG_RESTRICTIONS are now imported from attackConstants.ts
 watch(() => newAttack.type, (newType) => {
   if (newAttack.effect) {
     const alignment = EFFECT_ALIGNMENT[newAttack.effect]
@@ -737,20 +726,7 @@ function handleUpdateQualityRanks(index: number, ranks: number) {
   )
 }
 
-// Map quality ID to tag pattern for attack filtering
-function getTagPatternForQuality(qualityId: string): string | null {
-  const patterns: Record<string, string> = {
-    'weapon': 'Weapon',
-    'armor-piercing': 'Armor Piercing',
-    'certain-strike': 'Certain Strike',
-    'charge-attack': 'Charge Attack',
-    'mighty-blow': 'Mighty Blow',
-    'signature-move': 'Signature Move',
-    'ammo': 'Ammo',
-    'area-attack': 'Area Attack',
-  }
-  return patterns[qualityId] || null
-}
+// Note: getTagPatternForQuality is now imported from attackConstants.ts
 
 function removeQuality(index: number) {
   const qualityToRemove = form.qualities[index]

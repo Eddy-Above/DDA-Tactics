@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { STAGE_CONFIG, type DigimonStage } from '../../../types'
+import { getStageBadgeColor, getAttributeColor } from '../../../utils/displayHelpers'
 
 definePageMeta({
   title: 'Digimon',
@@ -44,28 +45,6 @@ async function handleCopy(digimon: typeof digimonList.value[0]) {
   }
 }
 
-function getStageColor(stage: DigimonStage): string {
-  const colors: Record<DigimonStage, string> = {
-    fresh: 'bg-digimon-stage-fresh/20 text-digimon-stage-fresh',
-    'in-training': 'bg-digimon-stage-intraining/20 text-digimon-stage-intraining',
-    rookie: 'bg-digimon-stage-rookie/20 text-digimon-stage-rookie',
-    champion: 'bg-digimon-stage-champion/20 text-digimon-stage-champion',
-    ultimate: 'bg-digimon-stage-ultimate/20 text-digimon-stage-ultimate',
-    mega: 'bg-digimon-stage-mega/20 text-digimon-stage-mega',
-    ultra: 'bg-digimon-stage-ultra/20 text-digimon-stage-ultra',
-  }
-  return colors[stage] || 'bg-gray-500/20 text-gray-400'
-}
-
-function getAttributeColor(attr: string): string {
-  const colors: Record<string, string> = {
-    vaccine: 'text-digimon-attr-vaccine',
-    data: 'text-digimon-attr-data',
-    virus: 'text-digimon-attr-virus',
-    free: 'text-digimon-attr-free',
-  }
-  return colors[attr] || 'text-gray-400'
-}
 </script>
 
 <template>
@@ -151,7 +130,7 @@ function getAttributeColor(attr: string): string {
             <div class="flex-1">
               <div class="flex items-center gap-3 mb-1">
                 <h2 class="font-display text-xl font-semibold text-white">{{ digimon.name }}</h2>
-                <span :class="['text-xs px-2 py-0.5 rounded uppercase font-semibold', getStageColor(digimon.stage as DigimonStage)]">
+                <span :class="['text-xs px-2 py-0.5 rounded uppercase font-semibold', getStageBadgeColor(digimon.stage as DigimonStage)]">
                   {{ digimon.stage }}
                 </span>
                 <span :class="['text-xs uppercase', getAttributeColor(digimon.attribute)]">

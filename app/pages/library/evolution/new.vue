@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DigimonStage } from '../../../types'
+import { getStageColor } from '../../../utils/displayHelpers'
 import type { EvolutionChainEntry } from '../../../composables/useEvolution'
 import type { Digimon } from '../../../server/db/schema'
 
@@ -104,19 +105,6 @@ function moveEntryDown(index: number) {
   const temp = form.chain[index]
   form.chain[index] = form.chain[index + 1]
   form.chain[index + 1] = temp
-}
-
-function getStageColor(stage: DigimonStage): string {
-  const colors: Record<DigimonStage, string> = {
-    fresh: 'text-digimon-stage-fresh',
-    'in-training': 'text-digimon-stage-intraining',
-    rookie: 'text-digimon-stage-rookie',
-    champion: 'text-digimon-stage-champion',
-    ultimate: 'text-digimon-stage-ultimate',
-    mega: 'text-digimon-stage-mega',
-    ultra: 'text-digimon-stage-ultra',
-  }
-  return colors[stage] || 'text-gray-400'
 }
 
 async function handleSubmit() {

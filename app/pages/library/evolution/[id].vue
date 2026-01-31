@@ -2,6 +2,7 @@
 import type { EvolutionLine, Digimon } from '../../../server/db/schema'
 import type { EvolutionChainEntry, EvolutionProgress } from '../../../composables/useEvolution'
 import type { DigimonStage } from '../../../types'
+import { getStageColor } from '../../../utils/displayHelpers'
 
 definePageMeta({
   title: 'Evolution Line',
@@ -134,19 +135,6 @@ async function handleDevolve() {
       evolutionLine.value = updated
     }
   }
-}
-
-function getStageColor(stage: DigimonStage): string {
-  const colors: Record<DigimonStage, string> = {
-    fresh: 'text-digimon-stage-fresh',
-    'in-training': 'text-digimon-stage-intraining',
-    rookie: 'text-digimon-stage-rookie',
-    champion: 'text-digimon-stage-champion',
-    ultimate: 'text-digimon-stage-ultimate',
-    mega: 'text-digimon-stage-mega',
-    ultra: 'text-digimon-stage-ultra',
-  }
-  return colors[stage] || 'text-gray-400'
 }
 
 function getStageBgColor(stage: DigimonStage): string {

@@ -43,16 +43,66 @@ const form = reactive<CreateTamerData>({
   notes: '',
 })
 
+// Campaign level configuration based on official rules
+const campaignConfig = computed(() => {
+  switch (form.campaignLevel) {
+    case 'enhanced':
+      return { startingCP: 40, attrCap: 18, skillCap: 22, startingCap: 5 }
+    case 'extreme':
+      return { startingCP: 50, attrCap: 22, skillCap: 28, startingCap: 7 }
+    default: // standard
+      return { startingCP: 30, attrCap: 12, skillCap: 18, startingCap: 3 }
+  }
+})
+
 const attributePoints = computed(() => {
   const total = Object.values(form.attributes).reduce((a, b) => a + b, 0)
-  const max = form.campaignLevel === 'standard' ? 14 : form.campaignLevel === 'enhanced' ? 16 : 18
-  return { used: total, max }
+  return { used: total, max: campaignConfig.value.attrCap }
 })
 
 const skillPoints = computed(() => {
   const total = Object.values(form.skills).reduce((a, b) => a + b, 0)
-  const max = form.campaignLevel === 'standard' ? 20 : form.campaignLevel === 'enhanced' ? 25 : 30
-  return { used: total, max }
+  return { used: total, max: campaignConfig.value.skillCap }
+})
+
+const totalCP = computed(() => {
+  const total = attributePoints.value.used + skillPoints.value.used
+  return { used: total, max: campaignConfig.value.startingCP }
+})
+
+// Validation: only 1 attribute can be at starting cap
+const cappedAttributes = computed(() => {
+  return Object.values(form.attributes).filter(v => v >= campaignConfig.value.startingCap).length
+})
+
+// Validation: only 1 skill can be at starting cap
+const cappedSkills = computed(() => {
+  return Object.values(form.skills).filter(v => v >= campaignConfig.value.startingCap).length
+})
+
+// Warning: skills at 0 have -1 modifier
+const zeroSkills = computed(() => {
+  return Object.values(form.skills).filter(v => v === 0).length
+})
+
+// Validation: skills cannot exceed their linked attribute
+const skillsExceedingAttribute = computed(() => {
+  const violations: string[] = []
+  const skillToAttr: Record<string, keyof typeof form.attributes> = {
+    dodge: 'agility', fight: 'agility', stealth: 'agility',
+    athletics: 'body', endurance: 'body', featsOfStrength: 'body',
+    manipulate: 'charisma', perform: 'charisma', persuasion: 'charisma',
+    computer: 'intelligence', survival: 'intelligence', knowledge: 'intelligence',
+    perception: 'willpower', decipherIntent: 'willpower', bravery: 'willpower',
+  }
+  for (const [skill, attr] of Object.entries(skillToAttr)) {
+    const skillVal = form.skills[skill as keyof typeof form.skills]
+    const attrVal = form.attributes[attr]
+    if (skillVal > attrVal) {
+      violations.push(`${skillLabels[skill]} (${skillVal}) > ${attr} (${attrVal})`)
+    }
+  }
+  return violations
 })
 
 const skillsByAttribute = {
@@ -80,6 +130,16 @@ const skillLabels: Record<string, string> = {
   decipherIntent: 'Decipher Intent',
   bravery: 'Bravery',
 }
+
+// Derived stats calculated from attributes and skills
+const derivedStats = computed(() => ({
+  woundBoxes: Math.max(2, form.attributes.body + form.skills.endurance),
+  speed: form.attributes.agility + form.skills.survival,
+  accuracyPool: form.attributes.agility + form.skills.fight,
+  dodgePool: form.attributes.agility + form.skills.dodge,
+  armor: form.attributes.body + form.skills.endurance,
+  damage: form.attributes.body + form.skills.fight,
+}))
 
 async function handleSubmit() {
   const created = await createTamer(form)
@@ -139,6 +199,19 @@ async function handleSubmit() {
             </select>
           </div>
         </div>
+        <div class="flex justify-between items-center mt-4 pt-4 border-t border-digimon-dark-700">
+          <span class="text-sm text-digimon-dark-400">Creation Points</span>
+          <span
+            :class="[
+              'text-sm px-3 py-1 rounded font-semibold',
+              totalCP.used === totalCP.max && 'bg-green-900/30 text-green-400',
+              totalCP.used < totalCP.max && 'bg-yellow-900/30 text-yellow-400',
+              totalCP.used > totalCP.max && 'bg-red-900/30 text-red-400',
+            ]"
+          >
+            {{ totalCP.used }} / {{ totalCP.max }} CP
+          </span>
+        </div>
       </div>
 
       <!-- Attributes -->
@@ -153,7 +226,7 @@ async function handleSubmit() {
               attributePoints.used > attributePoints.max && 'bg-red-900/30 text-red-400',
             ]"
           >
-            {{ attributePoints.used }} / {{ attributePoints.max }} points
+            {{ attributePoints.used }} / {{ attributePoints.max }} area cap
           </span>
         </div>
         <div class="grid grid-cols-5 gap-4">
@@ -163,12 +236,16 @@ async function handleSubmit() {
               v-model.number="form.attributes[attr]"
               type="number"
               min="1"
-              max="5"
+              :max="campaignConfig.startingCap"
               class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
                      text-white text-center focus:border-digimon-orange-500 focus:outline-none"
             />
           </div>
         </div>
+        <p class="text-xs text-digimon-dark-500 mt-2">Max per attribute: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
+        <p v-if="cappedAttributes > 1" class="text-xs text-red-400 mt-1">
+          Only 1 attribute can be at max. You have {{ cappedAttributes }} at {{ campaignConfig.startingCap }}.
+        </p>
       </div>
 
       <!-- Skills -->
@@ -183,7 +260,7 @@ async function handleSubmit() {
               skillPoints.used > skillPoints.max && 'bg-red-900/30 text-red-400',
             ]"
           >
-            {{ skillPoints.used }} / {{ skillPoints.max }} points
+            {{ skillPoints.used }} / {{ skillPoints.max }} area cap
           </span>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
@@ -196,7 +273,7 @@ async function handleSubmit() {
                   v-model.number="form.skills[skill as keyof typeof form.skills]"
                   type="number"
                   min="0"
-                  max="5"
+                  :max="campaignConfig.startingCap"
                   class="w-14 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1
                          text-white text-center text-sm focus:border-digimon-orange-500 focus:outline-none"
                 />
@@ -204,6 +281,16 @@ async function handleSubmit() {
             </div>
           </div>
         </div>
+        <p class="text-xs text-digimon-dark-500 mt-2">Max per skill: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
+        <p v-if="cappedSkills > 1" class="text-xs text-red-400 mt-1">
+          Only 1 skill can be at max. You have {{ cappedSkills }} at {{ campaignConfig.startingCap }}.
+        </p>
+        <p v-if="zeroSkills > 0" class="text-xs text-yellow-400 mt-1">
+          {{ zeroSkills }} skill(s) at 0 will have -1 modifier on checks.
+        </p>
+        <p v-if="skillsExceedingAttribute.length > 0" class="text-xs text-red-400 mt-1">
+          Skills cannot exceed their linked attribute: {{ skillsExceedingAttribute.join(', ') }}
+        </p>
       </div>
 
       <!-- Notes -->
@@ -216,6 +303,38 @@ async function handleSubmit() {
           class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
                  text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
         />
+      </div>
+
+      <!-- Derived Stats -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Derived Stats</h2>
+        <p class="text-xs text-digimon-dark-500 mb-4">These are calculated automatically from your attributes and skills.</p>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.woundBoxes }}</div>
+            <div class="text-sm text-digimon-dark-400">Wound Boxes</div>
+          </div>
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.speed }}</div>
+            <div class="text-sm text-digimon-dark-400">Speed</div>
+          </div>
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.accuracyPool }}</div>
+            <div class="text-sm text-digimon-dark-400">Accuracy Pool</div>
+          </div>
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.dodgePool }}</div>
+            <div class="text-sm text-digimon-dark-400">Dodge Pool</div>
+          </div>
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.armor }}</div>
+            <div class="text-sm text-digimon-dark-400">Armor</div>
+          </div>
+          <div class="bg-digimon-dark-700 rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-white">{{ derivedStats.damage }}</div>
+            <div class="text-sm text-digimon-dark-400">Damage</div>
+          </div>
+        </div>
       </div>
 
       <!-- Error message -->
