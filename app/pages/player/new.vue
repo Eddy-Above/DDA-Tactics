@@ -10,6 +10,9 @@ const router = useRouter()
 const { createTamer, loading, error } = useTamers()
 const selectedTamerId = useCookie<string | null>('player-tamer-id', { default: () => null })
 
+const majorAspect = reactive({ name: '', description: '' })
+const minorAspect = reactive({ name: '', description: '' })
+
 const form = reactive<CreateTamerData>({
   name: '',
   age: 14,
@@ -211,6 +214,27 @@ const unlockedSpecialOrders = computed(() => {
 })
 
 async function handleSubmit() {
+  // Build aspects array
+  const aspects: Array<{ id: string; name: string; description: string; type: 'major' | 'minor'; usesRemaining: number }> = []
+  if (majorAspect.name) {
+    aspects.push({
+      id: crypto.randomUUID(),
+      name: majorAspect.name,
+      description: majorAspect.description,
+      type: 'major',
+      usesRemaining: 1,
+    })
+  }
+  if (minorAspect.name) {
+    aspects.push({
+      id: crypto.randomUUID(),
+      name: minorAspect.name,
+      description: minorAspect.description,
+      type: 'minor',
+      usesRemaining: 2,
+    })
+  }
+  form.aspects = aspects
   const created = await createTamer(form)
   if (created) {
     selectedTamerId.value = created.id
@@ -360,6 +384,68 @@ async function handleSubmit() {
         <p v-if="skillsExceedingAttribute.length > 0" class="text-xs text-red-400 mt-1">
           Skills cannot exceed their linked attribute: {{ skillsExceedingAttribute.join(', ') }}
         </p>
+      </div>
+
+      <!-- Aspects -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Aspects</h2>
+        <p class="text-xs text-digimon-dark-500 mb-4">Personality traits that can help or hinder you. Major (+/-4, 1/day), Minor (+/-2, 2/day).</p>
+
+        <div class="space-y-6">
+          <!-- Major Aspect -->
+          <div>
+            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3">Major Aspect (+/-4)</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
+                <input
+                  v-model="majorAspect.name"
+                  type="text"
+                  placeholder="e.g., Track Star, Thuggish Looks"
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Description</label>
+                <textarea
+                  v-model="majorAspect.description"
+                  rows="2"
+                  placeholder="Describe when this aspect helps (+4) and hinders (-4)..."
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Minor Aspect -->
+          <div>
+            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3">Minor Aspect (+/-2)</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
+                <input
+                  v-model="minorAspect.name"
+                  type="text"
+                  placeholder="e.g., Smarter Than They Act, Single-Minded Focus"
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Description</label>
+                <textarea
+                  v-model="minorAspect.description"
+                  rows="2"
+                  placeholder="Describe when this aspect helps (+2) and hinders (-2)..."
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Derived Stats -->

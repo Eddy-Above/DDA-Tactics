@@ -40,6 +40,8 @@ const form = reactive({
     decipherIntent: 0,
     bravery: 0,
   },
+  majorAspect: { name: '', description: '' },
+  minorAspect: { name: '', description: '' },
   notes: '',
 })
 
@@ -220,6 +222,17 @@ onMounted(async () => {
     form.campaignLevel = fetched.campaignLevel
     Object.assign(form.attributes, fetched.attributes)
     Object.assign(form.skills, fetched.skills)
+    // Load aspects
+    const majorAspect = fetched.aspects?.find(a => a.type === 'major')
+    const minorAspect = fetched.aspects?.find(a => a.type === 'minor')
+    if (majorAspect) {
+      form.majorAspect.name = majorAspect.name
+      form.majorAspect.description = majorAspect.description
+    }
+    if (minorAspect) {
+      form.minorAspect.name = minorAspect.name
+      form.minorAspect.description = minorAspect.description
+    }
     form.notes = fetched.notes || ''
   }
   initialLoading.value = false
@@ -227,12 +240,35 @@ onMounted(async () => {
 
 async function handleSubmit() {
   if (!tamer.value) return
+  // Build aspects array
+  const aspects: Array<{ id: string; name: string; description: string; type: 'major' | 'minor'; usesRemaining: number }> = []
+  if (form.majorAspect.name) {
+    const existingMajor = tamer.value.aspects?.find(a => a.type === 'major')
+    aspects.push({
+      id: existingMajor?.id || crypto.randomUUID(),
+      name: form.majorAspect.name,
+      description: form.majorAspect.description,
+      type: 'major',
+      usesRemaining: existingMajor?.usesRemaining ?? 1,
+    })
+  }
+  if (form.minorAspect.name) {
+    const existingMinor = tamer.value.aspects?.find(a => a.type === 'minor')
+    aspects.push({
+      id: existingMinor?.id || crypto.randomUUID(),
+      name: form.minorAspect.name,
+      description: form.minorAspect.description,
+      type: 'minor',
+      usesRemaining: existingMinor?.usesRemaining ?? 2,
+    })
+  }
   const updated = await updateTamer(tamer.value.id, {
     name: form.name,
     age: form.age,
     campaignLevel: form.campaignLevel,
     attributes: { ...form.attributes },
     skills: { ...form.skills },
+    aspects,
     notes: form.notes,
   })
   if (updated) {
@@ -397,6 +433,68 @@ async function handleSubmit() {
         <p v-if="skillsExceedingAttribute.length > 0" class="text-xs text-red-400 mt-1">
           Skills cannot exceed their linked attribute: {{ skillsExceedingAttribute.join(', ') }}
         </p>
+      </div>
+
+      <!-- Aspects -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Aspects</h2>
+        <p class="text-xs text-digimon-dark-500 mb-4">Personality traits that can help or hinder you. Major (+/-4, 1/day), Minor (+/-2, 2/day).</p>
+
+        <div class="space-y-6">
+          <!-- Major Aspect -->
+          <div>
+            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3">Major Aspect (+/-4)</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
+                <input
+                  v-model="form.majorAspect.name"
+                  type="text"
+                  placeholder="e.g., Track Star, Thuggish Looks"
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Description</label>
+                <textarea
+                  v-model="form.majorAspect.description"
+                  rows="2"
+                  placeholder="Describe when this aspect helps (+4) and hinders (-4)..."
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Minor Aspect -->
+          <div>
+            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3">Minor Aspect (+/-2)</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
+                <input
+                  v-model="form.minorAspect.name"
+                  type="text"
+                  placeholder="e.g., Smarter Than They Act, Single-Minded Focus"
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="block text-sm text-digimon-dark-400 mb-1">Description</label>
+                <textarea
+                  v-model="form.minorAspect.description"
+                  rows="2"
+                  placeholder="Describe when this aspect helps (+2) and hinders (-2)..."
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                         text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Derived Stats -->

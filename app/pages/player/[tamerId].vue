@@ -15,6 +15,13 @@ definePageMeta({
 const route = useRoute()
 const tamerId = computed(() => route.params.tamerId as string)
 
+// Check if we're on a child route (e.g., /player/:tamerId/digimon/new or /player/:tamerId/digimon/:id)
+const isChildRoute = computed(() => {
+  const path = route.path
+  const basePath = `/player/${tamerId.value}`
+  return path !== basePath && path.startsWith(basePath + '/')
+})
+
 // State
 const tamer = ref<Tamer | null>(null)
 const partnerDigimon = ref<Digimon[]>([])
@@ -441,6 +448,11 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
 <template>
   <div class="min-h-screen bg-digimon-dark-900">
+    <!-- Render child route (create/edit Digimon) -->
+    <NuxtPage v-if="isChildRoute" />
+
+    <!-- Dashboard content (only when not on child route) -->
+    <template v-else>
     <!-- Header -->
     <header class="bg-digimon-dark-800 border-b border-digimon-dark-700 sticky top-0 z-50">
       <div class="container mx-auto px-4">
@@ -943,5 +955,6 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
         </div>
       </template>
     </main>
+    </template>
   </div>
 </template>
