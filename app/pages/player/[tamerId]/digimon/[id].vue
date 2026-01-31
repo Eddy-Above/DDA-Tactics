@@ -68,6 +68,14 @@ onMounted(async () => {
     }
     linkedEvolvesTo.value = fetched
   }
+
+  // Load full chain
+  if (form.evolvesFromId) {
+    fullChainAncestors.value = await fetchAllAncestors(form.evolvesFromId)
+  }
+  if (form.evolutionPathIds.length > 0) {
+    fullChainDescendantsTree.value = await fetchDescendantsTree(form.evolutionPathIds)
+  }
 })
 
 type FormStats = { accuracy: number; damage: number; dodge: number; armor: number; health: number }
@@ -146,9 +154,51 @@ const form = reactive<{
   evolutionPathIds: [],
 })
 
+// Tree node structure for evolution chain display
+interface EvolutionTreeNode {
+  digimon: Digimon
+  children: EvolutionTreeNode[]
+}
+
 // Linked Digimon data for Evolution Chain Preview
 const linkedEvolvesFrom = ref<Digimon | null>(null)
 const linkedEvolvesTo = ref<Digimon[]>([])
+
+// Full chain data (all ancestors and descendants tree)
+const fullChainAncestors = ref<Digimon[]>([])
+const fullChainDescendantsTree = ref<EvolutionTreeNode[]>([])
+
+// Recursively fetch all ancestors
+async function fetchAllAncestors(digimonId: string | null, visited = new Set<string>()): Promise<Digimon[]> {
+  if (!digimonId || visited.has(digimonId)) return []
+  visited.add(digimonId)
+
+  const digimon = await fetchDigimonById(digimonId)
+  if (!digimon) return []
+
+  const ancestors = await fetchAllAncestors(digimon.evolvesFromId || null, visited)
+  return [...ancestors, digimon]
+}
+
+// Recursively fetch descendants as tree structure (preserves hierarchy)
+async function fetchDescendantsTree(digimonIds: string[], visited = new Set<string>()): Promise<EvolutionTreeNode[]> {
+  const nodes: EvolutionTreeNode[] = []
+  for (const id of digimonIds) {
+    if (visited.has(id)) continue
+    visited.add(id)
+
+    const digimon = await fetchDigimonById(id)
+    if (!digimon) continue
+
+    nodes.push({
+      digimon,
+      children: digimon.evolutionPathIds?.length
+        ? await fetchDescendantsTree(digimon.evolutionPathIds, visited)
+        : [],
+    })
+  }
+  return nodes
+}
 
 // Collapsible sections
 const basicInfoExpanded = ref(true)
@@ -696,8 +746,11 @@ watch(() => form.evolvesFromId, async (newId, oldId) => {
     if (linkedDigimon) {
       linkedEvolvesFrom.value = linkedDigimon
     }
+    // Also update full chain ancestors
+    fullChainAncestors.value = await fetchAllAncestors(newId)
   } else if (!newId) {
     linkedEvolvesFrom.value = null
+    fullChainAncestors.value = []
   }
 })
 
@@ -710,8 +763,11 @@ watch(() => form.evolutionPathIds, async (newIds, oldIds) => {
         if (d) fetched.push(d)
       }
       linkedEvolvesTo.value = fetched
+      // Also update full chain descendants tree
+      fullChainDescendantsTree.value = await fetchDescendantsTree(newIds)
     } else {
       linkedEvolvesTo.value = []
+      fullChainDescendantsTree.value = []
     }
   }
 }, { deep: true })
@@ -1481,28 +1537,30 @@ function handleCancel() {
             </div>
           </div>
 
-          <div v-if="linkedEvolvesFrom || linkedEvolvesTo.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
+          <div v-if="fullChainAncestors.length > 0 || fullChainDescendantsTree.length > 0 || linkedEvolvesFrom || linkedEvolvesTo.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
             <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain Preview</h3>
-            <div class="flex items-center gap-2 flex-wrap">
-              <template v-if="linkedEvolvesFrom">
+            <div class="flex items-start gap-2 flex-wrap">
+              <!-- All ancestors (full chain) -->
+              <template v-for="(ancestor, index) in fullChainAncestors" :key="ancestor.id">
                 <div class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2">
                   <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                     <img
-                      v-if="linkedEvolvesFrom.spriteUrl"
-                      :src="linkedEvolvesFrom.spriteUrl"
-                      :alt="linkedEvolvesFrom.name"
+                      v-if="ancestor.spriteUrl"
+                      :src="ancestor.spriteUrl"
+                      :alt="ancestor.name"
                       class="max-w-full max-h-full object-contain"
                     />
                     <span v-else class="text-sm">🦖</span>
                   </div>
                   <div>
-                    <div class="text-white text-sm font-medium">{{ linkedEvolvesFrom.name }}</div>
-                    <div class="text-xs text-digimon-dark-400 capitalize">{{ linkedEvolvesFrom.stage }}</div>
+                    <div class="text-white text-sm font-medium">{{ ancestor.name }}</div>
+                    <div class="text-xs text-digimon-dark-400 capitalize">{{ ancestor.stage }}</div>
                   </div>
                 </div>
                 <span class="text-digimon-dark-500 self-center">→</span>
               </template>
 
+              <!-- Current Digimon (highlighted) -->
               <div class="flex items-center gap-2 bg-digimon-orange-500/20 border border-digimon-orange-500 rounded-lg px-3 py-2">
                 <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                   <img
@@ -1519,28 +1577,15 @@ function handleCancel() {
                 </div>
               </div>
 
-              <template v-if="linkedEvolvesTo.length > 0">
+              <!-- All descendants (tree structure with hierarchy) -->
+              <template v-if="fullChainDescendantsTree.length > 0">
                 <span class="text-digimon-dark-500 self-center">→</span>
-                <div class="flex flex-col gap-2">
-                  <div
-                    v-for="evo in linkedEvolvesTo"
-                    :key="evo.id"
-                    class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2"
-                  >
-                    <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                      <img
-                        v-if="evo.spriteUrl"
-                        :src="evo.spriteUrl"
-                        :alt="evo.name"
-                        class="max-w-full max-h-full object-contain"
-                      />
-                      <span v-else class="text-sm">🦖</span>
-                    </div>
-                    <div>
-                      <div class="text-white text-sm font-medium">{{ evo.name }}</div>
-                      <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
-                    </div>
-                  </div>
+                <div :class="fullChainDescendantsTree.length > 1 ? 'flex flex-col gap-2' : ''">
+                  <EvolutionTreeBranch
+                    v-for="node in fullChainDescendantsTree"
+                    :key="node.digimon.id"
+                    :node="node"
+                  />
                 </div>
               </template>
             </div>

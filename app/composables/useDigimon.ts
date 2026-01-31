@@ -6,6 +6,12 @@ export type UpdateDigimonData = Partial<Digimon> & {
   syncBonusDP?: boolean
 }
 
+// Tree node structure for evolution chain display
+export interface EvolutionTreeNode {
+  digimon: Digimon
+  children: EvolutionTreeNode[]
+}
+
 export interface CreateDigimonData {
   name: string
   species: string
@@ -239,11 +245,11 @@ export function useDigimon() {
     return STAGE_ORDER.slice(index + 1)
   }
 
-  // Build evolution chain for display
+  // Build evolution chain for display (recursive for full chain)
   function getEvolutionChain(
     digimon: Digimon,
     allDigimon: Digimon[]
-  ): { ancestors: Digimon[]; current: Digimon; descendants: Digimon[] } {
+  ): { ancestors: Digimon[]; current: Digimon; descendants: Digimon[]; descendantsTree: EvolutionTreeNode[] } {
     const ancestors: Digimon[] = []
     const descendants: Digimon[] = []
 
@@ -258,15 +264,28 @@ export function useDigimon() {
         : null
     }
 
-    // Find direct descendants (from evolutionPathIds)
-    for (const pathId of digimon.evolutionPathIds || []) {
-      const descendant = allDigimon.find((d) => d.id === pathId)
-      if (descendant) {
-        descendants.push(descendant)
+    // Recursively build descendants tree (preserves hierarchy)
+    function buildDescendantsTree(parent: Digimon, visited: Set<string>): EvolutionTreeNode[] {
+      const nodes: EvolutionTreeNode[] = []
+      for (const pathId of parent.evolutionPathIds || []) {
+        if (visited.has(pathId)) continue
+        const descendant = allDigimon.find((d) => d.id === pathId)
+        if (descendant) {
+          visited.add(pathId)
+          descendants.push(descendant) // Keep flat array for backward compatibility
+          nodes.push({
+            digimon: descendant,
+            children: buildDescendantsTree(descendant, visited),
+          })
+        }
       }
+      return nodes
     }
 
-    return { ancestors, current: digimon, descendants }
+    const visited = new Set<string>()
+    const descendantsTree = buildDescendantsTree(digimon, visited)
+
+    return { ancestors, current: digimon, descendants, descendantsTree }
   }
 
   return {
