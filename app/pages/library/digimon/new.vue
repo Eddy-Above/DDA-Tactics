@@ -108,8 +108,8 @@ watch(() => form.evolutionPathIds, async (newIds) => {
       // Sync bonus DP if enabled
       if (form.syncBonusDP && linkedDigimon.bonusDP) {
         form.bonusDP = linkedDigimon.bonusDP
-        form.bonusStats = { ...(linkedDigimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 } }
-        form.bonusDPForQualities = (linkedDigimon as any).bonusDPForQualities || 0
+        form.bonusStats = linkedDigimon.bonusStats ? { ...linkedDigimon.bonusStats } : { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }
+        form.bonusDPForQualities = linkedDigimon.bonusDPForQualities || 0
       }
     }
   } else {
