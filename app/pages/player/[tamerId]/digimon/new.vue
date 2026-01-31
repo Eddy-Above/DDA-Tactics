@@ -401,7 +401,10 @@ const availableAttackTags = computed(() => {
 
 const usedEffects = computed(() => {
   const used = new Set<string>()
-  for (const attack of form.attacks || []) {
+  for (let i = 0; i < (form.attacks || []).length; i++) {
+    // Skip the attack being edited
+    if (i === editingAttackIndex.value) continue
+    const attack = form.attacks![i]
     if (attack.effect) {
       used.add(attack.effect.toLowerCase())
     }
