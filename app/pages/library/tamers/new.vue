@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CreateTamerData } from '../../../composables/useTamers'
+import { getTormentBoxCount, type TormentSeverity } from '../../../types'
 
 definePageMeta({
   title: 'New Tamer',
@@ -10,6 +11,77 @@ const { createTamer, loading, error } = useTamers()
 
 const majorAspect = reactive({ name: '', description: '' })
 const minorAspect = reactive({ name: '', description: '' })
+
+// Torment management
+interface TormentEntry {
+  id: string
+  name: string
+  description: string
+  severity: TormentSeverity
+  totalBoxes: number
+  markedBoxes: number
+}
+
+const torments = ref<TormentEntry[]>([])
+const showAddTorment = ref(false)
+const newTormentSeverity = ref<TormentSeverity>('minor')
+
+// Creation limits for marking torment boxes
+const tormentMarkingLimits: Record<TormentSeverity, number> = {
+  minor: 2,
+  major: 3,
+  terrible: 4,
+}
+
+function addTorment() {
+  const severity = newTormentSeverity.value
+  torments.value.push({
+    id: crypto.randomUUID(),
+    name: '',
+    description: '',
+    severity,
+    totalBoxes: getTormentBoxCount(severity),
+    markedBoxes: 0,
+  })
+  showAddTorment.value = false
+}
+
+function removeTorment(id: string) {
+  torments.value = torments.value.filter(t => t.id !== id)
+}
+
+function updateTormentSeverity(torment: TormentEntry, severity: TormentSeverity) {
+  torment.severity = severity
+  torment.totalBoxes = getTormentBoxCount(severity)
+  // Reset marked boxes if they exceed the new limit
+  const maxMarked = tormentMarkingLimits[severity]
+  if (torment.markedBoxes > maxMarked) {
+    torment.markedBoxes = maxMarked
+  }
+}
+
+// Validation for torments (2 Minor OR 1 Major minimum)
+const tormentValidation = computed(() => {
+  const minorCount = torments.value.filter(t => t.severity === 'minor').length
+  const majorCount = torments.value.filter(t => t.severity === 'major').length
+  const terribleCount = torments.value.filter(t => t.severity === 'terrible').length
+
+  // Valid if: 2+ minor, OR 1+ major/terrible
+  const isValid = minorCount >= 2 || majorCount >= 1 || terribleCount >= 1
+
+  let message = ''
+  if (!isValid) {
+    message = 'You need at least 2 Minor Torments OR 1 Major/Terrible Torment'
+  }
+
+  // Check if all torments have names
+  const allNamed = torments.value.every(t => t.name.trim() !== '')
+  if (!allNamed && torments.value.length > 0) {
+    message = 'All torments must have a name'
+  }
+
+  return { isValid: isValid && allNamed, message }
+})
 
 const form = reactive<CreateTamerData>({
   name: '',
@@ -233,6 +305,17 @@ async function handleSubmit() {
     })
   }
   form.aspects = aspects
+
+  // Build torments array
+  form.torments = torments.value.map(t => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    severity: t.severity,
+    totalBoxes: t.totalBoxes,
+    markedBoxes: t.markedBoxes,
+  }))
+
   const created = await createTamer(form)
   if (created) {
     router.push('/library/tamers')
@@ -442,6 +525,145 @@ async function handleSubmit() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Torments -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="font-display text-xl font-semibold text-white">Torments</h2>
+          <button
+            type="button"
+            class="text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-1.5 rounded-lg transition-colors"
+            @click="showAddTorment = !showAddTorment"
+          >
+            + Add Torment
+          </button>
+        </div>
+        <p class="text-xs text-digimon-dark-500 mb-4">
+          Character flaws or traumas to overcome. Require 2 Minor OR 1 Major/Terrible.
+          Roll: 3d6 + Willpower - unmarked boxes vs TN 12.
+        </p>
+
+        <!-- Add torment dialog -->
+        <div v-if="showAddTorment" class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
+          <div class="flex items-center gap-4">
+            <label class="text-sm text-digimon-dark-400">Severity:</label>
+            <select
+              v-model="newTormentSeverity"
+              class="bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5 text-white text-sm"
+            >
+              <option value="minor">Minor (5 boxes)</option>
+              <option value="major">Major (7 boxes)</option>
+              <option value="terrible">Terrible (10 boxes)</option>
+            </select>
+            <button
+              type="button"
+              class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-1.5 rounded text-sm font-semibold"
+              @click="addTorment"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              class="text-digimon-dark-400 hover:text-white text-sm"
+              @click="showAddTorment = false"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+
+        <!-- Torment list -->
+        <div v-if="torments.length === 0" class="text-center py-6 text-digimon-dark-400">
+          No torments added yet. Add at least 2 Minor OR 1 Major/Terrible Torment.
+        </div>
+
+        <div v-else class="space-y-4">
+          <div
+            v-for="torment in torments"
+            :key="torment.id"
+            class="bg-digimon-dark-700 rounded-lg p-4"
+          >
+            <div class="flex items-start justify-between gap-4 mb-3">
+              <div class="flex-1 space-y-2">
+                <div class="flex items-center gap-3">
+                  <input
+                    v-model="torment.name"
+                    type="text"
+                    placeholder="Torment name..."
+                    class="flex-1 bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5
+                           text-white text-sm focus:border-digimon-orange-500 focus:outline-none"
+                  />
+                  <select
+                    :value="torment.severity"
+                    class="bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1.5 text-white text-sm"
+                    @change="updateTormentSeverity(torment, ($event.target as HTMLSelectElement).value as TormentSeverity)"
+                  >
+                    <option value="minor">Minor</option>
+                    <option value="major">Major</option>
+                    <option value="terrible">Terrible</option>
+                  </select>
+                </div>
+                <textarea
+                  v-model="torment.description"
+                  rows="2"
+                  placeholder="Describe the torment..."
+                  class="w-full bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5
+                         text-white text-sm focus:border-digimon-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+              <button
+                type="button"
+                class="text-red-400 hover:text-red-300 text-sm"
+                @click="removeTorment(torment.id)"
+              >
+                Remove
+              </button>
+            </div>
+
+            <!-- Torment boxes visualization -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-digimon-dark-400 w-20">Progress:</span>
+              <div class="flex gap-1">
+                <button
+                  v-for="i in torment.totalBoxes"
+                  :key="i"
+                  type="button"
+                  :class="[
+                    'w-5 h-5 rounded border-2 transition-colors',
+                    i <= torment.markedBoxes
+                      ? 'bg-green-500 border-green-400'
+                      : 'bg-digimon-dark-600 border-digimon-dark-500 hover:border-digimon-dark-400',
+                    i > tormentMarkingLimits[torment.severity] && i > torment.markedBoxes
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'cursor-pointer'
+                  ]"
+                  :disabled="i > tormentMarkingLimits[torment.severity] && i > torment.markedBoxes"
+                  :title="i > tormentMarkingLimits[torment.severity] ? 'Cannot mark more than ' + tormentMarkingLimits[torment.severity] + ' boxes at creation' : ''"
+                  @click="torment.markedBoxes = torment.markedBoxes >= i ? i - 1 : Math.min(i, tormentMarkingLimits[torment.severity])"
+                />
+              </div>
+              <span class="text-xs text-digimon-dark-400">
+                {{ torment.markedBoxes }}/{{ torment.totalBoxes }}
+                <span v-if="torment.markedBoxes < torment.totalBoxes" class="text-yellow-400 ml-1">
+                  (Roll modifier: -{{ torment.totalBoxes - torment.markedBoxes }})
+                </span>
+                <span v-else class="text-green-400 ml-1">(Overcome!)</span>
+              </span>
+            </div>
+            <p class="text-xs text-digimon-dark-500 mt-2">
+              Max {{ tormentMarkingLimits[torment.severity] }} boxes can be marked at creation (1 CP each)
+            </p>
+          </div>
+        </div>
+
+        <!-- Validation message -->
+        <div
+          v-if="torments.length > 0 && !tormentValidation.isValid"
+          class="mt-4 text-xs text-red-400"
+        >
+          {{ tormentValidation.message }}
         </div>
       </div>
 

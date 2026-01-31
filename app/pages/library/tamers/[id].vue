@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Tamer } from '../../../server/db/schema'
+import { getTormentBoxCount, type TormentSeverity } from '../../../types'
 
 definePageMeta({
   title: 'Edit Tamer',
@@ -11,6 +12,51 @@ const { fetchTamer, updateTamer, loading, error } = useTamers()
 
 const tamer = ref<Tamer | null>(null)
 const initialLoading = ref(true)
+
+// Collapsible section state (start collapsed)
+const sectionsCollapsed = reactive({
+  basicInfo: true,
+  attributes: true,
+  skills: true,
+  aspects: true,
+  torments: true,
+})
+
+// Torment management
+interface TormentEntry {
+  id: string
+  name: string
+  description: string
+  severity: TormentSeverity
+  totalBoxes: number
+  markedBoxes: number
+}
+
+const torments = ref<TormentEntry[]>([])
+const showAddTorment = ref(false)
+const newTormentSeverity = ref<TormentSeverity>('minor')
+
+function addTorment() {
+  const severity = newTormentSeverity.value
+  torments.value.push({
+    id: crypto.randomUUID(),
+    name: '',
+    description: '',
+    severity,
+    totalBoxes: getTormentBoxCount(severity),
+    markedBoxes: 0,
+  })
+  showAddTorment.value = false
+}
+
+function removeTorment(id: string) {
+  torments.value = torments.value.filter(t => t.id !== id)
+}
+
+function updateTormentSeverity(torment: TormentEntry, severity: TormentSeverity) {
+  torment.severity = severity
+  torment.totalBoxes = getTormentBoxCount(severity)
+}
 
 const form = reactive({
   name: '',
@@ -234,6 +280,17 @@ onMounted(async () => {
       form.minorAspect.description = minorAspect.description
     }
     form.notes = fetched.notes || ''
+    // Load torments
+    if (fetched.torments && fetched.torments.length > 0) {
+      torments.value = fetched.torments.map(t => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        severity: t.severity,
+        totalBoxes: t.totalBoxes,
+        markedBoxes: t.markedBoxes,
+      }))
+    }
   }
   initialLoading.value = false
 })
@@ -262,6 +319,16 @@ async function handleSubmit() {
       usesRemaining: existingMinor?.usesRemaining ?? 2,
     })
   }
+  // Build torments array
+  const tormentData = torments.value.map(t => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    severity: t.severity,
+    totalBoxes: t.totalBoxes,
+    markedBoxes: t.markedBoxes,
+  }))
+
   const updated = await updateTamer(tamer.value.id, {
     name: form.name,
     age: form.age,
@@ -269,6 +336,7 @@ async function handleSubmit() {
     attributes: { ...form.attributes },
     skills: { ...form.skills },
     aspects,
+    torments: tormentData,
     notes: form.notes,
   })
   if (updated) {
@@ -304,45 +372,23 @@ async function handleSubmit() {
     <form v-else class="space-y-8" @submit.prevent="handleSubmit">
       <!-- Basic Info -->
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-        <h2 class="font-display text-xl font-semibold text-white mb-4">Basic Information</h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
-            <input
-              v-model="form.name"
-              type="text"
-              required
-              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                     text-white focus:border-digimon-orange-500 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label class="block text-sm text-digimon-dark-400 mb-1">Age</label>
-            <input
-              v-model.number="form.age"
-              type="number"
-              min="6"
-              max="100"
-              required
-              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                     text-white focus:border-digimon-orange-500 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label class="block text-sm text-digimon-dark-400 mb-1">Campaign Level</label>
-            <select
-              v-model="form.campaignLevel"
-              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                     text-white focus:border-digimon-orange-500 focus:outline-none"
+        <div
+          class="flex justify-between items-center cursor-pointer select-none"
+          :class="{ 'mb-4': !sectionsCollapsed.basicInfo }"
+          @click="sectionsCollapsed.basicInfo = !sectionsCollapsed.basicInfo"
+        >
+          <div class="flex items-center gap-2">
+            <svg
+              class="w-5 h-5 text-digimon-dark-400 transition-transform"
+              :class="{ '-rotate-90': sectionsCollapsed.basicInfo }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
             >
-              <option value="standard">Standard</option>
-              <option value="enhanced">Enhanced</option>
-              <option value="extreme">Extreme</option>
-            </select>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            <h2 class="font-display text-xl font-semibold text-white">Basic Information</h2>
           </div>
-        </div>
-        <div class="flex justify-between items-center mt-4 pt-4 border-t border-digimon-dark-700">
-          <span class="text-sm text-digimon-dark-400">Creation Points</span>
           <span
             :class="[
               'text-sm px-3 py-1 rounded font-semibold',
@@ -354,12 +400,65 @@ async function handleSubmit() {
             {{ totalCP.used }} / {{ totalCP.max }} CP
           </span>
         </div>
+        <div v-show="!sectionsCollapsed.basicInfo">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label class="block text-sm text-digimon-dark-400 mb-1">Name</label>
+              <input
+                v-model="form.name"
+                type="text"
+                required
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                       text-white focus:border-digimon-orange-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="block text-sm text-digimon-dark-400 mb-1">Age</label>
+              <input
+                v-model.number="form.age"
+                type="number"
+                min="6"
+                max="100"
+                required
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                       text-white focus:border-digimon-orange-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="block text-sm text-digimon-dark-400 mb-1">Campaign Level</label>
+              <select
+                v-model="form.campaignLevel"
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                       text-white focus:border-digimon-orange-500 focus:outline-none"
+              >
+                <option value="standard">Standard</option>
+                <option value="enhanced">Enhanced</option>
+                <option value="extreme">Extreme</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Attributes -->
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="font-display text-xl font-semibold text-white">Attributes</h2>
+        <div
+          class="flex justify-between items-center cursor-pointer select-none"
+          :class="{ 'mb-4': !sectionsCollapsed.attributes }"
+          @click="sectionsCollapsed.attributes = !sectionsCollapsed.attributes"
+        >
+          <div class="flex items-center gap-2">
+            <svg
+              class="w-5 h-5 text-digimon-dark-400 transition-transform"
+              :class="{ '-rotate-90': sectionsCollapsed.attributes }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            <h2 class="font-display text-xl font-semibold text-white">Attributes</h2>
+          </div>
           <span
             :class="[
               'text-sm px-3 py-1 rounded',
@@ -371,29 +470,46 @@ async function handleSubmit() {
             {{ attributePoints.used }} / {{ attributePoints.max }} area cap
           </span>
         </div>
-        <div class="grid grid-cols-5 gap-4">
-          <div v-for="attr in (['agility', 'body', 'charisma', 'intelligence', 'willpower'] as const)" :key="attr" class="text-center">
-            <label class="block text-sm text-digimon-dark-400 mb-2 capitalize">{{ attr }}</label>
-            <input
-              v-model.number="form.attributes[attr]"
-              type="number"
-              min="1"
-              :max="campaignConfig.startingCap"
-              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
-                     text-white text-center focus:border-digimon-orange-500 focus:outline-none"
-            />
+        <div v-show="!sectionsCollapsed.attributes">
+          <div class="grid grid-cols-5 gap-4">
+            <div v-for="attr in (['agility', 'body', 'charisma', 'intelligence', 'willpower'] as const)" :key="attr" class="text-center">
+              <label class="block text-sm text-digimon-dark-400 mb-2 capitalize">{{ attr }}</label>
+              <input
+                v-model.number="form.attributes[attr]"
+                type="number"
+                min="1"
+                :max="campaignConfig.startingCap"
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
+                       text-white text-center focus:border-digimon-orange-500 focus:outline-none"
+              />
+            </div>
           </div>
+          <p class="text-xs text-digimon-dark-500 mt-2">Max per attribute: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
+          <p v-if="cappedAttributes > 1" class="text-xs text-red-400 mt-1">
+            Only 1 attribute can be at the highest value. You have {{ cappedAttributes }} tied for highest.
+          </p>
         </div>
-        <p class="text-xs text-digimon-dark-500 mt-2">Max per attribute: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
-        <p v-if="cappedAttributes > 1" class="text-xs text-red-400 mt-1">
-          Only 1 attribute can be at the highest value. You have {{ cappedAttributes }} tied for highest.
-        </p>
       </div>
 
       <!-- Skills -->
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="font-display text-xl font-semibold text-white">Skills</h2>
+        <div
+          class="flex justify-between items-center cursor-pointer select-none"
+          :class="{ 'mb-4': !sectionsCollapsed.skills }"
+          @click="sectionsCollapsed.skills = !sectionsCollapsed.skills"
+        >
+          <div class="flex items-center gap-2">
+            <svg
+              class="w-5 h-5 text-digimon-dark-400 transition-transform"
+              :class="{ '-rotate-90': sectionsCollapsed.skills }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            <h2 class="font-display text-xl font-semibold text-white">Skills</h2>
+          </div>
           <span
             :class="[
               'text-sm px-3 py-1 rounded',
@@ -405,42 +521,61 @@ async function handleSubmit() {
             {{ skillPoints.used }} / {{ skillPoints.max }} area cap
           </span>
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
-          <div v-for="(skills, attr) in skillsByAttribute" :key="attr">
-            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3 capitalize">{{ attr }}</h3>
-            <div class="space-y-2">
-              <div v-for="skill in skills" :key="skill" class="flex items-center gap-2">
-                <label class="flex-1 text-sm text-digimon-dark-300">{{ skillLabels[skill] }}</label>
-                <input
-                  v-model.number="form.skills[skill as keyof typeof form.skills]"
-                  type="number"
-                  min="0"
-                  :max="campaignConfig.startingCap"
-                  class="w-14 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1
-                         text-white text-center text-sm focus:border-digimon-orange-500 focus:outline-none"
-                />
+        <div v-show="!sectionsCollapsed.skills">
+          <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
+            <div v-for="(skills, attr) in skillsByAttribute" :key="attr">
+              <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3 capitalize">{{ attr }}</h3>
+              <div class="space-y-2">
+                <div v-for="skill in skills" :key="skill" class="flex items-center gap-2">
+                  <label class="flex-1 text-sm text-digimon-dark-300">{{ skillLabels[skill] }}</label>
+                  <input
+                    v-model.number="form.skills[skill as keyof typeof form.skills]"
+                    type="number"
+                    min="0"
+                    :max="campaignConfig.startingCap"
+                    class="w-14 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1
+                           text-white text-center text-sm focus:border-digimon-orange-500 focus:outline-none"
+                  />
+                </div>
               </div>
             </div>
           </div>
+          <p class="text-xs text-digimon-dark-500 mt-2">Max per skill: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
+          <p v-if="cappedSkillGroups.length > 0" class="text-xs text-red-400 mt-1">
+            Only 1 skill per group can be at the highest value. Violations in: {{ cappedSkillGroups.join(', ') }}
+          </p>
+          <p v-if="zeroSkills > 0" class="text-xs text-yellow-400 mt-1">
+            {{ zeroSkills }} skill(s) at 0 will have -1 modifier on checks.
+          </p>
+          <p v-if="skillsExceedingAttribute.length > 0" class="text-xs text-red-400 mt-1">
+            Skills cannot exceed their linked attribute: {{ skillsExceedingAttribute.join(', ') }}
+          </p>
         </div>
-        <p class="text-xs text-digimon-dark-500 mt-2">Max per skill: {{ campaignConfig.startingCap }} (only 1 can be at max)</p>
-        <p v-if="cappedSkillGroups.length > 0" class="text-xs text-red-400 mt-1">
-          Only 1 skill per group can be at the highest value. Violations in: {{ cappedSkillGroups.join(', ') }}
-        </p>
-        <p v-if="zeroSkills > 0" class="text-xs text-yellow-400 mt-1">
-          {{ zeroSkills }} skill(s) at 0 will have -1 modifier on checks.
-        </p>
-        <p v-if="skillsExceedingAttribute.length > 0" class="text-xs text-red-400 mt-1">
-          Skills cannot exceed their linked attribute: {{ skillsExceedingAttribute.join(', ') }}
-        </p>
       </div>
 
       <!-- Aspects -->
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-        <h2 class="font-display text-xl font-semibold text-white mb-4">Aspects</h2>
-        <p class="text-xs text-digimon-dark-500 mb-4">Personality traits that can help or hinder you. Major (+/-4, 1/day), Minor (+/-2, 2/day).</p>
+        <div
+          class="flex items-center gap-2 cursor-pointer select-none"
+          :class="{ 'mb-4': !sectionsCollapsed.aspects }"
+          @click="sectionsCollapsed.aspects = !sectionsCollapsed.aspects"
+        >
+          <svg
+            class="w-5 h-5 text-digimon-dark-400 transition-transform"
+            :class="{ '-rotate-90': sectionsCollapsed.aspects }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+          <h2 class="font-display text-xl font-semibold text-white">Aspects</h2>
+        </div>
 
-        <div class="space-y-6">
+        <div v-show="!sectionsCollapsed.aspects">
+          <p class="text-xs text-digimon-dark-500 mb-4">Personality traits that can help or hinder you. Major (+/-4, 1/day), Minor (+/-2, 2/day).</p>
+
+          <div class="space-y-6">
           <!-- Major Aspect -->
           <div>
             <h3 class="text-sm font-semibold text-digimon-orange-400 mb-3">Major Aspect (+/-4)</h3>
@@ -491,6 +626,150 @@ async function handleSubmit() {
                   class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
                          text-white focus:border-digimon-orange-500 focus:outline-none resize-none"
                 />
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <!-- Torments -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <div
+          class="flex justify-between items-center cursor-pointer select-none"
+          :class="{ 'mb-4': !sectionsCollapsed.torments }"
+          @click="sectionsCollapsed.torments = !sectionsCollapsed.torments"
+        >
+          <div class="flex items-center gap-2">
+            <svg
+              class="w-5 h-5 text-digimon-dark-400 transition-transform"
+              :class="{ '-rotate-90': sectionsCollapsed.torments }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            <h2 class="font-display text-xl font-semibold text-white">Torments</h2>
+          </div>
+          <span class="text-sm text-digimon-dark-400">{{ torments.length }} torment(s)</span>
+        </div>
+
+        <div v-show="!sectionsCollapsed.torments">
+          <div class="flex justify-between items-center mb-4">
+            <p class="text-xs text-digimon-dark-500">
+              Character flaws or traumas to overcome. Roll: 3d6 + Willpower - unmarked boxes vs TN 12.
+            </p>
+            <button
+              type="button"
+              class="text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-1.5 rounded-lg transition-colors"
+              @click="showAddTorment = !showAddTorment"
+            >
+              + Add Torment
+            </button>
+          </div>
+
+          <!-- Add torment dialog -->
+          <div v-if="showAddTorment" class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
+            <div class="flex items-center gap-4">
+              <label class="text-sm text-digimon-dark-400">Severity:</label>
+              <select
+                v-model="newTormentSeverity"
+                class="bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5 text-white text-sm"
+              >
+                <option value="minor">Minor (5 boxes)</option>
+                <option value="major">Major (7 boxes)</option>
+                <option value="terrible">Terrible (10 boxes)</option>
+              </select>
+              <button
+                type="button"
+                class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-1.5 rounded text-sm font-semibold"
+                @click="addTorment"
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                class="text-digimon-dark-400 hover:text-white text-sm"
+                @click="showAddTorment = false"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+
+          <!-- Torment list -->
+          <div v-if="torments.length === 0" class="text-center py-6 text-digimon-dark-400">
+            No torments added yet.
+          </div>
+
+          <div v-else class="space-y-4">
+            <div
+              v-for="torment in torments"
+              :key="torment.id"
+              class="bg-digimon-dark-700 rounded-lg p-4"
+            >
+              <div class="flex items-start justify-between gap-4 mb-3">
+                <div class="flex-1 space-y-2">
+                  <div class="flex items-center gap-3">
+                    <input
+                      v-model="torment.name"
+                      type="text"
+                      placeholder="Torment name..."
+                      class="flex-1 bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5
+                             text-white text-sm focus:border-digimon-orange-500 focus:outline-none"
+                    />
+                    <select
+                      :value="torment.severity"
+                      class="bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1.5 text-white text-sm"
+                      @change="updateTormentSeverity(torment, ($event.target as HTMLSelectElement).value as TormentSeverity)"
+                    >
+                      <option value="minor">Minor</option>
+                      <option value="major">Major</option>
+                      <option value="terrible">Terrible</option>
+                    </select>
+                  </div>
+                  <textarea
+                    v-model="torment.description"
+                    rows="2"
+                    placeholder="Describe the torment..."
+                    class="w-full bg-digimon-dark-600 border border-digimon-dark-500 rounded px-3 py-1.5
+                           text-white text-sm focus:border-digimon-orange-500 focus:outline-none resize-none"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="text-red-400 hover:text-red-300 text-sm"
+                  @click="removeTorment(torment.id)"
+                >
+                  Remove
+                </button>
+              </div>
+
+              <!-- Torment boxes visualization -->
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-digimon-dark-400 w-20">Progress:</span>
+                <div class="flex gap-1">
+                  <button
+                    v-for="i in torment.totalBoxes"
+                    :key="i"
+                    type="button"
+                    :class="[
+                      'w-5 h-5 rounded border-2 transition-colors cursor-pointer',
+                      i <= torment.markedBoxes
+                        ? 'bg-green-500 border-green-400'
+                        : 'bg-digimon-dark-600 border-digimon-dark-500 hover:border-digimon-dark-400'
+                    ]"
+                    @click="torment.markedBoxes = torment.markedBoxes >= i ? i - 1 : i"
+                  />
+                </div>
+                <span class="text-xs text-digimon-dark-400">
+                  {{ torment.markedBoxes }}/{{ torment.totalBoxes }}
+                  <span v-if="torment.markedBoxes < torment.totalBoxes" class="text-yellow-400 ml-1">
+                    (Roll modifier: -{{ torment.totalBoxes - torment.markedBoxes }})
+                  </span>
+                  <span v-else class="text-green-400 ml-1">(Overcome!)</span>
+                </span>
               </div>
             </div>
           </div>

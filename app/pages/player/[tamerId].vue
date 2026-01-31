@@ -611,7 +611,15 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                   👤
                 </div>
                 <div>
-                  <h1 class="font-display text-2xl font-bold text-white">{{ tamer.name }}</h1>
+                  <div class="flex items-center gap-3">
+                    <h1 class="font-display text-2xl font-bold text-white">{{ tamer.name }}</h1>
+                    <NuxtLink
+                      :to="`/player/${tamerId}/edit`"
+                      class="text-digimon-orange-400 hover:text-digimon-orange-300 transition-colors text-sm"
+                    >
+                      Edit
+                    </NuxtLink>
+                  </div>
                   <p class="text-digimon-dark-400">Age {{ tamer.age }} • {{ tamer.campaignLevel }} campaign</p>
                   <div class="flex gap-4 mt-2 text-sm">
                     <span class="text-digimon-dark-300">
@@ -641,6 +649,57 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 <span><span class="text-digimon-dark-400">Dodge:</span> <span class="text-white">{{ tamerStats?.dodgePool }}</span></span>
                 <span><span class="text-digimon-dark-400">Damage:</span> <span class="text-white">{{ tamerStats?.damage }}</span></span>
                 <span><span class="text-digimon-dark-400">Armor:</span> <span class="text-white">{{ tamerStats?.armor }}</span></span>
+              </div>
+
+              <!-- Torments -->
+              <div v-if="tamer.torments && tamer.torments.length > 0" class="mt-4 pt-4 border-t border-digimon-dark-700">
+                <h3 class="text-sm font-semibold text-digimon-dark-400 mb-3">Torments</h3>
+                <div class="space-y-3">
+                  <div
+                    v-for="torment in tamer.torments"
+                    :key="torment.id"
+                    class="bg-digimon-dark-700 rounded-lg p-3"
+                  >
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="font-medium text-white">{{ torment.name }}</span>
+                      <span :class="[
+                        'text-xs px-2 py-0.5 rounded capitalize',
+                        torment.severity === 'minor' && 'bg-yellow-900/30 text-yellow-400',
+                        torment.severity === 'major' && 'bg-orange-900/30 text-orange-400',
+                        torment.severity === 'terrible' && 'bg-red-900/30 text-red-400',
+                      ]">
+                        {{ torment.severity }}
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <div class="flex gap-1">
+                        <div
+                          v-for="i in torment.totalBoxes"
+                          :key="i"
+                          :class="[
+                            'w-4 h-4 rounded border-2',
+                            i <= torment.markedBoxes
+                              ? 'bg-green-500 border-green-400'
+                              : 'bg-digimon-dark-600 border-digimon-dark-500'
+                          ]"
+                        />
+                      </div>
+                      <span class="text-xs text-digimon-dark-400 ml-2">
+                        {{ torment.markedBoxes }}/{{ torment.totalBoxes }}
+                        <span v-if="torment.markedBoxes < torment.totalBoxes" class="text-yellow-400">
+                          (Roll: -{{ torment.totalBoxes - torment.markedBoxes }})
+                        </span>
+                        <span v-else class="text-green-400">(Overcome!)</span>
+                      </span>
+                    </div>
+                    <p v-if="torment.description" class="text-xs text-digimon-dark-400 mt-2 italic">
+                      {{ torment.description }}
+                    </p>
+                  </div>
+                </div>
+                <p class="text-xs text-digimon-dark-500 mt-2">
+                  Roll: 3d6 + Willpower ({{ tamer.attributes.willpower }}) - unmarked boxes vs TN 12
+                </p>
               </div>
             </div>
 
