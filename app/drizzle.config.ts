@@ -5,7 +5,7 @@ export default defineConfig({
   out: './server/db/migrations',
   dialect: 'sqlite',
   dbCredentials: {
-    url: './data/digimon.db',
+    url: process.env.NUXT_DB_PATH || './data/digimon.db',
   },
   verbose: true,
   strict: true,
