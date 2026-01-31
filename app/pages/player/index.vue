@@ -58,7 +58,13 @@ function clearSelection() {
       <div v-if="tamers.length === 0" class="text-center py-8">
         <div class="text-6xl mb-4">👤</div>
         <h2 class="text-xl font-semibold text-white mb-2">No Characters Available</h2>
-        <p class="text-digimon-dark-400">Ask your GM to create your Tamer first</p>
+        <p class="text-digimon-dark-400 mb-6">Create your Tamer to get started</p>
+        <NuxtLink
+          to="/player/new"
+          class="inline-block bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+        >
+          Create Your Character
+        </NuxtLink>
       </div>
 
       <div v-else class="grid gap-4">
@@ -83,6 +89,12 @@ function clearSelection() {
             </div>
           </div>
         </button>
+
+        <div class="text-center mt-2">
+          <NuxtLink to="/player/new" class="text-digimon-orange-400 hover:text-digimon-orange-300 text-sm">
+            + Create New Character
+          </NuxtLink>
+        </div>
       </div>
     </div>
   </div>
