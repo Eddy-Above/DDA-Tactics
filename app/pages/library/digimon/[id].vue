@@ -1753,7 +1753,7 @@ async function handleCopy() {
                   <div class="text-xs text-digimon-dark-400 capitalize">{{ ancestor.stage }}</div>
                 </div>
               </NuxtLink>
-              <span class="text-digimon-dark-500">→</span>
+              <span class="text-digimon-dark-500 self-center">→</span>
             </template>
 
             <!-- Current (highlighted) -->
@@ -1773,27 +1773,55 @@ async function handleCopy() {
               </div>
             </div>
 
-            <!-- Descendants -->
-            <template v-for="descendant in getEvolutionChain(digimon, digimonList).descendants" :key="descendant.id">
-              <span class="text-digimon-dark-500">→</span>
-              <NuxtLink
-                :to="`/library/digimon/${descendant.id}`"
-                class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
-              >
-                <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                  <img
-                    v-if="descendant.spriteUrl"
-                    :src="descendant.spriteUrl"
-                    :alt="descendant.name"
-                    class="max-w-full max-h-full object-contain"
-                  />
-                  <span v-else class="text-sm">🦖</span>
+            <!-- Descendants (tree structure) -->
+            <template v-if="getEvolutionChain(digimon, digimonList).descendants.length > 0">
+              <span class="text-digimon-dark-500 self-center">→</span>
+              <!-- Single descendant - show inline -->
+              <template v-if="getEvolutionChain(digimon, digimonList).descendants.length === 1">
+                <NuxtLink
+                  :to="`/library/digimon/${getEvolutionChain(digimon, digimonList).descendants[0].id}`"
+                  class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                >
+                  <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                    <img
+                      v-if="getEvolutionChain(digimon, digimonList).descendants[0].spriteUrl"
+                      :src="getEvolutionChain(digimon, digimonList).descendants[0].spriteUrl"
+                      :alt="getEvolutionChain(digimon, digimonList).descendants[0].name"
+                      class="max-w-full max-h-full object-contain"
+                    />
+                    <span v-else class="text-sm">🦖</span>
+                  </div>
+                  <div>
+                    <div class="text-white text-sm font-medium">{{ getEvolutionChain(digimon, digimonList).descendants[0].name }}</div>
+                    <div class="text-xs text-digimon-dark-400 capitalize">{{ getEvolutionChain(digimon, digimonList).descendants[0].stage }}</div>
+                  </div>
+                </NuxtLink>
+              </template>
+              <!-- Multiple descendants - show as vertical branch -->
+              <template v-else>
+                <div class="flex flex-col gap-2">
+                  <NuxtLink
+                    v-for="descendant in getEvolutionChain(digimon, digimonList).descendants"
+                    :key="descendant.id"
+                    :to="`/library/digimon/${descendant.id}`"
+                    class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                  >
+                    <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                      <img
+                        v-if="descendant.spriteUrl"
+                        :src="descendant.spriteUrl"
+                        :alt="descendant.name"
+                        class="max-w-full max-h-full object-contain"
+                      />
+                      <span v-else class="text-sm">🦖</span>
+                    </div>
+                    <div>
+                      <div class="text-white text-sm font-medium">{{ descendant.name }}</div>
+                      <div class="text-xs text-digimon-dark-400 capitalize">{{ descendant.stage }}</div>
+                    </div>
+                  </NuxtLink>
                 </div>
-                <div>
-                  <div class="text-white text-sm font-medium">{{ descendant.name }}</div>
-                  <div class="text-xs text-digimon-dark-400 capitalize">{{ descendant.stage }}</div>
-                </div>
-              </NuxtLink>
+              </template>
             </template>
 
             <!-- No links message -->

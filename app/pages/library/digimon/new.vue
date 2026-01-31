@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CreateDigimonData } from '../../../composables/useDigimon'
+import type { Digimon } from '../../../server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../../../types'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../../../data/qualities'
 
@@ -56,6 +57,10 @@ const form = reactive<CreateDigimonData & {
   evolvesFromId: null,
   evolutionPathIds: [],
 })
+
+// Linked Digimon data for Evolution Chain Preview
+const linkedEvolvesFrom = ref<Digimon | null>(null)
+const linkedEvolvesTo = ref<Digimon[]>([])
 
 // Collapsible sections
 const basicInfoExpanded = ref(true)  // Start expanded for new Digimon
@@ -690,6 +695,8 @@ watch(() => form.evolvesFromId, async (newId) => {
   if (newId) {
     const linkedDigimon = await fetchDigimonById(newId)
     if (linkedDigimon) {
+      // Store for preview
+      linkedEvolvesFrom.value = linkedDigimon
       // Always sync partnerId from linked Digimon
       if (linkedDigimon.partnerId && !form.partnerId) {
         form.partnerId = linkedDigimon.partnerId
@@ -703,15 +710,25 @@ watch(() => form.evolvesFromId, async (newId) => {
         prevBonusStats.value = { ...form.bonusStats }
       }
     }
+  } else {
+    linkedEvolvesFrom.value = null
   }
 })
 
 // Also sync from evolutionPathIds if no evolvesFromId
 watch(() => form.evolutionPathIds, async (newIds) => {
-  if (newIds.length > 0 && !form.evolvesFromId) {
-    const linkedDigimon = await fetchDigimonById(newIds[0])
-    if (linkedDigimon) {
-      // Always sync partnerId from linked Digimon
+  // Fetch all linked evolutions for preview
+  if (newIds.length > 0) {
+    const fetched: Digimon[] = []
+    for (const id of newIds) {
+      const d = await fetchDigimonById(id)
+      if (d) fetched.push(d)
+    }
+    linkedEvolvesTo.value = fetched
+
+    // Sync partnerId from first linked if no evolvesFrom
+    if (!form.evolvesFromId && fetched.length > 0) {
+      const linkedDigimon = fetched[0]
       if (linkedDigimon.partnerId && !form.partnerId) {
         form.partnerId = linkedDigimon.partnerId
       }
@@ -724,6 +741,8 @@ watch(() => form.evolutionPathIds, async (newIds) => {
         prevBonusStats.value = { ...form.bonusStats }
       }
     }
+  } else {
+    linkedEvolvesTo.value = []
   }
 }, { deep: true })
 
@@ -1598,6 +1617,103 @@ async function handleSubmit() {
             <p v-if="getNextStages(form.stage).length === 0" class="text-xs text-digimon-dark-500 mt-1">
               No later stages available (already at Ultra)
             </p>
+          </div>
+        </div>
+
+        <!-- Evolution Chain Preview -->
+        <div v-if="linkedEvolvesFrom || linkedEvolvesTo.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
+          <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain Preview</h3>
+          <div class="flex items-center gap-2 flex-wrap">
+            <!-- Evolves From -->
+            <template v-if="linkedEvolvesFrom">
+              <NuxtLink
+                :to="`/library/digimon/${linkedEvolvesFrom.id}`"
+                class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+              >
+                <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                  <img
+                    v-if="linkedEvolvesFrom.spriteUrl"
+                    :src="linkedEvolvesFrom.spriteUrl"
+                    :alt="linkedEvolvesFrom.name"
+                    class="max-w-full max-h-full object-contain"
+                  />
+                  <span v-else class="text-sm">🦖</span>
+                </div>
+                <div>
+                  <div class="text-white text-sm font-medium">{{ linkedEvolvesFrom.name }}</div>
+                  <div class="text-xs text-digimon-dark-400 capitalize">{{ linkedEvolvesFrom.stage }}</div>
+                </div>
+              </NuxtLink>
+              <span class="text-digimon-dark-500 self-center">→</span>
+            </template>
+
+            <!-- Current (New Digimon being created) -->
+            <div class="flex items-center gap-2 bg-digimon-orange-500/20 border border-digimon-orange-500 rounded-lg px-3 py-2">
+              <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                <img
+                  v-if="form.spriteUrl"
+                  :src="form.spriteUrl"
+                  :alt="form.name"
+                  class="max-w-full max-h-full object-contain"
+                />
+                <span v-else class="text-sm">🦖</span>
+              </div>
+              <div>
+                <div class="text-digimon-orange-400 text-sm font-medium">{{ form.name || 'New Digimon' }}</div>
+                <div class="text-xs text-digimon-dark-400 capitalize">{{ form.stage }}</div>
+              </div>
+            </div>
+
+            <!-- Evolves To (tree structure) -->
+            <template v-if="linkedEvolvesTo.length > 0">
+              <span class="text-digimon-dark-500 self-center">→</span>
+              <!-- Single evolution - show inline -->
+              <template v-if="linkedEvolvesTo.length === 1">
+                <NuxtLink
+                  :to="`/library/digimon/${linkedEvolvesTo[0].id}`"
+                  class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                >
+                  <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                    <img
+                      v-if="linkedEvolvesTo[0].spriteUrl"
+                      :src="linkedEvolvesTo[0].spriteUrl"
+                      :alt="linkedEvolvesTo[0].name"
+                      class="max-w-full max-h-full object-contain"
+                    />
+                    <span v-else class="text-sm">🦖</span>
+                  </div>
+                  <div>
+                    <div class="text-white text-sm font-medium">{{ linkedEvolvesTo[0].name }}</div>
+                    <div class="text-xs text-digimon-dark-400 capitalize">{{ linkedEvolvesTo[0].stage }}</div>
+                  </div>
+                </NuxtLink>
+              </template>
+              <!-- Multiple evolutions - show as vertical branch -->
+              <template v-else>
+                <div class="flex flex-col gap-2">
+                  <NuxtLink
+                    v-for="evo in linkedEvolvesTo"
+                    :key="evo.id"
+                    :to="`/library/digimon/${evo.id}`"
+                    class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                  >
+                    <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                      <img
+                        v-if="evo.spriteUrl"
+                        :src="evo.spriteUrl"
+                        :alt="evo.name"
+                        class="max-w-full max-h-full object-contain"
+                      />
+                      <span v-else class="text-sm">🦖</span>
+                    </div>
+                    <div>
+                      <div class="text-white text-sm font-medium">{{ evo.name }}</div>
+                      <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
+                    </div>
+                  </NuxtLink>
+                </div>
+              </template>
+            </template>
           </div>
         </div>
       </div>
