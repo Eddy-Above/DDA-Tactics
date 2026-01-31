@@ -4,7 +4,8 @@
  * Handles all DP budget calculations following DDA 1.4 rules
  */
 
-import type { Digimon } from '../server/db/schema'
+import { computed, isRef } from 'vue'
+import type { Ref } from 'vue'
 import { STAGE_CONFIG } from '../types'
 
 export interface DigimonFormData {
@@ -16,8 +17,12 @@ export interface DigimonFormData {
   stage: string
 }
 
-export function useDigimonDP(form: Ref<DigimonFormData>) {
-  const currentStageConfig = computed(() => STAGE_CONFIG[form.value.stage as any])
+export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData) {
+  // Handle both Ref and reactive objects
+  const formValue = computed(() => isRef(form) ? form.value : form)
+
+  // Stage configuration
+  const currentStageConfig = computed(() => STAGE_CONFIG[formValue.value.stage as any])
 
   // Base DP pool (from stage only - NOT including bonus DP)
   const baseDP = computed(() => {
@@ -26,12 +31,12 @@ export function useDigimonDP(form: Ref<DigimonFormData>) {
 
   // DP used on base stats
   const dpUsedOnStats = computed(() => {
-    return Object.values(form.value.baseStats).reduce((a, b) => a + b, 0)
+    return Object.values(formValue.value.baseStats).reduce((a, b) => a + b, 0)
   })
 
   // DP used on qualities
   const dpUsedOnQualities = computed(() => {
-    return form.value.qualities.reduce((total, q) => total + (q.dpCost || 0) * (q.ranks || 1), 0)
+    return formValue.value.qualities.reduce((total, q) => total + (q.dpCost || 0) * (q.ranks || 1), 0)
   })
 
   // How much of quality spending comes from base DP (vs bonus DP for qualities)
@@ -52,24 +57,24 @@ export function useDigimonDP(form: Ref<DigimonFormData>) {
 
   // Total bonus DP spent on stats
   const bonusStatsTotal = computed(() => {
-    if (!form.value.bonusStats) return 0
-    return Object.values(form.value.bonusStats).reduce((a, b) => a + b, 0)
+    if (!formValue.value.bonusStats) return 0
+    return Object.values(formValue.value.bonusStats).reduce((a, b) => a + b, 0)
   })
 
   // Bonus DP available for stats (excluding DP allocated to qualities)
   const bonusDPForStats = computed(() => {
-    return Math.max(0, (form.value.bonusDP || 0) - (form.value.bonusDPForQualities || 0))
+    return Math.max(0, (formValue.value.bonusDP || 0) - (formValue.value.bonusDPForQualities || 0))
   })
 
   // Bonus DP remaining
   const bonusDPRemaining = computed(() => {
-    return Math.max(0, (form.value.bonusDP || 0) - bonusStatsTotal.value - (form.value.bonusDPForQualities || 0))
+    return Math.max(0, (formValue.value.bonusDP || 0) - bonusStatsTotal.value - (formValue.value.bonusDPForQualities || 0))
   })
 
   // Total DP for qualities (base available + bonus allocated)
   const totalDPForQualities = computed(() => {
     const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
-    return baseDPAvailableForQualities + (form.value.bonusDPForQualities || 0)
+    return baseDPAvailableForQualities + (formValue.value.bonusDPForQualities || 0)
   })
 
   // Available DP for qualities
@@ -92,8 +97,8 @@ export function useDigimonDP(form: Ref<DigimonFormData>) {
 
   // Maximum bonus DP that can be allocated to qualities
   const maxBonusDPForQualities = computed(() => {
-    const statsTotal = form.value.bonusStats ? bonusStatsTotal.value : 0
-    return Math.max(minBonusDPForQualities.value, (form.value.bonusDP || 0) - statsTotal)
+    const statsTotal = formValue.value.bonusStats ? bonusStatsTotal.value : 0
+    return Math.max(minBonusDPForQualities.value, (formValue.value.bonusDP || 0) - statsTotal)
   })
 
   // Check if bonus stats are overspent
