@@ -71,7 +71,7 @@ export default defineEventHandler(async (event) => {
     aspects: body.aspects || [],
     torments: body.torments || [],
     specialOrders: [],
-    inspiration: Math.max(1, body.attributes.willpower),
+    inspiration: 1,
     xp: 0,
     equipment: [],
     currentWounds: 0,
