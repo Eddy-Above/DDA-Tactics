@@ -113,6 +113,7 @@ const baseDPRemaining = computed(() => {
 })
 
 const bonusStatsTotal = computed(() => {
+  if (!form.bonusStats) return 0
   return Object.values(form.bonusStats).reduce((a, b) => a + b, 0)
 })
 
