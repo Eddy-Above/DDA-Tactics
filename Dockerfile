@@ -5,14 +5,14 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json ./
+# Copy package files from app directory
+COPY app/package.json app/package-lock.json ./
 
 # Install dependencies with npm
 RUN npm ci
 
-# Copy source code
-COPY . .
+# Copy source code from app directory
+COPY app/ .
 
 # Build the application
 RUN npm run build
