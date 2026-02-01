@@ -22,7 +22,12 @@ export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData) {
   const formValue = computed(() => isRef(form) ? form.value : form)
 
   // Stage configuration
-  const currentStageConfig = computed(() => STAGE_CONFIG[formValue.value.stage as any])
+  const currentStageConfig = computed(() => {
+    if (!STAGE_CONFIG || !formValue.value.stage) {
+      return { stage: 'rookie' as const, dp: 25, movement: 6, woundBonus: 2, brainsBonus: 3, attacks: 2, stageBonus: 1 }
+    }
+    return STAGE_CONFIG[formValue.value.stage as keyof typeof STAGE_CONFIG]
+  })
 
   // Base DP pool (from stage only - NOT including bonus DP)
   const baseDP = computed(() => {
