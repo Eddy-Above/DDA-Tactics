@@ -104,11 +104,15 @@ export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
 
   const currentStageConfig = computed(() => {
     if (!STAGE_CONFIG || !form.stage) return { stage: 'rookie', dp: 30, movement: 6, woundBonus: 2, brainsBonus: 0, attacks: 6, stageBonus: 0 }
-    return STAGE_CONFIG[form.stage]
+    const config = STAGE_CONFIG[form.stage]
+    if (!config) return { stage: 'rookie', dp: 30, movement: 6, woundBonus: 2, brainsBonus: 0, attacks: 6, stageBonus: 0 }
+    return config
   })
   const currentSizeConfig = computed(() => {
     if (!SIZE_CONFIG || !form.size) return { size: 'medium', bodyBonus: 0, agilityBonus: 0, squares: '1x1', extra: '' }
-    return SIZE_CONFIG[form.size]
+    const config = SIZE_CONFIG[form.size]
+    if (!config) return { size: 'medium', bodyBonus: 0, agilityBonus: 0, squares: '1x1', extra: '' }
+    return config
   })
 
   // ========================

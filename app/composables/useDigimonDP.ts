@@ -6,7 +6,7 @@
 
 import { computed, isRef } from 'vue'
 import type { Ref } from 'vue'
-import { STAGE_CONFIG } from '../types'
+import { STAGE_CONFIG } from '../types/index'
 
 export interface DigimonFormData {
   baseStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
@@ -26,7 +26,11 @@ export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData) {
     if (!STAGE_CONFIG || !formValue.value.stage) {
       return { stage: 'rookie' as const, dp: 25, movement: 6, woundBonus: 2, brainsBonus: 3, attacks: 2, stageBonus: 1 }
     }
-    return STAGE_CONFIG[formValue.value.stage as keyof typeof STAGE_CONFIG]
+    const config = STAGE_CONFIG[formValue.value.stage as keyof typeof STAGE_CONFIG]
+    if (!config) {
+      return { stage: 'rookie' as const, dp: 25, movement: 6, woundBonus: 2, brainsBonus: 3, attacks: 2, stageBonus: 1 }
+    }
+    return config
   })
 
   // Base DP pool (from stage only - NOT including bonus DP)
