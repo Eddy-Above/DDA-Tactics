@@ -397,13 +397,8 @@ function getEvolutionPath(chainId: string): Digimon[] {
 
 // Get all movement types available to a Digimon based on qualities
 function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
-  const stageBaseMove = calcDigimonStats(digimon).movement
-
-  // Check for Speedy quality (adds +2 movement per rank, max 2x base)
-  const speedyQuality = digimon.qualities.find(q => q.id === 'speedy')
-  const speedyRanks = speedyQuality?.ranks || 0
-  const speedyBonus = Math.min(speedyRanks * 2, stageBaseMove) // Can't exceed 2x base (so bonus = base max)
-  const baseMove = stageBaseMove + speedyBonus
+  // calcDigimonStats() already includes all movement modifiers (Speedy, Bulky, Instinct, etc.)
+  const baseMove = calcDigimonStats(digimon).movement
 
   const halfMove = Math.floor(baseMove / 2)
 
