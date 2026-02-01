@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
+import { parseDigimonData } from '../../utils/parsers'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
 
@@ -26,5 +27,5 @@ export default defineEventHandler(async (event) => {
   }
 
   const allDigimon = await queryBuilder
-  return allDigimon
+  return allDigimon.map(parseDigimonData)
 })

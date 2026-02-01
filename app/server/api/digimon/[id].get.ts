@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
+import { parseDigimonData } from '../../utils/parsers'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -20,5 +21,5 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  return found
+  return parseDigimonData(found)
 })
