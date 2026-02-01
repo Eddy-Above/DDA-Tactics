@@ -81,15 +81,18 @@ onMounted(async () => {
     Object.assign(form.attributes, fetched.attributes)
     Object.assign(form.skills, fetched.skills)
     // Load aspects
-    const majorAspect = fetched.aspects?.find(a => a.type === 'major')
-    const minorAspect = fetched.aspects?.find(a => a.type === 'minor')
-    if (majorAspect) {
-      form.majorAspect.name = majorAspect.name
-      form.majorAspect.description = majorAspect.description
-    }
-    if (minorAspect) {
-      form.minorAspect.name = minorAspect.name
-      form.minorAspect.description = minorAspect.description
+    if (fetched.aspects && fetched.aspects.length > 0) {
+      form.aspects = fetched.aspects
+      const majorAspect = fetched.aspects.find(a => a.type === 'major')
+      const minorAspect = fetched.aspects.find(a => a.type === 'minor')
+      if (majorAspect) {
+        form.majorAspect.name = majorAspect.name
+        form.majorAspect.description = majorAspect.description
+      }
+      if (minorAspect) {
+        form.minorAspect.name = minorAspect.name
+        form.minorAspect.description = minorAspect.description
+      }
     }
     form.notes = fetched.notes || ''
     form.spriteUrl = fetched.spriteUrl || ''
@@ -120,7 +123,7 @@ onMounted(async () => {
 
 async function handleSubmit() {
   if (!tamer.value) return
-  // Build aspects array
+  // Build aspects array from major/minor aspects
   const aspects: Array<{ id: string; name: string; description: string; type: 'major' | 'minor'; usesRemaining: number }> = []
   if (form.majorAspect.name) {
     const existingMajor = tamer.value.aspects?.find(a => a.type === 'major')
