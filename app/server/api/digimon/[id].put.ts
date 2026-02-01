@@ -104,11 +104,11 @@ export default defineEventHandler(async (event) => {
   }
 
   // Stringify JSON fields for storage
-  if (updateData.baseStats) updateData.baseStats = JSON.stringify(updateData.baseStats)
-  if (updateData.attacks) updateData.attacks = JSON.stringify(updateData.attacks)
-  if (updateData.qualities) updateData.qualities = JSON.stringify(updateData.qualities)
-  if (updateData.bonusStats) updateData.bonusStats = JSON.stringify(updateData.bonusStats)
-  if (updateData.evolutionPathIds) updateData.evolutionPathIds = JSON.stringify(updateData.evolutionPathIds)
+  if (updateData.baseStats !== undefined) updateData.baseStats = JSON.stringify(updateData.baseStats)
+  if (updateData.attacks !== undefined) updateData.attacks = JSON.stringify(updateData.attacks)
+  if (updateData.qualities !== undefined) updateData.qualities = JSON.stringify(updateData.qualities)
+  if (updateData.bonusStats !== undefined) updateData.bonusStats = JSON.stringify(updateData.bonusStats)
+  if (updateData.evolutionPathIds !== undefined) updateData.evolutionPathIds = JSON.stringify(updateData.evolutionPathIds)
 
   await db.update(digimon).set(updateData).where(eq(digimon.id, id))
 
