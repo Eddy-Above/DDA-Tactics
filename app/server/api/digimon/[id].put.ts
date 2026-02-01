@@ -1,5 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type Digimon } from '../../db'
+import { parseDigimonData } from '../../utils/parsers'
 
 type UpdateDigimonBody = Partial<Omit<Digimon, 'id' | 'createdAt' | 'updatedAt'>> & {
   syncBonusDP?: boolean // Whether to sync bonusDP to all linked evolution forms
@@ -65,7 +66,7 @@ export default defineEventHandler(async (event) => {
       const [oldParent] = await db.select().from(digimon).where(eq(digimon.id, oldFromId))
       if (oldParent) {
         const updatedPaths = (oldParent.evolutionPathIds || []).filter((pathId) => pathId !== id)
-        await db.update(digimon).set({ evolutionPathIds: updatedPaths, updatedAt: now }).where(eq(digimon.id, oldFromId))
+        await db.update(digimon).set({ evolutionPathIds: JSON.stringify(updatedPaths), updatedAt: now }).where(eq(digimon.id, oldFromId))
       }
     }
 
@@ -76,7 +77,7 @@ export default defineEventHandler(async (event) => {
         const updatedPaths = [...(newParent.evolutionPathIds || []), id]
         // Avoid duplicates
         const uniquePaths = [...new Set(updatedPaths)]
-        await db.update(digimon).set({ evolutionPathIds: uniquePaths, updatedAt: now }).where(eq(digimon.id, newFromId))
+        await db.update(digimon).set({ evolutionPathIds: JSON.stringify(uniquePaths), updatedAt: now }).where(eq(digimon.id, newFromId))
       }
     }
   }
@@ -97,16 +98,23 @@ export default defineEventHandler(async (event) => {
 
   // Update digimon (remove syncBonusDP from body as it's not a DB field)
   const { syncBonusDP: _, ...updateFields } = body
-  const updateData = {
+  const updateData: any = {
     ...updateFields,
     updatedAt: now,
   }
+
+  // Stringify JSON fields for storage
+  if (updateData.baseStats) updateData.baseStats = JSON.stringify(updateData.baseStats)
+  if (updateData.attacks) updateData.attacks = JSON.stringify(updateData.attacks)
+  if (updateData.qualities) updateData.qualities = JSON.stringify(updateData.qualities)
+  if (updateData.bonusStats) updateData.bonusStats = JSON.stringify(updateData.bonusStats)
+  if (updateData.evolutionPathIds) updateData.evolutionPathIds = JSON.stringify(updateData.evolutionPathIds)
 
   await db.update(digimon).set(updateData).where(eq(digimon.id, id))
 
   // Return updated digimon
   const [updated] = await db.select().from(digimon).where(eq(digimon.id, id))
-  return updated
+  return parseDigimonData(updated)
 })
 
 // Helper to collect all linked Digimon IDs (ancestors and descendants)

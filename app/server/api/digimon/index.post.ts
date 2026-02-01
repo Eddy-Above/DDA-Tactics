@@ -1,6 +1,7 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type NewDigimon } from '../../db'
 import { generateId } from '../../utils/id'
+import { parseDigimonData } from '../../utils/parsers'
 import {
   type DigimonStage,
   type DigimonAttribute,
@@ -94,17 +95,17 @@ export default defineEventHandler(async (event) => {
     family: body.family,
     type: body.type || null,
     size: body.size || 'medium',
-    baseStats: body.baseStats,
-    attacks: body.attacks || [],
-    qualities: body.qualities || [],
+    baseStats: JSON.stringify(body.baseStats),
+    attacks: JSON.stringify(body.attacks || []),
+    qualities: JSON.stringify(body.qualities || []),
     dataOptimization: body.dataOptimization || null,
     baseDP: stageConfig.dp,
     bonusDP: body.bonusDP || 0,
-    bonusStats: body.bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 },
+    bonusStats: JSON.stringify(body.bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }),
     bonusDPForQualities: body.bonusDPForQualities || 0,
     currentWounds: 0,
     currentStance: 'neutral',
-    evolutionPathIds: body.evolutionPathIds || [],
+    evolutionPathIds: JSON.stringify(body.evolutionPathIds || []),
     evolvesFromId: body.evolvesFromId || null,
     partnerId: body.partnerId || null,
     isEnemy: body.isEnemy || false,
@@ -123,7 +124,7 @@ export default defineEventHandler(async (event) => {
       const [parent] = await db.select().from(digimon).where(eq(digimon.id, body.evolvesFromId))
       if (parent) {
         const updatedPaths = [...new Set([...(parent.evolutionPathIds || []), id])]
-        await db.update(digimon).set({ evolutionPathIds: updatedPaths, updatedAt: now }).where(eq(digimon.id, body.evolvesFromId))
+        await db.update(digimon).set({ evolutionPathIds: JSON.stringify(updatedPaths), updatedAt: now }).where(eq(digimon.id, body.evolvesFromId))
       }
     }
 
@@ -139,5 +140,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  return newDigimon
+  // Fetch and return the created digimon with parsed JSON fields
+  const [created] = await db.select().from(digimon).where(eq(digimon.id, id))
+  return parseDigimonData(created)
 })
