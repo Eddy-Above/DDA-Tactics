@@ -30,6 +30,7 @@ const {
   form,
   basicInfoExpanded,
   baseStatsExpanded,
+  bonusDPExpanded,
   stages,
   sizes,
   attributes,
@@ -75,6 +76,7 @@ const {
 const totalDP = computed(() => baseDP.value)
 const dpUsed = computed(() => dpUsedOnStats.value + dpUsedOnQualities.value)
 const bonusDPAllocated = computed(() => bonusStatsTotal.value + (form.bonusDPForQualities || 0))
+const qualitiesFromBaseDP = computed(() => Math.max(0, dpUsedOnQualities.value - (form.bonusDPForQualities || 0)))
 
 // Handler for attacks - delegates to handleAddQuality logic
 function handleAddAttack(attack: any) {
@@ -112,6 +114,8 @@ async function loadDigimon() {
         evolutionPathIds: data.evolutionPathIds || [],
         syncBonusDP: data.syncBonusDP ?? true,
       })
+      // Reset UI state
+      baseStatsExpanded.value = false
     }
   } finally {
     initialLoading.value = false

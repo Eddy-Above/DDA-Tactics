@@ -7,6 +7,7 @@
 import { computed, isRef } from 'vue'
 import type { Ref } from 'vue'
 import { STAGE_CONFIG } from '../types/index'
+import { QUALITY_DATABASE, getEffectiveDPCost } from '../data/qualities'
 
 export interface DigimonFormData {
   baseStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
@@ -45,7 +46,13 @@ export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData) {
 
   // DP used on qualities
   const dpUsedOnQualities = computed(() => {
-    return formValue.value.qualities.reduce((total, q) => total + (q.dpCost || 0) * (q.ranks || 1), 0)
+    return formValue.value.qualities.reduce((total, q) => {
+      const template = QUALITY_DATABASE.find((t) => t.id === q.id)
+      const baseCost = (q.dpCost || 0) as number
+      if (!template) return total + baseCost * (q.ranks || 1)
+      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, formValue.value.stage, true)
+      return total + cost
+    }, 0)
   })
 
   // How much of quality spending comes from base DP (vs bonus DP for qualities)

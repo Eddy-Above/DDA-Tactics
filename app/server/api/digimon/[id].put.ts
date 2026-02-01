@@ -124,7 +124,7 @@ export default defineEventHandler(async (event) => {
     if (linkedIds.length > 0) {
       const dpUpdate: Record<string, unknown> = { updatedAt: now }
       if (body.bonusDP !== undefined) dpUpdate.bonusDP = body.bonusDP
-      if (body.bonusStats !== undefined) dpUpdate.bonusStats = body.bonusStats
+      if (body.bonusStats !== undefined) dpUpdate.bonusStats = JSON.stringify(body.bonusStats)
       if (body.bonusDPForQualities !== undefined) dpUpdate.bonusDPForQualities = body.bonusDPForQualities
 
       await db.update(digimon).set(dpUpdate).where(inArray(digimon.id, linkedIds))

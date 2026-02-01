@@ -1,15 +1,17 @@
 /**
  * Digimon Form Composable
  * Extracted from duplicated digimon form pages (new.vue and [id].vue)
- * Manages all form state, calculations, and operations for creating/editing Digimon
+ * Orchestrates feature composables for stats, qualities, and attacks
  */
 
+import { computed, ref, reactive, watch } from 'vue'
 import type { Digimon } from '../server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types/index'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../data/qualities'
-import { getTagPatternForQuality } from '../data/attackConstants'
-import { useDigimonDP, type DigimonFormData } from './useDigimonDP'
-import { useAttackTags, type Attack, type NewAttack } from './useAttackTags'
+import type { Attack } from './useAttackTags'
+import { useDigimonStats } from './useDigimonStats'
+import { useDigimonQualities } from './useDigimonQualities'
+import { useDigimonAttacks } from './useDigimonAttacks'
 
 export interface CreateDigimonData {
   name: string
@@ -81,7 +83,7 @@ function getSpeedyMaxRanks(
 
 export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
   // ========================
-  // Form State
+  // Form State (Basic Info)
   // ========================
   const form = reactive<CreateDigimonData>({
     name: initialData?.name || '',
@@ -108,275 +110,11 @@ export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
   })
 
   // ========================
-  // Collapsible Sections
+  // Collapsible UI State
   // ========================
   const basicInfoExpanded = ref(false)
   const baseStatsExpanded = ref(false)
-
-  // ========================
-  // Stage Configuration
-  // ========================
-  const stages: DigimonStage[] = ['fresh', 'in-training', 'rookie', 'champion', 'ultimate', 'mega']
-  const sizes: DigimonSize[] = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
-  const attributes = ['vaccine', 'data', 'virus', 'free'] as const
-
-  const families: DigimonFamily[] = [
-    'dark-empire',
-    'deep-savers',
-    'dragons-roar',
-    'jungle-troopers',
-    'metal-empire',
-    'nature-spirits',
-    'nightmare-soldiers',
-    'unknown',
-    'virus-busters',
-    'wind-guardians',
-  ]
-
-  const familyLabels: Record<DigimonFamily, string> = {
-    'dark-empire': 'Dark Empire',
-    'deep-savers': 'Deep Savers',
-    'dragons-roar': "Dragon's Roar",
-    'jungle-troopers': 'Jungle Troopers',
-    'metal-empire': 'Metal Empire',
-    'nature-spirits': 'Nature Spirits',
-    'nightmare-soldiers': 'Nightmare Soldiers',
-    'unknown': 'Unknown',
-    'virus-busters': 'Virus Busters',
-    'wind-guardians': 'Wind Guardians',
-  }
-
-  const currentStageConfig = computed(() => {
-    if (!STAGE_CONFIG || !form.stage) return { stage: 'rookie', dp: 30, movement: 6, woundBonus: 2, brainsBonus: 0, attacks: 6, stageBonus: 0 }
-    const config = STAGE_CONFIG[form.stage]
-    if (!config) return { stage: 'rookie', dp: 30, movement: 6, woundBonus: 2, brainsBonus: 0, attacks: 6, stageBonus: 0 }
-    return config
-  })
-  const currentSizeConfig = computed(() => {
-    if (!SIZE_CONFIG || !form.size) return { size: 'medium', bodyBonus: 0, agilityBonus: 0, squares: '1x1', extra: '' }
-    const config = SIZE_CONFIG[form.size]
-    if (!config) return { size: 'medium', bodyBonus: 0, agilityBonus: 0, squares: '1x1', extra: '' }
-    return config
-  })
-
-  // ========================
-  // DP Calculations
-  // ========================
-  const {
-    baseDP,
-    dpUsedOnStats,
-    dpUsedOnQualities,
-    baseDPRemaining,
-    bonusStatsTotal,
-    bonusDPForStats,
-    bonusDPRemaining,
-    totalDPForQualities,
-    availableDPForQualities,
-    canAddQualities,
-    minBonusDPForQualities,
-    maxBonusDPForQualities,
-    bonusStatsOverspent,
-  } = useDigimonDP(form as any)
-
-  // ========================
-  // Attack Management
-  // ========================
-  const showCustomAttackForm = ref(false)
-  const editingAttackIndex = ref(-1)
-
-  const newAttack = reactive<NewAttack>({
-    name: '',
-    range: 'melee',
-    type: 'damage',
-    tags: [],
-    effect: undefined,
-    description: '',
-  })
-
-  const { usedAttackTags, countAttacksWithTag, isTagAlreadyUsed, availableAttackTags, usedEffects, availableEffectTags, addTagToAttack, removeTagFromAttack } = useAttackTags(form as any, newAttack as any)
-
-  // ========================
-  // Derived Stats
-  // ========================
-  const derivedStats = computed(() => {
-    const accuracy = form.baseStats.accuracy + (form.bonusStats?.accuracy || 0)
-    const damage = form.baseStats.damage + (form.bonusStats?.damage || 0)
-    const dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0)
-    const armor = form.baseStats.armor + (form.bonusStats?.armor || 0)
-    const health = form.baseStats.health + (form.bonusStats?.health || 0)
-    const stageConfig = currentStageConfig.value
-    const sizeConfig = currentSizeConfig.value
-
-    const brains = Math.floor(accuracy / 2) + stageConfig.brainsBonus
-    const body = Math.max(0, Math.floor((health + damage + armor) / 3) + sizeConfig.bodyBonus)
-    const agility = Math.max(0, Math.floor((accuracy + dodge) / 2) + sizeConfig.agilityBonus)
-
-    const bit = Math.floor(brains / 10) + stageConfig.stageBonus
-    const cpu = Math.floor(body / 10) + stageConfig.stageBonus
-    const ram = Math.floor(agility / 10) + stageConfig.stageBonus
-
-    const stageBaseMovement = stageConfig.movement
-    const qualities = form.qualities || []
-
-    // Calculate effective base movement (after base movement modifiers)
-    let effectiveBase = stageBaseMovement
-
-    // Data Optimization modifiers
-    const dataOpt = qualities.find((q) => q.id === 'data-optimization')
-    if (dataOpt?.choiceId === 'speed-striker') effectiveBase += 2
-    if (dataOpt?.choiceId === 'guardian') effectiveBase -= 1
-
-    // Data Specialization modifiers
-    const dataSpec = qualities.find((q) => q.id === 'data-specialization')
-    if (dataSpec?.choiceId === 'mobile-artillery') effectiveBase -= 1
-
-    // Negative quality modifiers
-    const bulky = qualities.find((q) => q.id === 'bulky')
-    if (bulky) effectiveBase -= (bulky.ranks || 0) * 3
-
-    // Boosting quality modifiers
-    const instinct = qualities.find((q) => q.id === 'instinct')
-    if (instinct) effectiveBase += instinct.ranks || 0
-
-    // Ensure minimum effective base of 1
-    effectiveBase = Math.max(1, effectiveBase)
-
-    // Apply Speedy bonus (capped at 2x or 3x effective base with Advanced Movement)
-    const hasAdvMovement = qualities.some(
-      (q) => q.id === 'advanced-mobility' && q.choiceId === 'adv-movement'
-    )
-    const speedyMaxMultiplier = hasAdvMovement ? 3 : 2
-    const speedyCap = effectiveBase * speedyMaxMultiplier
-    const speedyQuality = qualities.find((q) => q.id === 'speedy')
-    const speedyRanks = speedyQuality?.ranks || 0
-    const speedyBonus = Math.min(speedyRanks * 2, speedyCap)
-
-    const movement = effectiveBase + speedyBonus
-
-    return {
-      brains,
-      body,
-      agility,
-      bit,
-      cpu,
-      ram,
-      woundBoxes: health + stageConfig.woundBonus,
-      movement,
-      baseMovement: effectiveBase,
-      stageBonus: stageConfig.stageBonus,
-    }
-  })
-
-  // Compute current Speedy max ranks based on effective base movement
-  const currentSpeedyMaxRanks = computed(() => {
-    const effectiveBase = derivedStats.value.baseMovement
-    const hasAdvMovement = (form.qualities || []).some(
-      (q) => q.id === 'advanced-mobility' && q.choiceId === 'adv-movement'
-    )
-    return getSpeedyMaxRanks(effectiveBase, hasAdvMovement)
-  })
-
-  // Auto-validate Speedy ranks when max changes
-  watch(currentSpeedyMaxRanks, (newMax) => {
-    const speedyQuality = (form.qualities || []).find((q) => q.id === 'speedy')
-    if (speedyQuality && (speedyQuality.ranks || 1) > newMax) {
-      speedyQuality.ranks = newMax
-    }
-  })
-
-  // ========================
-  // Quality Management
-  // ========================
-  const handleAddQuality = (quality: any) => {
-    const qualityCost = (quality.dpCost || 0) * (quality.ranks || 1)
-    const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
-    const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
-    const newTotalUsed = dpUsedOnQualities.value + qualityCost
-
-    if (newTotalUsed > totalDPForQualitiesVal) {
-      return
-    }
-
-    form.qualities = [...(form.qualities || []), quality]
-  }
-
-  const handleUpdateQualityRanks = (index: number, ranks: number) => {
-    if (!form.qualities || !form.qualities[index]) return
-    form.qualities = form.qualities.map((q, i) => (i === index ? { ...q, ranks } : q))
-  }
-
-  const removeQuality = (index: number) => {
-    const qualityToRemove = form.qualities?.[index]
-    if (!qualityToRemove) return
-
-    form.qualities = form.qualities?.filter((_, i) => i !== index) || []
-
-    const tagPattern = getTagPatternForQuality(qualityToRemove.id)
-    if (tagPattern) {
-      form.attacks = form.attacks?.filter((attack) => {
-        const hasTag = attack.tags.some((t) => t.startsWith(tagPattern))
-        return !hasTag
-      }) || []
-    }
-
-    if (qualityToRemove.id.startsWith('effect-')) {
-      const effectName = qualityToRemove.name
-      form.attacks = form.attacks?.filter((attack) => {
-        return attack.effect !== effectName
-      }) || []
-    }
-  }
-
-  // ========================
-  // Attack CRUD Operations
-  // ========================
-  const addCustomAttack = () => {
-    if (!newAttack.name) return
-
-    const attackData: Attack = {
-      id: editingAttackIndex.value >= 0 ? form.attacks![editingAttackIndex.value].id : `attack-${Date.now()}`,
-      name: newAttack.name,
-      range: newAttack.range,
-      type: newAttack.type,
-      tags: [...newAttack.tags],
-      effect: newAttack.effect || undefined,
-      description: newAttack.description,
-    }
-
-    if (editingAttackIndex.value >= 0) {
-      form.attacks = form.attacks?.map((attack, i) => (i === editingAttackIndex.value ? attackData : attack)) || []
-    } else {
-      form.attacks = [...(form.attacks || []), attackData]
-    }
-
-    newAttack.name = ''
-    newAttack.range = 'melee'
-    newAttack.type = 'damage'
-    newAttack.tags = []
-    newAttack.effect = ''
-    newAttack.description = ''
-    editingAttackIndex.value = -1
-    showCustomAttackForm.value = false
-  }
-
-  const removeAttack = (index: number) => {
-    form.attacks = form.attacks?.filter((_, i) => i !== index) || []
-  }
-
-  const editAttack = (index: number) => {
-    const attack = form.attacks?.[index]
-    if (!attack) return
-
-    newAttack.name = attack.name
-    newAttack.range = attack.range
-    newAttack.type = attack.type
-    newAttack.tags = [...attack.tags]
-    newAttack.effect = attack.effect || ''
-    newAttack.description = attack.description
-
-    editingAttackIndex.value = index
-    showCustomAttackForm.value = true
-  }
+  const bonusDPExpanded = ref(false)
 
   // ========================
   // Sprite Management
@@ -395,141 +133,70 @@ export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
   )
 
   // ========================
-  // Watchers for Constraints
+  // Compose Feature Composables
+  // ========================
+
+  // 1. Create attacks composable (no dependencies)
+  const attacksComposable = useDigimonAttacks(form)
+
+  // 2. Create stats composable (no dependencies - dpUsedOnQualities comes from useDigimonDP internally)
+  const statsComposable = useDigimonStats(form)
+
+  // 3. Create qualities composable (with stats outputs + attack callback)
+  const qualitiesComposable = useDigimonQualities({
+    form,
+    availableDPForQualities: statsComposable.availableDPForQualities,
+    dpUsedOnStats: statsComposable.dpUsedOnStats,
+    baseDP: statsComposable.baseDP,
+    onRemoveAttacksForQuality: attacksComposable.removeAttacksForQuality,
+  })
+
+  // ========================
+  // Cross-Cutting Watchers
   // ========================
 
   // Enforce bonus DP for qualities stays within valid range
   watch(
     () => form.bonusDPForQualities,
     (newVal) => {
-      if (newVal < minBonusDPForQualities.value) {
-        form.bonusDPForQualities = minBonusDPForQualities.value
-      } else if (newVal > maxBonusDPForQualities.value) {
-        form.bonusDPForQualities = maxBonusDPForQualities.value
+      if (newVal != null) {
+        if (newVal < statsComposable.minBonusDPForQualities.value) {
+          form.bonusDPForQualities = statsComposable.minBonusDPForQualities.value
+        } else if (newVal > statsComposable.maxBonusDPForQualities.value) {
+          form.bonusDPForQualities = statsComposable.maxBonusDPForQualities.value
+        }
       }
     }
   )
 
   // Enforce when bonus stats change
   watch(
-    () => bonusStatsTotal.value,
+    () => statsComposable.bonusStatsTotal.value,
     () => {
-      if (form.bonusDPForQualities > maxBonusDPForQualities.value) {
-        form.bonusDPForQualities = maxBonusDPForQualities.value
+      if ((form.bonusDPForQualities ?? 0) > statsComposable.maxBonusDPForQualities.value) {
+        form.bonusDPForQualities = statsComposable.maxBonusDPForQualities.value
       }
     }
   )
 
   // Enforce when quality spending changes
   watch(
-    () => minBonusDPForQualities.value,
+    () => statsComposable.minBonusDPForQualities.value,
     (newMin) => {
-      if (form.bonusDPForQualities < newMin) {
+      if ((form.bonusDPForQualities ?? 0) < newMin) {
         form.bonusDPForQualities = newMin
       }
     }
   )
 
-  // Track previous stat values to revert changes that exceed limits
-  const prevBonusStats = ref({ ...form.bonusStats })
-  const prevBaseStats = ref({ ...form.baseStats })
-
+  // Auto-validate Speedy ranks when max changes
   watch(
-    () => form.bonusStats,
-    (stats) => {
-      const total = Object.values(stats).reduce((a, b) => a + b, 0)
-      const max = bonusDPForStats.value
-      if (total > max) {
-        for (const key of Object.keys(stats) as (keyof typeof stats)[]) {
-          if (stats[key] !== prevBonusStats.value[key]) {
-            form.bonusStats[key] = prevBonusStats.value[key]
-          }
-        }
-      } else {
-        prevBonusStats.value = { ...stats }
+    () => statsComposable.currentSpeedyMaxRanks.value,
+    (newMax) => {
+      const speedyQuality = (form.qualities || []).find((q) => q.id === 'speedy')
+      if (speedyQuality && (speedyQuality.ranks || 1) > newMax) {
+        speedyQuality.ranks = newMax
       }
-    },
-    { deep: true }
-  )
-
-  watch(
-    () => form.baseStats,
-    (stats) => {
-      const total = Object.values(stats).reduce((a, b) => a + b, 0)
-      const qualitiesFromBaseDP = Math.max(0, dpUsedOnQualities.value - (form.bonusDPForQualities || 0))
-      const maxForStats = baseDP.value - qualitiesFromBaseDP
-      if (total > maxForStats) {
-        for (const key of Object.keys(stats) as (keyof typeof stats)[]) {
-          if (stats[key] !== prevBaseStats.value[key]) {
-            form.baseStats[key] = prevBaseStats.value[key]
-          }
-        }
-      } else {
-        prevBaseStats.value = { ...stats }
-      }
-    },
-    { deep: true }
-  )
-
-  // Watch for attack type changes - clear invalid effects
-  watch(
-    () => newAttack.type,
-    (newType) => {
-      if (newAttack.effect) {
-        const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
-          'effect-vigor': 'P',
-          'effect-fury': 'P',
-          'effect-cleanse': 'P',
-          'effect-haste': 'P',
-          'effect-revitalize': 'P',
-          'effect-shield': 'P',
-          'effect-poison': 'N',
-          'effect-confuse': 'N',
-          'effect-stun': 'N',
-          'effect-fear': 'N',
-          'effect-immobilize': 'N',
-          'effect-taunt': 'N',
-          'effect-lifesteal': 'NA',
-          'effect-knockback': 'NA',
-          'effect-pull': 'NA',
-        }
-        const alignment = EFFECT_ALIGNMENT[newAttack.effect]
-        if (alignment === 'P' && newType !== 'support') {
-          newAttack.effect = ''
-        } else if (alignment === 'N' && newType !== 'damage') {
-          newAttack.effect = ''
-        }
-      }
-    }
-  )
-
-  // Watch for attack range changes - clear invalid tags
-  watch(
-    () => newAttack.range,
-    (newRange) => {
-      newAttack.tags = newAttack.tags.filter((tag) => {
-        const TAG_RESTRICTIONS: Record<string, any> = {}
-        const restriction = TAG_RESTRICTIONS[tag]
-        if (restriction?.range && restriction.range !== newRange) {
-          return false
-        }
-        return true
-      })
-    }
-  )
-
-  // Watch for attack type changes - clear invalid tags
-  watch(
-    () => newAttack.type,
-    (newType) => {
-      newAttack.tags = newAttack.tags.filter((tag) => {
-        const TAG_RESTRICTIONS: Record<string, any> = {}
-        const restriction = TAG_RESTRICTIONS[tag]
-        if (restriction?.type && restriction.type !== newType) {
-          return false
-        }
-        return true
-      })
     }
   )
 
@@ -587,59 +254,61 @@ export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
     }
   )
 
+  // ========================
+  // Re-export Everything
+  // ========================
   return {
-    // State
+    // Form & UI state
     form,
     basicInfoExpanded,
     baseStatsExpanded,
-    showCustomAttackForm,
-    editingAttackIndex,
-    newAttack,
+    bonusDPExpanded,
     spriteError,
-
-    // Configuration
-    stages,
-    sizes,
-    attributes,
-    families,
-    familyLabels,
-    currentStageConfig,
-    currentSizeConfig,
-
-    // DP and calculations
-    baseDP,
-    dpUsedOnStats,
-    dpUsedOnQualities,
-    baseDPRemaining,
-    bonusStatsTotal,
-    bonusDPForStats,
-    bonusDPRemaining,
-    totalDPForQualities,
-    availableDPForQualities,
-    canAddQualities,
-    minBonusDPForQualities,
-    maxBonusDPForQualities,
-    bonusStatsOverspent,
-    derivedStats,
-    currentSpeedyMaxRanks,
-
-    // Attack tags
-    usedAttackTags,
-    countAttacksWithTag,
-    isTagAlreadyUsed,
-    availableAttackTags,
-    usedEffects,
-    availableEffectTags,
-    addTagToAttack,
-    removeTagFromAttack,
-
-    // Operations
-    handleAddQuality,
-    handleUpdateQualityRanks,
-    removeQuality,
-    addCustomAttack,
-    removeAttack,
-    editAttack,
     handleSpriteError,
+
+    // Stats composable exports (23 total)
+    stages: statsComposable.stages,
+    sizes: statsComposable.sizes,
+    attributes: statsComposable.attributes,
+    families: statsComposable.families,
+    familyLabels: statsComposable.familyLabels,
+    currentStageConfig: statsComposable.currentStageConfig,
+    currentSizeConfig: statsComposable.currentSizeConfig,
+    baseDP: statsComposable.baseDP,
+    dpUsedOnStats: statsComposable.dpUsedOnStats,
+    baseDPRemaining: statsComposable.baseDPRemaining,
+    bonusStatsTotal: statsComposable.bonusStatsTotal,
+    bonusDPForStats: statsComposable.bonusDPForStats,
+    bonusDPRemaining: statsComposable.bonusDPRemaining,
+    totalDPForQualities: statsComposable.totalDPForQualities,
+    availableDPForQualities: statsComposable.availableDPForQualities,
+    canAddQualities: statsComposable.canAddQualities,
+    minBonusDPForQualities: statsComposable.minBonusDPForQualities,
+    maxBonusDPForQualities: statsComposable.maxBonusDPForQualities,
+    bonusStatsOverspent: statsComposable.bonusStatsOverspent,
+    derivedStats: statsComposable.derivedStats,
+    currentSpeedyMaxRanks: statsComposable.currentSpeedyMaxRanks,
+
+    // Qualities composable exports (4 total)
+    dpUsedOnQualities: qualitiesComposable.dpUsedOnQualities,
+    handleAddQuality: qualitiesComposable.handleAddQuality,
+    handleUpdateQualityRanks: qualitiesComposable.handleUpdateQualityRanks,
+    removeQuality: qualitiesComposable.removeQuality,
+
+    // Attacks composable exports (14 total)
+    showCustomAttackForm: attacksComposable.showCustomAttackForm,
+    editingAttackIndex: attacksComposable.editingAttackIndex,
+    newAttack: attacksComposable.newAttack,
+    usedAttackTags: attacksComposable.usedAttackTags,
+    countAttacksWithTag: attacksComposable.countAttacksWithTag,
+    isTagAlreadyUsed: attacksComposable.isTagAlreadyUsed,
+    availableAttackTags: attacksComposable.availableAttackTags,
+    usedEffects: attacksComposable.usedEffects,
+    availableEffectTags: attacksComposable.availableEffectTags,
+    addTagToAttack: attacksComposable.addTagToAttack,
+    removeTagFromAttack: attacksComposable.removeTagFromAttack,
+    addCustomAttack: attacksComposable.addCustomAttack,
+    removeAttack: attacksComposable.removeAttack,
+    editAttack: attacksComposable.editAttack,
   }
 }

@@ -2,7 +2,7 @@
 import type { CreateDigimonData } from '../../../../composables/useDigimon'
 import type { Digimon } from '../../../../server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../../../../types'
-import { QUALITY_DATABASE, getMaxRanksAtStage } from '../../../../data/qualities'
+import { QUALITY_DATABASE, getMaxRanksAtStage, getEffectiveDPCost } from '../../../../data/qualities'
 
 definePageMeta({
   layout: 'player',
@@ -103,7 +103,13 @@ const dpUsedOnStats = computed(() => {
 })
 
 const dpUsedOnQualities = computed(() => {
-  return (form.qualities || []).reduce((total, q) => total + (q.dpCost || 0) * (q.ranks || 1), 0)
+  return (form.qualities || []).reduce((total, q) => {
+    const template = QUALITY_DATABASE.find((t) => t.id === q.id)
+    const baseCost = (q.dpCost || 0) as number
+    if (!template) return total + baseCost * (q.ranks || 1)
+    const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, form.stage, true)
+    return total + cost
+  }, 0)
 })
 
 const baseDP = computed(() => currentStageConfig.value.dp)

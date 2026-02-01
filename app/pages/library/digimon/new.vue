@@ -633,7 +633,7 @@ async function handleSubmit() {
         </h2>
 
         <!-- Custom attack toggle -->
-        <div v-if="(form.attacks?.length || 0) < currentStageConfig.attacks" class="mb-4">
+        <div v-if="(form.attacks?.length || 0) < currentStageConfig.attacks || showCustomAttackForm" class="mb-4">
           <button
             v-if="!showCustomAttackForm"
             type="button"
