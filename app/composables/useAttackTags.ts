@@ -5,7 +5,7 @@
  */
 
 import { computed, isRef, type Ref } from 'vue'
-import { EFFECT_ALIGNMENT, TAG_RESTRICTIONS, getTagPatternForQuality } from '../data/attackConstants'
+import { EFFECT_ALIGNMENT, EFFECT_ATTACK_TYPE_RESTRICTIONS, TAG_RESTRICTIONS, getTagPatternForQuality, isEffectValidForType } from '../data/attackConstants'
 
 export type Attack = {
   id: string
@@ -305,40 +305,24 @@ export function useAttackTags(form: Ref<DigimonFormData> | DigimonFormData, newA
     const currentTags = newAttackValue.value.tags
     const hasSignatureMove = currentTags.some((t) => t.includes('Signature Move'))
 
-    const effectAlignment: Record<string, 'P' | 'N' | 'NA'> = {
-      'effect-vigor': 'P',
-      'effect-fury': 'P',
-      'effect-cleanse': 'P',
-      'effect-haste': 'P',
-      'effect-revitalize': 'P',
-      'effect-shield': 'P',
-      'effect-poison': 'N',
-      'effect-confuse': 'N',
-      'effect-stun': 'N',
-      'effect-fear': 'N',
-      'effect-immobilize': 'N',
-      'effect-taunt': 'N',
-      'effect-lifesteal': 'NA',
-      'effect-knockback': 'NA',
-      'effect-pull': 'NA',
-    }
     const signatureRestricted = ['effect-poison', 'effect-hazard', 'effect-revitalize']
 
     return (formValue.value.qualities || [])
       .filter((q) => q.id.startsWith('effect-'))
       .map((q) => {
-        const alignment = effectAlignment[q.id] || 'NA'
         const effectName = q.name
+        const alignment = EFFECT_ALIGNMENT[effectName] || 'NA'
         const alreadyUsed = usedEffects.value.has(effectName.toLowerCase())
         let disabled = alreadyUsed
         let disabledReason: string | undefined = alreadyUsed ? 'Already used on another attack' : undefined
 
-        if (!disabled && alignment === 'P' && currentType !== 'support') {
+        // Check attack type restriction using new mapping
+        if (!disabled && !isEffectValidForType(effectName, currentType)) {
           disabled = true
-          disabledReason = 'Requires [Support] attack'
-        } else if (!disabled && alignment === 'N' && currentType !== 'damage') {
-          disabled = true
-          disabledReason = 'Requires [Damage] attack'
+          const restriction = EFFECT_ATTACK_TYPE_RESTRICTIONS[effectName]
+          disabledReason = restriction === 'damage'
+            ? 'Requires [Damage] attack'
+            : 'Requires [Support] attack'
         }
         if (!disabled && hasSignatureMove && signatureRestricted.includes(q.id)) {
           disabled = true

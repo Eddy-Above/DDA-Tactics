@@ -272,33 +272,24 @@ export const evolutionLines = pgTable('evolution_lines', {
   name: text('name').notNull(), // e.g., "Agumon Line", "Gabumon Line"
   description: text('description').notNull().default(''),
 
-  // The ordered chain of Digimon species in this evolution line
-  // Each entry is a "slot" in the line (Fresh → In-Training → Rookie → etc.)
+  // The evolution tree of Digimon forms in this evolution line
+  // Each entry must link to an actual Digimon in the library
+  // GM can lock/unlock individual stages to control progression
+  // Tree structure uses evolvesFromIndex to track parent-child relationships
   chain: text('chain', { mode: 'json' }).notNull().$type<Array<{
     stage: 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
     species: string // Species name (e.g., "Agumon", "Greymon")
-    digimonId: string | null // Link to actual Digimon if created
-    requirements: {
-      type: 'battles' | 'xp' | 'bond' | 'item' | 'special'
-      description: string
-      value: number | null
-      itemName: string | null
-    } | null
+    digimonId: string // Required: Link to actual Digimon sheet from library
+    isUnlocked: boolean // GM can unlock/lock this stage
+    evolvesFromIndex: number | null // Index of parent form in chain (null for root)
   }>>(),
 
   // Which tamer owns this evolution line (for partner Digimon)
   partnerId: text('partner_id').references(() => tamers.id),
 
-  // Current stage index in the chain (0 = first stage)
+  // Current stage index in the chain (0 = first stage, always unlocked)
+  // Tracks which form the Digimon is currently in during the session
   currentStageIndex: integer('current_stage_index').notNull().default(0),
-
-  // Track progress toward next evolution
-  evolutionProgress: text('evolution_progress', { mode: 'json' }).notNull().$type<{
-    battlesWon: number
-    xpEarned: number
-    bondLevel: number
-    itemsCollected: string[]
-  }>(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),

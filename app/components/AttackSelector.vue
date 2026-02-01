@@ -382,12 +382,12 @@ function getAttackStats(attack: Attack) {
             </span>
           </div>
           <!-- Accuracy & Damage stats -->
-          <div v-if="baseStats && attack.type === 'damage'" class="flex items-center gap-3 mt-2">
+          <div v-if="baseStats" class="flex items-center gap-3 mt-2">
             <span class="text-sm text-yellow-400">
               <span class="text-digimon-dark-400">ACC:</span> {{ getAttackStats(attack).accuracy }}d6
               <span v-if="getAttackStats(attack).accuracyBonus > 0" class="text-green-400">(+{{ getAttackStats(attack).accuracyBonus }})</span>
             </span>
-            <span class="text-sm text-red-400">
+            <span v-if="attack.type === 'damage'" class="text-sm text-red-400">
               <span class="text-digimon-dark-400">DMG:</span> {{ getAttackStats(attack).damage }}
               <span v-if="getAttackStats(attack).damageBonus > 0" class="text-green-400">(+{{ getAttackStats(attack).damageBonus }})</span>
             </span>

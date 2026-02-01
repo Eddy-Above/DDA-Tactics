@@ -7,13 +7,8 @@ interface CreateEvolutionLineBody {
   chain: Array<{
     stage: 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega'
     species: string
-    digimonId: string | null
-    requirements: {
-      type: 'battles' | 'xp' | 'bond' | 'item' | 'special'
-      description: string
-      value: number | null
-      itemName: string | null
-    } | null
+    digimonId: string // Required: must link to library Digimon
+    isUnlocked?: boolean
   }>
   partnerId?: string
 }
@@ -28,27 +23,39 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Validate all chain entries have digimonId
+  if (body.chain.some((entry) => !entry.digimonId)) {
+    throw createError({
+      statusCode: 400,
+      message: 'All chain entries must be linked to a Digimon',
+    })
+  }
+
   const id = generateId()
   const now = new Date()
+
+  // Build chain with isUnlocked (first stage unlocked by default, others locked)
+  const chain = body.chain.map((entry, index) => ({
+    ...entry,
+    isUnlocked: index === 0 || (entry.isUnlocked ?? false),
+  }))
 
   const newEvolutionLine = {
     id,
     name: body.name,
     description: body.description || '',
-    chain: body.chain,
+    chain: JSON.stringify(chain), // Explicitly stringify to ensure proper JSON storage
     partnerId: body.partnerId || null,
     currentStageIndex: 0,
-    evolutionProgress: {
-      battlesWon: 0,
-      xpEarned: 0,
-      bondLevel: 0,
-      itemsCollected: [],
-    },
     createdAt: now,
     updatedAt: now,
   }
 
   await db.insert(evolutionLines).values(newEvolutionLine)
 
-  return newEvolutionLine
+  // Return with parsed chain
+  return {
+    ...newEvolutionLine,
+    chain, // Return the array, not the stringified version
+  }
 })

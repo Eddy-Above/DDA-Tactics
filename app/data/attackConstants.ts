@@ -2,13 +2,14 @@
 // Extracted from duplicate definitions in [id].vue and new.vue
 
 /**
- * Effect alignment determines which attack type an effect can be used with
- * P = Support only, N = Damage only, NA = Both
+ * Effect alignment determines the resolution mechanics per game rules
+ * P = Positive (uses ally Health roll for duration), N = Negative (uses enemy Dodge roll), NA = Non-Aligned
+ * This is separate from which attack types an effect can be applied to (see EFFECT_ATTACK_TYPE_RESTRICTIONS)
  */
 export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Vigor': 'P',
   'Fury': 'P',
-  'Cleanse': 'P',
+  'Cleanse': 'NA',
   'Haste': 'P',
   'Revitalize': 'P',
   'Shield': 'P',
@@ -21,6 +22,48 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Knockback': 'NA',
   'Pull': 'NA',
   'Taunt': 'NA',
+}
+
+/**
+ * Attack type restrictions define which attack types each effect can be applied to
+ * Based on Attack Effects Glossary rules:
+ * - 'damage': Effect can only be applied to [Damage] attacks
+ * - 'support': Effect can only be applied to [Support] attacks
+ * - 'both': Effect can be applied to either attack type
+ */
+export const EFFECT_ATTACK_TYPE_RESTRICTIONS: Record<string, 'damage' | 'support' | 'both'> = {
+  // Support-only effects (all [P] buffs)
+  'Vigor': 'support',
+  'Fury': 'support',
+  'Cleanse': 'both',
+  'Haste': 'support',
+  'Revitalize': 'support',
+  'Shield': 'support',
+  'Strengthen': 'support',
+  'Vigilance': 'support',
+  'Swiftness': 'support',
+
+  // Damage-only effects (require dealing damage or explicitly stated)
+  'Lifesteal': 'damage',
+  'DOT': 'damage',
+  'Burn': 'damage',
+
+  // Both types allowed (all other effects)
+  'Poison': 'both',
+  'Confuse': 'both',
+  'Stun': 'both',
+  'Fear': 'both',
+  'Immobilize': 'both',
+  'Taunt': 'both',
+  'Knockback': 'both',
+  'Pull': 'both',
+  'Weaken': 'both',
+  'Distract': 'both',
+  'Exploit': 'both',
+  'Pacify': 'both',
+  'Blind': 'both',
+  'Paralysis': 'both',
+  'Lag': 'both',
 }
 
 /**
@@ -64,12 +107,10 @@ export function getTagPatternForQuality(qualityId: string): string | null {
  * @returns true if the effect is valid for the attack type
  */
 export function isEffectValidForType(effect: string, attackType: 'damage' | 'support'): boolean {
-  const alignment = EFFECT_ALIGNMENT[effect]
-  if (!alignment) return true // Unknown effects are allowed
-  if (alignment === 'NA') return true // Both types allowed
-  if (alignment === 'P' && attackType === 'support') return true
-  if (alignment === 'N' && attackType === 'damage') return true
-  return false
+  const restriction = EFFECT_ATTACK_TYPE_RESTRICTIONS[effect]
+  if (!restriction) return true // Unknown effects are allowed
+  if (restriction === 'both') return true
+  return restriction === attackType
 }
 
 /**

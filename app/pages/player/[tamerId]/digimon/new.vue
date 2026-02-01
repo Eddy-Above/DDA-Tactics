@@ -3,6 +3,7 @@ import type { CreateDigimonData } from '../../../../composables/useDigimon'
 import type { Digimon } from '../../../../server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../../../../types'
 import { QUALITY_DATABASE, getMaxRanksAtStage, getEffectiveDPCost } from '../../../../data/qualities'
+import { isEffectValidForType } from '../../../../data/attackConstants'
 
 definePageMeta({
   layout: 'player',
@@ -681,28 +682,10 @@ watch(() => form.evolutionPathIds, async (newIds) => {
   }
 }, { deep: true })
 
-// Stage change handler
-const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
-  'Vigor': 'P', 'Fury': 'P', 'Cleanse': 'P', 'Haste': 'P', 'Revitalize': 'P', 'Shield': 'P',
-  'Poison': 'N', 'Confuse': 'N', 'Stun': 'N', 'Fear': 'N', 'Immobilize': 'N',
-  'Lifesteal': 'NA', 'Knockback': 'NA', 'Pull': 'NA', 'Taunt': 'NA',
-}
-
-const TAG_RESTRICTIONS: Record<string, { range?: 'melee' | 'ranged'; type?: 'damage' | 'support' }> = {
-  'Charge Attack': { range: 'melee' },
-  'Mighty Blow': { range: 'melee' },
-  'Area Attack: Pass': { range: 'melee' },
-  'Area Attack: Blast': { range: 'ranged' },
-}
-
+// Watch for attack type changes - clear invalid effects
 watch(() => newAttack.type, (newType) => {
-  if (newAttack.effect) {
-    const alignment = EFFECT_ALIGNMENT[newAttack.effect]
-    if (alignment === 'P' && newType !== 'support') {
-      newAttack.effect = ''
-    } else if (alignment === 'N' && newType !== 'damage') {
-      newAttack.effect = ''
-    }
+  if (newAttack.effect && !isEffectValidForType(newAttack.effect, newType)) {
+    newAttack.effect = ''
   }
 })
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EvolutionLine } from '../../../server/db/schema'
-import type { EvolutionChainEntry, EvolutionProgress } from '../../../composables/useEvolution'
+import type { EvolutionChainEntry } from '../../../composables/useEvolution'
 import type { DigimonStage } from '../../../types'
 import { getStageColor } from '../../../utils/displayHelpers'
 
@@ -34,6 +34,57 @@ async function handleDelete(id: string, name: string) {
   if (confirm(`Are you sure you want to delete "${name}"?`)) {
     await deleteEvolutionLine(id)
   }
+}
+
+// Helper to safely get chain as array (handle JSON string if needed)
+function getChainArray(chain: any): EvolutionChainEntry[] {
+  if (typeof chain === 'string') {
+    try {
+      return JSON.parse(chain) as EvolutionChainEntry[]
+    } catch {
+      return []
+    }
+  }
+  return chain as EvolutionChainEntry[] || []
+}
+
+// Build tree levels for visualization
+function getChainLevels(chain: EvolutionChainEntry[]): EvolutionChainEntry[][] {
+  if (chain.length === 0) return []
+
+  const levels: EvolutionChainEntry[][] = []
+  const visited = new Set<number>()
+  const indexMap = new Map(chain.map((entry, idx) => [idx, entry]))
+
+  // Find roots
+  const roots = chain.map((entry, idx) => ({ entry, idx }))
+    .filter(({ entry }) => entry.evolvesFromIndex === null)
+
+  if (roots.length === 0) return [chain] // Fallback to flat display
+
+  // BFS to build levels
+  let currentLevel = roots.map(({ idx }) => idx)
+
+  while (currentLevel.length > 0) {
+    const levelEntries = currentLevel.map(idx => chain[idx])
+    levels.push(levelEntries)
+
+    currentLevel.forEach(idx => visited.add(idx))
+
+    // Find children of current level
+    const nextLevel: number[] = []
+    currentLevel.forEach(parentIdx => {
+      chain.forEach((entry, idx) => {
+        if (!visited.has(idx) && entry.evolvesFromIndex === parentIdx) {
+          nextLevel.push(idx)
+        }
+      })
+    })
+
+    currentLevel = nextLevel
+  }
+
+  return levels
 }
 
 </script>
@@ -97,22 +148,28 @@ async function handleDelete(id: string, name: string) {
               </span>
             </div>
 
-            <!-- Evolution chain visualization -->
+            <!-- Evolution chain visualization - horizontal with vertical sibling stacking -->
             <div class="flex items-center gap-2 flex-wrap mb-3">
-              <template v-for="(entry, index) in (line.chain as EvolutionChainEntry[])" :key="index">
-                <div
-                  :class="[
-                    'px-3 py-1 rounded-lg text-sm font-medium border',
-                    index === line.currentStageIndex
-                      ? 'bg-digimon-orange-500/20 border-digimon-orange-500 text-digimon-orange-400'
-                      : index < line.currentStageIndex
-                        ? 'bg-green-900/20 border-green-500/30 text-green-400'
-                        : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-400',
-                  ]"
-                >
-                  <span :class="getStageColor(entry.stage)">{{ entry.species }}</span>
+              <template v-for="(level, levelIndex) in getChainLevels(getChainArray(line.chain))" :key="levelIndex">
+                <!-- Entries at this level (stacked vertically) -->
+                <div class="flex flex-col gap-1">
+                  <div
+                    v-for="(entry, entryIndex) in level"
+                    :key="`${levelIndex}-${entryIndex}`"
+                    :class="[
+                      'px-3 py-1 rounded-lg text-sm font-medium border',
+                      getChainArray(line.chain).indexOf(entry) === line.currentStageIndex
+                        ? 'bg-digimon-orange-500/20 border-digimon-orange-500 text-digimon-orange-400'
+                        : getChainArray(line.chain).indexOf(entry) < line.currentStageIndex
+                          ? 'bg-green-900/20 border-green-500/30 text-green-400'
+                          : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-400',
+                    ]"
+                  >
+                    <span :class="getStageColor(entry.stage)">{{ entry.species }}</span>
+                  </div>
                 </div>
-                <span v-if="index < (line.chain as EvolutionChainEntry[]).length - 1" class="text-digimon-dark-500">
+                <!-- Arrow between levels -->
+                <span v-if="levelIndex < getChainLevels(getChainArray(line.chain)).length - 1" class="text-digimon-dark-500">
                   →
                 </span>
               </template>
@@ -130,11 +187,14 @@ async function handleDelete(id: string, name: string) {
               </span>
             </div>
 
-            <!-- Progress -->
+            <!-- Unlock Status -->
             <div class="flex gap-4 mt-2 text-xs text-digimon-dark-400">
-              <span>Battles: {{ (line.evolutionProgress as EvolutionProgress).battlesWon }}</span>
-              <span>XP: {{ (line.evolutionProgress as EvolutionProgress).xpEarned }}</span>
-              <span>Bond: {{ (line.evolutionProgress as EvolutionProgress).bondLevel }}</span>
+              <span>
+                Unlocked:
+                <span class="text-digimon-orange-400">
+                  {{ getChainArray(line.chain).filter((e) => e.isUnlocked).length }}/{{ getChainArray(line.chain).length }}
+                </span>
+              </span>
             </div>
           </div>
 

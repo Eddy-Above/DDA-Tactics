@@ -1,0 +1,1 @@
+ALTER TABLE "evolution_lines" DROP COLUMN IF EXISTS "evolution_progress";

@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import type { Tamer, Digimon, Encounter } from '../../server/db/schema'
 import type { CombatParticipant } from '../../composables/useEncounters'
-import type { EvolutionLine } from '../../server/db/schema'
-import type { EvolutionChainEntry, EvolutionProgress } from '../../composables/useEvolution'
 import { skillsByAttribute, skillLabels } from '../../constants/tamer-skills'
 import type { DigimonStage } from '../../types'
 import { STAGE_CONFIG } from '../../types'
@@ -26,7 +24,6 @@ const isChildRoute = computed(() => {
 // State
 const tamer = ref<Tamer | null>(null)
 const partnerDigimon = ref<Digimon[]>([])
-const evolutionLines = ref<EvolutionLine[]>([])
 const activeEncounter = ref<Encounter | null>(null)
 const loading = ref(true)
 const lastRefresh = ref(new Date())
@@ -37,7 +34,6 @@ const lastRefresh = ref(new Date())
 const { fetchTamer, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, calculateDerivedStats: calcDigimonStats } = useDigimon()
 const { encounters, fetchEncounters, getCurrentParticipant } = useEncounters()
-const { fetchEvolutionLines, getCurrentStage, getNextStage, canEvolve } = useEvolution()
 
 // Auto-refresh every 5 seconds
 let refreshInterval: ReturnType<typeof setInterval>
@@ -53,10 +49,6 @@ async function loadData() {
       // Fetch partner Digimon
       await fetchDigimon({ partnerId: fetchedTamer.id })
       partnerDigimon.value = await $fetch<Digimon[]>(`/api/digimon?partnerId=${fetchedTamer.id}`)
-
-      // Fetch evolution lines
-      const lines = await $fetch<EvolutionLine[]>(`/api/evolution-lines?partnerId=${fetchedTamer.id}`)
-      evolutionLines.value = lines
 
       // Fetch encounters to find active one
       await fetchEncounters()
@@ -874,8 +866,12 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
               <!-- Derived Stats -->
               <div class="flex flex-wrap gap-4 text-sm mb-4">
-                <span><span class="text-digimon-dark-400">Agility:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).agility }}</span></span>
+                <span><span class="text-digimon-dark-400">Brains:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).brains }}</span></span>
                 <span><span class="text-digimon-dark-400">Body:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).body }}</span></span>
+                <span><span class="text-digimon-dark-400">Agility:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).agility }}</span></span>
+                <span><span class="text-digimon-dark-400">BIT:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).bit }}</span></span>
+                <span><span class="text-digimon-dark-400">CPU:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).cpu }}</span></span>
+                <span><span class="text-digimon-dark-400">RAM:</span> <span class="text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).ram }}</span></span>
                 <span class="relative group">
                   <span class="text-digimon-dark-400">Move: </span>
                   <span class="text-white cursor-help border-b border-dotted border-digimon-dark-500">
@@ -891,7 +887,6 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                     </div>
                   </div>
                 </span>
-                <span><span class="text-digimon-dark-400">Stage Bonus:</span> <span class="text-white">+{{ calcDigimonStats(getCurrentForm(chain.chainId)!).stageBonus }}</span></span>
               </div>
 
               <!-- Attacks -->
@@ -924,7 +919,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                         <span class="text-cyan-400">
                           ACC: {{ getAttackAccuracy(getCurrentForm(chain.chainId)!, { range: attack.range, tags: attack.tags || [] }) }}d6
                         </span>
-                        <span class="text-orange-400">
+                        <span v-if="attack.type === 'damage'" class="text-orange-400">
                           DMG: {{ getAttackDamage(getCurrentForm(chain.chainId)!, { range: attack.range, tags: attack.tags || [] }) }}
                         </span>
                       </div>
@@ -952,48 +947,6 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               </template>
             </div>
 
-            <!-- Evolution Lines -->
-            <div v-for="line in evolutionLines" :key="line.id" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-              <h3 class="font-display text-lg font-semibold text-white mb-4">{{ line.name }}</h3>
-
-              <!-- Chain visualization -->
-              <div class="flex items-center gap-2 flex-wrap mb-4">
-                <template v-for="(entry, index) in (line.chain as EvolutionChainEntry[])" :key="index">
-                  <div
-                    :class="[
-                      'px-3 py-1.5 rounded-lg text-sm font-medium border',
-                      index === line.currentStageIndex
-                        ? 'bg-digimon-orange-500/20 border-digimon-orange-500 text-digimon-orange-400'
-                        : index < line.currentStageIndex
-                          ? 'bg-green-900/20 border-green-500/30 text-green-400'
-                          : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-400',
-                    ]"
-                  >
-                    {{ entry.species }}
-                  </div>
-                  <span v-if="index < (line.chain as EvolutionChainEntry[]).length - 1" class="text-digimon-dark-500">→</span>
-                </template>
-              </div>
-
-              <!-- Next evolution requirements -->
-              <div v-if="getNextStage(line)" class="text-sm">
-                <span class="text-digimon-dark-400">Next:</span>
-                <span :class="['ml-1', getStageColor(getNextStage(line)!.stage)]">{{ getNextStage(line)!.species }}</span>
-                <span :class="['ml-2', canEvolve(line).canEvolve ? 'text-green-400' : 'text-yellow-400']">
-                  ({{ canEvolve(line).reason }})
-                </span>
-              </div>
-              <div v-else class="text-sm text-green-400">
-                Maximum evolution reached!
-              </div>
-
-              <!-- Progress -->
-              <div class="flex gap-4 mt-2 text-xs text-digimon-dark-400">
-                <span>Battles: {{ (line.evolutionProgress as EvolutionProgress).battlesWon }}</span>
-                <span>XP: {{ (line.evolutionProgress as EvolutionProgress).xpEarned }}</span>
-                <span>Bond: {{ (line.evolutionProgress as EvolutionProgress).bondLevel }}</span>
-              </div>
-            </div>
           </div>
 
           <!-- Sidebar -->

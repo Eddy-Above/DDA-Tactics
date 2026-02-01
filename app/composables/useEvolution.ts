@@ -4,26 +4,15 @@ import type { DigimonStage } from '../types'
 export interface EvolutionChainEntry {
   stage: DigimonStage
   species: string
-  digimonId: string | null
-  requirements: {
-    type: 'battles' | 'xp' | 'bond' | 'item' | 'special'
-    description: string
-    value: number | null
-    itemName: string | null
-  } | null
-}
-
-export interface EvolutionProgress {
-  battlesWon: number
-  xpEarned: number
-  bondLevel: number
-  itemsCollected: string[]
+  digimonId: string // Required: must link to library Digimon
+  isUnlocked: boolean // GM-controlled unlock state
+  evolvesFromIndex: number | null // Index of parent form (null for root)
 }
 
 export interface CreateEvolutionLineData {
   name: string
   description?: string
-  chain: EvolutionChainEntry[]
+  chain: EvolutionChainEntry[] // All entries must have valid digimonId
   partnerId?: string
 }
 
@@ -114,150 +103,136 @@ export function useEvolution() {
     }
   }
 
-  // Evolve to next stage
-  async function evolve(evolutionLineId: string): Promise<EvolutionLine | null> {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
+  // Evolve to specific target stage (must be child of current stage)
+  async function evolve(evolutionLineId: string, targetIndex?: number): Promise<EvolutionLine | null> {
+    // Try to find in the list array first
+    let line = evolutionLines.value.find((l) => l.id === evolutionLineId)
 
-    const chain = line.chain as EvolutionChainEntry[]
+    // If not found, fetch it directly
+    if (!line) {
+      line = await fetchEvolutionLine(evolutionLineId)
+      if (!line) return null
+    }
+
+    // Parse chain from JSON if needed
+    const chainData = typeof line.chain === 'string' ? JSON.parse(line.chain) : line.chain
+    const chain = chainData as EvolutionChainEntry[]
     const currentIndex = line.currentStageIndex
 
-    if (currentIndex >= chain.length - 1) {
-      error.value = 'Already at maximum evolution stage'
+    // Find all unlocked children of current form
+    const children = chain
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => entry.evolvesFromIndex === currentIndex && entry.isUnlocked)
+
+    if (children.length === 0) {
+      error.value = 'No unlocked evolution paths available'
       return null
     }
 
-    // Check requirements for next stage
-    const nextStage = chain[currentIndex + 1]
-    if (nextStage.requirements) {
-      const progress = line.evolutionProgress as EvolutionProgress
-      const req = nextStage.requirements
+    // If targetIndex specified, use it; otherwise use first child
+    const target = targetIndex !== undefined
+      ? children.find(({ index }) => index === targetIndex)
+      : children[0]
 
-      switch (req.type) {
-        case 'battles':
-          if (progress.battlesWon < (req.value || 0)) {
-            error.value = `Need ${req.value} battles won (have ${progress.battlesWon})`
-            return null
-          }
-          break
-        case 'xp':
-          if (progress.xpEarned < (req.value || 0)) {
-            error.value = `Need ${req.value} XP (have ${progress.xpEarned})`
-            return null
-          }
-          break
-        case 'bond':
-          if (progress.bondLevel < (req.value || 0)) {
-            error.value = `Need bond level ${req.value} (have ${progress.bondLevel})`
-            return null
-          }
-          break
-        case 'item':
-          if (req.itemName && !progress.itemsCollected.includes(req.itemName)) {
-            error.value = `Need item: ${req.itemName}`
-            return null
-          }
-          break
-      }
+    if (!target) {
+      error.value = 'Invalid evolution target'
+      return null
     }
 
-    // Evolution successful
+    // Evolution successful - set to target stage
     return updateEvolutionLine(evolutionLineId, {
-      currentStageIndex: currentIndex + 1,
+      currentStageIndex: target.index,
     })
   }
 
-  // Devolve to previous stage
+  // Devolve to parent form
   async function devolve(evolutionLineId: string): Promise<EvolutionLine | null> {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
+    // Try to find in the list array first
+    let line = evolutionLines.value.find((l) => l.id === evolutionLineId)
 
-    if (line.currentStageIndex <= 0) {
-      error.value = 'Already at minimum evolution stage'
+    // If not found, fetch it directly
+    if (!line) {
+      line = await fetchEvolutionLine(evolutionLineId)
+      if (!line) return null
+    }
+
+    // Parse chain from JSON if needed
+    const chainData = typeof line.chain === 'string' ? JSON.parse(line.chain) : line.chain
+    const chain = chainData as EvolutionChainEntry[]
+    const currentEntry = chain[line.currentStageIndex]
+
+    if (currentEntry.evolvesFromIndex === null) {
+      error.value = 'Already at base form'
       return null
     }
 
     return updateEvolutionLine(evolutionLineId, {
-      currentStageIndex: line.currentStageIndex - 1,
+      currentStageIndex: currentEntry.evolvesFromIndex,
     })
   }
 
-  // Update progress
-  async function updateProgress(
+  // Lock/unlock a stage
+  async function toggleStageLock(
     evolutionLineId: string,
-    progressUpdate: Partial<EvolutionProgress>
+    stageIndex: number,
+    isUnlocked: boolean
+  ): Promise<EvolutionLine | null> {
+    // Try to find in the list array first
+    let line = evolutionLines.value.find((l) => l.id === evolutionLineId)
+
+    // If not found, fetch it directly
+    if (!line) {
+      line = await fetchEvolutionLine(evolutionLineId)
+      if (!line) return null
+    }
+
+    // Parse chain from JSON if needed
+    const chainData = typeof line.chain === 'string' ? JSON.parse(line.chain) : line.chain
+    const chain = [...(chainData as EvolutionChainEntry[])]
+    if (stageIndex < 0 || stageIndex >= chain.length) return null
+
+    // First stage must always be unlocked
+    if (stageIndex === 0 && !isUnlocked) {
+      error.value = 'First stage must always be unlocked'
+      return null
+    }
+
+    chain[stageIndex] = { ...chain[stageIndex], isUnlocked }
+    return updateEvolutionLine(evolutionLineId, { chain })
+  }
+
+  // Set the current form
+  async function setCurrentForm(
+    evolutionLineId: string,
+    stageIndex: number
   ): Promise<EvolutionLine | null> {
     const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
     if (!line) return null
 
-    const currentProgress = line.evolutionProgress as EvolutionProgress
-    const newProgress = {
-      ...currentProgress,
-      ...progressUpdate,
+    // Parse chain from JSON if needed
+    const chainData = typeof line.chain === 'string' ? JSON.parse(line.chain) : line.chain
+    const chain = chainData as EvolutionChainEntry[]
+    if (stageIndex < 0 || stageIndex >= chain.length) return null
+
+    // Can only set to unlocked stages
+    if (!chain[stageIndex].isUnlocked) {
+      error.value = 'Cannot set locked stage as current form'
+      return null
     }
 
-    return updateEvolutionLine(evolutionLineId, {
-      evolutionProgress: newProgress,
-    })
-  }
-
-  // Add battles won
-  async function addBattlesWon(evolutionLineId: string, count: number = 1) {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
-
-    const progress = line.evolutionProgress as EvolutionProgress
-    return updateProgress(evolutionLineId, {
-      battlesWon: progress.battlesWon + count,
-    })
-  }
-
-  // Add XP
-  async function addXP(evolutionLineId: string, amount: number) {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
-
-    const progress = line.evolutionProgress as EvolutionProgress
-    return updateProgress(evolutionLineId, {
-      xpEarned: progress.xpEarned + amount,
-    })
-  }
-
-  // Increase bond
-  async function increaseBond(evolutionLineId: string, amount: number = 1) {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
-
-    const progress = line.evolutionProgress as EvolutionProgress
-    return updateProgress(evolutionLineId, {
-      bondLevel: progress.bondLevel + amount,
-    })
-  }
-
-  // Collect item
-  async function collectItem(evolutionLineId: string, itemName: string) {
-    const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
-    if (!line) return null
-
-    const progress = line.evolutionProgress as EvolutionProgress
-    if (progress.itemsCollected.includes(itemName)) return line
-
-    return updateProgress(evolutionLineId, {
-      itemsCollected: [...progress.itemsCollected, itemName],
-    })
+    return updateEvolutionLine(evolutionLineId, { currentStageIndex: stageIndex })
   }
 
   // Get current stage info
   function getCurrentStage(evolutionLine: EvolutionLine): EvolutionChainEntry | null {
-    const chain = evolutionLine.chain as EvolutionChainEntry[]
+    const chainData = typeof evolutionLine.chain === 'string' ? JSON.parse(evolutionLine.chain) : evolutionLine.chain
+    const chain = chainData as EvolutionChainEntry[]
     return chain[evolutionLine.currentStageIndex] || null
   }
 
-  // Get next stage info
-  function getNextStage(evolutionLine: EvolutionLine): EvolutionChainEntry | null {
-    const chain = evolutionLine.chain as EvolutionChainEntry[]
-    const nextIndex = evolutionLine.currentStageIndex + 1
-    return chain[nextIndex] || null
+  // Get next stage options (may be multiple for branching)
+  function getNextStageOptions(evolutionLine: EvolutionLine): EvolutionChainEntry[] {
+    return getEvolutionOptions(evolutionLine)
   }
 
   // Link a Digimon sheet to a chain entry
@@ -271,62 +246,65 @@ export function useEvolution() {
       // Try fetching it
       const fetchedLine = await fetchEvolutionLine(evolutionLineId)
       if (!fetchedLine) return null
-      const chain = [...(fetchedLine.chain as EvolutionChainEntry[])]
+      const chainData = typeof fetchedLine.chain === 'string' ? JSON.parse(fetchedLine.chain) : fetchedLine.chain
+      const chain = [...(chainData as EvolutionChainEntry[])]
       if (chainIndex < 0 || chainIndex >= chain.length) return null
       chain[chainIndex] = { ...chain[chainIndex], digimonId }
       return updateEvolutionLine(evolutionLineId, { chain })
     }
 
-    const chain = [...(line.chain as EvolutionChainEntry[])]
+    const chainData = typeof line.chain === 'string' ? JSON.parse(line.chain) : line.chain
+    const chain = [...(chainData as EvolutionChainEntry[])]
     if (chainIndex < 0 || chainIndex >= chain.length) return null
 
     chain[chainIndex] = { ...chain[chainIndex], digimonId }
     return updateEvolutionLine(evolutionLineId, { chain })
   }
 
-  // Check if can evolve
-  function canEvolve(evolutionLine: EvolutionLine): { canEvolve: boolean; reason: string } {
-    const chain = evolutionLine.chain as EvolutionChainEntry[]
+  // Get available evolution options from current form
+  function getEvolutionOptions(evolutionLine: EvolutionLine): EvolutionChainEntry[] {
+    const chainData = typeof evolutionLine.chain === 'string' ? JSON.parse(evolutionLine.chain) : evolutionLine.chain
+    const chain = chainData as EvolutionChainEntry[]
     const currentIndex = evolutionLine.currentStageIndex
 
-    if (currentIndex >= chain.length - 1) {
-      return { canEvolve: false, reason: 'Maximum evolution reached' }
+    // Find all unlocked children of current form
+    return chain.filter(
+      (entry) => entry.evolvesFromIndex === currentIndex && entry.isUnlocked
+    )
+  }
+
+  // Check if can evolve
+  function canEvolve(evolutionLine: EvolutionLine): { canEvolve: boolean; reason: string } {
+    const options = getEvolutionOptions(evolutionLine)
+
+    if (options.length === 0) {
+      return { canEvolve: false, reason: 'No unlocked evolution paths' }
     }
 
-    const nextStage = chain[currentIndex + 1]
-    if (!nextStage.requirements) {
-      return { canEvolve: true, reason: 'Ready to evolve' }
+    return { canEvolve: true, reason: `${options.length} evolution option(s) available` }
+  }
+
+  // Refresh chain from library
+  async function refreshChainFromLibrary(evolutionLineId: string): Promise<EvolutionLine | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const updated = await $fetch<EvolutionLine>(`/api/evolution-lines/${evolutionLineId}/refresh`, {
+        method: 'POST',
+      })
+      // Update the list if it exists
+      const index = evolutionLines.value.findIndex((l) => l.id === evolutionLineId)
+      if (index >= 0) {
+        evolutionLines.value[index] = updated
+      }
+      return updated
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to refresh evolution chain'
+      console.error('Failed to refresh evolution chain:', e)
+      return null
+    } finally {
+      loading.value = false
     }
-
-    const progress = evolutionLine.evolutionProgress as EvolutionProgress
-    const req = nextStage.requirements
-
-    switch (req.type) {
-      case 'battles':
-        if (progress.battlesWon < (req.value || 0)) {
-          return { canEvolve: false, reason: `Need ${(req.value || 0) - progress.battlesWon} more battles` }
-        }
-        break
-      case 'xp':
-        if (progress.xpEarned < (req.value || 0)) {
-          return { canEvolve: false, reason: `Need ${(req.value || 0) - progress.xpEarned} more XP` }
-        }
-        break
-      case 'bond':
-        if (progress.bondLevel < (req.value || 0)) {
-          return { canEvolve: false, reason: `Need bond level ${req.value}` }
-        }
-        break
-      case 'item':
-        if (req.itemName && !progress.itemsCollected.includes(req.itemName)) {
-          return { canEvolve: false, reason: `Need item: ${req.itemName}` }
-        }
-        break
-      case 'special':
-        return { canEvolve: false, reason: req.description || 'Special requirement not met' }
-    }
-
-    return { canEvolve: true, reason: 'Ready to evolve' }
   }
 
   return {
@@ -340,14 +318,13 @@ export function useEvolution() {
     deleteEvolutionLine,
     evolve,
     devolve,
-    updateProgress,
-    addBattlesWon,
-    addXP,
-    increaseBond,
-    collectItem,
+    toggleStageLock,
+    setCurrentForm,
     getCurrentStage,
-    getNextStage,
+    getNextStageOptions,
+    getEvolutionOptions,
     canEvolve,
     linkDigimonToChainEntry,
+    refreshChainFromLibrary,
   }
 }

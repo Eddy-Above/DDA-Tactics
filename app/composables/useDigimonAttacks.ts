@@ -4,7 +4,7 @@
  */
 
 import { computed, type Ref, isRef, watch, reactive, ref } from 'vue'
-import { getTagPatternForQuality } from '../data/attackConstants'
+import { getTagPatternForQuality, isEffectValidForType } from '../data/attackConstants'
 import { useAttackTags, type Attack, type NewAttack } from './useAttackTags'
 import type { DigimonFormData } from './useDigimonStats'
 
@@ -122,30 +122,17 @@ export function useDigimonAttacks(form: Ref<any> | any) {
   watch(
     () => newAttack.type,
     (newType) => {
-      if (newAttack.effect) {
-        const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
-          'effect-vigor': 'P',
-          'effect-fury': 'P',
-          'effect-cleanse': 'P',
-          'effect-haste': 'P',
-          'effect-revitalize': 'P',
-          'effect-shield': 'P',
-          'effect-poison': 'N',
-          'effect-confuse': 'N',
-          'effect-stun': 'N',
-          'effect-fear': 'N',
-          'effect-immobilize': 'N',
-          'effect-taunt': 'N',
-          'effect-lifesteal': 'NA',
-          'effect-knockback': 'NA',
-          'effect-pull': 'NA',
-        }
-        const alignment = EFFECT_ALIGNMENT[newAttack.effect]
-        if (alignment === 'P' && newType !== 'support') {
-          newAttack.effect = ''
-        } else if (alignment === 'N' && newType !== 'damage') {
-          newAttack.effect = ''
-        }
+      if (newAttack.effect && !isEffectValidForType(newAttack.effect, newType)) {
+        newAttack.effect = '' // Auto-clear invalid effect when type changes
+      }
+
+      // Handle tag restrictions based on attack type
+      if (newType === 'damage') {
+        newAttack.tags = newAttack.tags.filter((tag) => !tag.includes('Revitalize'))
+      } else if (newType === 'support') {
+        newAttack.tags = newAttack.tags.filter(
+          (tag) => !tag.includes('Poison') && !tag.includes('Hazard')
+        )
       }
     }
   )

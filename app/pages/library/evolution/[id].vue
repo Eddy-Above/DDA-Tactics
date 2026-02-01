@@ -1,8 +1,104 @@
 <script setup lang="ts">
+import { h, defineComponent, type PropType } from 'vue'
 import type { EvolutionLine, Digimon } from '../../../server/db/schema'
-import type { EvolutionChainEntry, EvolutionProgress } from '../../../composables/useEvolution'
+import type { EvolutionChainEntry } from '../../../composables/useEvolution'
 import type { DigimonStage } from '../../../types'
 import { getStageColor } from '../../../utils/displayHelpers'
+
+// Tree node component
+const EvolutionTreeNode = defineComponent({
+  name: 'EvolutionTreeNode',
+  props: {
+    node: { type: Object as PropType<any>, required: true },
+    evolutionLine: { type: Object as PropType<EvolutionLine>, required: true },
+    getLinkedDigimon: { type: Function, required: true },
+    getStageColor: { type: Function, required: true },
+    getStageBgColor: { type: Function, required: true },
+    handleToggleLock: { type: Function, required: true },
+    handleLinkDigimon: { type: Function, required: true },
+  },
+  setup(props) {
+    const { entry, index, children } = props.node
+
+    return () => h('div', { class: 'flex flex-col items-center' }, [
+      // Current node
+      h('div', {
+        class: [
+          'relative rounded-xl p-4 border-2 transition-all min-w-[280px]',
+          index === props.evolutionLine.currentStageIndex
+            ? 'border-digimon-orange-500 shadow-lg shadow-digimon-orange-500/20'
+            : 'border-digimon-dark-600',
+        ],
+      }, [
+        h('div', { class: 'flex items-center gap-3' }, [
+          // Sprite or number circle
+          props.getLinkedDigimon(entry)?.spriteUrl
+            ? h('div', {
+                class: 'w-12 h-12 rounded-lg overflow-hidden bg-digimon-dark-600 shrink-0',
+              }, [
+                h('img', {
+                  src: props.getLinkedDigimon(entry).spriteUrl,
+                  alt: entry.species,
+                  class: 'w-full h-full object-contain',
+                }),
+              ])
+            : h('div', {
+                class: [
+                  'w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold shrink-0',
+                  props.getStageBgColor(entry.stage),
+                  props.getStageColor(entry.stage),
+                ],
+              }, String(index + 1)),
+
+          // Info
+          h('div', { class: 'flex-1' }, [
+            h('div', { class: 'flex items-center gap-2 flex-wrap' }, [
+              h('h3', { class: 'text-lg font-semibold text-white' }, entry.species),
+              h('span', { class: ['text-xs capitalize', props.getStageColor(entry.stage)] }, entry.stage),
+              index === props.evolutionLine.currentStageIndex &&
+                h('span', { class: 'text-xs bg-digimon-orange-500 text-white px-2 py-0.5 rounded' }, 'Current'),
+            ]),
+
+            // Lock/unlock button
+            index > 0 && h('div', { class: 'mt-2' }, [
+              h('button', {
+                type: 'button',
+                class: [
+                  'px-2 py-1 text-xs rounded font-medium transition-colors',
+                  entry.isUnlocked
+                    ? 'bg-green-900/30 hover:bg-green-900/50 text-green-400'
+                    : 'bg-digimon-dark-600 hover:bg-digimon-dark-500 text-digimon-dark-400',
+                ],
+                onClick: () => props.handleToggleLock(index),
+              }, entry.isUnlocked ? '🔓 Unlocked' : '🔒 Locked'),
+            ]),
+          ]),
+        ]),
+      ]),
+
+      // Children (horizontally arranged)
+      children.length > 0 && h('div', { class: 'flex items-start gap-4 mt-6 relative' }, [
+        // Connector lines
+        h('div', { class: 'absolute top-0 left-1/2 w-0.5 h-6 bg-digimon-dark-600 -translate-x-1/2' }),
+
+        // Child nodes
+        ...children.map((child: any, i: number) => [
+          h(EvolutionTreeNode, {
+            key: child.index,
+            node: child,
+            evolutionLine: props.evolutionLine,
+            getLinkedDigimon: props.getLinkedDigimon,
+            getStageColor: props.getStageColor,
+            getStageBgColor: props.getStageBgColor,
+            handleToggleLock: props.handleToggleLock,
+            handleLinkDigimon: props.handleLinkDigimon,
+          }),
+          i < children.length - 1 && h('div', { class: 'w-8' }), // Spacer
+        ]),
+      ]),
+    ])
+  },
+})
 
 definePageMeta({
   title: 'Evolution Line',
@@ -16,14 +112,13 @@ const {
   updateEvolutionLine,
   evolve,
   devolve,
-  addBattlesWon,
-  addXP,
-  increaseBond,
-  collectItem,
+  toggleStageLock,
   getCurrentStage,
-  getNextStage,
+  getNextStageOptions,
+  getEvolutionOptions,
   canEvolve,
   linkDigimonToChainEntry,
+  refreshChainFromLibrary,
   loading,
   error,
 } = useEvolution()
@@ -68,58 +163,48 @@ async function handleLinkDigimon(index: number, digimonId: string | null) {
 }
 
 // Computed values
-const chain = computed(() => (evolutionLine.value?.chain as EvolutionChainEntry[]) || [])
-const progress = computed(() => (evolutionLine.value?.evolutionProgress as EvolutionProgress) || {
-  battlesWon: 0,
-  xpEarned: 0,
-  bondLevel: 0,
-  itemsCollected: [],
-})
+const chain = computed(() => evolutionLine.value ? getChainArray(evolutionLine.value.chain) : [])
 const currentStage = computed(() => evolutionLine.value ? getCurrentStage(evolutionLine.value) : null)
-const nextStage = computed(() => evolutionLine.value ? getNextStage(evolutionLine.value) : null)
+const evolutionOptions = computed(() => evolutionLine.value ? getEvolutionOptions(evolutionLine.value) : [])
 const evolutionStatus = computed(() => evolutionLine.value ? canEvolve(evolutionLine.value) : { canEvolve: false, reason: '' })
 
-// Progress update modals
-const showProgressModal = ref(false)
-const progressType = ref<'battles' | 'xp' | 'bond' | 'item'>('battles')
-const progressValue = ref(1)
-const itemName = ref('')
-
-async function handleUpdateProgress() {
+// Handle lock/unlock toggle
+async function handleToggleLock(stageIndex: number) {
   if (!evolutionLine.value) return
 
-  let updated: EvolutionLine | null = null
+  const chainArray = getChainArray(evolutionLine.value.chain)
+  const currentUnlocked = chainArray[stageIndex].isUnlocked
 
-  switch (progressType.value) {
-    case 'battles':
-      updated = await addBattlesWon(evolutionLine.value.id, progressValue.value)
-      break
-    case 'xp':
-      updated = await addXP(evolutionLine.value.id, progressValue.value)
-      break
-    case 'bond':
-      updated = await increaseBond(evolutionLine.value.id, progressValue.value)
-      break
-    case 'item':
-      if (itemName.value) {
-        updated = await collectItem(evolutionLine.value.id, itemName.value)
-      }
-      break
-  }
-
+  const updated = await toggleStageLock(evolutionLine.value.id, stageIndex, !currentUnlocked)
   if (updated) {
     evolutionLine.value = updated
-    showProgressModal.value = false
-    progressValue.value = 1
-    itemName.value = ''
   }
 }
 
-async function handleEvolve() {
+async function handleEvolve(targetIndex?: number) {
   if (!evolutionLine.value || !evolutionStatus.value.canEvolve) return
 
-  if (confirm(`Evolve to ${nextStage.value?.species}?`)) {
-    const updated = await evolve(evolutionLine.value.id)
+  const options = evolutionOptions.value
+  if (options.length === 0) return
+
+  // If multiple options and no target specified, need to choose
+  if (options.length > 1 && targetIndex === undefined) {
+    return
+  }
+
+  // Get the actual target index
+  let actualTargetIndex: number
+  if (targetIndex !== undefined) {
+    actualTargetIndex = targetIndex
+  } else {
+    // Find the index of the first (and only) option
+    actualTargetIndex = chain.value.findIndex(e => e.digimonId === options[0].digimonId)
+  }
+
+  const targetEntry = chain.value[actualTargetIndex]
+
+  if (confirm(`Evolve to ${targetEntry.species}?`)) {
+    const updated = await evolve(evolutionLine.value.id, actualTargetIndex)
     if (updated) {
       evolutionLine.value = updated
     }
@@ -131,6 +216,17 @@ async function handleDevolve() {
 
   if (confirm('Devolve to previous stage?')) {
     const updated = await devolve(evolutionLine.value.id)
+    if (updated) {
+      evolutionLine.value = updated
+    }
+  }
+}
+
+async function handleRefreshChain() {
+  if (!evolutionLine.value) return
+
+  if (confirm('Refresh chain from library? This will detect any new Digimon and add them to the chain, preserving existing lock states.')) {
+    const updated = await refreshChainFromLibrary(evolutionLine.value.id)
     if (updated) {
       evolutionLine.value = updated
     }
@@ -149,6 +245,53 @@ function getStageBgColor(stage: DigimonStage): string {
   }
   return colors[stage] || 'bg-gray-500/20'
 }
+
+// Helper to safely get chain as array (handle JSON string if needed)
+function getChainArray(chainData: any): EvolutionChainEntry[] {
+  if (typeof chainData === 'string') {
+    try {
+      return JSON.parse(chainData) as EvolutionChainEntry[]
+    } catch {
+      return []
+    }
+  }
+  return chainData as EvolutionChainEntry[] || []
+}
+
+// Build tree structure for visualization
+interface TreeNode {
+  entry: EvolutionChainEntry
+  index: number
+  children: TreeNode[]
+}
+
+function buildTree(chainArray: EvolutionChainEntry[]): TreeNode[] {
+  // Find root nodes (evolvesFromIndex === null)
+  const roots: TreeNode[] = []
+  const nodeMap = new Map<number, TreeNode>()
+
+  // Create nodes
+  chainArray.forEach((entry, index) => {
+    nodeMap.set(index, { entry, index, children: [] })
+  })
+
+  // Build tree structure
+  chainArray.forEach((entry, index) => {
+    const node = nodeMap.get(index)!
+    if (entry.evolvesFromIndex === null) {
+      roots.push(node)
+    } else {
+      const parent = nodeMap.get(entry.evolvesFromIndex)
+      if (parent) {
+        parent.children.push(node)
+      }
+    }
+  })
+
+  return roots
+}
+
+const treeRoots = computed(() => buildTree(chain.value))
 </script>
 
 <template>
@@ -177,11 +320,41 @@ function getStageBgColor(stage: DigimonStage): string {
             Partner of {{ tamerMap.get(evolutionLine.partnerId) }}
           </p>
         </div>
+        <button
+          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50
+                 text-white px-4 py-2 rounded-lg font-semibold transition-colors text-sm"
+          :disabled="loading"
+          @click="handleRefreshChain"
+        >
+          🔄 Refresh Chain
+        </button>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Evolution Chain Visualization -->
         <div class="lg:col-span-2">
+          <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+            <h2 class="font-display text-xl font-semibold text-white mb-6">Evolution Tree</h2>
+
+            <!-- Tree visualization -->
+            <div class="flex flex-col items-center gap-6">
+              <template v-for="root in treeRoots" :key="`tree-${evolutionLine.updatedAt}-${root.index}`">
+                <EvolutionTreeNode
+                  :node="root"
+                  :evolution-line="evolutionLine"
+                  :get-linked-digimon="getLinkedDigimon"
+                  :get-stage-color="getStageColor"
+                  :get-stage-bg-color="getStageBgColor"
+                  :handle-toggle-lock="handleToggleLock"
+                  :handle-link-digimon="handleLinkDigimon"
+                />
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fallback: Old flat list view (hidden, for reference) -->
+        <div v-if="false" class="lg:col-span-2">
           <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
             <h2 class="font-display text-xl font-semibold text-white mb-6">Evolution Chain</h2>
 
@@ -276,35 +449,23 @@ function getStageBgColor(stage: DigimonStage): string {
                       />
                     </div>
 
-                    <!-- Requirements for next evolution -->
-                    <div v-if="entry.requirements && index > evolutionLine.currentStageIndex" class="mt-2">
-                      <div class="text-sm text-digimon-dark-400">
-                        <span class="text-yellow-400">Requirements:</span>
-                        {{ entry.requirements.description }}
-                      </div>
-
-                      <!-- Progress bar for requirements -->
-                      <div v-if="entry.requirements.type !== 'special' && entry.requirements.type !== 'item' && index === evolutionLine.currentStageIndex + 1" class="mt-2">
-                        <div class="h-2 bg-digimon-dark-600 rounded-full overflow-hidden">
-                          <div
-                            class="h-full bg-digimon-orange-500 transition-all"
-                            :style="{
-                              width: `${Math.min(100, (
-                                entry.requirements.type === 'battles' ? progress.battlesWon :
-                                entry.requirements.type === 'xp' ? progress.xpEarned :
-                                entry.requirements.type === 'bond' ? progress.bondLevel : 0
-                              ) / (entry.requirements.value || 1) * 100)}%`
-                            }"
-                          />
-                        </div>
-                        <div class="text-xs text-digimon-dark-400 mt-1">
-                          {{
-                            entry.requirements.type === 'battles' ? progress.battlesWon :
-                            entry.requirements.type === 'xp' ? progress.xpEarned :
-                            entry.requirements.type === 'bond' ? progress.bondLevel : 0
-                          }} / {{ entry.requirements.value }}
-                        </div>
-                      </div>
+                    <!-- Lock/Unlock toggle -->
+                    <div v-if="index > 0" class="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        class="px-3 py-1 text-sm rounded font-medium transition-colors"
+                        :class="[
+                          entry.isUnlocked
+                            ? 'bg-green-900/30 hover:bg-green-900/50 text-green-400'
+                            : 'bg-digimon-dark-600 hover:bg-digimon-dark-500 text-digimon-dark-400'
+                        ]"
+                        @click="handleToggleLock(index)"
+                      >
+                        {{ entry.isUnlocked ? '🔓 Unlocked' : '🔒 Locked' }}
+                      </button>
+                      <span class="text-xs text-digimon-dark-400">
+                        {{ entry.isUnlocked ? 'Click to lock' : 'Click to unlock' }}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -327,156 +488,60 @@ function getStageBgColor(stage: DigimonStage): string {
                 </div>
               </div>
 
-              <div v-if="nextStage">
-                <div class="text-sm text-digimon-dark-400">Next Evolution</div>
-                <div :class="['text-lg', getStageColor(nextStage.stage)]">
-                  {{ nextStage.species }}
+              <div v-if="evolutionOptions.length > 0">
+                <div class="text-sm text-digimon-dark-400 mb-2">Evolution Options</div>
+                <div class="space-y-2">
+                  <div
+                    v-for="(option, idx) in evolutionOptions"
+                    :key="idx"
+                    class="flex items-center gap-2"
+                  >
+                    <div :class="['text-sm font-semibold', getStageColor(option.stage)]">
+                      {{ option.species }}
+                    </div>
+                    <button
+                      v-if="evolutionOptions.length > 1"
+                      class="ml-auto text-xs bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-2 py-1 rounded"
+                      @click="handleEvolve(chain.findIndex(e => e.digimonId === option.digimonId))"
+                    >
+                      Choose
+                    </button>
+                  </div>
                 </div>
-                <div :class="['text-sm mt-1', evolutionStatus.canEvolve ? 'text-green-400' : 'text-yellow-400']">
+                <div class="text-xs text-digimon-dark-400 mt-2">
                   {{ evolutionStatus.reason }}
                 </div>
               </div>
-              <div v-else class="text-green-400 text-sm">
-                Maximum evolution reached!
+              <div v-else class="text-yellow-400 text-sm">
+                {{ evolutionStatus.reason }}
               </div>
 
               <!-- Evolution buttons -->
               <div class="flex gap-2 pt-2">
                 <button
+                  v-if="evolutionOptions.length === 1"
                   :disabled="!evolutionStatus.canEvolve || loading"
                   class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50
                          text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                  @click="handleEvolve"
+                  @click="handleEvolve()"
                 >
                   ⬆️ Evolve
                 </button>
                 <button
-                  :disabled="evolutionLine.currentStageIndex <= 0 || loading"
+                  :disabled="!currentStage || currentStage.evolvesFromIndex === null || loading"
                   class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50
                          text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                   @click="handleDevolve"
                 >
-                  ⬇️ Devolve
+                  ⬇️ De-evolve
                 </button>
               </div>
             </div>
           </div>
 
-          <!-- Progress Tracker -->
-          <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
-            <h3 class="font-display text-lg font-semibold text-white mb-4">Progress</h3>
-
-            <div class="space-y-3">
-              <div class="flex justify-between items-center">
-                <span class="text-digimon-dark-400">Battles Won</span>
-                <span class="text-white font-semibold">{{ progress.battlesWon }}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-digimon-dark-400">XP Earned</span>
-                <span class="text-white font-semibold">{{ progress.xpEarned }}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-digimon-dark-400">Bond Level</span>
-                <span class="text-white font-semibold">{{ progress.bondLevel }}</span>
-              </div>
-              <div v-if="progress.itemsCollected.length > 0">
-                <span class="text-digimon-dark-400 text-sm">Items Collected:</span>
-                <div class="flex flex-wrap gap-1 mt-1">
-                  <span
-                    v-for="item in progress.itemsCollected"
-                    :key="item"
-                    class="text-xs bg-digimon-dark-700 text-white px-2 py-0.5 rounded"
-                  >
-                    {{ item }}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                class="w-full mt-2 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2
-                       rounded-lg font-semibold transition-colors"
-                @click="showProgressModal = true"
-              >
-                + Add Progress
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
-      <!-- Progress Modal -->
-      <Teleport to="body">
-        <div
-          v-if="showProgressModal"
-          class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-          @click.self="showProgressModal = false"
-        >
-          <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
-            <h2 class="font-display text-xl font-semibold text-white mb-4">Add Progress</h2>
-
-            <div class="space-y-4">
-              <div>
-                <label class="block text-sm text-digimon-dark-400 mb-2">Progress Type</label>
-                <div class="grid grid-cols-2 gap-2">
-                  <button
-                    v-for="type in (['battles', 'xp', 'bond', 'item'] as const)"
-                    :key="type"
-                    :class="[
-                      'px-3 py-2 rounded-lg font-medium transition-colors capitalize',
-                      progressType === type
-                        ? 'bg-digimon-orange-500 text-white'
-                        : 'bg-digimon-dark-700 text-digimon-dark-400 hover:text-white',
-                    ]"
-                    @click="progressType = type"
-                  >
-                    {{ type }}
-                  </button>
-                </div>
-              </div>
-
-              <div v-if="progressType !== 'item'">
-                <label class="block text-sm text-digimon-dark-400 mb-1">Amount</label>
-                <input
-                  v-model.number="progressValue"
-                  type="number"
-                  min="1"
-                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                         text-white focus:border-digimon-orange-500 focus:outline-none"
-                />
-              </div>
-
-              <div v-else>
-                <label class="block text-sm text-digimon-dark-400 mb-1">Item Name</label>
-                <input
-                  v-model="itemName"
-                  type="text"
-                  placeholder="e.g., Crest of Courage"
-                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                         text-white focus:border-digimon-orange-500 focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div class="flex gap-3 mt-6">
-              <button
-                :disabled="loading || (progressType === 'item' && !itemName)"
-                class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50
-                       text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                @click="handleUpdateProgress"
-              >
-                {{ loading ? 'Adding...' : 'Add' }}
-              </button>
-              <button
-                class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2
-                       rounded-lg font-semibold transition-colors"
-                @click="showProgressModal = false"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      </Teleport>
     </template>
   </div>
 </template>
