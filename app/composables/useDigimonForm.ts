@@ -5,7 +5,7 @@
  */
 
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types/index'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../data/qualities'
 import { getTagPatternForQuality } from '../data/attackConstants'
 import { useDigimonDP, type DigimonFormData } from './useDigimonDP'
