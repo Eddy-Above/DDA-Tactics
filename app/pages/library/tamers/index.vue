@@ -108,7 +108,7 @@ async function handleDelete(id: string, name: string) {
             <div class="flex gap-4 mt-4 text-sm text-digimon-dark-400">
               <span>Wounds: {{ calculateDerivedStats(tamer).woundBoxes }}</span>
               <span>Speed: {{ calculateDerivedStats(tamer).speed }}</span>
-              <span>Inspiration: {{ calculateDerivedStats(tamer).maxInspiration }}</span>
+              <span>Inspiration: {{ tamer.inspiration }}</span>
             </div>
           </div>
 
