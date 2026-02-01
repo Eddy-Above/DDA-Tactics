@@ -67,6 +67,7 @@ const {
   canAffordSkillIncrease,
   canAffordInspiration,
   canAffordTormentBox,
+  getTormentBoxCost,
   unlockedSpecialOrders,
 } = useTamerForm()
 
