@@ -153,7 +153,7 @@ async function handleSubmit() {
     qualities: form.qualities,
     dataOptimization: form.dataOptimization || undefined,
     bonusDP: form.bonusDP || 0,
-    partnerId: form.partnerId || undefined,
+    partnerId: form.partnerId || null,
     isEnemy: form.isEnemy,
     notes: form.notes,
     spriteUrl: form.spriteUrl || undefined,

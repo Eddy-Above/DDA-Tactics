@@ -186,7 +186,7 @@ async function handleSubmit() {
     attacks: form.attacks,
     qualities: form.qualities,
     dataOptimization: form.dataOptimization || undefined,
-    partnerId: form.partnerId || undefined,
+    partnerId: form.partnerId || null,
     isEnemy: form.isEnemy,
     notes: form.notes,
     spriteUrl: form.spriteUrl || undefined,
