@@ -974,7 +974,7 @@ const hasLinkedEvolutions = computed(() => {
             <!-- Descendants (tree structure with hierarchy) -->
             <template v-if="fullChainDescendantsTree.length > 0">
               <span class="text-digimon-dark-500 self-center">→</span>
-              <div :class="fullChainDescendantsTree.length > 1 ? 'flex flex-col gap-2' : ''">
+              <div :class="fullChainDescendantsTree.length > 1 ? 'flex flex-col gap-2 items-center' : 'flex items-center'">
                 <EvolutionTreeBranch
                   v-for="node in fullChainDescendantsTree"
                   :key="node.digimon.id"
