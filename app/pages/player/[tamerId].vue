@@ -1147,7 +1147,8 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           <h3 class="text-lg font-display font-semibold text-white mb-3">Turn Order</h3>
 
           <div class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700">
-            <div class="flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-4">
+            <!-- Layout when it's NOT player's turn (original) -->
+            <div v-if="!isMyTurn" class="flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-4">
 
               <!-- Current Turn Participant -->
               <div class="flex flex-col items-center">
@@ -1160,8 +1161,8 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                   />
                   <span v-else class="text-2xl">{{ currentTurnParticipant?.type === 'digimon' ? '🦖' : '👤' }}</span>
                 </div>
-                <span class="text-xs mt-1 font-semibold text-center" :class="isMyTurn ? 'text-digimon-orange-400' : 'text-digimon-dark-400'">
-                  {{ isMyTurn ? 'YOUR TURN' : 'Current' }}
+                <span class="text-xs mt-1 font-semibold text-center text-digimon-dark-400">
+                  Current
                 </span>
               </div>
 
@@ -1179,33 +1180,26 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               <!-- Arrow -->
               <span class="text-digimon-dark-500 text-xl">→</span>
 
-              <!-- First Player Turn (YOUR TURN or YOUR NEXT TURN) -->
+              <!-- First Player Turn (YOUR NEXT TURN) -->
               <div class="flex flex-col items-center">
-                <div
-                  :class="[
-                    'w-14 h-14 rounded-lg flex items-center justify-center overflow-hidden',
-                    isMyTurn
-                      ? 'bg-digimon-orange-500 border-2 border-digimon-orange-400 animate-pulse'
-                      : 'bg-digimon-orange-600 border-2 border-digimon-orange-500'
-                  ]"
-                >
+                <div class="w-14 h-14 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
                     :src="tamer.spriteUrl"
-                    alt="Your turn"
+                    alt="Your next turn"
                     class="w-full h-full object-cover"
                   />
                   <span v-else class="text-3xl">⚔️</span>
                 </div>
                 <span class="text-xs text-digimon-orange-400 mt-1 font-semibold text-center">
-                  {{ isMyTurn ? 'YOUR TURN' : 'YOUR NEXT TURN' }}
+                  YOUR NEXT TURN
                 </span>
               </div>
 
               <!-- Arrow -->
               <span class="text-digimon-dark-500 text-xl">→</span>
 
-              <!-- Turns Until Player Turn Again (always shown) -->
+              <!-- Turns Until Player Turn Again -->
               <div class="flex flex-col items-center">
                 <div class="w-10 h-10 rounded-full bg-digimon-dark-700 flex items-center justify-center">
                   <span class="text-white font-bold text-sm">{{ turnsUntilPlayerTurnAgain }}</span>
@@ -1216,7 +1210,88 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               <!-- Arrow -->
               <span class="text-digimon-dark-500 text-xl">→</span>
 
-              <!-- Player's Next Turn (always shown) -->
+              <!-- Player's Next Turn -->
+              <div class="flex flex-col items-center">
+                <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
+                  <img
+                    v-if="tamer?.spriteUrl"
+                    :src="tamer.spriteUrl"
+                    alt="Your next turn"
+                    class="w-full h-full object-cover"
+                  />
+                  <span v-else class="text-2xl">⚔️</span>
+                </div>
+                <span class="text-xs text-digimon-orange-400 mt-1 font-semibold text-center">
+                  YOUR NEXT TURN
+                </span>
+              </div>
+
+            </div>
+
+            <!-- Layout when it's player's turn (simplified) -->
+            <div v-else class="flex items-center justify-between px-2 sm:px-4 md:px-6 lg:px-8 py-4">
+
+              <!-- Current Turn (YOUR TURN) -->
+              <div class="flex flex-col items-center">
+                <div class="w-14 h-14 rounded-lg bg-digimon-orange-500 border-2 border-digimon-orange-400 animate-pulse flex items-center justify-center overflow-hidden">
+                  <img
+                    v-if="tamer?.spriteUrl"
+                    :src="tamer.spriteUrl"
+                    alt="Your turn"
+                    class="w-full h-full object-cover"
+                  />
+                  <span v-else class="text-3xl">⚔️</span>
+                </div>
+                <span class="text-xs text-digimon-orange-400 mt-1 font-semibold text-center">
+                  YOUR TURN
+                </span>
+              </div>
+
+              <!-- Arrow -->
+              <span class="text-digimon-dark-500 text-xl">→</span>
+
+              <!-- Turns Until Next Player Turn -->
+              <div class="flex flex-col items-center">
+                <div class="w-10 h-10 rounded-full bg-digimon-dark-700 flex items-center justify-center">
+                  <span class="text-white font-bold text-sm">{{ turnsUntilPlayerTurnAgain }}</span>
+                </div>
+                <span class="text-xs text-digimon-dark-400 mt-1">Turns</span>
+              </div>
+
+              <!-- Arrow -->
+              <span class="text-digimon-dark-500 text-xl">→</span>
+
+              <!-- Next Player Turn -->
+              <div class="flex flex-col items-center">
+                <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
+                  <img
+                    v-if="tamer?.spriteUrl"
+                    :src="tamer.spriteUrl"
+                    alt="Your next turn"
+                    class="w-full h-full object-cover"
+                  />
+                  <span v-else class="text-2xl">⚔️</span>
+                </div>
+                <span class="text-xs text-digimon-orange-400 mt-1 font-semibold text-center">
+                  YOUR NEXT TURN
+                </span>
+              </div>
+
+              <!-- Arrow -->
+              <span class="text-digimon-dark-500 text-xl">→</span>
+
+              <!-- Turns Until Second Next Player Turn (cycles) -->
+              <div class="flex flex-col items-center">
+                <div class="w-10 h-10 rounded-full bg-digimon-dark-700 flex items-center justify-center">
+                  <span class="text-white font-bold text-sm">{{ turnsUntilPlayerTurnAgain }}</span>
+                </div>
+                <span class="text-xs text-digimon-dark-400 mt-1">Turns</span>
+              </div>
+
+              <!-- Arrow -->
+              <span class="text-digimon-dark-500 text-xl">→</span>
+
+              <!-- Second Next Player Turn -->
               <div class="flex flex-col items-center">
                 <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
