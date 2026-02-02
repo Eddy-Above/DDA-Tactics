@@ -170,14 +170,27 @@ onUnmounted(() => {
 watch(
   () => activeEncounter.value?.requestResponses,
   (newResponses, oldResponses) => {
-    if (!newResponses || !activeEncounter.value) return
+    console.log('[ATTACK RESULT] Watch triggered, pendingAttacks:', pendingAttacks.value.length)
+
+    if (!newResponses || !activeEncounter.value) {
+      console.log('[ATTACK RESULT] Early return - no responses or no encounter')
+      return
+    }
 
     const responses = newResponses
     const requests = activeEncounter.value.pendingRequests || []
 
+    console.log('[ATTACK RESULT] Responses:', responses.length, 'Requests:', requests.length)
+
     // Iterate backwards to safely splice during iteration
     for (let i = pendingAttacks.value.length - 1; i >= 0; i--) {
       const pendingAttack = pendingAttacks.value[i]
+
+      console.log(`[ATTACK RESULT] Checking pending attack #${i}:`, {
+        attackName: pendingAttack.attackName,
+        participantId: pendingAttack.participantId,
+        age: Date.now() - pendingAttack.timestamp
+      })
 
       // Find matching dodge-roll request with extended timeout (30 seconds)
       const matchingRequest = requests.find((req: any) =>
@@ -187,13 +200,17 @@ watch(
       )
 
       if (!matchingRequest) {
+        console.log('[ATTACK RESULT] No matching request for:', pendingAttack.attackName)
         // Clean up expired attacks (>60 seconds)
         const now = Date.now()
         if (now - pendingAttack.timestamp > 60000) {
+          console.log('[ATTACK RESULT] Removing expired attack:', pendingAttack.attackName)
           pendingAttacks.value.splice(i, 1)
         }
         continue
       }
+
+      console.log('[ATTACK RESULT] Found matching request:', matchingRequest.id)
 
       // Find matching dodge response
       const matchingResponse = responses.find((resp: any) =>
@@ -202,10 +219,13 @@ watch(
       )
 
       if (matchingResponse) {
+        console.log('[ATTACK RESULT] ✓ Found matching response! Showing modal for:', pendingAttack.attackName)
         // Found dodge response - show result modal!
         showAttackResult(pendingAttack, matchingRequest, matchingResponse)
         // Remove from array (splice in reverse order iteration)
         pendingAttacks.value.splice(i, 1)
+      } else {
+        console.log('[ATTACK RESULT] No matching response yet for request:', matchingRequest.id)
       }
     }
   },
@@ -752,10 +772,19 @@ function showAttackResult(
   dodgeRequest: any,
   dodgeResponse: any
 ) {
+  console.log('[ATTACK RESULT] showAttackResult called:', {
+    attackName: pendingAttack.attackName,
+    targetName: pendingAttack.targetName,
+    accuracySuccesses: pendingAttack.accuracySuccesses,
+    dodgeSuccesses: dodgeResponse.response.dodgeSuccesses
+  })
+
   const accuracySuccesses = pendingAttack.accuracySuccesses
   const dodgeSuccesses = dodgeResponse.response.dodgeSuccesses
   const netSuccesses = accuracySuccesses - dodgeSuccesses
   const hit = netSuccesses >= 0
+
+  console.log('[ATTACK RESULT] Damage calculation: accuracySuccesses:', accuracySuccesses, 'dodgeSuccesses:', dodgeSuccesses, 'netSuccesses:', netSuccesses, 'hit:', hit)
 
   // Get attacker's digimon to calculate base damage
   const attackDef = pendingAttack.attackData
@@ -854,6 +883,8 @@ function showAttackResult(
     finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
   }
 
+  console.log('[ATTACK RESULT] About to add to queue, current length:', attackResultQueue.value.length)
+
   // Add to queue to handle multiple attacks in one turn
   attackResultQueue.value.push({
     attackerName: tamer.value?.name || 'You',
@@ -873,8 +904,12 @@ function showAttackResult(
     finalDamage: finalDamage
   })
 
+  console.log('[ATTACK RESULT] Added to queue, new length:', attackResultQueue.value.length)
+  console.log('[ATTACK RESULT] attackResultData computed value:', attackResultData.value ? 'HAS DATA' : 'NULL')
+
   // Show modal (will display the first item in the queue)
   showAttackResultModal.value = true
+  console.log('[ATTACK RESULT] Modal flag set to true')
 }
 
 function closeAttackResultModal() {
