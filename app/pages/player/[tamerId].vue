@@ -36,9 +36,9 @@ const showTargetSelector = ref(false)
 const selectedDigimonId = ref<string | null>(null)
 const allTamers = ref<Tamer[]>([])
 
-// Track attacks awaiting dodge responses
-const pendingAttacks = ref<Map<string, {
-  requestId: string
+// Track attacks awaiting dodge responses (use array for proper Vue reactivity)
+const pendingAttacks = ref<Array<{
+  trackingId: string
   timestamp: number
   attackName: string
   targetName: string
@@ -47,7 +47,7 @@ const pendingAttacks = ref<Map<string, {
   accuracySuccesses: number
   participantId: string
   attackData: any
-}>>(new Map())
+}>>>([])
 
 // Attack result modal state
 const showAttackResultModal = ref(false)
@@ -166,16 +166,25 @@ watchEffect(() => {
   const responses = activeEncounter.value.requestResponses || []
   const requests = activeEncounter.value.pendingRequests || []
 
-  // Check each pending attack
-  for (const [trackingId, pendingAttack] of pendingAttacks.value.entries()) {
-    // Find matching dodge-roll request
+  // Iterate backwards to safely splice during iteration
+  for (let i = pendingAttacks.value.length - 1; i >= 0; i--) {
+    const pendingAttack = pendingAttacks.value[i]
+
+    // Find matching dodge-roll request with extended timeout (30 seconds)
     const matchingRequest = requests.find((req: any) =>
       req.type === 'dodge-roll' &&
       req.data?.attackerParticipantId === pendingAttack.participantId &&
-      Math.abs(new Date(req.timestamp).getTime() - pendingAttack.timestamp) < 5000 // Within 5 seconds
+      Math.abs(new Date(req.timestamp).getTime() - pendingAttack.timestamp) < 30000 // Increased to 30 seconds
     )
 
-    if (!matchingRequest) continue
+    if (!matchingRequest) {
+      // Clean up expired attacks (>60 seconds)
+      const now = Date.now()
+      if (now - pendingAttack.timestamp > 60000) {
+        pendingAttacks.value.splice(i, 1)
+      }
+      continue
+    }
 
     // Find matching dodge response
     const matchingResponse = responses.find((resp: any) =>
@@ -186,15 +195,8 @@ watchEffect(() => {
     if (matchingResponse) {
       // Found dodge response - show result modal!
       showAttackResult(pendingAttack, matchingRequest, matchingResponse)
-      pendingAttacks.value.delete(trackingId)
-    }
-  }
-
-  // Clean up old pending attacks (>30 seconds)
-  const now = Date.now()
-  for (const [trackingId, attack] of pendingAttacks.value.entries()) {
-    if (now - attack.timestamp > 30000) {
-      pendingAttacks.value.delete(trackingId)
+      // Remove from array (splice in reverse order iteration)
+      pendingAttacks.value.splice(i, 1)
     }
   }
 })
@@ -708,8 +710,8 @@ async function confirmAttack(target: CombatParticipant) {
     if (result) {
       // Store pending attack for result tracking
       const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      pendingAttacks.value.set(trackingId, {
-        requestId: trackingId,
+      pendingAttacks.value.push({
+        trackingId: trackingId,
         timestamp: Date.now(),
         attackName: attack.name,
         targetName: getParticipantName(target),
