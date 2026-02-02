@@ -158,6 +158,44 @@ const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
 const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
 
+// Check if request has already been responded to (hide modal if response exists)
+const hasUnrespondedDigimonRequest = computed(() => {
+  if (!activeEncounter.value || !tamer.value) return false
+
+  const digimonRequest = currentDigimonRequest.value
+  if (!digimonRequest) return false
+
+  // Check if response already exists for this request
+  const responses = (activeEncounter.value.requestResponses as any[]) || []
+  const hasResponse = responses.some((r) => r.requestId === digimonRequest.id && r.tamerId === tamer.value!.id)
+
+  return !hasResponse // Only show modal if no response yet
+})
+
+const hasUnrespondedInitiativeRequest = computed(() => {
+  if (!activeEncounter.value || !tamer.value) return false
+
+  const initiativeRequest = currentInitiativeRequest.value
+  if (!initiativeRequest) return false
+
+  const responses = (activeEncounter.value.requestResponses as any[]) || []
+  const hasResponse = responses.some((r) => r.requestId === initiativeRequest.id && r.tamerId === tamer.value!.id)
+
+  return !hasResponse
+})
+
+const hasUnrespondedDodgeRequest = computed(() => {
+  if (!activeEncounter.value || !tamer.value) return false
+
+  const dodgeRequest = currentDodgeRequest.value
+  if (!dodgeRequest) return false
+
+  const responses = (activeEncounter.value.requestResponses as any[]) || []
+  const hasResponse = responses.some((r) => r.requestId === dodgeRequest.id && r.tamerId === tamer.value!.id)
+
+  return !hasResponse
+})
+
 // Turn tracking
 const turnsUntilMyTurn = computed(() => {
   if (!activeEncounter.value || myParticipants.value.length === 0) return 0
@@ -1396,7 +1434,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
   <!-- Digimon Selection Modal -->
   <Teleport to="body">
     <div
-      v-if="hasDigimonRequest"
+      v-if="hasUnrespondedDigimonRequest"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-digimon-orange-500">
@@ -1435,7 +1473,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
   <!-- Initiative Request Modal -->
   <Teleport to="body">
     <div
-      v-if="hasInitiativeRequest"
+      v-if="hasUnrespondedInitiativeRequest"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-digimon-orange-500">
@@ -1516,7 +1554,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
   <!-- Dodge Request Modal -->
   <Teleport to="body">
     <div
-      v-if="hasDodgeRequest"
+      v-if="hasUnrespondedDodgeRequest"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-pulse"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-red-500">
