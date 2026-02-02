@@ -49,9 +49,9 @@ const pendingAttacks = ref<Array<{
   attackData: any;
 }>>([])
 
-// Attack result modal state
+// Attack result modal state - queue to handle multiple attacks in one turn
 const showAttackResultModal = ref(false)
-const attackResultData = ref<{
+const attackResultQueue = ref<Array<{
   attackerName: string
   attackName: string
   targetName: string
@@ -67,7 +67,10 @@ const attackResultData = ref<{
   armorPiercing?: number
   targetArmor?: number
   finalDamage?: number
-} | null>(null)
+}>>([])
+
+// Computed property to get the current result (first in queue)
+const attackResultData = computed(() => attackResultQueue.value[0] || null)
 
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
@@ -848,8 +851,8 @@ function showAttackResult(
     finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
   }
 
-  // Set modal data
-  attackResultData.value = {
+  // Add to queue to handle multiple attacks in one turn
+  attackResultQueue.value.push({
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: pendingAttack.targetName,
@@ -865,14 +868,20 @@ function showAttackResult(
     armorPiercing: armorPiercing,
     targetArmor: targetArmor,
     finalDamage: finalDamage
-  }
+  })
 
+  // Show modal (will display the first item in the queue)
   showAttackResultModal.value = true
 }
 
 function closeAttackResultModal() {
-  showAttackResultModal.value = false
-  attackResultData.value = null
+  // Remove the current (first) result from the queue
+  attackResultQueue.value.shift()
+
+  // Keep modal open if there are more results to show, close otherwise
+  if (attackResultQueue.value.length === 0) {
+    showAttackResultModal.value = false
+  }
 }
 
 // Clear selection
