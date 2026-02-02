@@ -596,6 +596,8 @@ const selectedParticipant = computed(() => {
   return participants.find((p) => p.id === selectedParticipantId.value) || null
 })
 
+let refreshInterval: ReturnType<typeof setInterval>
+
 onMounted(async () => {
   await Promise.all([
     fetchEncounter(route.params.id as string),
@@ -603,6 +605,17 @@ onMounted(async () => {
     fetchTamers(),
     fetchEvolutionLines(),
   ])
+
+  // Auto-refresh encounter every 5 seconds to see player responses
+  refreshInterval = setInterval(() => {
+    fetchEncounter(route.params.id as string)
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+  }
 })
 
 // Get set of digimon IDs that are current forms for partners
