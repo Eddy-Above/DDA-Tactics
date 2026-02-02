@@ -359,13 +359,13 @@ const turnsUntilPlayerTurnAgain = computed(() => {
   for (let i = 1; i < turnOrder.length; i++) {
     const checkIndex = (firstPlayerTurnIndex.value + i) % turnOrder.length
     if (myParticipantIds.has(turnOrder[checkIndex])) {
-      // Found another player turn - return distance (never 0)
-      return Math.max(1, i)
+      // Found another player turn - return turns between (min 1, never 0)
+      return Math.max(1, i - 1)
     }
   }
 
-  // No other player turn found - return full cycle length (never 0)
-  return Math.max(1, turnOrder.length)
+  // No other player turn found - return full cycle between (min 1, never 0)
+  return Math.max(1, turnOrder.length - 1)
 })
 
 function getParticipantName(participant: CombatParticipant): string {
