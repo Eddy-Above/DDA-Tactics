@@ -70,7 +70,10 @@ const attackResultQueue = ref<Array<{
 }>>([])
 
 // Computed property to get the current result (first in queue)
-const attackResultData = computed(() => attackResultQueue.value[0] || null)
+// Important: Check length first to properly establish reactivity dependency
+const attackResultData = computed(() => {
+  return attackResultQueue.value.length > 0 ? attackResultQueue.value[0] : null
+})
 
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
