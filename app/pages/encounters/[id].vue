@@ -93,6 +93,21 @@ const activeParticipant = computed(() => {
   return getCurrentParticipant(currentEncounter.value)
 })
 
+// Get the participant whose turn it currently is
+const currentTurnParticipant = computed(() => {
+  if (!currentEncounter.value) return null
+  if (currentEncounter.value.phase !== 'combat') return null
+
+  const turnOrder = (currentEncounter.value.turnOrder as string[]) || []
+  const currentIndex = currentEncounter.value.currentTurnIndex || 0
+  const currentTurnParticipantId = turnOrder[currentIndex]
+
+  if (!currentTurnParticipantId) return null
+
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  return participants.find(p => p.id === currentTurnParticipantId) || null
+})
+
 // Battle log
 const battleLog = computed(() => {
   if (!currentEncounter.value) return []
@@ -230,6 +245,15 @@ function canParticipantAct(participant: CombatParticipant): boolean {
   }
 
   return false
+}
+
+// Get attacks for a participant
+function getParticipantAttacks(participant: CombatParticipant) {
+  if (participant.type !== 'digimon') return []
+
+  // Look up digimon in digimonMap
+  const digimon = digimonMap.value.get(participant.entityId)
+  return digimon?.attacks || []
 }
 
 // Add participant handler - supports adding multiple of the same entity
@@ -985,6 +1009,59 @@ async function handleUpdateHazard(hazard: Hazard) {
               <span v-else>
                 ⚠️ Some participants missing initiative
               </span>
+            </div>
+          </div>
+
+          <!-- Active Participant's Attacks (GM Reference) -->
+          <div v-if="currentEncounter.phase === 'combat' && currentTurnParticipant && currentTurnParticipant.type === 'digimon'" class="mb-6">
+            <div class="bg-digimon-dark-800 rounded-xl p-6 border-2 border-digimon-orange-500">
+              <h3 class="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
+                <span class="text-2xl">⚔️</span>
+                {{ getEntityDetails(currentTurnParticipant)?.name || 'Unknown' }}'s Attacks
+                <span class="text-sm text-digimon-dark-400 font-normal ml-2">(Current Turn)</span>
+              </h3>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div
+                  v-for="attack in getParticipantAttacks(currentTurnParticipant)"
+                  :key="attack.id"
+                  class="bg-digimon-dark-700 rounded-lg p-4 border border-digimon-dark-600"
+                >
+                  <div class="flex items-center gap-2 mb-2">
+                    <h4 class="font-semibold text-white">{{ attack.name }}</h4>
+                    <span class="px-2 py-0.5 bg-digimon-dark-600 text-digimon-dark-300 text-xs rounded uppercase font-medium">
+                      {{ attack.type }}
+                    </span>
+                  </div>
+
+                  <p v-if="attack.description" class="text-sm text-digimon-dark-300 mb-3">
+                    {{ attack.description }}
+                  </p>
+
+                  <div class="flex flex-wrap gap-3 text-sm">
+                    <div class="flex items-center gap-1">
+                      <span class="text-digimon-dark-400">ACC:</span>
+                      <span class="text-white font-medium">{{ attack.accuracy }}</span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <span class="text-digimon-dark-400">DMG:</span>
+                      <span class="text-white font-medium">{{ attack.damage }}</span>
+                    </div>
+                    <div v-if="attack.range" class="flex items-center gap-1">
+                      <span class="text-digimon-dark-400">Range:</span>
+                      <span class="text-white font-medium">{{ attack.range }}</span>
+                    </div>
+                    <div v-if="attack.tags?.length" class="flex items-center gap-1">
+                      <span class="text-digimon-dark-400">Tags:</span>
+                      <span class="text-digimon-dark-300 text-xs">{{ attack.tags.join(', ') }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="getParticipantAttacks(currentTurnParticipant).length === 0" class="col-span-full text-center text-digimon-dark-400 py-4">
+                  No attacks defined for this participant.
+                </div>
+              </div>
             </div>
           </div>
 
