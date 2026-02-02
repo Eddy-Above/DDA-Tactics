@@ -414,10 +414,8 @@ function getAttackAccuracyPool(participant: CombatParticipant): number {
 }
 
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
-  // Complex attacks cost 2 simple actions, simple attacks cost 1 simple action
-  // For now, assume all attacks are complex (cost 2)
-  // TODO: Check attack definition to determine actual cost
-  const requiredActions = 2
+  // Attacks cost 1 simple action
+  const requiredActions = 1
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 

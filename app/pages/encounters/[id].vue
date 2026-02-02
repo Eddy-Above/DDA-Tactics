@@ -262,9 +262,9 @@ function getParticipantAttacks(participant: CombatParticipant) {
   return digimon?.attacks || []
 }
 
-// Check if participant can use an attack (requires 2 simple actions)
+// Check if participant can use an attack (requires 1 simple action)
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
-  const requiredActions = 2
+  const requiredActions = 1
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 
@@ -1255,7 +1255,7 @@ async function handleUpdateHazard(hazard: Hazard) {
                   </div>
 
                   <div v-if="!canUseAttack(currentTurnParticipant, attack)" class="text-xs text-red-400 mt-2">
-                    Not enough actions (requires 2)
+                    Not enough actions (requires 1)
                   </div>
                 </button>
 
