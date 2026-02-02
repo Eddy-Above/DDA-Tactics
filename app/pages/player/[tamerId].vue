@@ -368,6 +368,14 @@ const turnsUntilPlayerTurnAgain = computed(() => {
   return Math.max(1, turnOrder.length - 1)
 })
 
+// When it's the player's turn, show number of other participants (turnOrder.length - 1)
+// This represents how many turns until the player's turn comes around again
+const playerTurnCycleLength = computed(() => {
+  if (!activeEncounter.value || !isMyTurn.value) return 0
+  const turnOrder = (activeEncounter.value.turnOrder as string[]) || []
+  return Math.max(1, turnOrder.length - 1)
+})
+
 function getParticipantName(participant: CombatParticipant): string {
   if (participant.type === 'tamer') {
     return tamer.value?.name || 'Unknown'
@@ -1253,7 +1261,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               <!-- Turns Until Next Player Turn -->
               <div class="flex flex-col items-center">
                 <div class="w-10 h-10 rounded-full bg-digimon-dark-700 flex items-center justify-center">
-                  <span class="text-white font-bold text-sm">{{ turnsUntilPlayerTurnAgain }}</span>
+                  <span class="text-white font-bold text-sm">{{ playerTurnCycleLength }}</span>
                 </div>
                 <span class="text-xs text-digimon-dark-400 mt-1">Turns</span>
               </div>
@@ -1283,7 +1291,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               <!-- Turns Until Second Next Player Turn (cycles) -->
               <div class="flex flex-col items-center">
                 <div class="w-10 h-10 rounded-full bg-digimon-dark-700 flex items-center justify-center">
-                  <span class="text-white font-bold text-sm">{{ turnsUntilPlayerTurnAgain }}</span>
+                  <span class="text-white font-bold text-sm">{{ playerTurnCycleLength }}</span>
                 </div>
                 <span class="text-xs text-digimon-dark-400 mt-1">Turns</span>
               </div>
