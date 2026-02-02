@@ -611,7 +611,7 @@ async function confirmAttack(target: CombatParticipant) {
     const { participant, attack } = selectedAttack.value
 
     // Roll accuracy (count successes: 5+ = 1 success)
-    const accuracyPool = getAttackAccuracyPool(participant)
+    const accuracyPool = getAttackStats(participant, attack).accuracy
     const accuracyDiceResults = []
     for (let i = 0; i < accuracyPool; i++) {
       accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
