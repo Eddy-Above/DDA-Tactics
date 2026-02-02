@@ -168,7 +168,8 @@ export function useEncounters() {
 
   async function addParticipant(
     encounterId: string,
-    participant: CombatParticipant
+    participant: CombatParticipant,
+    digimonMap?: Map<string, any>  // Optional: for hierarchical filtering of partner digimon
   ): Promise<Encounter | null> {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
@@ -176,9 +177,23 @@ export function useEncounters() {
     const participants = [...((encounter.participants as CombatParticipant[]) || []), participant]
 
     // Sort by initiative (highest first)
-    const turnOrder = participants
-      .sort((a, b) => b.initiative - a.initiative)
-      .map((p) => p.id)
+    let sortedParticipants = participants.sort((a, b) => b.initiative - a.initiative)
+
+    // Apply hierarchical filter if digimonMap provided (exclude partner digimon from turnOrder)
+    if (digimonMap) {
+      sortedParticipants = sortedParticipants.filter(p => {
+        // Always include tamers and enemies
+        if (p.type === 'tamer' || p.type === 'enemy') return true
+        // For digimon, only include if NOT a partner (no partnerId)
+        if (p.type === 'digimon') {
+          const d = digimonMap.get(p.entityId)
+          return !d?.partnerId  // Exclude if has partnerId (is a partner digimon)
+        }
+        return true
+      })
+    }
+
+    const turnOrder = sortedParticipants.map((p) => p.id)
 
     const result = await updateEncounter(encounterId, { participants, turnOrder })
     return result

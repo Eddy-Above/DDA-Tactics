@@ -276,7 +276,7 @@ async function handleAddParticipant() {
       maxWounds
     )
 
-    const result = await addParticipant(currentEncounter.value.id, participant)
+    const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
   }
 
   showAddParticipant.value = false
@@ -463,7 +463,7 @@ async function processResponse(response: any) {
           if (!participant) {
             const derived = calcTamerStats(tamer)
             participant = createParticipant('tamer', tamer.id, response.response.initiative, response.response.initiativeRoll, derived.woundBoxes)
-            const result = await addParticipant(currentEncounter.value.id, participant)
+            const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
             }
