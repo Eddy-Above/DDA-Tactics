@@ -15,6 +15,13 @@
       "when": 1769955752241,
       "tag": "0001_sturdy_skreet",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1769977686179,
+      "tag": "0002_busy_morbius",
+      "breakpoints": true
     }
   ]
 }

@@ -173,14 +173,15 @@ export function useEncounters() {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
 
-    const participants = [...(encounter.participants as CombatParticipant[]), participant]
+    const participants = [...((encounter.participants as CombatParticipant[]) || []), participant]
 
     // Sort by initiative (highest first)
     const turnOrder = participants
       .sort((a, b) => b.initiative - a.initiative)
       .map((p) => p.id)
 
-    return updateEncounter(encounterId, { participants, turnOrder })
+    const result = await updateEncounter(encounterId, { participants, turnOrder })
+    return result
   }
 
   async function removeParticipant(
@@ -268,14 +269,14 @@ export function useEncounters() {
       timestamp: new Date().toISOString(),
     }
 
-    const battleLog = [...(encounter.battleLog as BattleLogEntry[]), newEntry]
+    const battleLog = [...((encounter.battleLog as BattleLogEntry[]) || []), newEntry]
     return updateEncounter(encounterId, { battleLog })
   }
 
   // Get current turn participant
   function getCurrentParticipant(encounter: Encounter): CombatParticipant | null {
-    const turnOrder = encounter.turnOrder as string[]
-    const participants = encounter.participants as CombatParticipant[]
+    const turnOrder = (encounter.turnOrder as string[]) || []
+    const participants = (encounter.participants as CombatParticipant[]) || []
     const currentId = turnOrder[encounter.currentTurnIndex]
     return participants.find((p) => p.id === currentId) || null
   }
@@ -286,7 +287,7 @@ export function useEncounters() {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
 
-    const hazards = [...(encounter.hazards as Hazard[]), hazard]
+    const hazards = [...((encounter.hazards as Hazard[]) || []), hazard]
     return updateEncounter(encounterId, { hazards })
   }
 
@@ -320,6 +321,135 @@ export function useEncounters() {
     return updateEncounter(encounterId, { hazards })
   }
 
+  // === Request/Response Management Functions ===
+
+  async function createRequest(
+    encounterId: string,
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll',
+    targetTamerId: string,
+    targetParticipantId?: string,
+    data?: any
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/requests`, {
+        method: 'POST',
+        body: { type, targetTamerId, targetParticipantId, data },
+      })
+      // Update local state
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) {
+        currentEncounter.value = result
+      }
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to create request'
+      console.error('Failed to create request:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function respondToRequest(
+    encounterId: string,
+    requestId: string,
+    tamerId: string,
+    response: {
+      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled'
+      digimonId?: string
+      initiative?: number
+      initiativeRoll?: number
+      dodgeRoll?: number
+    }
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/responses`, {
+        method: 'POST',
+        body: { requestId, tamerId, response },
+      })
+      // Update local state
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) {
+        currentEncounter.value = result
+      }
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to submit response'
+      console.error('Failed to submit response:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function cancelRequest(encounterId: string, requestId: string): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/requests/${requestId}`, {
+        method: 'DELETE',
+      })
+      // Update local state
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) {
+        currentEncounter.value = result
+      }
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to cancel request'
+      console.error('Failed to cancel request:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // Helper functions for request/response
+  function getMyPendingRequests(encounter: Encounter, tamerId: string) {
+    const requests = (encounter.pendingRequests as any[]) || []
+    return requests.filter((r) => r.targetTamerId === tamerId)
+  }
+
+  function getUnprocessedResponses(encounter: Encounter) {
+    return (encounter.requestResponses as any[]) || []
+  }
+
+  // === Combat Action Functions ===
+
+  async function performAttack(
+    encounterId: string,
+    participantId: string,
+    attackId: string,
+    targetId: string,
+    accuracyRoll: number,
+    tamerId: string
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/attack`, {
+        method: 'POST',
+        body: { participantId, attackId, targetId, accuracyRoll, tamerId },
+      })
+      // Update local state
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) {
+        currentEncounter.value = result
+      }
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to perform attack'
+      console.error('Failed to perform attack:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     encounters,
     currentEncounter,
@@ -344,5 +474,13 @@ export function useEncounters() {
     removeHazard,
     updateHazard,
     decrementHazardDurations,
+    // Request/response management
+    createRequest,
+    respondToRequest,
+    cancelRequest,
+    getMyPendingRequests,
+    getUnprocessedResponses,
+    // Combat actions
+    performAttack,
   }
 }

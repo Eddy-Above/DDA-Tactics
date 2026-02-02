@@ -28,15 +28,23 @@ const {
   addHazard,
   removeHazard,
   updateHazard,
+  createRequest,
+  respondToRequest,
+  cancelRequest,
+  getMyPendingRequests,
+  getUnprocessedResponses,
 } = useEncounters()
 
 const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: calcDigimonStats } = useDigimon()
 const { tamers, fetchTamers, calculateDerivedStats: calcTamerStats } = useTamers()
+const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const showAddParticipant = ref(false)
-const selectedEntityType = ref<'digimon' | 'tamer'>('digimon')
+const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
 const addQuantity = ref(1)
+const showRequestPanel = ref(false)
+const selectedTamerForRequest = ref('')
 
 // Entity lookup maps
 const digimonMap = computed(() => {
@@ -54,8 +62,8 @@ const tamerMap = computed(() => {
 // Participants sorted by turn order
 const sortedParticipants = computed(() => {
   if (!currentEncounter.value) return []
-  const participants = currentEncounter.value.participants as CombatParticipant[]
-  const turnOrder = currentEncounter.value.turnOrder as string[]
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  const turnOrder = (currentEncounter.value.turnOrder as string[]) || []
   return turnOrder.map((id) => participants.find((p) => p.id === id)).filter(Boolean) as CombatParticipant[]
 })
 
@@ -68,13 +76,25 @@ const activeParticipant = computed(() => {
 // Battle log
 const battleLog = computed(() => {
   if (!currentEncounter.value) return []
-  return (currentEncounter.value.battleLog as BattleLogEntry[]).slice().reverse()
+  return ((currentEncounter.value.battleLog as BattleLogEntry[]) || []).slice().reverse()
 })
 
 // Hazards
 const hazards = computed(() => {
   if (!currentEncounter.value) return []
-  return currentEncounter.value.hazards as Hazard[]
+  return (currentEncounter.value.hazards as Hazard[]) || []
+})
+
+// Pending requests
+const pendingRequests = computed(() => {
+  if (!currentEncounter.value) return []
+  return (currentEncounter.value.pendingRequests as any[]) || []
+})
+
+// Unprocessed responses
+const unprocessedResponses = computed(() => {
+  if (!currentEncounter.value) return []
+  return (currentEncounter.value.requestResponses as any[]) || []
 })
 
 // Get entity details for a participant
@@ -121,7 +141,7 @@ async function handleAddParticipant() {
     let initiativeRoll = 0
     let maxWounds = 5
 
-    if (selectedEntityType.value === 'digimon') {
+    if (selectedEntityType.value === 'digimon' || selectedEntityType.value === 'enemy') {
       const digimon = digimonMap.value.get(selectedEntityId.value)
       if (digimon) {
         const result = rollDigimonInitiative(digimon)
@@ -144,14 +164,14 @@ async function handleAddParticipant() {
     }
 
     const participant = createParticipant(
-      selectedEntityType.value,
+      selectedEntityType.value === 'enemy' ? 'digimon' : selectedEntityType.value,
       selectedEntityId.value,
       initiative,
       initiativeRoll,
       maxWounds
     )
 
-    await addParticipant(currentEncounter.value.id, participant)
+    const result = await addParticipant(currentEncounter.value.id, participant)
   }
 
   showAddParticipant.value = false
@@ -164,6 +184,140 @@ async function handleRemoveParticipant(participantId: string) {
   if (!currentEncounter.value) return
   if (confirm('Remove this participant from the encounter?')) {
     await removeParticipant(currentEncounter.value.id, participantId)
+  }
+}
+
+// Request digimon selection from a tamer
+async function requestDigimonSelection() {
+  if (!currentEncounter.value || !selectedTamerForRequest.value) return
+
+  await createRequest(
+    currentEncounter.value.id,
+    'digimon-selection',
+    selectedTamerForRequest.value
+  )
+
+  showRequestPanel.value = false
+  selectedTamerForRequest.value = ''
+}
+
+// Request initiative roll from a tamer
+async function requestInitiativeRoll(tamerId: string) {
+  if (!currentEncounter.value) return
+
+  await createRequest(
+    currentEncounter.value.id,
+    'initiative-roll',
+    tamerId
+  )
+}
+
+// Request dodge roll from a participant's tamer
+async function requestDodgeRoll(participantId: string) {
+  if (!currentEncounter.value) return
+
+  const participant = (currentEncounter.value.participants as any[])?.find((p: any) => p.id === participantId)
+  if (!participant) return
+
+  // For digimon, we need the tamer's ID
+  let tamerId = participant.entityId
+  if (participant.type === 'digimon') {
+    // This is simplified - in reality, we'd need to look up which tamer owns this digimon
+    // For now, we'll just use the entityId
+    tamerId = participant.entityId
+  }
+
+  await createRequest(
+    currentEncounter.value.id,
+    'dodge-roll',
+    tamerId,
+    participantId,
+    {
+      attackName: 'Attack',
+      attackerName: 'Attacker',
+    }
+  )
+}
+
+// Process player response
+async function processResponse(response: any) {
+  if (!currentEncounter.value) return
+
+  try {
+    const request = pendingRequests.value.find((r: any) => r.id === response.requestId)
+    if (!request) {
+      console.error('Request not found:', response.requestId)
+      return
+    }
+
+    if (response.response.type === 'digimon-selected') {
+      // Fetch the selected digimon
+      const digimon = digimonMap.value.get(response.response.digimonId)
+      if (!digimon) {
+        console.error('Digimon not found:', response.response.digimonId)
+        return
+      }
+
+      // Roll initiative for the digimon
+      const initiativeResult = rollDigimonInitiative(digimon)
+      const derived = calcDigimonStats(digimon)
+
+      // Create participant
+      const participant = createParticipant(
+        'digimon',
+        digimon.id,
+        initiativeResult.total,
+        initiativeResult.roll,
+        derived.woundBoxes
+      )
+
+      // Add to encounter
+      const result = await addParticipant(currentEncounter.value.id, participant)
+      if (result) {
+        // Clear the request
+        await cancelRequest(currentEncounter.value.id, request.id)
+      }
+    } else if (response.response.type === 'initiative-rolled') {
+      // Find the participant that needs initiative updated
+      const participants = (currentEncounter.value.participants as any[]) || []
+      const tamer = tamers.value.find((t) => t.id === response.tamerId)
+
+      if (tamer) {
+        // Check if tamer already has a participant in the encounter
+        let participant = participants.find((p: any) => p.entityId === tamer.id && p.type === 'tamer')
+
+        if (!participant) {
+          // Create new tamer participant with the rolled initiative
+          const derived = calcTamerStats(tamer)
+          participant = createParticipant('tamer', tamer.id, response.response.initiative, response.response.initiativeRoll, derived.woundBoxes)
+          const result = await addParticipant(currentEncounter.value.id, participant)
+          if (result) {
+            await cancelRequest(currentEncounter.value.id, request.id)
+          }
+        } else {
+          // Update existing participant's initiative
+          const updated = participants.map((p: any) => {
+            if (p.id === participant.id) {
+              return {
+                ...p,
+                initiative: response.response.initiative,
+                initiativeRoll: response.response.initiativeRoll,
+              }
+            }
+            return p
+          })
+          const result = await updateEncounter(currentEncounter.value.id, { participants: updated })
+          if (result) {
+            await cancelRequest(currentEncounter.value.id, request.id)
+          }
+        }
+      } else {
+        console.error('Tamer not found:', response.tamerId)
+      }
+    }
+    // For dodge rolls, we don't auto-process - GM uses the damage calculator
+  } catch (error) {
+    console.error('Error processing response:', error)
   }
 }
 
@@ -444,11 +598,44 @@ onMounted(async () => {
     fetchEncounter(route.params.id as string),
     fetchDigimon(),
     fetchTamers(),
+    fetchEvolutionLines(),
   ])
 })
 
+// Get set of digimon IDs that are current forms for partners
+const currentPartnerDigimonIds = computed(() => {
+  const ids = new Set<string>()
+
+  for (const evolutionLine of evolutionLines.value) {
+    // Only process evolution lines with partners
+    if (!evolutionLine.partnerId) continue
+
+    const currentStage = getCurrentStage(evolutionLine)
+    if (currentStage?.digimonId) {
+      ids.add(currentStage.digimonId)
+    }
+  }
+
+  return ids
+})
+
 // Available entities to add (all entities - can add multiples)
-const availableDigimon = computed(() => digimonList.value)
+const availableDigimon = computed(() => {
+  return digimonList.value.filter((digimon) => {
+    // Only show partner digimon (those with a partnerId)
+    if (!digimon.partnerId) {
+      return false
+    }
+
+    // For partners, only show if they're at their current stage
+    return currentPartnerDigimonIds.value.has(digimon.id)
+  })
+})
+
+const availableEnemyDigimon = computed(() => {
+  return digimonList.value.filter((digimon) => digimon.isEnemy)
+})
+
 const availableTamers = computed(() => tamers.value)
 
 function getStanceColor(stance: string) {
@@ -807,6 +994,75 @@ async function handleUpdateHazard(hazard: Hazard) {
             />
           </div>
 
+          <!-- Pending Player Requests -->
+          <div class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700">
+            <h3 class="font-display text-lg font-semibold text-white mb-3">
+              Pending Player Requests
+            </h3>
+
+            <div v-if="pendingRequests.length === 0" class="text-digimon-dark-400 text-sm">
+              No pending requests
+            </div>
+
+            <div v-else class="space-y-2">
+              <div
+                v-for="request in pendingRequests"
+                :key="request.id"
+                class="bg-digimon-dark-700 rounded-lg p-3 flex justify-between items-center"
+              >
+                <div>
+                  <span class="text-white font-medium">
+                    {{ tamerMap.get(request.targetTamerId)?.name || 'Unknown Player' }}
+                  </span>
+                  <span class="text-digimon-dark-400 text-sm ml-2">
+                    {{ request.type === 'digimon-selection' ? 'Select Digimon' : request.type === 'initiative-roll' ? 'Roll Initiative' : 'Roll Dodge' }}
+                  </span>
+                </div>
+                <button
+                  @click="cancelRequest(currentEncounter.id, request.id)"
+                  class="text-red-400 hover:text-red-300 text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Unprocessed Player Responses -->
+          <div
+            v-if="unprocessedResponses.length > 0"
+            class="bg-green-900/20 border border-green-500 rounded-xl p-4"
+          >
+            <h3 class="font-display text-lg font-semibold text-green-400 mb-3">
+              Player Responses ({{ unprocessedResponses.length }})
+            </h3>
+
+            <div class="space-y-2">
+              <div
+                v-for="response in unprocessedResponses"
+                :key="response.id"
+                class="bg-digimon-dark-800 rounded-lg p-3 flex justify-between items-center"
+              >
+                <div>
+                  <span class="text-white font-medium">
+                    {{ tamerMap.get(response.tamerId)?.name || 'Unknown Player' }}
+                  </span>
+                  <span class="text-digimon-dark-400 text-sm ml-2">
+                    {{ response.response.type === 'digimon-selected' ? 'Selected Digimon' : response.response.type === 'initiative-rolled' ? 'Rolled Initiative: ' + response.response.initiative : 'Rolled Dodge: ' + response.response.dodgeRoll }}
+                  </span>
+                </div>
+                <button
+                  v-if="response.response.type !== 'dodge-rolled'"
+                  @click="processResponse(response)"
+                  class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
+                >
+                  Process
+                </button>
+                <span v-else class="text-green-400 text-sm font-semibold">Processed</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Battle Log -->
           <div class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700">
             <h3 class="font-display text-lg font-semibold text-white mb-3">Battle Log</h3>
@@ -844,18 +1100,29 @@ async function handleUpdateHazard(hazard: Hazard) {
               <div class="flex gap-2">
                 <button
                   :class="[
-                    'flex-1 px-4 py-2 rounded-lg font-medium transition-colors',
+                    'flex-1 px-4 py-2 rounded-lg font-medium transition-colors text-sm',
                     selectedEntityType === 'digimon'
                       ? 'bg-digimon-orange-500 text-white'
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
                   @click="selectedEntityType = 'digimon'; selectedEntityId = ''"
                 >
-                  🦖 Digimon
+                  🦖 Partner
                 </button>
                 <button
                   :class="[
-                    'flex-1 px-4 py-2 rounded-lg font-medium transition-colors',
+                    'flex-1 px-4 py-2 rounded-lg font-medium transition-colors text-sm',
+                    selectedEntityType === 'enemy'
+                      ? 'bg-digimon-orange-500 text-white'
+                      : 'bg-digimon-dark-700 text-digimon-dark-400',
+                  ]"
+                  @click="selectedEntityType = 'enemy'; selectedEntityId = ''"
+                >
+                  ⚔️ Enemy
+                </button>
+                <button
+                  :class="[
+                    'flex-1 px-4 py-2 rounded-lg font-medium transition-colors text-sm',
                     selectedEntityType === 'tamer'
                       ? 'bg-digimon-orange-500 text-white'
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
@@ -869,7 +1136,7 @@ async function handleUpdateHazard(hazard: Hazard) {
 
             <div class="mb-6">
               <label class="block text-sm text-digimon-dark-400 mb-2">
-                Select {{ selectedEntityType === 'digimon' ? 'Digimon' : 'Tamer' }}
+                Select {{ selectedEntityType === 'digimon' ? 'Partner Digimon' : selectedEntityType === 'enemy' ? 'Enemy Digimon' : 'Tamer' }}
               </label>
               <select
                 v-model="selectedEntityId"
@@ -879,7 +1146,12 @@ async function handleUpdateHazard(hazard: Hazard) {
                 <option value="">Choose...</option>
                 <template v-if="selectedEntityType === 'digimon'">
                   <option v-for="d in availableDigimon" :key="d.id" :value="d.id">
-                    {{ d.name }} ({{ d.stage }}) {{ d.isEnemy ? '- Enemy' : '' }}
+                    {{ d.name }} ({{ d.stage }})
+                  </option>
+                </template>
+                <template v-else-if="selectedEntityType === 'enemy'">
+                  <option v-for="d in availableEnemyDigimon" :key="d.id" :value="d.id">
+                    {{ d.name }} ({{ d.stage }})
                   </option>
                 </template>
                 <template v-else>

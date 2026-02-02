@@ -240,6 +240,32 @@ export const encounters = pgTable('encounters', {
     duration: number | null
   }>>(),
 
+  // Pending player requests (digimon selection, initiative roll, dodge roll)
+  pendingRequests: text('pending_requests', { mode: 'json' }).notNull().$type<Array<{
+    id: string
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll'
+    targetTamerId: string
+    targetParticipantId?: string
+    timestamp: string
+    data?: any
+  }>>(),
+
+  // Player responses to requests
+  requestResponses: text('request_responses', { mode: 'json' }).notNull().$type<Array<{
+    id: string
+    requestId: string
+    tamerId: string
+    participantId?: string
+    response: {
+      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled'
+      digimonId?: string
+      initiative?: number
+      initiativeRoll?: number
+      dodgeRoll?: number
+      timestamp: string
+    }
+  }>>(),
+
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 })
