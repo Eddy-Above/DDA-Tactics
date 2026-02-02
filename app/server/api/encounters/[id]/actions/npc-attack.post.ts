@@ -5,8 +5,12 @@ interface NpcAttackBody {
   participantId: string
   attackId: string
   targetId: string
-  accuracyRoll: number
-  dodgeRoll: number
+  accuracyDicePool: number
+  accuracySuccesses: number
+  accuracyDiceResults: number[]
+  dodgeDicePool: number
+  dodgeSuccesses: number
+  dodgeDiceResults: number[]
 }
 
 export default defineEventHandler(async (event) => {
@@ -21,10 +25,11 @@ export default defineEventHandler(async (event) => {
   }
 
   if (!body.participantId || !body.attackId || !body.targetId ||
-      body.accuracyRoll === undefined || body.dodgeRoll === undefined) {
+      body.accuracyDicePool === undefined || body.accuracySuccesses === undefined || !body.accuracyDiceResults ||
+      body.dodgeDicePool === undefined || body.dodgeSuccesses === undefined || !body.dodgeDiceResults) {
     throw createError({
       statusCode: 400,
-      message: 'participantId, attackId, targetId, accuracyRoll, and dodgeRoll are required',
+      message: 'participantId, attackId, targetId, and all accuracy/dodge dice data (dicePool, successes, diceResults) are required',
     })
   }
 
@@ -126,9 +131,33 @@ export default defineEventHandler(async (event) => {
     return p
   })
 
-  // Compare rolls and calculate outcome
-  const hit = body.accuracyRoll >= body.dodgeRoll
-  const damageDealt = hit ? 5 : 0  // TODO: Calculate actual damage from attack definition
+  // Compare successes and calculate outcome
+  const netSuccesses = body.accuracySuccesses - body.dodgeSuccesses
+  const hit = netSuccesses >= 0
+
+  // Look up attack definition to get base damage
+  // Note: Attack damage value may already include DP bonuses and quality modifiers
+  // from the attack definition itself (e.g., Heavy quality, bonus DP spent)
+  const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+
+  let attackBaseDamage = 0
+  if (attackerDigimon?.attacks) {
+    // Parse attacks if it's a JSON string from database
+    const attacks = typeof attackerDigimon.attacks === 'string'
+      ? JSON.parse(attackerDigimon.attacks)
+      : attackerDigimon.attacks
+
+    const attackDef = attacks.find((a: any) => a.id === body.attackId)
+    if (attackDef) {
+      // Parse damage value (may be string like "5" or number)
+      // This value already accounts for any DP bonuses or qualities applied to the move
+      attackBaseDamage = typeof attackDef.damage === 'number'
+        ? attackDef.damage
+        : parseInt(attackDef.damage) || 0
+    }
+  }
+
+  const damageDealt = hit ? (attackBaseDamage + netSuccesses) : 0
 
   // Apply damage to target
   const finalParticipants = updatedParticipants.map((p: any) => {
@@ -150,7 +179,7 @@ export default defineEventHandler(async (event) => {
     actorName: actor.type === 'tamer' ? `Tamer ${actor.entityId}` : `Digimon ${actor.entityId}`,
     action: 'Attack',
     target: target.type === 'tamer' ? `Tamer ${target.entityId}` : `Digimon ${target.entityId}`,
-    result: `Accuracy: ${body.accuracyRoll}`,
+    result: `${body.accuracyDicePool}d6 => [${body.accuracyDiceResults.join(',')}] = ${body.accuracySuccesses} successes`,
     damage: null,
     effects: ['Attack'],
   }
@@ -163,7 +192,7 @@ export default defineEventHandler(async (event) => {
     actorName: target.type === 'tamer' ? `Tamer ${target.entityId}` : `Digimon ${target.entityId}`,
     action: 'Dodge',
     target: null,
-    result: `Dodge: ${body.dodgeRoll} - ${hit ? 'HIT!' : 'MISS!'}`,
+    result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
     effects: ['Dodge'],
   }

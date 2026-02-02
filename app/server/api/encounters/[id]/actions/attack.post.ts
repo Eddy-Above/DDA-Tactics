@@ -5,7 +5,9 @@ interface AttackActionBody {
   participantId: string
   attackId: string
   targetId: string
-  accuracyRoll: number
+  accuracyDicePool: number
+  accuracySuccesses: number
+  accuracyDiceResults: number[]
   tamerId: string
 }
 
@@ -20,10 +22,12 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (!body.participantId || !body.attackId || !body.targetId || !body.tamerId || body.accuracyRoll === undefined) {
+  if (!body.participantId || !body.attackId || !body.targetId || !body.tamerId ||
+      body.accuracyDicePool === undefined || body.accuracySuccesses === undefined ||
+      !body.accuracyDiceResults) {
     throw createError({
       statusCode: 400,
-      message: 'participantId, attackId, targetId, accuracyRoll, and tamerId are required',
+      message: 'participantId, attackId, targetId, accuracyDicePool, accuracySuccesses, accuracyDiceResults, and tamerId are required',
     })
   }
 
@@ -137,7 +141,7 @@ export default defineEventHandler(async (event) => {
     actorName: actor.type === 'tamer' ? `Tamer ${actor.entityId}` : `Digimon ${actor.entityId}`,
     action: 'Attack',
     target: target.type === 'tamer' ? `Tamer ${target.entityId}` : `Digimon ${target.entityId}`,
-    result: `Attack Roll: ${body.accuracyRoll}`,
+    result: `${body.accuracyDicePool}d6 => [${body.accuracyDiceResults.join(',')}] = ${body.accuracySuccesses} successes`,
     damage: null,
     effects: ['Attack', 'Accuracy Roll'],
   }
@@ -159,6 +163,11 @@ export default defineEventHandler(async (event) => {
       attackName: body.attackId,
       attackerName: actor.type === 'tamer' ? `Tamer ${actor.entityId}` : `Digimon ${actor.entityId}`,
       attackerParticipantId: body.participantId,
+      attackerEntityId: actor.entityId,
+      // Store accuracy dice data for later comparison when dodge response comes in
+      accuracyDicePool: body.accuracyDicePool,
+      accuracySuccesses: body.accuracySuccesses,
+      accuracyDiceResults: body.accuracyDiceResults,
     },
   }
 

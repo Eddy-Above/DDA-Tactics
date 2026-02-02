@@ -494,13 +494,13 @@ async function confirmAttack(target: CombatParticipant) {
   try {
     const { participant, attack } = selectedAttack.value
 
-    // Roll accuracy
+    // Roll accuracy (count successes: 5+ = 1 success)
     const accuracyPool = getAttackAccuracyPool(participant)
-    const rolls = []
+    const accuracyDiceResults = []
     for (let i = 0; i < accuracyPool; i++) {
-      rolls.push(Math.floor(Math.random() * 6) + 1)
+      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
-    const accuracyRoll = rolls.reduce((a, b) => a + b, 0)
+    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
     // Submit attack to server
     const result = await performAttack(
@@ -508,7 +508,11 @@ async function confirmAttack(target: CombatParticipant) {
       participant.id,
       attack.id,
       target.id,
-      accuracyRoll,
+      {
+        dicePool: accuracyPool,
+        successes: accuracySuccesses,
+        diceResults: accuracyDiceResults,
+      },
       tamer.value.id
     )
 

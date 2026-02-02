@@ -9,7 +9,9 @@ interface SubmitResponseBody {
     digimonId?: string
     initiative?: number
     initiativeRoll?: number
-    dodgeRoll?: number
+    dodgeDicePool?: number
+    dodgeSuccesses?: number
+    dodgeDiceResults?: number[]
   }
 }
 
@@ -111,10 +113,10 @@ export default defineEventHandler(async (event) => {
         message: 'Response type does not match request type',
       })
     }
-    if (!Number.isInteger(body.response.dodgeRoll)) {
+    if (body.response.dodgeDicePool === undefined || body.response.dodgeSuccesses === undefined || !body.response.dodgeDiceResults) {
       throw createError({
         statusCode: 400,
-        message: 'dodgeRoll is required for dodge-rolled response',
+        message: 'dodgeDicePool, dodgeSuccesses, and dodgeDiceResults are required for dodge-rolled response',
       })
     }
   }

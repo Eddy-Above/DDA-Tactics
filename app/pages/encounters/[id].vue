@@ -262,17 +262,164 @@ function getParticipantAttacks(participant: CombatParticipant) {
   return digimon?.attacks || []
 }
 
+// Calculate attack stats based on digimon stats, qualities, and tags (mirrors AttackSelector logic)
+function getAttackStats(participant: CombatParticipant, attack: any) {
+  if (participant.type !== 'digimon') {
+    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [] }
+  }
+
+  const digimon = digimonMap.value.get(participant.entityId)
+  if (!digimon) {
+    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [] }
+  }
+
+  // Get base stats (baseStats + bonusStats)
+  const baseAccuracy = (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0)
+  const baseDamage = (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0)
+
+  let damageBonus = 0
+  let accuracyBonus = 0
+  let notes: string[] = []
+
+  // Helper functions
+  const hasQuality = (id: string) => digimon.qualities?.some((q: any) => q.id === id)
+  const hasTag = (pattern: string) => attack.tags?.some((t: string) => t.toLowerCase().includes(pattern.toLowerCase()))
+  const hasWeaponTag = attack.tags?.some((t: string) => /^Weapon\s+/i.test(t))
+  const hasSignatureTag = attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))
+
+  // === GLOBAL QUALITY BONUSES ===
+
+  // True Guardian: -2 Accuracy (global penalty)
+  if (hasQuality('true-guardian')) {
+    accuracyBonus -= 2
+  }
+
+  // Huge Power: Reroll 1s on Accuracy
+  if (hasQuality('huge-power')) {
+    notes.push(attack.range === 'melee' ? 'Reroll 1s' : 'Reroll 1s (1/round)')
+  }
+
+  // Overkill: Reroll 2s on Accuracy (once per round)
+  if (hasQuality('overkill')) {
+    notes.push('Reroll 2s (1/round)')
+  }
+
+  // Aggressive Flank: +RAM to Accuracy when near allies
+  if (hasQuality('aggressive-flank')) {
+    notes.push('+RAM ACC (near ally)')
+  }
+
+  // === DATA OPTIMIZATION BONUSES ===
+
+  const dataOptQuality = digimon.qualities?.find((q: any) => q.id === 'data-optimization')
+  const dataOpt = dataOptQuality?.choiceId || digimon.dataOptimization
+
+  if (dataOpt === 'close-combat') {
+    if (attack.range === 'melee') {
+      accuracyBonus += 2
+    } else if (attack.range === 'ranged') {
+      accuracyBonus -= 1
+    }
+  } else if (dataOpt === 'ranged-striker') {
+    if (attack.range === 'ranged') {
+      accuracyBonus += 2
+    }
+  }
+
+  // === DATA SPECIALIZATION BONUSES ===
+
+  // Mobile Artillery: Add CPU to [Area] attack damage
+  if (hasQuality('mobile-artillery') && hasTag('area')) {
+    notes.push('+CPU DMG (Area)')
+  }
+
+  // Hit and Run: [Charge] attacks add RAM to Damage
+  if (hasQuality('hit-and-run') && hasTag('charge')) {
+    notes.push('+RAM DMG (Charge)')
+  }
+
+  // === WEAPON-TAGGED ATTACK BONUSES (Digizoid Weapons) ===
+
+  if (hasWeaponTag) {
+    // Digizoid Weapon: Chrome - +2 ACC, +1 DMG
+    if (hasQuality('digizoid-weapon-chrome')) {
+      accuracyBonus += 2
+      damageBonus += 1
+    }
+    // Digizoid Weapon: Black - +2 ACC + random bonus
+    if (hasQuality('digizoid-weapon-black')) {
+      accuracyBonus += 2
+      notes.push('+random (d6)')
+    }
+    // Digizoid Weapon: Brown - +2 Dodge, +2 DMG
+    if (hasQuality('digizoid-weapon-brown')) {
+      damageBonus += 2
+    }
+    // Digizoid Weapon: Blue - +2 ACC, +2 DMG, auto success
+    if (hasQuality('digizoid-weapon-blue')) {
+      accuracyBonus += 2
+      damageBonus += 2
+      notes.push('+1 auto success')
+    }
+    // Digizoid Weapon: Gold - +4 ACC, +1 DMG
+    if (hasQuality('digizoid-weapon-gold')) {
+      accuracyBonus += 4
+      damageBonus += 1
+    }
+    // Digizoid Weapon: Obsidian - +2 ACC, +2 DMG, +1 AP
+    if (hasQuality('digizoid-weapon-obsidian')) {
+      accuracyBonus += 2
+      damageBonus += 2
+      notes.push('+1 Armor Piercing')
+    }
+    // Digizoid Weapon: Red - +6 DMG
+    if (hasQuality('digizoid-weapon-red')) {
+      damageBonus += 6
+    }
+  }
+
+  // === SIGNATURE MOVE BONUSES ===
+
+  if (hasSignatureTag) {
+    // Signature Move: +Attacks to Accuracy and Damage (round 3+)
+    notes.push('+Attacks ACC/DMG (R3+)')
+  }
+
+  // === TAG-BASED BONUSES ===
+
+  if (attack.tags) {
+    for (const tag of attack.tags) {
+      // Weapon I/II/III adds +Rank to both accuracy and damage
+      const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
+      if (weaponMatch) {
+        const rankStr = weaponMatch[1]
+        const romanMap: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
+        const rank = romanMap[rankStr.toUpperCase()] || parseInt(rankStr) || 1
+        damageBonus += rank
+        accuracyBonus += rank
+      }
+
+      // Certain Strike adds +2 accuracy
+      if (tag.startsWith('Certain Strike')) {
+        accuracyBonus += 2
+      }
+    }
+  }
+
+  // Return calculated stats
+  return {
+    accuracy: baseAccuracy + accuracyBonus,
+    damage: baseDamage + damageBonus,
+    accuracyBonus,
+    damageBonus,
+    notes,
+  }
+}
+
 // Check if participant can use an attack (requires 1 simple action)
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
   const requiredActions = 1
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
-}
-
-// Get accuracy dice pool for a participant
-function getAttackAccuracyPool(participant: CombatParticipant): number {
-  if (participant.type !== 'digimon') return 0
-  // Default 3d6 accuracy pool (TODO: look up from digimon stats)
-  return 3
 }
 
 // Check if target is player-controlled
@@ -327,13 +474,14 @@ async function confirmAttack(target: CombatParticipant) {
   try {
     const { participant, attack } = selectedAttack.value
 
-    // Roll accuracy
-    const accuracyPool = getAttackAccuracyPool(participant)
-    const rolls = []
+    // Roll accuracy (count successes: 5+ = 1 success)
+    const attackStats = getAttackStats(participant, attack)
+    const accuracyPool = attackStats.accuracy
+    const accuracyDiceResults = []
     for (let i = 0; i < accuracyPool; i++) {
-      rolls.push(Math.floor(Math.random() * 6) + 1)
+      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
-    const accuracyRoll = rolls.reduce((a, b) => a + b, 0)
+    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
     // Check if target is player-controlled
     const targetIsPlayer = isPlayerControlled(target)
@@ -357,7 +505,11 @@ async function confirmAttack(target: CombatParticipant) {
         participant.id,
         attack.id,
         target.id,
-        accuracyRoll,
+        {
+          dicePool: accuracyPool,
+          successes: accuracySuccesses,
+          diceResults: accuracyDiceResults,
+        },
         tamerId
       )
 
@@ -369,11 +521,11 @@ async function confirmAttack(target: CombatParticipant) {
     } else {
       // Target is NPC - auto-roll dodge and resolve immediately
       const dodgePool = getDodgePool(target)
-      const dodgeRolls = []
+      const dodgeDiceResults = []
       for (let i = 0; i < dodgePool; i++) {
-        dodgeRolls.push(Math.floor(Math.random() * 6) + 1)
+        dodgeDiceResults.push(Math.floor(Math.random() * 6) + 1)
       }
-      const dodgeRoll = dodgeRolls.reduce((a, b) => a + b, 0)
+      const dodgeSuccesses = dodgeDiceResults.filter(d => d >= 5).length
 
       // Use new NPC attack endpoint for instant resolution
       const result = await performNpcAttack(
@@ -381,8 +533,16 @@ async function confirmAttack(target: CombatParticipant) {
         participant.id,
         attack.id,
         target.id,
-        accuracyRoll,
-        dodgeRoll
+        {
+          dicePool: accuracyPool,
+          successes: accuracySuccesses,
+          diceResults: accuracyDiceResults,
+        },
+        {
+          dicePool: dodgePool,
+          successes: dodgeSuccesses,
+          diceResults: dodgeDiceResults,
+        }
       )
 
       if (result) {
@@ -951,12 +1111,12 @@ async function handleGmDodgeRoll(request: any) {
     // Get dodge pool for the target
     const dodgePool = getDodgePool(target)
 
-    // Roll dice
-    const rolls = []
+    // Roll dice (count successes: 5+ = 1 success)
+    const dodgeDiceResults = []
     for (let i = 0; i < dodgePool; i++) {
-      rolls.push(Math.floor(Math.random() * 6) + 1)
+      dodgeDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
-    const dodgeRoll = rolls.reduce((a, b) => a + b, 0)
+    const dodgeSuccesses = dodgeDiceResults.filter(d => d >= 5).length
 
     // Submit response using targetTamerId from request
     const result = await respondToRequest(
@@ -965,7 +1125,9 @@ async function handleGmDodgeRoll(request: any) {
       request.targetTamerId,  // Use value from request (already correct)
       {
         type: 'dodge-rolled',
-        dodgeRoll,
+        dodgeDicePool: dodgePool,
+        dodgeSuccesses,
+        dodgeDiceResults,
         timestamp: new Date().toISOString(),
       }
     )
@@ -1239,19 +1401,42 @@ async function handleUpdateHazard(hazard: Hazard) {
                     {{ attack.description }}
                   </p>
 
-                  <div class="flex flex-wrap gap-3 text-sm">
+                  <!-- Attack stats with calculated values -->
+                  <div class="flex flex-wrap gap-3 text-sm mb-3">
+                    <!-- Accuracy -->
                     <div class="flex items-center gap-1">
                       <span class="text-digimon-dark-400">ACC:</span>
-                      <span class="text-white font-medium">{{ getAttackAccuracyPool(currentTurnParticipant) }}d6</span>
+                      <span class="text-white font-medium">{{ getAttackStats(currentTurnParticipant, attack).accuracy }}d6</span>
+                      <span v-if="getAttackStats(currentTurnParticipant, attack).accuracyBonus > 0" class="text-green-400">
+                        (+{{ getAttackStats(currentTurnParticipant, attack).accuracyBonus }})
+                      </span>
+                      <span v-else-if="getAttackStats(currentTurnParticipant, attack).accuracyBonus < 0" class="text-red-400">
+                        ({{ getAttackStats(currentTurnParticipant, attack).accuracyBonus }})
+                      </span>
                     </div>
-                    <div class="flex items-center gap-1">
+
+                    <!-- Damage (only for damage-type attacks) -->
+                    <div v-if="attack.type === 'damage'" class="flex items-center gap-1">
                       <span class="text-digimon-dark-400">DMG:</span>
-                      <span class="text-white font-medium">{{ attack.damage }}</span>
+                      <span class="text-white font-medium">{{ getAttackStats(currentTurnParticipant, attack).damage }}</span>
+                      <span v-if="getAttackStats(currentTurnParticipant, attack).damageBonus > 0" class="text-green-400">
+                        (+{{ getAttackStats(currentTurnParticipant, attack).damageBonus }})
+                      </span>
+                      <span v-else-if="getAttackStats(currentTurnParticipant, attack).damageBonus < 0" class="text-red-400">
+                        ({{ getAttackStats(currentTurnParticipant, attack).damageBonus }})
+                      </span>
                     </div>
+
+                    <!-- Tags -->
                     <div v-if="attack.tags?.length" class="flex items-center gap-1">
                       <span class="text-digimon-dark-400">Tags:</span>
                       <span class="text-digimon-dark-300 text-xs">{{ attack.tags.join(', ') }}</span>
                     </div>
+
+                    <!-- Special notes (rerolls, conditional bonuses, etc.) -->
+                    <span v-for="note in getAttackStats(currentTurnParticipant, attack).notes" :key="note" class="text-xs text-cyan-400">
+                      {{ note }}
+                    </span>
                   </div>
 
                   <div v-if="!canUseAttack(currentTurnParticipant, attack)" class="text-xs text-red-400 mt-2">

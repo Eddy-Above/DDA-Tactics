@@ -440,7 +440,11 @@ export function useEncounters() {
     participantId: string,
     attackId: string,
     targetId: string,
-    accuracyRoll: number,
+    accuracyData: {
+      dicePool: number
+      successes: number
+      diceResults: number[]
+    },
     tamerId: string
   ): Promise<Encounter | null> {
     loading.value = true
@@ -448,7 +452,15 @@ export function useEncounters() {
     try {
       const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/attack`, {
         method: 'POST',
-        body: { participantId, attackId, targetId, accuracyRoll, tamerId },
+        body: {
+          participantId,
+          attackId,
+          targetId,
+          accuracyDicePool: accuracyData.dicePool,
+          accuracySuccesses: accuracyData.successes,
+          accuracyDiceResults: accuracyData.diceResults,
+          tamerId,
+        },
       })
       // Update local state
       encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
@@ -470,15 +482,33 @@ export function useEncounters() {
     participantId: string,
     attackId: string,
     targetId: string,
-    accuracyRoll: number,
-    dodgeRoll: number
+    accuracyData: {
+      dicePool: number
+      successes: number
+      diceResults: number[]
+    },
+    dodgeData: {
+      dicePool: number
+      successes: number
+      diceResults: number[]
+    }
   ): Promise<Encounter | null> {
     loading.value = true
     error.value = null
     try {
       const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/npc-attack`, {
         method: 'POST',
-        body: { participantId, attackId, targetId, accuracyRoll, dodgeRoll },
+        body: {
+          participantId,
+          attackId,
+          targetId,
+          accuracyDicePool: accuracyData.dicePool,
+          accuracySuccesses: accuracyData.successes,
+          accuracyDiceResults: accuracyData.diceResults,
+          dodgeDicePool: dodgeData.dicePool,
+          dodgeSuccesses: dodgeData.successes,
+          dodgeDiceResults: dodgeData.diceResults,
+        },
       })
       // Update local state
       encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
