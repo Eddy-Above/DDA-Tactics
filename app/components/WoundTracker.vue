@@ -11,19 +11,23 @@ const emit = defineEmits<{
 }>()
 
 const wounds = ref(props.currentWounds)
+const damageAmount = ref(1)
+const healAmount = ref(1)
 
 watch(() => props.currentWounds, (newVal) => {
   wounds.value = newVal
 })
 
-function takeDamage(amount: number = 1) {
+function takeDamage(amount: number = damageAmount.value) {
   wounds.value = Math.min(props.maxWounds, wounds.value + amount)
   emit('update', wounds.value)
+  damageAmount.value = 1
 }
 
-function heal(amount: number = 1) {
+function heal(amount: number = healAmount.value) {
   wounds.value = Math.max(0, wounds.value - amount)
   emit('update', wounds.value)
+  healAmount.value = 1
 }
 
 function setWounds(value: number) {
@@ -78,19 +82,42 @@ const healthStatus = computed(() => {
     </div>
 
     <!-- Controls -->
-    <div class="flex gap-2">
-      <button
-        class="flex-1 bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-sm"
-        @click="takeDamage(1)"
-      >
-        +1 Wound
-      </button>
-      <button
-        class="flex-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-sm"
-        @click="heal(1)"
-      >
-        -1 Wound
-      </button>
+    <div class="space-y-2">
+      <!-- Take Damage Row -->
+      <div class="flex gap-2 items-center">
+        <input
+          v-model.number="damageAmount"
+          type="number"
+          min="1"
+          :max="maxWounds - wounds"
+          class="w-16 bg-digimon-dark-600 text-white px-2 py-1 rounded text-sm text-center border border-digimon-dark-500 focus:border-red-500 focus:outline-none"
+          @keyup.enter="takeDamage()"
+        />
+        <button
+          class="flex-1 bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-sm font-medium"
+          @click="takeDamage()"
+        >
+          +{{ damageAmount }} Wound{{ damageAmount !== 1 ? 's' : '' }}
+        </button>
+      </div>
+
+      <!-- Heal Row -->
+      <div class="flex gap-2 items-center">
+        <input
+          v-model.number="healAmount"
+          type="number"
+          min="1"
+          :max="wounds"
+          class="w-16 bg-digimon-dark-600 text-white px-2 py-1 rounded text-sm text-center border border-digimon-dark-500 focus:border-green-500 focus:outline-none"
+          @keyup.enter="heal()"
+        />
+        <button
+          class="flex-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-sm font-medium"
+          @click="heal()"
+        >
+          -{{ healAmount }} Wound{{ healAmount !== 1 ? 's' : '' }}
+        </button>
+      </div>
     </div>
 
     <div class="text-center text-xs text-digimon-dark-400 mt-2">
