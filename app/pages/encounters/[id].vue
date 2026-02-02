@@ -718,6 +718,13 @@ async function processResponse(response: any) {
 
         // Clear the original digimon selection request
         await cancelRequest(currentEncounter.value.id, request.id)
+
+        // Remove response from list
+        const currentResponses = currentEncounter.value.requestResponses || []
+        const updatedResponses = currentResponses.filter(r => r.id !== response.id)
+        await updateEncounter(currentEncounter.value.id, {
+          requestResponses: updatedResponses
+        })
         return
       }
 
@@ -740,6 +747,13 @@ async function processResponse(response: any) {
 
       // Clear the original digimon selection request
       await cancelRequest(currentEncounter.value.id, request.id)
+
+      // Remove response from list
+      const currentResponsesForDigimon = currentEncounter.value.requestResponses || []
+      const updatedResponsesForDigimon = currentResponsesForDigimon.filter(r => r.id !== response.id)
+      await updateEncounter(currentEncounter.value.id, {
+        requestResponses: updatedResponsesForDigimon
+      })
     } else if (response.response.type === 'initiative-rolled') {
       // Check if this initiative request has a digimonId (from digimon selection flow)
       if (request.data?.digimonId) {
@@ -800,6 +814,13 @@ async function processResponse(response: any) {
 
         if (result) {
           await cancelRequest(currentEncounter.value.id, request.id)
+
+          // Remove response from list
+          const respForInitiative = currentEncounter.value.requestResponses || []
+          const updatedRespForInitiative = respForInitiative.filter(r => r.id !== response.id)
+          await updateEncounter(currentEncounter.value.id, {
+            requestResponses: updatedRespForInitiative
+          })
         }
       } else {
         // This is for a standalone tamer participant (if needed)
@@ -815,6 +836,13 @@ async function processResponse(response: any) {
             const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
+
+              // Remove response from list
+              const respForTamer = currentEncounter.value.requestResponses || []
+              const updatedRespForTamer = respForTamer.filter(r => r.id !== response.id)
+              await updateEncounter(currentEncounter.value.id, {
+                requestResponses: updatedRespForTamer
+              })
             }
           } else {
             const updated = participants.map((p: any) => {
@@ -830,6 +858,13 @@ async function processResponse(response: any) {
             const result = await updateEncounter(currentEncounter.value.id, { participants: updated })
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
+
+              // Remove response from list
+              const respForTamerExisting = currentEncounter.value.requestResponses || []
+              const updatedRespForTamerExisting = respForTamerExisting.filter(r => r.id !== response.id)
+              await updateEncounter(currentEncounter.value.id, {
+                requestResponses: updatedRespForTamerExisting
+              })
             }
           }
         } else {
