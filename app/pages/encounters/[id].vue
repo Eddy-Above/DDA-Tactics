@@ -666,9 +666,16 @@ async function rerollInitiative(participantId: string) {
   participant.initiative = initiative
   participant.initiativeRoll = initiativeRoll
 
-  // Resort turn order
+  // Resort turn order (exclude partner digimon - hierarchical children)
   const turnOrder = [...participants]
     .sort((a, b) => b.initiative - a.initiative)
+    .filter(p => {
+      // Include tamer and non-partnered digimon
+      if (p.type === 'tamer') return true
+      // For digimon, only include if not a partner (no partnerId match)
+      const d = digimonMap.value.get(p.entityId)
+      return !d?.partnerId
+    })
     .map((p) => p.id)
 
   await updateEncounter(currentEncounter.value.id, { participants, turnOrder })
