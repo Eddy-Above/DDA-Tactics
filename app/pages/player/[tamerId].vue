@@ -744,24 +744,77 @@ function showAttackResult(
   const netSuccesses = accuracySuccesses - dodgeSuccesses
   const hit = netSuccesses >= 0
 
-  // Get attack damage
+  // Get attacker's digimon to calculate base damage
   const attackDef = pendingAttack.attackData
-  const baseDamage = attackDef.damage || 0
-  const armorPiercing = attackDef.armorPiercing || 0
+  let baseDamage = 0
+  let armorPiercing = 0
 
-  // Get target armor (if available in encounter data)
-  let targetArmor = 0
+  // Find attacker participant to get their digimon data
   const participants = activeEncounter.value?.participants || []
+  const attackerParticipant = participants.find((p: any) => p.id === pendingAttack.participantId)
+
+  if (attackerParticipant && attackerParticipant.type === 'digimon') {
+    const attackerDigimon = allDigimon.value.find((d) => d.id === attackerParticipant.entityId)
+
+    if (attackerDigimon) {
+      // Parse baseStats and bonusStats if they're JSON strings
+      const baseStats = typeof attackerDigimon.baseStats === 'string'
+        ? JSON.parse(attackerDigimon.baseStats)
+        : attackerDigimon.baseStats
+      const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
+        ? JSON.parse((attackerDigimon as any).bonusStats)
+        : (attackerDigimon as any).bonusStats
+
+      // Base damage from digimon stats
+      baseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
+
+      // Add weapon tag bonuses
+      if (attackDef?.tags && Array.isArray(attackDef.tags)) {
+        for (const tag of attackDef.tags) {
+          // Weapon tags add to damage
+          const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
+          if (weaponMatch) {
+            const rankStr = weaponMatch[1]
+            const romanMap: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
+            const rank = romanMap[rankStr.toUpperCase()] || parseInt(rankStr) || 1
+            baseDamage += rank
+          }
+
+          // Armor Piercing tags
+          const apMatch = tag.match(/^Armor Piercing\s+(\d+|I{1,3}|IV|V|VI|VII|VIII|IX|X)$/i)
+          if (apMatch) {
+            const rankStr = apMatch[1]
+            const romanMap: Record<string, number> = {
+              'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5,
+              'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10
+            }
+            const rank = romanMap[rankStr.toUpperCase()] || parseInt(rankStr) || 0
+            armorPiercing = rank * 2
+          }
+        }
+      }
+    }
+  }
+
+  // Get target armor with JSON parsing fix
+  let targetArmor = 0
   const targetParticipant = participants.find((p: any) =>
     p.id === dodgeRequest.targetParticipantId
   )
 
   if (targetParticipant) {
-    // Get target's armor from digimon/tamer stats
     if (targetParticipant.type === 'digimon') {
       const targetDigimon = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
       if (targetDigimon) {
-        targetArmor = (targetDigimon.baseStats?.armor ?? 0) + ((targetDigimon as any).bonusStats?.armor ?? 0)
+        // Parse baseStats and bonusStats if they're JSON strings
+        const targetBaseStats = typeof targetDigimon.baseStats === 'string'
+          ? JSON.parse(targetDigimon.baseStats)
+          : targetDigimon.baseStats
+        const targetBonusStats = typeof (targetDigimon as any).bonusStats === 'string'
+          ? JSON.parse((targetDigimon as any).bonusStats)
+          : (targetDigimon as any).bonusStats
+
+        targetArmor = (targetBaseStats?.armor ?? 0) + (targetBonusStats?.armor ?? 0)
       }
     } else if (targetParticipant.type === 'tamer') {
       const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
