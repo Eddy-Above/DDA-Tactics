@@ -24,6 +24,7 @@ const isChildRoute = computed(() => {
 // State
 const tamer = ref<Tamer | null>(null)
 const partnerDigimon = ref<Digimon[]>([])
+const allDigimon = ref<Digimon[]>([])
 const activeEncounter = ref<Encounter | null>(null)
 const loading = ref(true)
 const lastRefresh = ref(new Date())
@@ -70,8 +71,21 @@ async function loadData() {
 
       const active = encounters.value.find((e) => e.phase === 'combat' || e.phase === 'setup' || e.phase === 'initiative')
       if (active) {
-        // Check if this tamer or their Digimon are participating OR if there are pending requests for them
+        // Fetch all digimon in the encounter (partner and enemy)
         const participants = active.participants as CombatParticipant[]
+        const digimonEntityIds = participants
+          .filter((p) => p.type === 'digimon')
+          .map((p) => p.entityId)
+
+        if (digimonEntityIds.length > 0) {
+          try {
+            allDigimon.value = await $fetch<Digimon[]>(`/api/digimon?ids=${digimonEntityIds.join(',')}`)
+          } catch (e) {
+            console.warn('Failed to fetch encounter digimon:', e)
+          }
+        }
+
+        // Check if this tamer or their Digimon are participating OR if there are pending requests for them
         const pendingRequests = (active.pendingRequests as any[]) || []
         const isParticipating = participants.some(
           (p) =>
@@ -372,11 +386,15 @@ function getParticipantName(participant: CombatParticipant): string {
     return participantTamer?.name || 'Unknown'
   }
   // For digimon, try to find in partner digimon first
-  const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
+  let digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
   if (digimon) return digimon.name
 
-  // If not found (enemy digimon), return generic label
-  return 'Enemy'
+  // Fallback: check allDigimon (includes enemy digimon)
+  digimon = allDigimon.value.find((d) => d.id === participant.entityId)
+  if (digimon) return digimon.name
+
+  // If still not found, return generic label
+  return 'Unknown'
 }
 
 function getParticipantAttacks(participant: CombatParticipant): any[] {
@@ -406,9 +424,14 @@ function canUseAttack(participant: CombatParticipant, attack: any): boolean {
 function getParticipantImage(participant: CombatParticipant): string | null {
   if (participant.type === 'digimon') {
     // Try to find in partner digimon first
-    const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
+    let digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
     if (digimon?.spriteUrl) return digimon.spriteUrl
-    // If not found (enemy digimon), return null (fallback to emoji)
+
+    // Fallback: check allDigimon (includes enemy digimon)
+    digimon = allDigimon.value.find((d) => d.id === participant.entityId)
+    if (digimon?.spriteUrl) return digimon.spriteUrl
+
+    // If not found, return null (fallback to emoji)
     return null
   } else if (participant.type === 'tamer') {
     // Look up the tamer by entityId from all available tamers
