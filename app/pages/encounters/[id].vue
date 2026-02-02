@@ -1603,8 +1603,8 @@ async function handleUpdateHazard(hazard: Hazard) {
                   <span class="text-white font-medium">
                     {{ tamerMap.get(request.targetTamerId)?.name || 'Unknown Player' }}
                   </span>
-                  <span class="text-digimon-dark-400 text-sm ml-2">
-                    {{ request.type === 'digimon-selection' ? 'Select Digimon' : request.type === 'initiative-roll' ? 'Roll Initiative' : 'Roll Dodge' }}
+                  <span v-if="request.type !== 'dodge-roll'" class="text-digimon-dark-400 text-sm ml-2">
+                    {{ request.type === 'digimon-selection' ? 'Select Digimon' : 'Roll Initiative' }}
                   </span>
                 </div>
                 <div class="flex gap-2">
