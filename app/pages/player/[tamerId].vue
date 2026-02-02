@@ -159,47 +159,52 @@ onUnmounted(() => {
   clearInterval(refreshInterval)
 })
 
-// Watch for dodge responses to our attacks
-watchEffect(() => {
-  if (!activeEncounter.value) return
+// Watch for new dodge responses (deep watch on nested array)
+// Using watch instead of watchEffect to properly detect changes to nested requestResponses array
+watch(
+  () => activeEncounter.value?.requestResponses,
+  (newResponses, oldResponses) => {
+    if (!newResponses || !activeEncounter.value) return
 
-  const responses = activeEncounter.value.requestResponses || []
-  const requests = activeEncounter.value.pendingRequests || []
+    const responses = newResponses
+    const requests = activeEncounter.value.pendingRequests || []
 
-  // Iterate backwards to safely splice during iteration
-  for (let i = pendingAttacks.value.length - 1; i >= 0; i--) {
-    const pendingAttack = pendingAttacks.value[i]
+    // Iterate backwards to safely splice during iteration
+    for (let i = pendingAttacks.value.length - 1; i >= 0; i--) {
+      const pendingAttack = pendingAttacks.value[i]
 
-    // Find matching dodge-roll request with extended timeout (30 seconds)
-    const matchingRequest = requests.find((req: any) =>
-      req.type === 'dodge-roll' &&
-      req.data?.attackerParticipantId === pendingAttack.participantId &&
-      Math.abs(new Date(req.timestamp).getTime() - pendingAttack.timestamp) < 30000 // Increased to 30 seconds
-    )
+      // Find matching dodge-roll request with extended timeout (30 seconds)
+      const matchingRequest = requests.find((req: any) =>
+        req.type === 'dodge-roll' &&
+        req.data?.attackerParticipantId === pendingAttack.participantId &&
+        Math.abs(new Date(req.timestamp).getTime() - pendingAttack.timestamp) < 30000 // 30 second window
+      )
 
-    if (!matchingRequest) {
-      // Clean up expired attacks (>60 seconds)
-      const now = Date.now()
-      if (now - pendingAttack.timestamp > 60000) {
+      if (!matchingRequest) {
+        // Clean up expired attacks (>60 seconds)
+        const now = Date.now()
+        if (now - pendingAttack.timestamp > 60000) {
+          pendingAttacks.value.splice(i, 1)
+        }
+        continue
+      }
+
+      // Find matching dodge response
+      const matchingResponse = responses.find((resp: any) =>
+        resp.requestId === matchingRequest.id &&
+        resp.response?.type === 'dodge-rolled'
+      )
+
+      if (matchingResponse) {
+        // Found dodge response - show result modal!
+        showAttackResult(pendingAttack, matchingRequest, matchingResponse)
+        // Remove from array (splice in reverse order iteration)
         pendingAttacks.value.splice(i, 1)
       }
-      continue
     }
-
-    // Find matching dodge response
-    const matchingResponse = responses.find((resp: any) =>
-      resp.requestId === matchingRequest.id &&
-      resp.response?.type === 'dodge-rolled'
-    )
-
-    if (matchingResponse) {
-      // Found dodge response - show result modal!
-      showAttackResult(pendingAttack, matchingRequest, matchingResponse)
-      // Remove from array (splice in reverse order iteration)
-      pendingAttacks.value.splice(i, 1)
-    }
-  }
-})
+  },
+  { deep: true, immediate: true }
+)
 
 // Computed
 const tamerStats = computed(() => (tamer.value ? calcTamerStats(tamer.value) : null))
