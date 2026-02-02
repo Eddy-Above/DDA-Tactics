@@ -36,6 +36,39 @@ const showTargetSelector = ref(false)
 const selectedDigimonId = ref<string | null>(null)
 const allTamers = ref<Tamer[]>([])
 
+// Track attacks awaiting dodge responses
+const pendingAttacks = ref<Map<string, {
+  requestId: string
+  timestamp: number
+  attackName: string
+  targetName: string
+  accuracyDicePool: number
+  accuracyDiceResults: number[]
+  accuracySuccesses: number
+  participantId: string
+  attackData: any
+}>>(new Map())
+
+// Attack result modal state
+const showAttackResultModal = ref(false)
+const attackResultData = ref<{
+  attackerName: string
+  attackName: string
+  targetName: string
+  accuracyDicePool: number
+  accuracyDiceResults: number[]
+  accuracySuccesses: number
+  dodgeDicePool: number
+  dodgeDiceResults: number[]
+  dodgeSuccesses: number
+  netSuccesses: number
+  hit: boolean
+  baseDamage?: number
+  armorPiercing?: number
+  targetArmor?: number
+  finalDamage?: number
+} | null>(null)
+
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
 // Composables
@@ -124,6 +157,46 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(refreshInterval)
+})
+
+// Watch for dodge responses to our attacks
+watchEffect(() => {
+  if (!activeEncounter.value) return
+
+  const responses = activeEncounter.value.requestResponses || []
+  const requests = activeEncounter.value.pendingRequests || []
+
+  // Check each pending attack
+  for (const [trackingId, pendingAttack] of pendingAttacks.value.entries()) {
+    // Find matching dodge-roll request
+    const matchingRequest = requests.find((req: any) =>
+      req.type === 'dodge-roll' &&
+      req.data?.attackerParticipantId === pendingAttack.participantId &&
+      Math.abs(new Date(req.timestamp).getTime() - pendingAttack.timestamp) < 5000 // Within 5 seconds
+    )
+
+    if (!matchingRequest) continue
+
+    // Find matching dodge response
+    const matchingResponse = responses.find((resp: any) =>
+      resp.requestId === matchingRequest.id &&
+      resp.response?.type === 'dodge-rolled'
+    )
+
+    if (matchingResponse) {
+      // Found dodge response - show result modal!
+      showAttackResult(pendingAttack, matchingRequest, matchingResponse)
+      pendingAttacks.value.delete(trackingId)
+    }
+  }
+
+  // Clean up old pending attacks (>30 seconds)
+  const now = Date.now()
+  for (const [trackingId, attack] of pendingAttacks.value.entries()) {
+    if (now - attack.timestamp > 30000) {
+      pendingAttacks.value.delete(trackingId)
+    }
+  }
 })
 
 // Computed
@@ -633,6 +706,20 @@ async function confirmAttack(target: CombatParticipant) {
     )
 
     if (result) {
+      // Store pending attack for result tracking
+      const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      pendingAttacks.value.set(trackingId, {
+        requestId: trackingId,
+        timestamp: Date.now(),
+        attackName: attack.name,
+        targetName: getParticipantName(target),
+        accuracyDicePool: accuracyPool,
+        accuracyDiceResults: accuracyDiceResults,
+        accuracySuccesses: accuracySuccesses,
+        participantId: participant.id,
+        attackData: attack
+      })
+
       // Show feedback and close modal
       showTargetSelector.value = false
       selectedAttack.value = null
@@ -645,6 +732,78 @@ async function confirmAttack(target: CombatParticipant) {
   } catch (error) {
     console.error('Error performing attack:', error)
   }
+}
+
+function showAttackResult(
+  pendingAttack: any,
+  dodgeRequest: any,
+  dodgeResponse: any
+) {
+  const accuracySuccesses = pendingAttack.accuracySuccesses
+  const dodgeSuccesses = dodgeResponse.response.dodgeSuccesses
+  const netSuccesses = accuracySuccesses - dodgeSuccesses
+  const hit = netSuccesses >= 0
+
+  // Get attack damage
+  const attackDef = pendingAttack.attackData
+  const baseDamage = attackDef.damage || 0
+  const armorPiercing = attackDef.armorPiercing || 0
+
+  // Get target armor (if available in encounter data)
+  let targetArmor = 0
+  const participants = activeEncounter.value?.participants || []
+  const targetParticipant = participants.find((p: any) =>
+    p.id === dodgeRequest.targetParticipantId
+  )
+
+  if (targetParticipant) {
+    // Get target's armor from digimon/tamer stats
+    if (targetParticipant.type === 'digimon') {
+      const targetDigimon = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
+      if (targetDigimon) {
+        targetArmor = (targetDigimon.baseStats?.armor ?? 0) + ((targetDigimon as any).bonusStats?.armor ?? 0)
+      }
+    } else if (targetParticipant.type === 'tamer') {
+      const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
+      if (targetTamer) {
+        const derived = calcTamerStats(targetTamer)
+        targetArmor = derived.armor || 0
+      }
+    }
+  }
+
+  // Calculate final damage
+  let finalDamage = 0
+  if (hit) {
+    const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+    finalDamage = Math.max(0, baseDamage + netSuccesses - effectiveArmor)
+  }
+
+  // Set modal data
+  attackResultData.value = {
+    attackerName: tamer.value?.name || 'You',
+    attackName: pendingAttack.attackName,
+    targetName: pendingAttack.targetName,
+    accuracyDicePool: pendingAttack.accuracyDicePool,
+    accuracyDiceResults: pendingAttack.accuracyDiceResults,
+    accuracySuccesses: accuracySuccesses,
+    dodgeDicePool: dodgeResponse.response.dodgeDicePool,
+    dodgeDiceResults: dodgeResponse.response.dodgeDiceResults,
+    dodgeSuccesses: dodgeSuccesses,
+    netSuccesses: netSuccesses,
+    hit: hit,
+    baseDamage: baseDamage,
+    armorPiercing: armorPiercing,
+    targetArmor: targetArmor,
+    finalDamage: finalDamage
+  }
+
+  showAttackResultModal.value = true
+}
+
+function closeAttackResultModal() {
+  showAttackResultModal.value = false
+  attackResultData.value = null
 }
 
 // Clear selection
@@ -2192,6 +2351,157 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
         >
           Cancel
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Attack Result Modal -->
+  <Teleport to="body">
+    <div
+      v-if="showAttackResultModal && attackResultData"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-orange-500">
+        <h2 class="text-2xl font-bold text-orange-500 mb-4">
+          Attack Result: {{ attackResultData.attackName }}
+        </h2>
+
+        <!-- Target -->
+        <div class="mb-4 text-digimon-dark-300">
+          <span class="text-white">{{ attackResultData.attackerName }}</span>
+          attacks
+          <span class="text-red-400">{{ attackResultData.targetName }}</span>
+        </div>
+
+        <!-- Accuracy Roll -->
+        <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
+          <h3 class="text-lg font-semibold text-blue-400 mb-2">Your Accuracy Roll</h3>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Dice Pool:</span>
+            <span class="text-white font-mono">{{ attackResultData.accuracyDicePool }}d6</span>
+          </div>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Results:</span>
+            <div class="flex gap-1">
+              <span
+                v-for="(die, i) in attackResultData.accuracyDiceResults"
+                :key="i"
+                :class="[
+                  'px-2 py-1 rounded font-mono text-sm',
+                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-300'
+                ]"
+              >
+                {{ die }}
+              </span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-digimon-dark-400">Successes:</span>
+            <span class="text-green-400 font-bold text-xl">{{ attackResultData.accuracySuccesses }}</span>
+          </div>
+        </div>
+
+        <!-- Dodge Roll -->
+        <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
+          <h3 class="text-lg font-semibold text-purple-400 mb-2">{{ attackResultData.targetName }}'s Dodge Roll</h3>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Dice Pool:</span>
+            <span class="text-white font-mono">{{ attackResultData.dodgeDicePool }}d6</span>
+          </div>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Results:</span>
+            <div class="flex gap-1">
+              <span
+                v-for="(die, i) in attackResultData.dodgeDiceResults"
+                :key="i"
+                :class="[
+                  'px-2 py-1 rounded font-mono text-sm',
+                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-300'
+                ]"
+              >
+                {{ die }}
+              </span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-digimon-dark-400">Successes:</span>
+            <span class="text-green-400 font-bold text-xl">{{ attackResultData.dodgeSuccesses }}</span>
+          </div>
+        </div>
+
+        <!-- Result -->
+        <div class="mb-6 p-4 bg-digimon-dark-700 rounded-lg border-2" :class="[
+          attackResultData.hit ? 'border-green-500' : 'border-red-500'
+        ]">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-lg font-semibold" :class="[
+              attackResultData.hit ? 'text-green-400' : 'text-red-400'
+            ]">
+              {{ attackResultData.hit ? 'HIT!' : 'MISS!' }}
+            </h3>
+            <div class="text-digimon-dark-400">
+              Net Successes:
+              <span :class="[
+                attackResultData.netSuccesses >= 0 ? 'text-green-400' : 'text-red-400',
+                'font-bold text-xl ml-2'
+              ]">
+                {{ attackResultData.netSuccesses >= 0 ? '+' : '' }}{{ attackResultData.netSuccesses }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Damage Breakdown (if hit) -->
+          <div v-if="attackResultData.hit" class="mt-4 pt-4 border-t border-digimon-dark-600">
+            <h4 class="text-md font-semibold text-orange-400 mb-3">Damage Calculation</h4>
+
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center justify-between">
+                <span class="text-digimon-dark-400">Base Attack Damage:</span>
+                <span class="text-white font-mono">{{ attackResultData.baseDamage }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-digimon-dark-400">Extra Successes:</span>
+                <span class="text-green-400 font-mono">+{{ attackResultData.netSuccesses }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-digimon-dark-400">Target Armor:</span>
+                <span class="text-blue-400 font-mono">{{ attackResultData.targetArmor }}</span>
+              </div>
+              <div v-if="attackResultData.armorPiercing && attackResultData.armorPiercing > 0" class="flex items-center justify-between">
+                <span class="text-digimon-dark-400">Armor Piercing:</span>
+                <span class="text-yellow-400 font-mono">-{{ attackResultData.armorPiercing }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-digimon-dark-400">Effective Armor:</span>
+                <span class="text-blue-400 font-mono">
+                  {{ Math.max(0, attackResultData.targetArmor - (attackResultData.armorPiercing || 0)) }}
+                </span>
+              </div>
+
+              <div class="mt-3 pt-3 border-t border-digimon-dark-600 flex items-center justify-between">
+                <span class="text-orange-400 font-semibold text-lg">Total Damage Dealt:</span>
+                <span class="text-red-400 font-bold text-2xl">{{ attackResultData.finalDamage }}</span>
+              </div>
+            </div>
+
+            <!-- Formula -->
+            <div class="mt-4 p-3 bg-digimon-dark-600 rounded text-xs font-mono text-digimon-dark-300">
+              {{ attackResultData.baseDamage }} (base) + {{ attackResultData.netSuccesses }} (extra) -
+              {{ Math.max(0, attackResultData.targetArmor - (attackResultData.armorPiercing || 0)) }} (effective armor) =
+              <span class="text-red-400 font-bold">{{ attackResultData.finalDamage }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Close Button -->
+        <div class="flex justify-end">
+          <button
+            @click="closeAttackResultModal"
+            class="px-6 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
