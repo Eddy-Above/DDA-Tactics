@@ -59,14 +59,17 @@ async function loadData() {
       await fetchEncounters()
       const active = encounters.value.find((e) => e.phase === 'combat' || e.phase === 'setup' || e.phase === 'initiative')
       if (active) {
-        // Check if this tamer or their Digimon are participating
+        // Check if this tamer or their Digimon are participating OR if there are pending requests for them
         const participants = active.participants as CombatParticipant[]
+        const pendingRequests = (active.pendingRequests as any[]) || []
         const isParticipating = participants.some(
           (p) =>
             (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
             (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
         )
-        if (isParticipating) {
+        const hasPendingRequests = pendingRequests.some((r) => r.targetTamerId === fetchedTamer.id)
+
+        if (isParticipating || hasPendingRequests) {
           activeEncounter.value = active
           // Extract my pending requests
           myRequests.value = getMyPendingRequests(active, fetchedTamer.id)
