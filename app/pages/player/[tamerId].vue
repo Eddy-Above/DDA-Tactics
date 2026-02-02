@@ -1160,7 +1160,9 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                   />
                   <span v-else class="text-2xl">{{ currentTurnParticipant?.type === 'digimon' ? '🦖' : '👤' }}</span>
                 </div>
-                <span class="text-xs text-digimon-dark-400 mt-1">Current</span>
+                <span class="text-xs mt-1 font-semibold text-center" :class="isMyTurn ? 'text-digimon-orange-400' : 'text-digimon-dark-400'">
+                  {{ isMyTurn ? 'YOUR TURN' : 'Current' }}
+                </span>
               </div>
 
               <!-- Arrow -->
