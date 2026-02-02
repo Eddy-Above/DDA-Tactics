@@ -150,11 +150,14 @@ export default defineEventHandler(async (event) => {
 
   // Determine targetTamerId based on whether target is NPC or player
   let targetTamerId: string | null = null
+  let targetDigimon: any = null  // Declare outside if block for reuse
+
   if (target.type === 'tamer') {
     targetTamerId = target.entityId
   } else if (target.type === 'digimon') {
     // Check if this is an NPC enemy or a player's partner digimon
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+    const [targetDigimonQuery] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+    targetDigimon = targetDigimonQuery
     if (targetDigimon?.isEnemy) {
       // NPC enemy - use 'GM' as targetTamerId
       targetTamerId = 'GM'
