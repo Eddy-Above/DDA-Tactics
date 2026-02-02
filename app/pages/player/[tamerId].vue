@@ -776,7 +776,7 @@ function showAttackResult(
   let finalDamage = 0
   if (hit) {
     const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
-    finalDamage = Math.max(0, baseDamage + netSuccesses - effectiveArmor)
+    finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
   }
 
   // Set modal data
@@ -2450,45 +2450,11 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             </div>
           </div>
 
-          <!-- Damage Breakdown (if hit) -->
+          <!-- Damage Result (if hit) -->
           <div v-if="attackResultData.hit" class="mt-4 pt-4 border-t border-digimon-dark-600">
-            <h4 class="text-md font-semibold text-orange-400 mb-3">Damage Calculation</h4>
-
-            <div class="space-y-2 text-sm">
-              <div class="flex items-center justify-between">
-                <span class="text-digimon-dark-400">Base Attack Damage:</span>
-                <span class="text-white font-mono">{{ attackResultData.baseDamage }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-digimon-dark-400">Extra Successes:</span>
-                <span class="text-green-400 font-mono">+{{ attackResultData.netSuccesses }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-digimon-dark-400">Target Armor:</span>
-                <span class="text-blue-400 font-mono">{{ attackResultData.targetArmor }}</span>
-              </div>
-              <div v-if="attackResultData.armorPiercing && attackResultData.armorPiercing > 0" class="flex items-center justify-between">
-                <span class="text-digimon-dark-400">Armor Piercing:</span>
-                <span class="text-yellow-400 font-mono">-{{ attackResultData.armorPiercing }}</span>
-              </div>
-              <div class="flex items-center justify-between">
-                <span class="text-digimon-dark-400">Effective Armor:</span>
-                <span class="text-blue-400 font-mono">
-                  {{ Math.max(0, attackResultData.targetArmor - (attackResultData.armorPiercing || 0)) }}
-                </span>
-              </div>
-
-              <div class="mt-3 pt-3 border-t border-digimon-dark-600 flex items-center justify-between">
-                <span class="text-orange-400 font-semibold text-lg">Total Damage Dealt:</span>
-                <span class="text-red-400 font-bold text-2xl">{{ attackResultData.finalDamage }}</span>
-              </div>
-            </div>
-
-            <!-- Formula -->
-            <div class="mt-4 p-3 bg-digimon-dark-600 rounded text-xs font-mono text-digimon-dark-300">
-              {{ attackResultData.baseDamage }} (base) + {{ attackResultData.netSuccesses }} (extra) -
-              {{ Math.max(0, attackResultData.targetArmor - (attackResultData.armorPiercing || 0)) }} (effective armor) =
-              <span class="text-red-400 font-bold">{{ attackResultData.finalDamage }}</span>
+            <div class="flex items-center justify-between">
+              <span class="text-orange-400 font-semibold text-lg">Damage Dealt:</span>
+              <span class="text-red-400 font-bold text-3xl">{{ attackResultData.finalDamage }}</span>
             </div>
           </div>
         </div>
