@@ -241,8 +241,68 @@ watch(
   { deep: true, immediate: true }
 )
 
+// Helper functions to calculate total values (base + xpBonuses)
+const getTotalAttribute = (attr: keyof Tamer['attributes']): number => {
+  if (!tamer.value) return 0
+  const base = tamer.value.attributes[attr] || 0
+  const bonus = tamer.value.xpBonuses?.attributes[attr] || 0
+  return base + bonus
+}
+
+const getTotalSkill = (skill: keyof Tamer['skills']): number => {
+  if (!tamer.value) return 0
+  const base = tamer.value.skills[skill] || 0
+  const bonus = tamer.value.xpBonuses?.skills[skill] || 0
+  return base + bonus
+}
+
 // Computed
-const tamerStats = computed(() => (tamer.value ? calcTamerStats(tamer.value) : null))
+const totalAttributes = computed(() => {
+  if (!tamer.value) return {}
+  return {
+    agility: getTotalAttribute('agility'),
+    body: getTotalAttribute('body'),
+    charisma: getTotalAttribute('charisma'),
+    intelligence: getTotalAttribute('intelligence'),
+    willpower: getTotalAttribute('willpower'),
+  }
+})
+
+const totalSkills = computed(() => {
+  if (!tamer.value) return {}
+  return {
+    dodge: getTotalSkill('dodge'),
+    fight: getTotalSkill('fight'),
+    stealth: getTotalSkill('stealth'),
+    athletics: getTotalSkill('athletics'),
+    endurance: getTotalSkill('endurance'),
+    featsOfStrength: getTotalSkill('featsOfStrength'),
+    manipulate: getTotalSkill('manipulate'),
+    perform: getTotalSkill('perform'),
+    persuasion: getTotalSkill('persuasion'),
+    computer: getTotalSkill('computer'),
+    survival: getTotalSkill('survival'),
+    knowledge: getTotalSkill('knowledge'),
+    perception: getTotalSkill('perception'),
+    decipherIntent: getTotalSkill('decipherIntent'),
+    bravery: getTotalSkill('bravery'),
+  }
+})
+
+const tamerStats = computed(() => {
+  if (!tamer.value) return null
+
+  // Calculate derived stats using total values (base + xpBonuses)
+  return {
+    woundBoxes: Math.max(2, getTotalAttribute('body') + getTotalSkill('endurance')),
+    speed: getTotalAttribute('agility') + getTotalSkill('survival'),
+    accuracyPool: getTotalAttribute('agility') + getTotalSkill('fight'),
+    dodgePool: getTotalAttribute('agility') + getTotalSkill('dodge'),
+    armor: getTotalAttribute('body') + getTotalSkill('endurance'),
+    damage: getTotalAttribute('body') + getTotalSkill('fight'),
+    maxInspiration: Math.max(1, getTotalAttribute('willpower')),
+  }
+})
 
 // Get current stage digimon for this tamer (for digimon selection)
 const currentPartnerDigimon = computed(() => {
@@ -1821,10 +1881,13 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 <div
                   v-for="(value, attr) in tamer.attributes"
                   :key="attr"
-                  class="relative group text-center bg-digimon-dark-700 rounded-lg p-2 cursor-help"
+                  :class="[
+                    'relative group text-center bg-digimon-dark-700 rounded-lg p-2 cursor-help',
+                    tamer.xpBonuses?.attributes[attr as keyof typeof tamer.xpBonuses.attributes] > 0 && 'ring-2 ring-green-500/50'
+                  ]"
                 >
                   <div class="text-xs text-digimon-dark-400 uppercase">{{ attr }}</div>
-                  <div class="text-lg font-semibold text-white">{{ value }}</div>
+                  <div class="text-lg font-semibold text-white">{{ totalAttributes[attr as keyof typeof totalAttributes] }}</div>
 
                   <!-- Skill hover box -->
                   <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
@@ -1835,7 +1898,14 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                         class="text-sm flex justify-between gap-3"
                       >
                         <span class="text-digimon-dark-400">{{ skillLabels[skill] }}:</span>
-                        <span class="text-white font-medium">{{ tamer.skills[skill as keyof typeof tamer.skills] }}</span>
+                        <span class="text-white font-medium">
+                          {{ totalSkills[skill as keyof typeof totalSkills] }}
+                          <span
+                            v-if="tamer.xpBonuses?.skills[skill as keyof typeof tamer.xpBonuses.skills] > 0"
+                            class="inline-block w-1.5 h-1.5 bg-green-500 rounded-full ml-1"
+                            title="XP Enhanced"
+                          ></span>
+                        </span>
                       </div>
                     </div>
                   </div>
