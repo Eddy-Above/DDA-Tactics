@@ -6,7 +6,7 @@
 import { computed, type Ref, isRef, watch, reactive, ref } from 'vue'
 import { getTagPatternForQuality, isEffectValidForType } from '../data/attackConstants'
 import { useAttackTags, type Attack, type NewAttack } from './useAttackTags'
-import type { DigimonFormData } from './useDigimonStats'
+import type { DigimonFormData } from './useDigimonForm'
 
 export function useDigimonAttacks(form: Ref<any> | any) {
   // Handle both Ref and raw values

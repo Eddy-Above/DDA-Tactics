@@ -8,18 +8,7 @@ import type { DigimonStage, DigimonSize, DigimonFamily } from '../types/index'
 import { STAGE_CONFIG, SIZE_CONFIG } from '../types/index'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../data/qualities'
 import { useDigimonDP } from './useDigimonDP'
-
-export interface DigimonFormData {
-  baseStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  bonusStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  bonusDP: number
-  bonusDPForQualities: number
-  attacks?: any[]
-  qualities?: Array<{ id: string; name?: string; ranks?: number; dpCost?: number; choiceId?: string }>
-  stage: DigimonStage
-  size: DigimonSize
-  [key: string]: any // Allow other properties
-}
+import type { DigimonFormData } from './useDigimonForm'
 
 /**
  * Calculate the effective base movement after all base movement modifiers

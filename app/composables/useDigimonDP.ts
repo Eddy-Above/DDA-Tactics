@@ -8,15 +8,7 @@ import { computed, isRef } from 'vue'
 import type { Ref } from 'vue'
 import { STAGE_CONFIG } from '../types/index'
 import { QUALITY_DATABASE, getEffectiveDPCost } from '../data/qualities'
-
-export interface DigimonFormData {
-  baseStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  bonusStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  bonusDP: number
-  bonusDPForQualities: number
-  qualities: Array<{ id: string; ranks?: number; dpCost?: number }>
-  stage: string
-}
+import type { DigimonFormData } from './useDigimonForm'
 
 export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData) {
   // Handle both Ref and reactive objects

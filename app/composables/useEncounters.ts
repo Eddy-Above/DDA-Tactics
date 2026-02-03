@@ -432,6 +432,28 @@ export function useEncounters() {
     }
   }
 
+  async function deleteResponse(encounterId: string, responseId: string): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/responses/${responseId}`, {
+        method: 'DELETE',
+      })
+      // Update local state
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) {
+        currentEncounter.value = result
+      }
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to delete response'
+      console.error('Failed to delete response:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   // Helper functions for request/response
   function getMyPendingRequests(encounter: Encounter, tamerId: string) {
     const requests = (encounter.pendingRequests as any[]) || []
@@ -562,6 +584,7 @@ export function useEncounters() {
     createRequest,
     respondToRequest,
     cancelRequest,
+    deleteResponse,
     getMyPendingRequests,
     getUnprocessedResponses,
     // Combat actions

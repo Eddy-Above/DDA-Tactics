@@ -6,32 +6,17 @@
 
 import { computed, ref, reactive, watch } from 'vue'
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types/index'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize } from '../types/index'
 import { QUALITY_DATABASE, getMaxRanksAtStage } from '../data/qualities'
 import type { Attack } from './useAttackTags'
 import { useDigimonStats } from './useDigimonStats'
 import { useDigimonQualities } from './useDigimonQualities'
 import { useDigimonAttacks } from './useDigimonAttacks'
+import type { CreateDigimonData } from './useDigimon'
 
-export interface CreateDigimonData {
-  name: string
-  species: string
-  stage: DigimonStage
-  attribute: 'vaccine' | 'data' | 'virus' | 'free'
-  family: DigimonFamily
-  type?: string
-  size: DigimonSize
-  baseStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  attacks?: Attack[]
-  qualities?: Array<{ id: string; name: string; ranks?: number; dpCost?: number; choiceId?: string }>
-  dataOptimization?: string
-  bonusDP?: number
+export interface DigimonFormData extends CreateDigimonData {
   bonusStats?: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
   bonusDPForQualities?: number
-  partnerId?: string
-  isEnemy?: boolean
-  notes?: string
-  spriteUrl?: string
   evolvesFromId?: string | null
   evolutionPathIds?: string[]
   syncBonusDP?: boolean
@@ -81,11 +66,11 @@ function getSpeedyMaxRanks(
   return hasAdvancedMovement ? Math.ceil(effectiveBase / 2) : Math.floor(effectiveBase / 2)
 }
 
-export function useDigimonForm(initialData?: Partial<CreateDigimonData>) {
+export function useDigimonForm(initialData?: Partial<DigimonFormData>) {
   // ========================
   // Form State (Basic Info)
   // ========================
-  const form = reactive<CreateDigimonData>({
+  const form = reactive<DigimonFormData>({
     name: initialData?.name || '',
     species: initialData?.species || '',
     stage: initialData?.stage || 'rookie',

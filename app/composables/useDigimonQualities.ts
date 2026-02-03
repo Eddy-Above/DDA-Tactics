@@ -4,7 +4,7 @@
  */
 
 import { computed, type Ref, isRef } from 'vue'
-import type { DigimonFormData } from './useDigimonStats'
+import type { DigimonFormData } from './useDigimonForm'
 import { QUALITY_DATABASE, getEffectiveDPCost } from '../data/qualities'
 
 export interface UseDigimonQualitiesOptions {

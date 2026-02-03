@@ -1,7 +1,7 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   compatibilityDate: '2024-11-01',
-  devtools: { enabled: true },
+  devtools: { enabled: false },
 
   modules: [
     '@nuxtjs/tailwindcss',
@@ -40,5 +40,11 @@ export default defineNuxtConfig({
         { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' },
       ],
     },
+  },
+
+  // Disable experimental appManifest to fix recurring build cache corruption
+  // See: https://github.com/nuxt/nuxt/issues/30461
+  experimental: {
+    appManifest: false,
   },
 })

@@ -52,6 +52,7 @@ const pendingAttacks = ref<Array<{
 // Attack result modal state - queue to handle multiple attacks in one turn
 const showAttackResultModal = ref(false)
 const attackResultQueue = ref<Array<{
+  responseId: string
   attackerName: string
   attackName: string
   targetName: string
@@ -80,7 +81,7 @@ const attackResultData = computed(() => {
 // Composables
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, calculateDerivedStats: calcDigimonStats } = useDigimon()
-const { encounters, fetchEncounters, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack } = useEncounters()
+const { encounters, fetchEncounters, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 // Auto-refresh every 5 seconds
@@ -894,6 +895,7 @@ function showAttackResult(
 
   // Add to queue to handle multiple attacks in one turn
   attackResultQueue.value.push({
+    responseId: dodgeResponse.id,
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: pendingAttack.targetName,
@@ -919,7 +921,20 @@ function showAttackResult(
   console.log('[ATTACK RESULT] Modal flag set to true')
 }
 
-function closeAttackResultModal() {
+async function closeAttackResultModal() {
+  // Get the current (first) result before removing it
+  const currentResult = attackResultQueue.value[0]
+
+  // Delete the response from the encounter
+  if (currentResult?.responseId && activeEncounter.value) {
+    try {
+      await deleteResponse(activeEncounter.value.id, currentResult.responseId)
+    } catch (error) {
+      console.error('Failed to delete response:', error)
+      // Continue closing modal even if delete fails
+    }
+  }
+
   // Remove the current (first) result from the queue
   attackResultQueue.value.shift()
 

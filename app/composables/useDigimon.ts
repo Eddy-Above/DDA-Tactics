@@ -1,5 +1,5 @@
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize } from '../types'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types'
 
 // Extended type for update requests with sync option
 export type UpdateDigimonData = Partial<Digimon> & {
@@ -17,9 +17,9 @@ export interface CreateDigimonData {
   species: string
   stage: DigimonStage
   attribute: 'vaccine' | 'data' | 'virus' | 'free'
-  family: string
+  family: DigimonFamily
   type?: string
-  size?: DigimonSize
+  size: DigimonSize
   baseStats: {
     accuracy: number
     damage: number

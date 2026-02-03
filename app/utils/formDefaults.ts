@@ -1,5 +1,6 @@
 import type { DigimonStage, DigimonSize, DigimonFamily } from '../types'
 import type { Digimon } from '../server/db/schema'
+import type { DigimonFormData } from '../composables/useDigimonForm'
 
 /**
  * Base stats structure
@@ -10,34 +11,6 @@ export interface BaseStats {
   dodge: number
   armor: number
   health: number
-}
-
-/**
- * Digimon form data structure
- * Used for both create and edit forms
- */
-export interface DigimonFormData {
-  name: string
-  species: string
-  stage: DigimonStage
-  attribute: 'vaccine' | 'data' | 'virus' | 'free'
-  family: DigimonFamily
-  type: string
-  size: DigimonSize
-  baseStats: BaseStats
-  attacks: Digimon['attacks']
-  qualities: Digimon['qualities']
-  dataOptimization: string
-  bonusDP: number
-  bonusStats: BaseStats
-  bonusDPForQualities: number
-  syncBonusDP: boolean
-  partnerId: string | null
-  isEnemy: boolean
-  notes: string
-  spriteUrl: string
-  evolvesFromId: string | null
-  evolutionPathIds: string[]
 }
 
 /**

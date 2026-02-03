@@ -3,15 +3,8 @@
  * Extracted validation logic for digimon creation/editing
  */
 
-export interface DigimonFormData {
-  name?: string
-  attacks?: Array<{ id: string; name: string; tags: string[] }>
-  qualities?: Array<{ id: string; ranks?: number }>
-  baseStats?: Record<string, number>
-  bonusStats?: Record<string, number>
-  bonusDP?: number
-  bonusDPForQualities?: number
-}
+import { computed, type Ref } from 'vue'
+import type { DigimonFormData } from './useDigimonForm'
 
 export function useDigimonValidation(form: Ref<DigimonFormData>) {
   // Check if basic info is valid
