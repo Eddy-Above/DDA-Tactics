@@ -33,6 +33,7 @@ const initiativeRollResult = ref<{ rolls: number[]; total: number } | null>(null
 const dodgeRollResult = ref<{ rolls: number[]; total: number } | null>(null)
 const selectedAttack = ref<any>(null)
 const showTargetSelector = ref(false)
+const selectedTargetId = ref<string | null>(null)
 const selectedDigimonId = ref<string | null>(null)
 const allTamers = ref<Tamer[]>([])
 
@@ -2446,11 +2447,18 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           <button
             v-for="target in getEnemyTargets()"
             :key="target.id"
-            @click="confirmAttack(target)"
+            @click="selectedTargetId = target.id"
             class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
+            :class="{
+              'bg-digimon-orange-500/20 border-digimon-orange-500': selectedTargetId === target.id
+            }"
           >
             <div class="flex justify-between items-center mb-2">
-              <span class="font-semibold">{{ getParticipantName(target) }}</span>
+              <!-- Checkbox with tick -->
+              <div class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0">
+                <span v-if="selectedTargetId === target.id" class="text-digimon-orange-400">✓</span>
+              </div>
+              <span class="font-semibold ml-2">{{ getParticipantName(target) }}</span>
               <span v-if="target.currentStance" :class="[
                 'text-xs px-2 py-1 rounded capitalize',
                 target.currentStance === 'offensive' && 'bg-red-900/50 text-red-400',
@@ -2483,12 +2491,22 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           </button>
         </div>
 
-        <button
-          @click="showTargetSelector = false; selectedAttack = null"
-          class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-        >
-          Cancel
-        </button>
+        <!-- Action buttons -->
+        <div class="flex gap-3">
+          <button
+            @click="confirmAttack(getEnemyTargets().find(t => t.id === selectedTargetId))"
+            :disabled="!selectedTargetId"
+            class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
+          </button>
+          <button
+            @click="showTargetSelector = false; selectedAttack = null; selectedTargetId = null"
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>

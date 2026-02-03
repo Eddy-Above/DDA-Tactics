@@ -51,6 +51,7 @@ const selectedTamerForRequest = ref('')
 // Attack execution state
 const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
 const showTargetSelector = ref(false)
+const selectedTargetId = ref<string | null>(null)
 
 // Entity lookup maps
 const digimonMap = computed(() => {
@@ -579,6 +580,7 @@ async function confirmAttack(target: CombatParticipant) {
 function cancelAttackSelection() {
   showTargetSelector.value = false
   selectedAttack.value = null
+  selectedTargetId.value = null
 }
 
 // Add participant handler - supports adding multiple of the same entity
@@ -2214,10 +2216,17 @@ async function handleUpdateHazard(hazard: Hazard) {
               <button
                 v-for="target in getAttackTargets(selectedAttack.participant.id)"
                 :key="target.id"
-                @click="confirmAttack(target)"
-                class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 rounded-lg p-4 border border-digimon-dark-600 hover:border-digimon-orange-500 transition-all text-left"
+                @click="selectedTargetId = target.id"
+                class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 rounded-lg p-4 border border-digimon-dark-600 transition-all text-left"
+                :class="{
+                  'bg-digimon-orange-500/20 border-digimon-orange-500': selectedTargetId === target.id
+                }"
               >
                 <div class="flex items-center gap-3 mb-2">
+                  <!-- Checkbox with tick -->
+                  <div class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0">
+                    <span v-if="selectedTargetId === target.id" class="text-digimon-orange-400">✓</span>
+                  </div>
                   <div class="w-10 h-10 rounded bg-digimon-dark-600 flex items-center justify-center overflow-hidden">
                     <img
                       v-if="getEntityDetails(target)?.spriteUrl"
@@ -2265,12 +2274,22 @@ async function handleUpdateHazard(hazard: Hazard) {
               </div>
             </div>
 
-            <button
-              @click="cancelAttackSelection"
-              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
+            <!-- Action buttons -->
+            <div class="flex gap-3">
+              <button
+                @click="confirmAttack(getAttackTargets(selectedAttack.participant.id).find(t => t.id === selectedTargetId))"
+                :disabled="!selectedTargetId"
+                class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
+              >
+                Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
+              </button>
+              <button
+                @click="cancelAttackSelection"
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       </Teleport>
