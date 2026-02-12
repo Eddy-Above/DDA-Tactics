@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { EFFECT_ALIGNMENT, EFFECT_ATTACK_TYPE_RESTRICTIONS } from '../data/attackConstants'
+
 interface Effect {
   id: string
   name: string
@@ -28,16 +30,33 @@ const newEffect = reactive({
   description: '',
 })
 
-const commonEffects = [
-  { name: 'Stunned', type: 'debuff' as const, duration: 1, description: 'Cannot take actions' },
-  { name: 'Poisoned', type: 'debuff' as const, duration: 3, description: 'Take 1 damage at start of turn' },
-  { name: 'Burning', type: 'debuff' as const, duration: 2, description: 'Take 2 damage at start of turn' },
-  { name: 'Frozen', type: 'debuff' as const, duration: 2, description: 'Speed reduced to 0' },
-  { name: 'Defended', type: 'buff' as const, duration: 1, description: '+2 to Dodge until next turn' },
-  { name: 'Empowered', type: 'buff' as const, duration: 2, description: '+2 to Damage' },
-  { name: 'Hasted', type: 'buff' as const, duration: 2, description: '+4 Movement' },
-  { name: 'Confused', type: 'status' as const, duration: 2, description: '50% chance to hit wrong target' },
-]
+// Build effects list from game system constants
+function getEffectType(name: string): 'buff' | 'debuff' | 'status' {
+  const alignment = EFFECT_ALIGNMENT[name]
+  if (alignment === 'P') return 'buff'
+  if (alignment === 'N') return 'debuff'
+  if (alignment === 'NA') return 'status'
+  // For effects only in EFFECT_ATTACK_TYPE_RESTRICTIONS, infer from attack type restriction
+  const restriction = EFFECT_ATTACK_TYPE_RESTRICTIONS[name]
+  if (restriction === 'support') return 'buff'
+  if (restriction === 'damage') return 'debuff'
+  return 'status'
+}
+
+const commonEffects = (() => {
+  const allNames = new Set([
+    ...Object.keys(EFFECT_ALIGNMENT),
+    ...Object.keys(EFFECT_ATTACK_TYPE_RESTRICTIONS),
+  ])
+  return Array.from(allNames)
+    .sort()
+    .map((name) => ({
+      name,
+      type: getEffectType(name),
+      duration: 1,
+      description: '',
+    }))
+})()
 
 function addEffect() {
   if (!newEffect.name.trim()) return

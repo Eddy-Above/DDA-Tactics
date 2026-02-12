@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
+import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 
 interface NpcAttackBody {
   participantId: string
@@ -118,7 +119,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Decrement attacker actions
+  // Decrement attacker actions and track used attack
   const updatedParticipants = participants.map((p: any) => {
     if (p.id === body.participantId) {
       return {
@@ -126,6 +127,7 @@ export default defineEventHandler(async (event) => {
         actionsRemaining: {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost),
         },
+        usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
       }
     }
     return p
@@ -140,6 +142,7 @@ export default defineEventHandler(async (event) => {
 
   let attackBaseDamage = 0
   let armorPiercing = 0
+  let npcAttackDef: any = null
   if (attackerDigimon) {
     // Parse baseStats and bonusStats if they're JSON strings
     const baseStats = typeof attackerDigimon.baseStats === 'string'
@@ -159,6 +162,7 @@ export default defineEventHandler(async (event) => {
         : attackerDigimon.attacks
 
       const attackDef = attacks?.find((a: any) => a.id === body.attackId)
+      npcAttackDef = attackDef
 
       if (attackDef?.tags && Array.isArray(attackDef.tags)) {
         for (const tag of attackDef.tags) {
@@ -227,13 +231,36 @@ export default defineEventHandler(async (event) => {
     damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
   }
 
-  // Apply damage to target
+  // Apply damage to target and auto-apply attack effects
+  let appliedEffectName: string | null = null
   const finalParticipants = updatedParticipants.map((p: any) => {
     if (p.id === body.targetId && hit) {
-      return {
+      const updated = {
         ...p,
         currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damageDealt),
       }
+
+      // Auto-apply effect if attack has one and conditions are met
+      if (npcAttackDef?.effect) {
+        const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
+        if (shouldApply) {
+          const effectDuration = Math.max(1, netSuccesses)
+          const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
+          const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+          const newEffect = {
+            id: `effect-${Date.now()}`,
+            name: npcAttackDef.effect,
+            type: effectType,
+            duration: effectDuration,
+            source: 'Attack',
+            description: '',
+          }
+          updated.activeEffects = [...(p.activeEffects || []), newEffect]
+          appliedEffectName = npcAttackDef.effect
+        }
+      }
+
+      return updated
     }
     return p
   })
@@ -283,7 +310,7 @@ export default defineEventHandler(async (event) => {
     target: null,
     result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
-    effects: ['Dodge'],
+    effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
 
     // Damage calculation breakdown
     baseDamage: attackBaseDamage,

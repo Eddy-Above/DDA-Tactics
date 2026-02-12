@@ -260,7 +260,10 @@ function getParticipantAttacks(participant: CombatParticipant) {
 
   // Look up digimon in digimonMap
   const digimon = digimonMap.value.get(participant.entityId)
-  return digimon?.attacks || []
+  const attacks = digimon?.attacks || []
+  // Filter out attacks already used this turn
+  const usedIds = new Set(participant.usedAttackIds || [])
+  return attacks.filter((a: any) => !usedIds.has(a.id))
 }
 
 // Calculate attack stats based on digimon stats, qualities, and tags (mirrors AttackSelector logic)
@@ -996,12 +999,19 @@ async function useAction(type: 'simple' | 'complex', description: string) {
 }
 
 // Change stance
-async function changeStance(stance: CombatParticipant['currentStance']) {
-  if (!currentEncounter.value || !activeParticipant.value) return
+async function changeStance(stance: CombatParticipant['currentStance'], participantId?: string) {
+  if (!currentEncounter.value) return
 
   const participants = currentEncounter.value.participants as CombatParticipant[]
-  const active = participants.find((p) => p.id === activeParticipant.value!.id)
+  const targetId = participantId || activeParticipant.value?.id
+  if (!targetId) return
+
+  const active = participants.find((p) => p.id === targetId)
   if (!active) return
+
+  // Stance change costs 1 simple action
+  if ((active.actionsRemaining?.simple || 0) < 1) return
+  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
 
   active.currentStance = stance
   await updateEncounter(currentEncounter.value.id, { participants })
@@ -1015,6 +1025,96 @@ async function changeStance(stance: CombatParticipant['currentStance']) {
       action: 'Changed stance',
       target: null,
       result: `Switched to ${stance} stance`,
+      damage: null,
+      effects: [],
+    })
+  }
+}
+
+// Movement action (costs 1 simple action)
+async function useMovement(participantId?: string) {
+  if (!currentEncounter.value) return
+
+  const participants = currentEncounter.value.participants as CombatParticipant[]
+  const targetId = participantId || activeParticipant.value?.id
+  if (!targetId) return
+
+  const active = participants.find((p) => p.id === targetId)
+  if (!active) return
+  if ((active.actionsRemaining?.simple || 0) < 1) return
+
+  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
+  await updateEncounter(currentEncounter.value.id, { participants })
+
+  const entity = getEntityDetails(active)
+  if (entity) {
+    await addBattleLogEntry(currentEncounter.value.id, {
+      round: currentEncounter.value.round,
+      actorId: active.id,
+      actorName: entity.name,
+      action: 'Movement',
+      target: null,
+      result: 'Used movement action',
+      damage: null,
+      effects: [],
+    })
+  }
+}
+
+// Tamer direct action (costs 1 simple action)
+async function useTamerDirectAction(participantId?: string) {
+  if (!currentEncounter.value) return
+
+  const participants = currentEncounter.value.participants as CombatParticipant[]
+  const targetId = participantId || activeParticipant.value?.id
+  if (!targetId) return
+
+  const active = participants.find((p) => p.id === targetId)
+  if (!active || active.type !== 'tamer') return
+  if ((active.actionsRemaining?.simple || 0) < 1) return
+
+  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
+  await updateEncounter(currentEncounter.value.id, { participants })
+
+  const entity = getEntityDetails(active)
+  if (entity) {
+    await addBattleLogEntry(currentEncounter.value.id, {
+      round: currentEncounter.value.round,
+      actorId: active.id,
+      actorName: entity.name,
+      action: 'Tamer Direct Action',
+      target: null,
+      result: 'Tamer took a direct action',
+      damage: null,
+      effects: [],
+    })
+  }
+}
+
+// Tamer bolster direct action (costs 2 simple actions)
+async function useTamerBolsterDirect(participantId?: string) {
+  if (!currentEncounter.value) return
+
+  const participants = currentEncounter.value.participants as CombatParticipant[]
+  const targetId = participantId || activeParticipant.value?.id
+  if (!targetId) return
+
+  const active = participants.find((p) => p.id === targetId)
+  if (!active || active.type !== 'tamer') return
+  if ((active.actionsRemaining?.simple || 0) < 2) return
+
+  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 2)
+  await updateEncounter(currentEncounter.value.id, { participants })
+
+  const entity = getEntityDetails(active)
+  if (entity) {
+    await addBattleLogEntry(currentEncounter.value.id, {
+      round: currentEncounter.value.round,
+      actorId: active.id,
+      actorName: entity.name,
+      action: 'Bolster Direct Action',
+      target: null,
+      result: 'Tamer used bolster direct action',
       damage: null,
       effects: [],
     })
@@ -1491,6 +1591,12 @@ async function handleUpdateHazard(hazard: Hazard) {
                       <span class="text-digimon-dark-300 text-xs">{{ attack.tags.join(', ') }}</span>
                     </div>
 
+                    <!-- Effect -->
+                    <div v-if="attack.effect" class="flex items-center gap-1">
+                      <span class="text-digimon-dark-400">Effect:</span>
+                      <span class="text-purple-400 text-xs font-medium">{{ attack.effect }}</span>
+                    </div>
+
                     <!-- Special notes (rerolls, conditional bonuses, etc.) -->
                     <span v-for="note in getAttackStats(currentTurnParticipant, attack).notes" :key="note" class="text-xs text-cyan-400">
                       {{ note }}
@@ -1794,18 +1900,54 @@ async function handleUpdateHazard(hazard: Hazard) {
               </button>
             </div>
 
+            <!-- Movement Action -->
+            <div class="mb-4">
+              <button
+                :disabled="activeParticipant.actionsRemaining.simple < 1"
+                class="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed
+                       text-white px-3 py-2 rounded text-sm font-medium"
+                @click="useMovement()"
+              >
+                Move (1 Simple)
+              </button>
+            </div>
+
+            <!-- Tamer Direct Actions -->
+            <div v-if="activeParticipant.type === 'tamer'" class="space-y-2 mb-4">
+              <label class="block text-sm text-digimon-dark-400">Tamer Actions</label>
+              <button
+                :disabled="activeParticipant.actionsRemaining.simple < 1"
+                class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed
+                       text-white px-3 py-2 rounded text-sm font-medium"
+                @click="useTamerDirectAction()"
+              >
+                Direct Action (1 Simple)
+              </button>
+              <button
+                :disabled="activeParticipant.actionsRemaining.simple < 2"
+                class="w-full bg-amber-700 hover:bg-amber-800 disabled:opacity-50 disabled:cursor-not-allowed
+                       text-white px-3 py-2 rounded text-sm font-medium"
+                @click="useTamerBolsterDirect()"
+              >
+                Bolster Direct (2 Simple)
+              </button>
+            </div>
+
             <!-- Stance Selector -->
             <div>
-              <label class="block text-sm text-digimon-dark-400 mb-2">Change Stance</label>
+              <label class="block text-sm text-digimon-dark-400 mb-2">Change Stance (1 Simple)</label>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   v-for="stance in ['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const"
                   :key="stance"
+                  :disabled="activeParticipant.actionsRemaining.simple < 1 && activeParticipant.currentStance !== stance"
                   :class="[
                     'px-2 py-1 rounded text-xs capitalize transition-colors',
                     activeParticipant.currentStance === stance
                       ? getStanceColor(stance) + ' text-white'
-                      : 'bg-digimon-dark-700 text-digimon-dark-300 hover:bg-digimon-dark-600',
+                      : activeParticipant.actionsRemaining.simple < 1
+                        ? 'bg-digimon-dark-700 text-digimon-dark-500 opacity-50 cursor-not-allowed'
+                        : 'bg-digimon-dark-700 text-digimon-dark-300 hover:bg-digimon-dark-600',
                   ]"
                   @click="changeStance(stance)"
                 >

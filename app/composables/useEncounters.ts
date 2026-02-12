@@ -22,6 +22,7 @@ export interface CombatParticipant {
   hasActed: boolean
   currentWounds: number
   maxWounds: number
+  usedAttackIds?: string[]
 }
 
 export interface BattleLogEntry {
@@ -247,6 +248,7 @@ export function useEncounters() {
       participants.forEach((p) => {
         p.actionsRemaining = { simple: 2 }
         p.hasActed = false
+        p.usedAttackIds = []
         // Decrement effect durations
         p.activeEffects = p.activeEffects
           .map((e) => ({ ...e, duration: e.duration - 1 }))
@@ -385,7 +387,11 @@ export function useEncounters() {
       digimonId?: string
       initiative?: number
       initiativeRoll?: number
-      dodgeRoll?: number
+      participantId?: string
+      dodgeDicePool?: number
+      dodgeSuccesses?: number
+      dodgeDiceResults?: number[]
+      timestamp?: string
     }
   ): Promise<Encounter | null> {
     loading.value = true

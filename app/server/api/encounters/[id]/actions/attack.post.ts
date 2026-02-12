@@ -119,7 +119,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Create new participant with decremented actions
+  // Create new participant with decremented actions and tracked used attack
   const updatedParticipants = participants.map((p: any) => {
     if (p.id === body.participantId) {
       return {
@@ -127,6 +127,7 @@ export default defineEventHandler(async (event) => {
         actionsRemaining: {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCostSimple),
         },
+        usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
       }
     }
     return p
@@ -147,6 +148,45 @@ export default defineEventHandler(async (event) => {
   }
 
   const updatedBattleLog = [...battleLog, attackLogEntry]
+
+  // Auto-miss: 0 accuracy successes = automatic miss, no dodge request needed
+  if (body.accuracySuccesses === 0) {
+    const missLogEntry = {
+      id: `log-${Date.now()}-miss`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: actor.id,
+      actorName: actor.type === 'tamer' ? `Tamer ${actor.entityId}` : `Digimon ${actor.entityId}`,
+      action: 'Attack Result',
+      target: target.type === 'tamer' ? `Tamer ${target.entityId}` : `Digimon ${target.entityId}`,
+      result: 'AUTO MISS - 0 accuracy successes',
+      damage: 0,
+      effects: ['Miss'],
+      hit: false,
+    }
+
+    updatedBattleLog.push(missLogEntry)
+
+    const updateData: any = {
+      participants: JSON.stringify(updatedParticipants),
+      battleLog: JSON.stringify(updatedBattleLog),
+      updatedAt: new Date(),
+    }
+
+    await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
+  }
 
   // Determine targetTamerId based on whether target is NPC or player
   let targetTamerId: string | null = null

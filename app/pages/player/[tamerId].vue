@@ -30,7 +30,9 @@ const loading = ref(true)
 const lastRefresh = ref(new Date())
 const myRequests = ref<any[]>([])
 const initiativeRollResult = ref<{ rolls: number[]; total: number } | null>(null)
-const dodgeRollResult = ref<{ rolls: number[]; total: number } | null>(null)
+const dodgeRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
+const hasRolledInitiative = ref(false)
+const hasRolledDodge = ref(false)
 const selectedAttack = ref<any>(null)
 const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
@@ -82,7 +84,7 @@ const attackResultData = computed(() => {
 // Composables
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, calculateDerivedStats: calcDigimonStats } = useDigimon()
-const { encounters, fetchEncounters, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse } = useEncounters()
+const { encounters, fetchEncounters, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, updateEncounter, addBattleLogEntry } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 // Auto-refresh every 5 seconds
@@ -139,6 +141,58 @@ async function loadData() {
           activeEncounter.value = active
           // Extract my pending requests
           myRequests.value = getMyPendingRequests(active, fetchedTamer.id)
+
+          // Reconstruct attack results from persisted responses (handles page refresh)
+          const responses = (active.requestResponses as any[]) || []
+          const myPartIds = new Set(
+            participants
+              .filter((p) =>
+                (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
+                (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
+              )
+              .map((p) => p.id)
+          )
+
+          for (const resp of responses) {
+            if (resp.response?.type !== 'dodge-rolled') continue
+            if (!myPartIds.has(resp.attackerParticipantId)) continue
+            // Skip if already in queue
+            if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
+            // Skip if already being tracked as pending
+            if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId)) continue
+
+            // Find matching request
+            const matchingRequest = pendingRequests.find((req: any) => req.id === resp.requestId)
+            if (!matchingRequest) continue
+
+            // Reconstruct synthetic pending attack from request data
+            const syntheticPendingAttack = {
+              trackingId: `reconstructed-${resp.id}`,
+              timestamp: new Date(resp.response.timestamp).getTime(),
+              attackName: matchingRequest.data?.attackName || 'Unknown',
+              targetName: matchingRequest.data?.targetName || 'Unknown',
+              accuracyDicePool: matchingRequest.data?.accuracyDicePool || 0,
+              accuracyDiceResults: matchingRequest.data?.accuracyDiceResults || [],
+              accuracySuccesses: matchingRequest.data?.accuracySuccesses || 0,
+              participantId: resp.attackerParticipantId,
+              attackData: { id: matchingRequest.data?.attackId, name: matchingRequest.data?.attackName, tags: [] }
+            }
+
+            // Find the attack definition with tags from the digimon's attacks for proper damage calc
+            const attackerParticipant = participants.find((p: any) => p.id === resp.attackerParticipantId)
+            if (attackerParticipant?.type === 'digimon') {
+              const attackerDigi = allDigimon.value.find((d) => d.id === attackerParticipant.entityId)
+              if (attackerDigi?.attacks) {
+                const attacks = typeof attackerDigi.attacks === 'string' ? JSON.parse(attackerDigi.attacks) : attackerDigi.attacks
+                const attackDef = attacks?.find((a: any) => a.id === matchingRequest.data?.attackId)
+                if (attackDef) {
+                  syntheticPendingAttack.attackData = attackDef
+                }
+              }
+            }
+
+            showAttackResult(syntheticPendingAttack, matchingRequest, resp)
+          }
         } else {
           activeEncounter.value = null
           myRequests.value = []
@@ -240,6 +294,17 @@ watch(
   },
   { deep: true, immediate: true }
 )
+
+// Reset roll flags when requests change (new request arrives)
+watch(currentInitiativeRequest, () => {
+  hasRolledInitiative.value = false
+  initiativeRollResult.value = null
+})
+
+watch(currentDodgeRequest, () => {
+  hasRolledDodge.value = false
+  dodgeRollResult.value = null
+})
 
 // Helper functions to calculate total values (base + xpBonuses)
 const getTotalAttribute = (attr: keyof Tamer['attributes']): number => {
@@ -390,6 +455,33 @@ const hasUnrespondedDodgeRequest = computed(() => {
   const hasResponse = responses.some((r) => r.requestId === dodgeRequest.id && r.tamerId === tamer.value!.id)
 
   return !hasResponse
+})
+
+// Dodge dice pool for the target participant in a dodge request
+const dodgeDicePool = computed(() => {
+  if (!activeEncounter.value || !currentDodgeRequest.value) return 3
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const targetParticipant = participants.find((p) => p.id === currentDodgeRequest.value!.targetParticipantId)
+  if (!targetParticipant) return 3
+
+  if (targetParticipant.type === 'digimon') {
+    const digi = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
+    if (digi) {
+      const baseStats = typeof digi.baseStats === 'string' ? JSON.parse(digi.baseStats) : digi.baseStats
+      const bonusStats = typeof (digi as any).bonusStats === 'string' ? JSON.parse((digi as any).bonusStats) : (digi as any).bonusStats
+      const totalDodge = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0)
+      return totalDodge || 3
+    }
+  } else if (targetParticipant.type === 'tamer') {
+    const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
+    if (targetTamer) {
+      const derived = calcTamerStats(targetTamer)
+      return derived.dodgePool || 3
+    }
+  }
+
+  return 3
 })
 
 // Initiative modifiers
@@ -575,7 +667,10 @@ function getParticipantName(participant: CombatParticipant): string {
 function getParticipantAttacks(participant: CombatParticipant): any[] {
   if (participant.type !== 'digimon') return []
   const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  return digimon?.attacks || []
+  const attacks = digimon?.attacks || []
+  // Filter out attacks already used this turn
+  const usedIds = new Set(participant.usedAttackIds || [])
+  return attacks.filter((a: any) => !usedIds.has(a.id))
 }
 
 function getAttackStats(participant: CombatParticipant, attack: any) {
@@ -731,6 +826,70 @@ function getParticipantImage(participant: CombatParticipant): string | null {
 }
 
 // Check if a participant can act (either their turn or their partner's turn)
+// Player combat actions (stance, movement, tamer direct)
+async function changePlayerStance(participant: CombatParticipant, stance: CombatParticipant['currentStance']) {
+  if (!activeEncounter.value || !tamer.value) return
+  if ((participant.actionsRemaining?.simple || 0) < 1) return
+  if (participant.currentStance === stance) return
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[])
+  const target = participants.find((p) => p.id === participant.id)
+  if (!target) return
+
+  target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
+  target.currentStance = stance
+  await updateEncounter(activeEncounter.value.id, { participants })
+  await addBattleLogEntry(activeEncounter.value.id, {
+    round: activeEncounter.value.round,
+    actorId: target.id,
+    actorName: getParticipantName(target) || 'Unknown',
+    action: 'Changed stance',
+    target: null,
+    result: `Switched to ${stance} stance`,
+    damage: null,
+    effects: [],
+  })
+  await loadData()
+}
+
+async function usePlayerAction(participant: CombatParticipant, actionType: 'movement' | 'direct' | 'bolster') {
+  if (!activeEncounter.value || !tamer.value) return
+
+  const cost = actionType === 'bolster' ? 2 : 1
+  if ((participant.actionsRemaining?.simple || 0) < cost) return
+  if ((actionType === 'direct' || actionType === 'bolster') && participant.type !== 'tamer') return
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[])
+  const target = participants.find((p) => p.id === participant.id)
+  if (!target) return
+
+  target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - cost)
+  await updateEncounter(activeEncounter.value.id, { participants })
+
+  const actionNames: Record<string, string> = {
+    movement: 'Movement',
+    direct: 'Tamer Direct Action',
+    bolster: 'Bolster Direct Action',
+  }
+  const resultTexts: Record<string, string> = {
+    movement: 'Used movement action',
+    direct: 'Tamer took a direct action',
+    bolster: 'Tamer used bolster direct action',
+  }
+
+  await addBattleLogEntry(activeEncounter.value.id, {
+    round: activeEncounter.value.round,
+    actorId: target.id,
+    actorName: getParticipantName(target) || 'Unknown',
+    action: actionNames[actionType],
+    target: null,
+    result: resultTexts[actionType],
+    damage: null,
+    effects: [],
+  })
+  await loadData()
+}
+
 function canParticipantAct(participant: CombatParticipant): boolean {
   if (!activeEncounter.value) return false
 
@@ -808,19 +967,42 @@ async function confirmAttack(target: CombatParticipant) {
     )
 
     if (result) {
-      // Store pending attack for result tracking
-      const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      pendingAttacks.value.push({
-        trackingId: trackingId,
-        timestamp: Date.now(),
-        attackName: attack.name,
-        targetName: getParticipantName(target),
-        accuracyDicePool: accuracyPool,
-        accuracyDiceResults: accuracyDiceResults,
-        accuracySuccesses: accuracySuccesses,
-        participantId: participant.id,
-        attackData: attack
-      })
+      if (accuracySuccesses === 0) {
+        // Auto-miss: show miss result directly, no dodge request will come
+        attackResultQueue.value.push({
+          responseId: `miss-${Date.now()}`,
+          attackerName: tamer.value?.name || 'You',
+          attackName: attack.name,
+          targetName: getParticipantName(target),
+          accuracyDicePool: accuracyPool,
+          accuracyDiceResults: accuracyDiceResults,
+          accuracySuccesses: 0,
+          dodgeDicePool: 0,
+          dodgeDiceResults: [],
+          dodgeSuccesses: 0,
+          netSuccesses: 0,
+          hit: false,
+          baseDamage: 0,
+          armorPiercing: 0,
+          targetArmor: 0,
+          finalDamage: 0,
+        })
+        showAttackResultModal.value = true
+      } else {
+        // Store pending attack for result tracking (await dodge response)
+        const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        pendingAttacks.value.push({
+          trackingId: trackingId,
+          timestamp: Date.now(),
+          attackName: attack.name,
+          targetName: getParticipantName(target),
+          accuracyDicePool: accuracyPool,
+          accuracyDiceResults: accuracyDiceResults,
+          accuracySuccesses: accuracySuccesses,
+          participantId: participant.id,
+          attackData: attack
+        })
+      }
 
       // Show feedback and close modal
       showTargetSelector.value = false
@@ -1118,7 +1300,9 @@ async function submitDodgeRoll() {
       {
         type: 'dodge-rolled',
         participantId: currentDodgeRequest.value.targetParticipantId,
-        dodgeRoll: dodgeRollResult.value.total,
+        dodgeDicePool: dodgeRollResult.value.dicePool,
+        dodgeSuccesses: dodgeRollResult.value.successes,
+        dodgeDiceResults: dodgeRollResult.value.rolls,
         timestamp: new Date().toISOString(),
       }
     )
@@ -1591,6 +1775,59 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 >
                   {{ effect.name }}
                 </span>
+              </div>
+
+              <!-- Combat Actions (when it's this participant's turn) -->
+              <div v-if="canParticipantAct(participant) && isMyTurn" class="mt-3 pt-3 border-t border-digimon-dark-600">
+                <div class="flex flex-wrap gap-2 mb-3">
+                  <!-- Movement -->
+                  <button
+                    :disabled="participant.actionsRemaining.simple < 1"
+                    class="text-xs px-2 py-1 rounded bg-teal-900/50 text-teal-400 hover:bg-teal-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                    @click="usePlayerAction(participant, 'movement')"
+                  >
+                    Move (1)
+                  </button>
+                  <!-- Tamer Direct Actions -->
+                  <template v-if="participant.type === 'tamer'">
+                    <button
+                      :disabled="participant.actionsRemaining.simple < 1"
+                      class="text-xs px-2 py-1 rounded bg-amber-900/50 text-amber-400 hover:bg-amber-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      @click="usePlayerAction(participant, 'direct')"
+                    >
+                      Direct (1)
+                    </button>
+                    <button
+                      :disabled="participant.actionsRemaining.simple < 2"
+                      class="text-xs px-2 py-1 rounded bg-amber-900/50 text-amber-400 hover:bg-amber-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      @click="usePlayerAction(participant, 'bolster')"
+                    >
+                      Bolster (2)
+                    </button>
+                  </template>
+                </div>
+                <!-- Stance Selector -->
+                <div class="mb-3">
+                  <label class="block text-xs text-digimon-dark-400 mb-1">Stance (1 Simple)</label>
+                  <div class="flex flex-wrap gap-1">
+                    <button
+                      v-for="stance in (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const)"
+                      :key="stance"
+                      :disabled="participant.actionsRemaining.simple < 1 && participant.currentStance !== stance"
+                      :class="[
+                        'text-xs px-2 py-1 rounded capitalize transition-colors',
+                        participant.currentStance === stance
+                          ? 'ring-1 ring-white text-white ' + (stance === 'offensive' ? 'bg-red-700' : stance === 'defensive' ? 'bg-blue-700' : stance === 'sniper' ? 'bg-purple-700' : stance === 'brave' ? 'bg-yellow-700' : 'bg-gray-600')
+                          : participant.actionsRemaining.simple < 1
+                            ? 'bg-digimon-dark-700 text-digimon-dark-500 opacity-50 cursor-not-allowed'
+                            : 'bg-digimon-dark-700 text-digimon-dark-300 hover:bg-digimon-dark-600'
+                      ]"
+                      @click="changePlayerStance(participant, stance)"
+                    >
+                      {{ stance }}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Attacks (when it's this participant's turn) -->
@@ -2387,10 +2624,14 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             </div>
 
             <button
-              @click="initiativeRollResult = { rolls: [Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1], total: 0 }; initiativeRollResult.total = initiativeRollResult.rolls.reduce((a, b) => a + b, 0)"
-              class="w-full bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              :disabled="hasRolledInitiative"
+              @click="initiativeRollResult = { rolls: [Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1], total: 0 }; initiativeRollResult.total = initiativeRollResult.rolls.reduce((a, b) => a + b, 0); hasRolledInitiative = true"
+              :class="[
+                'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+                hasRolledInitiative ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-digimon-orange-500 hover:bg-digimon-orange-600'
+              ]"
             >
-              🎲 Roll
+              🎲 {{ hasRolledInitiative ? 'Already Rolled' : 'Roll' }}
             </button>
           </div>
 
@@ -2445,34 +2686,26 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
         </div>
 
         <p class="text-white text-sm mb-4">
-          Roll 3d6 + Dodge Pool to avoid the attack
+          Roll {{ dodgeDicePool }}d6 — count 5+ as successes
         </p>
 
         <!-- Embedded Dice Roller -->
         <div class="mb-4">
           <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
             <div class="flex gap-2 items-center justify-center mb-4">
-              <input
-                type="number"
-                :value="3"
-                disabled
-                class="w-12 bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1 text-center text-white"
-              />
-              <span class="text-white">d</span>
-              <input
-                type="number"
-                :value="6"
-                disabled
-                class="w-12 bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1 text-center text-white"
-              />
-              <span class="text-white">+ dodge pool</span>
+              <span class="text-white font-semibold">{{ dodgeDicePool }}d6</span>
+              <span class="text-digimon-dark-400 text-sm">(5+ = success)</span>
             </div>
 
             <button
-              @click="dodgeRollResult = { rolls: [Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1, Math.floor(Math.random() * 6) + 1], total: 0 }; dodgeRollResult.total = dodgeRollResult.rolls.reduce((a, b) => a + b, 0) + 3"
-              class="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              :disabled="hasRolledDodge"
+              @click="(() => { const rolls: number[] = []; for (let i = 0; i < dodgeDicePool; i++) rolls.push(Math.floor(Math.random() * 6) + 1); dodgeRollResult = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: dodgeDicePool }; hasRolledDodge = true; })()"
+              :class="[
+                'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+                hasRolledDodge ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
+              ]"
             >
-              🎲 Roll Dodge
+              🎲 {{ hasRolledDodge ? 'Already Rolled' : 'Roll Dodge' }}
             </button>
           </div>
 
@@ -2481,8 +2714,20 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center"
           >
             <div class="text-sm text-digimon-dark-400 mb-2">Your Dodge Roll</div>
+            <div class="flex justify-center gap-1 mb-2">
+              <span
+                v-for="(die, idx) in dodgeRollResult.rolls"
+                :key="idx"
+                :class="[
+                  'w-8 h-8 flex items-center justify-center rounded font-bold text-sm',
+                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
+                ]"
+              >
+                {{ die }}
+              </span>
+            </div>
             <div class="text-3xl font-bold text-blue-400">
-              {{ dodgeRollResult.total }}
+              {{ dodgeRollResult.successes }} <span class="text-sm text-digimon-dark-400">successes</span>
             </div>
           </div>
         </div>
