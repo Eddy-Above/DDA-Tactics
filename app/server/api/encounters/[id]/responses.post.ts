@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers } from '../../../db'
+import { db, encounters, digimon, tamers, evolutionLines } from '../../../db'
 import { EFFECT_ALIGNMENT } from '../../../../data/attackConstants'
 
 interface SubmitResponseBody {
@@ -122,6 +122,39 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // Auto-process digimon-selected: immediately create initiative-roll request
+  if (body.response.type === 'digimon-selected') {
+    // Remove the original digimon-selection request
+    const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+
+    // Create initiative-roll request
+    const initiativeRequest = {
+      id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'initiative-roll',
+      targetTamerId: body.tamerId,
+      targetParticipantId: undefined,
+      timestamp: new Date().toISOString(),
+      data: body.response.digimonId ? { digimonId: body.response.digimonId } : {},
+    }
+    filteredRequests.push(initiativeRequest)
+
+    await db.update(encounters).set({
+      pendingRequests: JSON.stringify(filteredRequests),
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
+  }
+
   // Create response
   const newResponse = {
     id: `resp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -240,9 +273,9 @@ export default defineEventHandler(async (event) => {
     } else if (targetParticipant?.type === 'tamer') {
       const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
       if (targetTamer) {
-        const body = targetTamer.attributes?.body ?? 0
-        const endurance = targetTamer.skills?.endurance ?? 0
-        targetArmor = body + endurance
+        const attrs = typeof targetTamer.attributes === 'string' ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
+        const skills = typeof targetTamer.skills === 'string' ? JSON.parse(targetTamer.skills) : targetTamer.skills
+        targetArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
       }
     }
 
@@ -300,6 +333,45 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
+    // Auto-devolve check: if target is KO'd but has evolution history, devolve instead
+    let autoDevolveLog: any = null
+    const damagedTarget = participants.find((p: any) => p.id === request.targetParticipantId)
+    if (damagedTarget && hit &&
+        damagedTarget.currentWounds >= damagedTarget.maxWounds &&
+        damagedTarget.evolutionLineId &&
+        damagedTarget.woundsHistory?.length > 0) {
+      const previousState = damagedTarget.woundsHistory.pop()
+      if (previousState) {
+        const oldEntityId = damagedTarget.entityId
+        damagedTarget.entityId = previousState.entityId
+        damagedTarget.maxWounds = previousState.maxWounds
+        damagedTarget.currentWounds = previousState.wounds
+
+        // Update evolution line to previous stage
+        await db.update(evolutionLines).set({
+          currentStageIndex: previousState.stageIndex,
+          updatedAt: new Date(),
+        }).where(eq(evolutionLines.id, damagedTarget.evolutionLineId))
+
+        // Get old and new names for log
+        const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
+        const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+
+        autoDevolveLog = {
+          id: `log-${Date.now()}-autodevolve`,
+          timestamp: new Date().toISOString(),
+          round: encounter.round,
+          actorId: damagedTarget.id,
+          actorName: oldDigimon?.name || 'Digimon',
+          action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
+          target: null,
+          result: `Wounds restored to ${previousState.wounds}`,
+          damage: null,
+          effects: ['Auto-Devolve'],
+        }
+      }
+    }
+
     // Add dodge battle log entry with damage breakdown
     const dodgeLogEntry = {
       id: `log-${Date.now()}-dodge`,
@@ -323,7 +395,7 @@ export default defineEventHandler(async (event) => {
       hit: hit,
     }
 
-    battleLog = [...battleLog, dodgeLogEntry]
+    battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : [])]
 
     // Update participants and battleLog in the updateData
     updateData.participants = JSON.stringify(participants)
