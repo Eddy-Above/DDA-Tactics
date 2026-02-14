@@ -389,6 +389,10 @@ const myParticipants = computed(() => {
   )
 })
 
+const myTamerParticipant = computed(() =>
+  myParticipants.value.find((p) => p.type === 'tamer') ?? null
+)
+
 const currentTurnParticipant = computed(() => {
   if (!activeEncounter.value) return null
   return getCurrentParticipant(activeEncounter.value)
@@ -403,10 +407,12 @@ const isMyTurn = computed(() => {
 const hasDigimonRequest = computed(() => myRequests.value.some((r) => r.type === 'digimon-selection'))
 const hasInitiativeRequest = computed(() => myRequests.value.some((r) => r.type === 'initiative-roll'))
 const hasDodgeRequest = computed(() => myRequests.value.some((r) => r.type === 'dodge-roll'))
+const hasIntercedeRequest = computed(() => myRequests.value.some((r) => r.type === 'intercede-offer'))
 
 const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type === 'digimon-selection'))
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
 const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
+const currentIntercedeRequest = computed(() => myRequests.value.find((r) => r.type === 'intercede-offer'))
 
 // Reset roll flags when requests change (new request arrives)
 // Watch by ID to avoid resetting on every 5-second data refresh (new object references)
@@ -418,6 +424,10 @@ watch(() => currentInitiativeRequest.value?.id, () => {
 watch(() => currentDodgeRequest.value?.id, () => {
   hasRolledDodge.value = false
   dodgeRollResult.value = null
+})
+
+watch(() => currentDigimonRequest.value?.id, () => {
+  selectedDigimonId.value = null
 })
 
 // Check if request has already been responded to (hide modal if response exists)
@@ -921,6 +931,40 @@ function canParticipantAct(participant: CombatParticipant): boolean {
   return false
 }
 
+// Digivolve / Devolve helpers
+function getParticipantEvolutionOptions(participant: CombatParticipant) {
+  if (!participant.evolutionLineId) return { canEvolve: false, canDevolve: false, evolveTargets: [] as any[], devolveTarget: null as any }
+  const evoLine = evolutionLines.value.find(l => l.id === participant.evolutionLineId)
+  if (!evoLine) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null }
+
+  const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
+  const currentIndex = evoLine.currentStageIndex
+
+  const evolveTargets = chain
+    .map((entry: any, index: number) => ({ ...entry, chainIndex: index }))
+    .filter((entry: any) => entry.evolvesFromIndex === currentIndex && entry.isUnlocked)
+
+  const currentEntry = chain[currentIndex]
+  const canDevolve = (participant.woundsHistory?.length || 0) > 0 && currentEntry?.evolvesFromIndex !== null
+  const devolveTarget = canDevolve ? { ...chain[currentEntry.evolvesFromIndex], chainIndex: currentEntry.evolvesFromIndex } : null
+
+  return { canEvolve: evolveTargets.length > 0, canDevolve, evolveTargets, devolveTarget }
+}
+
+async function handleDigivolve(participant: CombatParticipant, targetChainIndex: number) {
+  if (!activeEncounter.value) return
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/digivolve`, {
+      method: 'POST',
+      body: { participantId: participant.id, targetChainIndex },
+    })
+    await loadData()
+  } catch (e: any) {
+    console.error('Digivolve failed:', e)
+    alert(e?.data?.message || 'Failed to digivolve')
+  }
+}
+
 // Calculate health percentage for target display (percentage-based for enemies)
 function getHealthPercentage(participant: CombatParticipant): number {
   const currentHealth = participant.maxWounds - participant.currentWounds
@@ -1319,6 +1363,107 @@ async function submitDodgeRoll() {
     }
   } catch (error) {
     console.error('Error submitting dodge roll:', error)
+  }
+}
+
+// Intercede: Available interceptor options
+const intercedeOptions = computed(() => {
+  if (!currentIntercedeRequest.value || !activeEncounter.value) return []
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const targetId = currentIntercedeRequest.value.data?.targetId
+  const options: { id: string; name: string; type: string }[] = []
+
+  // Find my tamer participant
+  const myTamerParticipant = participants.find(
+    (p) => p.type === 'tamer' && p.entityId === tamer.value?.id
+  )
+  // Find my partner digimon participant
+  const myDigimonParticipant = participants.find((p) => {
+    if (p.type !== 'digimon') return false
+    const digi = allDigimon.value.find((d) => d.id === p.entityId)
+    return digi?.partnerId === tamer.value?.id
+  })
+
+  // Offer tamer as interceptor (if tamer is not the target)
+  if (myTamerParticipant && myTamerParticipant.id !== targetId) {
+    options.push({ id: myTamerParticipant.id, name: tamer.value?.name || 'Tamer', type: 'tamer' })
+  }
+  // Offer partner digimon as interceptor (if digimon is not the target)
+  if (myDigimonParticipant && myDigimonParticipant.id !== targetId) {
+    const digi = allDigimon.value.find((d) => d.id === myDigimonParticipant.entityId)
+    options.push({ id: myDigimonParticipant.id, name: digi?.name || 'Digimon', type: 'digimon' })
+  }
+
+  return options
+})
+
+// Intercede: Claim (take the hit for another player)
+const intercedeLoading = ref(false)
+async function handleIntercedeClaim(interceptorParticipantId: string) {
+  if (!activeEncounter.value || !currentIntercedeRequest.value) return
+
+  intercedeLoading.value = true
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
+      method: 'POST',
+      body: {
+        requestId: currentIntercedeRequest.value.id,
+        interceptorParticipantId,
+      },
+    })
+    await loadData()
+  } catch (e: any) {
+    if (e?.statusCode === 409) {
+      alert('Another player already interceded for this attack!')
+    } else {
+      console.error('Intercede claim failed:', e)
+      alert(e?.data?.message || 'Failed to intercede')
+    }
+  } finally {
+    intercedeLoading.value = false
+  }
+}
+
+// Intercede: Skip (let original target handle it)
+async function handleIntercedeSkip() {
+  if (!activeEncounter.value || !currentIntercedeRequest.value) return
+
+  intercedeLoading.value = true
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+      method: 'POST',
+      body: {
+        requestId: currentIntercedeRequest.value.id,
+      },
+    })
+    await loadData()
+  } catch (e: any) {
+    console.error('Intercede skip failed:', e)
+    alert(e?.data?.message || 'Failed to skip intercede')
+  } finally {
+    intercedeLoading.value = false
+  }
+}
+
+// Intercede: Opt-out (never intercede for this target again)
+async function handleIntercedeOptOut() {
+  if (!activeEncounter.value || !currentIntercedeRequest.value) return
+
+  intercedeLoading.value = true
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+      method: 'POST',
+      body: {
+        requestId: currentIntercedeRequest.value.id,
+        optOut: true,
+      },
+    })
+    await loadData()
+  } catch (e: any) {
+    console.error('Intercede opt-out failed:', e)
+    alert(e?.data?.message || 'Failed to opt out')
+  } finally {
+    intercedeLoading.value = false
   }
 }
 
@@ -1831,6 +1976,40 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              <!-- Digivolve / Devolve (digimon with evolution line) -->
+              <div
+                v-if="participant.type === 'digimon' && participant.evolutionLineId && canParticipantAct(participant) && isMyTurn"
+                class="mb-2 flex flex-wrap gap-1"
+              >
+                <button
+                  v-for="target in getParticipantEvolutionOptions(participant).evolveTargets"
+                  :key="`evo-${target.chainIndex}`"
+                  :disabled="(myTamerParticipant?.actionsRemaining?.simple || 0) < 1"
+                  :class="[
+                    'text-xs px-2 py-1 rounded font-medium',
+                    (myTamerParticipant?.actionsRemaining?.simple || 0) >= 1
+                      ? 'bg-green-700 hover:bg-green-600 text-white'
+                      : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
+                  ]"
+                  @click="handleDigivolve(participant, target.chainIndex)"
+                >
+                  Digivolve → {{ target.species }}
+                </button>
+                <button
+                  v-if="getParticipantEvolutionOptions(participant).canDevolve"
+                  :disabled="(myTamerParticipant?.actionsRemaining?.simple || 0) < 1"
+                  :class="[
+                    'text-xs px-2 py-1 rounded font-medium',
+                    (myTamerParticipant?.actionsRemaining?.simple || 0) >= 1
+                      ? 'bg-amber-700 hover:bg-amber-600 text-white'
+                      : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
+                  ]"
+                  @click="handleDigivolve(participant, getParticipantEvolutionOptions(participant).devolveTarget.chainIndex)"
+                >
+                  Devolve → {{ getParticipantEvolutionOptions(participant).devolveTarget?.species }}
+                </button>
               </div>
 
               <!-- Attacks (when it's this participant's turn) -->
@@ -2745,6 +2924,65 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
         >
           Submit Dodge
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Intercede Offer Modal -->
+  <Teleport to="body">
+    <div
+      v-if="hasIntercedeRequest && currentIntercedeRequest"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
+        <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
+          Intercede?
+        </h2>
+
+        <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+          <p class="text-white text-sm">
+            <span class="font-semibold">{{ currentIntercedeRequest.data?.attackerName }}</span>
+            is attacking
+            <span class="font-semibold">{{ currentIntercedeRequest.data?.targetName }}</span>!
+          </p>
+          <p class="text-yellow-300 text-xs mt-1">
+            {{ currentIntercedeRequest.data?.accuracySuccesses }} accuracy successes
+          </p>
+        </div>
+
+        <div class="mb-4 p-3 bg-digimon-dark-700 rounded-lg text-sm text-digimon-dark-300">
+          <p class="mb-1">If you intercede:</p>
+          <ul class="list-disc list-inside space-y-1 text-xs">
+            <li>Your chosen participant takes the hit instead (0 dodge)</li>
+            <li>The interceptor loses 1 simple action on their next turn</li>
+          </ul>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <button
+            v-for="option in intercedeOptions"
+            :key="option.id"
+            :disabled="intercedeLoading"
+            @click="handleIntercedeClaim(option.id)"
+            class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
+          </button>
+          <button
+            :disabled="intercedeLoading"
+            @click="handleIntercedeSkip"
+            class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            {{ intercedeLoading ? 'Processing...' : 'Skip' }}
+          </button>
+          <button
+            :disabled="intercedeLoading"
+            @click="handleIntercedeOptOut"
+            class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
+          >
+            {{ intercedeLoading ? 'Processing...' : `Never intercede for ${currentIntercedeRequest.data?.targetName}` }}
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
