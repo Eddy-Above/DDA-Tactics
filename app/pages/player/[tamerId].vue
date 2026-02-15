@@ -3344,33 +3344,9 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
           <!-- Damage Result (if hit) -->
           <div v-if="dodgeResultData.hit" class="mt-4 pt-4 border-t border-digimon-dark-600">
-            <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center justify-between">
               <span class="text-red-400 font-semibold text-lg">Damage Taken:</span>
               <span class="text-red-500 font-bold text-3xl">{{ dodgeResultData.finalDamage }}</span>
-            </div>
-
-            <!-- Damage Breakdown -->
-            <div class="bg-digimon-dark-800 rounded p-3 space-y-1 text-xs text-digimon-dark-300">
-              <div class="flex justify-between">
-                <span>Base Damage:</span>
-                <span class="text-white">{{ dodgeResultData.baseDamage }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Net Successes:</span>
-                <span class="text-white">{{ dodgeResultData.netSuccesses >= 0 ? '+' : '' }}{{ dodgeResultData.netSuccesses }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Target Armor:</span>
-                <span class="text-white">{{ dodgeResultData.targetArmor }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Armor Piercing:</span>
-                <span class="text-white">-{{ dodgeResultData.armorPiercing }}</span>
-              </div>
-              <div class="border-t border-digimon-dark-600 pt-1 mt-1 flex justify-between font-semibold">
-                <span>Effective Armor:</span>
-                <span class="text-white">{{ dodgeResultData.effectiveArmor ?? 0 }}</span>
-              </div>
             </div>
           </div>
         </div>
@@ -3433,33 +3409,9 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
           <!-- Damage Result -->
           <div class="mt-4 pt-4 border-t border-digimon-dark-600">
-            <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center justify-between">
               <span class="text-red-400 font-semibold text-lg">Damage Taken:</span>
               <span class="text-red-500 font-bold text-3xl">{{ intercedeResultData.finalDamage }}</span>
-            </div>
-
-            <!-- Damage Breakdown -->
-            <div class="bg-digimon-dark-800 rounded p-3 space-y-1 text-xs text-digimon-dark-300">
-              <div class="flex justify-between">
-                <span>Base Damage:</span>
-                <span class="text-white">{{ intercedeResultData.baseDamage }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Net Successes:</span>
-                <span class="text-white">{{ intercedeResultData.netSuccesses >= 0 ? '+' : '' }}{{ intercedeResultData.netSuccesses }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Target Armor:</span>
-                <span class="text-white">{{ intercedeResultData.targetArmor }}</span>
-              </div>
-              <div class="flex justify-between">
-                <span>Armor Piercing:</span>
-                <span class="text-white">-{{ intercedeResultData.armorPiercing }}</span>
-              </div>
-              <div class="border-t border-digimon-dark-600 pt-1 mt-1 flex justify-between font-semibold">
-                <span>Effective Armor:</span>
-                <span class="text-white">{{ intercedeResultData.effectiveArmor }}</span>
-              </div>
             </div>
           </div>
         </div>
