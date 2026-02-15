@@ -79,6 +79,25 @@ const attackResultData = computed(() => {
   return attackResultQueue.value.length > 0 ? attackResultQueue.value[0] : null
 })
 
+// Dodge result modal state - shown to the defender after they submit their dodge roll
+const showDodgeResultModal = ref(false)
+const dodgeResultData = ref<{
+  attackName: string
+  attackerName: string
+  targetName: string
+  dodgeDicePool: number
+  dodgeDiceResults: number[]
+  dodgeSuccesses: number
+  accuracySuccesses: number
+  netSuccesses: number
+  hit: boolean
+  finalDamage: number
+  baseDamage: number
+  targetArmor: number
+  armorPiercing: number
+  effectiveArmor: number | undefined
+} | null>(null)
+
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
 // Composables
@@ -1339,6 +1358,10 @@ async function submitInitiativeRoll() {
 async function submitDodgeRoll() {
   if (!activeEncounter.value || !currentDodgeRequest.value || !tamer.value || !dodgeRollResult.value) return
 
+  // Capture context before submitting (loadData() will change currentDodgeRequest)
+  const capturedRequest = currentDodgeRequest.value
+  const capturedDodgeRoll = dodgeRollResult.value
+
   try {
     const result = await respondToRequest(
       activeEncounter.value.id,
@@ -1357,6 +1380,33 @@ async function submitDodgeRoll() {
     if (result) {
       // Reset and refresh
       dodgeRollResult.value = null
+
+      // Extract the dodge result from the API response before calling loadData()
+      const battleLog = (result.battleLog as any[]) || []
+      const dodgeEntry = battleLog.findLast(
+        (entry: any) => entry.action === 'Dodge' && entry.actorId === capturedRequest.targetParticipantId
+      )
+
+      if (dodgeEntry && capturedRequest) {
+        dodgeResultData.value = {
+          attackName: capturedRequest.data.attackName,
+          attackerName: capturedRequest.data.attackerName,
+          targetName: capturedRequest.data.targetName,
+          dodgeDicePool: capturedDodgeRoll.dicePool,
+          dodgeDiceResults: capturedDodgeRoll.rolls,
+          dodgeSuccesses: capturedDodgeRoll.successes,
+          accuracySuccesses: capturedRequest.data.accuracySuccesses,
+          netSuccesses: dodgeEntry.netSuccesses,
+          hit: dodgeEntry.hit,
+          finalDamage: dodgeEntry.finalDamage,
+          baseDamage: dodgeEntry.baseDamage,
+          targetArmor: dodgeEntry.targetArmor,
+          armorPiercing: dodgeEntry.armorPiercing,
+          effectiveArmor: dodgeEntry.effectiveArmor,
+        }
+        showDodgeResultModal.value = true
+      }
+
       await loadData()
     } else {
       console.error('Failed to submit dodge roll')
@@ -1364,6 +1414,12 @@ async function submitDodgeRoll() {
   } catch (error) {
     console.error('Error submitting dodge roll:', error)
   }
+}
+
+function closeDodgeResultModal() {
+  showDodgeResultModal.value = false
+  dodgeResultData.value = null
+  hasRolledDodge.value = false
 }
 
 // Intercede: Available interceptor options
@@ -3151,6 +3207,128 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           <button
             @click="closeAttackResultModal"
             class="px-6 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Dodge Result Modal (shown to the defender after submitting their dodge) -->
+  <Teleport to="body">
+    <div
+      v-if="showDodgeResultModal && dodgeResultData"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-blue-500">
+        <h2 class="text-2xl font-bold text-blue-500 mb-4">
+          Dodge Result: {{ dodgeResultData.attackName }}
+        </h2>
+
+        <!-- Target -->
+        <div class="mb-4 text-digimon-dark-300">
+          <span class="text-white">{{ dodgeResultData.attackerName }}</span>
+          attacks
+          <span class="text-red-400">{{ dodgeResultData.targetName }}</span>
+        </div>
+
+        <!-- Your Dodge Roll -->
+        <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
+          <h3 class="text-lg font-semibold text-blue-400 mb-2">Your Dodge Roll</h3>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Dice Pool:</span>
+            <span class="text-white font-mono">{{ dodgeResultData.dodgeDicePool }}d6</span>
+          </div>
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-digimon-dark-400">Results:</span>
+            <div class="flex gap-1">
+              <span
+                v-for="(die, i) in dodgeResultData.dodgeDiceResults"
+                :key="i"
+                :class="[
+                  'px-2 py-1 rounded font-mono text-sm',
+                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-300'
+                ]"
+              >
+                {{ die }}
+              </span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-digimon-dark-400">Successes:</span>
+            <span class="text-blue-400 font-bold text-xl">{{ dodgeResultData.dodgeSuccesses }}</span>
+          </div>
+        </div>
+
+        <!-- Attacker's Accuracy -->
+        <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
+          <h3 class="text-lg font-semibold text-orange-400 mb-2">Attacker's Accuracy</h3>
+          <div class="flex items-center gap-2">
+            <span class="text-digimon-dark-400">Successes:</span>
+            <span class="text-orange-400 font-bold text-xl">{{ dodgeResultData.accuracySuccesses }}</span>
+          </div>
+        </div>
+
+        <!-- Result -->
+        <div class="mb-6 p-4 bg-digimon-dark-700 rounded-lg border-2" :class="[
+          dodgeResultData.hit ? 'border-red-500' : 'border-green-500'
+        ]">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-lg font-semibold" :class="[
+              dodgeResultData.hit ? 'text-red-400' : 'text-green-400'
+            ]">
+              {{ dodgeResultData.hit ? 'HIT!' : 'MISS!' }}
+            </h3>
+            <div class="text-digimon-dark-400">
+              Net Successes:
+              <span :class="[
+                dodgeResultData.netSuccesses >= 0 ? 'text-red-400' : 'text-green-400',
+                'font-bold text-xl ml-2'
+              ]">
+                {{ dodgeResultData.netSuccesses >= 0 ? '+' : '' }}{{ dodgeResultData.netSuccesses }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Damage Result (if hit) -->
+          <div v-if="dodgeResultData.hit" class="mt-4 pt-4 border-t border-digimon-dark-600">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-red-400 font-semibold text-lg">Damage Taken:</span>
+              <span class="text-red-500 font-bold text-3xl">{{ dodgeResultData.finalDamage }}</span>
+            </div>
+
+            <!-- Damage Breakdown -->
+            <div class="bg-digimon-dark-800 rounded p-3 space-y-1 text-xs text-digimon-dark-300">
+              <div class="flex justify-between">
+                <span>Base Damage:</span>
+                <span class="text-white">{{ dodgeResultData.baseDamage }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Net Successes:</span>
+                <span class="text-white">{{ dodgeResultData.netSuccesses >= 0 ? '+' : '' }}{{ dodgeResultData.netSuccesses }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Target Armor:</span>
+                <span class="text-white">{{ dodgeResultData.targetArmor }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Armor Piercing:</span>
+                <span class="text-white">-{{ dodgeResultData.armorPiercing }}</span>
+              </div>
+              <div class="border-t border-digimon-dark-600 pt-1 mt-1 flex justify-between font-semibold">
+                <span>Effective Armor:</span>
+                <span class="text-white">{{ dodgeResultData.effectiveArmor ?? 0 }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Close Button -->
+        <div class="flex justify-end">
+          <button
+            @click="closeDodgeResultModal"
+            class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
           </button>
