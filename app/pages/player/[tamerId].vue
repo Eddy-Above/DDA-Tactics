@@ -98,6 +98,21 @@ const dodgeResultData = ref<{
   effectiveArmor: number | undefined
 } | null>(null)
 
+// Intercede result modal state - shown to the interceptor after they claim intercede
+const showIntercedeResultModal = ref(false)
+const intercedeResultData = ref<{
+  attackerName: string
+  targetName: string
+  interceptorName: string
+  accuracySuccesses: number
+  finalDamage: number
+  baseDamage: number
+  netSuccesses: number
+  targetArmor: number
+  armorPiercing: number
+  effectiveArmor: number
+} | null>(null)
+
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
 // Composables
@@ -1422,6 +1437,11 @@ function closeDodgeResultModal() {
   hasRolledDodge.value = false
 }
 
+function closeIntercedeResultModal() {
+  showIntercedeResultModal.value = false
+  intercedeResultData.value = null
+}
+
 // Intercede: Available interceptor options
 const intercedeOptions = computed(() => {
   if (!currentIntercedeRequest.value || !activeEncounter.value) return []
@@ -1458,15 +1478,46 @@ const intercedeLoading = ref(false)
 async function handleIntercedeClaim(interceptorParticipantId: string) {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
 
+  // Capture context before API call (intercede offers are removed from pendingRequests)
+  const capturedRequest = currentIntercedeRequest.value
+
   intercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
+    const result = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST',
       body: {
-        requestId: currentIntercedeRequest.value.id,
+        requestId: capturedRequest.id,
         interceptorParticipantId,
       },
     })
+
+    // Extract the intercede result from the API response before calling loadData()
+    if (result) {
+      const battleLog = (result.battleLog as any[]) || []
+      const intercedeEntry = battleLog.findLast(
+        (entry: any) =>
+          entry.actorId === interceptorParticipantId &&
+          typeof entry.action === 'string' &&
+          entry.action.startsWith('Interceded for')
+      )
+
+      if (intercedeEntry && capturedRequest) {
+        intercedeResultData.value = {
+          attackerName: capturedRequest.data.attackerName,
+          targetName: capturedRequest.data.targetName,
+          interceptorName: intercedeEntry.actorName,
+          accuracySuccesses: capturedRequest.data.accuracySuccesses,
+          finalDamage: intercedeEntry.finalDamage,
+          baseDamage: intercedeEntry.baseDamage,
+          netSuccesses: intercedeEntry.netSuccesses,
+          targetArmor: intercedeEntry.targetArmor,
+          armorPiercing: intercedeEntry.armorPiercing,
+          effectiveArmor: intercedeEntry.effectiveArmor,
+        }
+        showIntercedeResultModal.value = true
+      }
+    }
+
     await loadData()
   } catch (e: any) {
     if (e?.statusCode === 409) {
@@ -3329,6 +3380,95 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           <button
             @click="closeDodgeResultModal"
             class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Intercede Result Modal (shown to the interceptor after they claim intercede) -->
+  <Teleport to="body">
+    <div
+      v-if="showIntercedeResultModal && intercedeResultData"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-yellow-500">
+        <h2 class="text-2xl font-bold text-yellow-500 mb-2">
+          Intercede Result
+        </h2>
+        <p class="text-digimon-dark-300 mb-4">
+          <span class="text-white font-semibold">{{ intercedeResultData.interceptorName }}</span>
+          took the hit for
+          <span class="text-white font-semibold">{{ intercedeResultData.targetName }}</span>!
+        </p>
+
+        <!-- Attacker's Accuracy -->
+        <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
+          <h3 class="text-lg font-semibold text-orange-400 mb-2">Attack Details</h3>
+          <div class="flex items-center gap-2">
+            <span class="text-digimon-dark-400">Attacker:</span>
+            <span class="text-white">{{ intercedeResultData.attackerName }}</span>
+          </div>
+          <div class="flex items-center gap-2 mt-2">
+            <span class="text-digimon-dark-400">Accuracy Successes:</span>
+            <span class="text-orange-400 font-bold text-xl">{{ intercedeResultData.accuracySuccesses }}</span>
+          </div>
+        </div>
+
+        <!-- Result -->
+        <div class="mb-6 p-4 bg-digimon-dark-700 rounded-lg border-2 border-red-500">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-lg font-semibold text-red-400">
+              HIT! (Intercede = 0 Dodge)
+            </h3>
+            <div class="text-digimon-dark-400">
+              Net Successes:
+              <span class="text-orange-400 font-bold text-xl ml-2">
+                {{ intercedeResultData.netSuccesses >= 0 ? '+' : '' }}{{ intercedeResultData.netSuccesses }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Damage Result -->
+          <div class="mt-4 pt-4 border-t border-digimon-dark-600">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-red-400 font-semibold text-lg">Damage Taken:</span>
+              <span class="text-red-500 font-bold text-3xl">{{ intercedeResultData.finalDamage }}</span>
+            </div>
+
+            <!-- Damage Breakdown -->
+            <div class="bg-digimon-dark-800 rounded p-3 space-y-1 text-xs text-digimon-dark-300">
+              <div class="flex justify-between">
+                <span>Base Damage:</span>
+                <span class="text-white">{{ intercedeResultData.baseDamage }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Net Successes:</span>
+                <span class="text-white">{{ intercedeResultData.netSuccesses >= 0 ? '+' : '' }}{{ intercedeResultData.netSuccesses }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Target Armor:</span>
+                <span class="text-white">{{ intercedeResultData.targetArmor }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Armor Piercing:</span>
+                <span class="text-white">-{{ intercedeResultData.armorPiercing }}</span>
+              </div>
+              <div class="border-t border-digimon-dark-600 pt-1 mt-1 flex justify-between font-semibold">
+                <span>Effective Armor:</span>
+                <span class="text-white">{{ intercedeResultData.effectiveArmor }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Close Button -->
+        <div class="flex justify-end">
+          <button
+            @click="closeIntercedeResultModal"
+            class="px-6 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
           </button>

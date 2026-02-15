@@ -204,6 +204,10 @@ export default defineEventHandler(async (event) => {
 
       return updated
     }
+    // Original target still gets the dodge penalty even though they didn't take the hit
+    if (p.id === request.data.targetId) {
+      return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
+    }
     return p
   })
 
