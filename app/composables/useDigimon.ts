@@ -166,6 +166,11 @@ export function useDigimon() {
       health: baseStats.health + (bonusStats.health || 0),
     }
 
+    // Apply quality bonuses to stats before calculating derived stats
+    const qualities = (digimon as any).qualities || []
+    const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
+    if (dataOpt?.choiceId === 'guardian') totalStats.armor += 2
+
     // Primary Derived Stats (always round down)
     // Size affects Body and Agility differently (page 110)
     const brains = Math.floor(totalStats.accuracy / 2) + stageConfig.brainsBonus
@@ -178,14 +183,12 @@ export function useDigimon() {
     const ram = Math.floor(agility / 10) + stageConfig.stageBonus
 
     // Calculate movement with all modifiers
-    const qualities = (digimon as any).qualities || []
     const stageBaseMovement = stageConfig.movement
 
     // Calculate effective base movement (after base movement modifiers)
     let effectiveBase = stageBaseMovement
 
     // Data Optimization modifiers
-    const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'speed-striker') effectiveBase += 2
     if (dataOpt?.choiceId === 'guardian') effectiveBase -= 1
 
@@ -220,6 +223,7 @@ export function useDigimon() {
     const effectiveLimit = Math.floor(totalStats.accuracy / 2) + brains + bit
 
     return {
+      armor: totalStats.armor,
       brains,
       body,
       agility,

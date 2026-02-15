@@ -2843,7 +2843,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 </div>
                 <div class="text-center bg-digimon-dark-700 rounded-lg p-2">
                   <div class="text-xs text-digimon-dark-400">ARM</div>
-                  <div class="text-lg font-semibold text-white">{{ getCurrentForm(chain.chainId)!.baseStats.armor + (getCurrentForm(chain.chainId)!.bonusStats?.armor || 0) }}</div>
+                  <div class="text-lg font-semibold text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).armor }}</div>
                 </div>
                 <div class="text-center bg-digimon-dark-700 rounded-lg p-2">
                   <div class="text-xs text-digimon-dark-400">HP</div>
