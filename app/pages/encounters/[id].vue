@@ -203,9 +203,12 @@ function getDisplayName(participant: CombatParticipant): string {
     baseName = tamerMap.value.get(participant.entityId)?.name || 'Unknown'
   }
 
-  // Number all digimon when duplicates exist
+  // Number all digimon when duplicates exist (by name, not entityId)
   if (participant.type === 'digimon') {
-    const duplicates = participants.filter(p => p.entityId === participant.entityId)
+    const duplicates = participants.filter(p =>
+      p.type === 'digimon' &&
+      (digimonMap.value.get(p.entityId)?.name || 'Unknown') === baseName
+    )
     if (duplicates.length > 1) {
       const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
       const index = sorted.findIndex(p => p.id === participant.id)
