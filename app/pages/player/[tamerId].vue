@@ -734,14 +734,26 @@ function getParticipantName(participant: CombatParticipant): string {
   }
   // For digimon, try to find in partner digimon first
   let digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  if (digimon) return digimon.name
+  if (!digimon) digimon = allDigimon.value.find((d) => d.id === participant.entityId)
+  const baseName = digimon?.name || 'Unknown'
 
-  // Fallback: check allDigimon (includes enemy digimon)
-  digimon = allDigimon.value.find((d) => d.id === participant.entityId)
-  if (digimon) return digimon.name
+  // Number digimon when duplicates share the same name
+  if (activeEncounter.value) {
+    const participants = activeEncounter.value.participants as CombatParticipant[]
+    const duplicates = participants.filter(p => {
+      if (p.type !== 'digimon') return false
+      const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
+                allDigimon.value.find(d => d.id === p.entityId)
+      return (d?.name || 'Unknown') === baseName
+    })
+    if (duplicates.length > 1) {
+      const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
+      const index = sorted.findIndex(p => p.id === participant.id)
+      return `${baseName} ${index + 1}`
+    }
+  }
 
-  // If still not found, return generic label
-  return 'Unknown'
+  return baseName
 }
 
 function getParticipantAttacks(participant: CombatParticipant): any[] {
