@@ -51,6 +51,7 @@ const specialOrderTargetId = ref<string | null>(null)
 const showAddParticipant = ref(false)
 const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
+const selectedNpcEvoLineId = ref<string>('')
 const addQuantity = ref(1)
 const showRequestPanel = ref(false)
 const selectedTamerForRequest = ref('')
@@ -860,7 +861,7 @@ async function handleAddParticipant() {
       }
     }
 
-    // Look up evolution line for partner digimon
+    // Look up evolution line for partner digimon or NPC
     let evoLineId: string | undefined
     if (selectedEntityType.value === 'digimon') {
       const matchingLine = evolutionLines.value.find((line) => {
@@ -868,6 +869,8 @@ async function handleAddParticipant() {
         return stage?.digimonId === selectedEntityId.value
       })
       if (matchingLine) evoLineId = matchingLine.id
+    } else if (selectedEntityType.value === 'enemy' && quantity === 1 && selectedNpcEvoLineId.value) {
+      evoLineId = selectedNpcEvoLineId.value
     }
 
     const participant = createParticipant(
@@ -885,6 +888,7 @@ async function handleAddParticipant() {
 
   showAddParticipant.value = false
   selectedEntityId.value = ''
+  selectedNpcEvoLineId.value = ''
   addQuantity.value = 1
 }
 
@@ -1784,6 +1788,15 @@ const availableEnemyDigimon = computed(() => {
 })
 
 const availableTamers = computed(() => tamers.value)
+
+const npcEvolutionLineOptions = computed(() => {
+  if (selectedEntityType.value !== 'enemy' || !selectedEntityId.value) return []
+  return evolutionLines.value.filter((line) => {
+    if (line.partnerId) return false
+    const stage = getCurrentStage(line)
+    return stage?.digimonId === selectedEntityId.value
+  })
+})
 
 function getStanceColor(stance: string) {
   const colors: Record<string, string> = {
@@ -2759,7 +2772,7 @@ async function handleUpdateHazard(hazard: Hazard) {
                       ? 'bg-digimon-orange-500 text-white'
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
-                  @click="selectedEntityType = 'digimon'; selectedEntityId = ''"
+                  @click="selectedEntityType = 'digimon'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
                 >
                   🦖 Partner
                 </button>
@@ -2770,7 +2783,7 @@ async function handleUpdateHazard(hazard: Hazard) {
                       ? 'bg-digimon-orange-500 text-white'
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
-                  @click="selectedEntityType = 'enemy'; selectedEntityId = ''"
+                  @click="selectedEntityType = 'enemy'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
                 >
                   ⚔️ Enemy
                 </button>
@@ -2781,7 +2794,7 @@ async function handleUpdateHazard(hazard: Hazard) {
                       ? 'bg-digimon-orange-500 text-white'
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
-                  @click="selectedEntityType = 'tamer'; selectedEntityId = ''"
+                  @click="selectedEntityType = 'tamer'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
                 >
                   👤 Tamer
                 </button>
@@ -2846,6 +2859,24 @@ async function handleUpdateHazard(hazard: Hazard) {
                 {{ selectedEntityType === 'tamer'
                   ? 'Tamers must respond with digimon selection before rolling initiative'
                   : 'Each will roll initiative separately (3d6 + Agility)' }}
+              </p>
+            </div>
+
+            <!-- NPC Evolution Line (only for single enemy with matching lines) -->
+            <div v-if="selectedEntityType === 'enemy' && addQuantity === 1 && npcEvolutionLineOptions.length > 0" class="mb-6">
+              <label class="block text-sm text-digimon-dark-400 mb-2">Evolution Line (optional)</label>
+              <select
+                v-model="selectedNpcEvoLineId"
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
+                       text-white focus:border-digimon-orange-500 focus:outline-none"
+              >
+                <option value="">None</option>
+                <option v-for="line in npcEvolutionLineOptions" :key="line.id" :value="line.id">
+                  {{ line.name }}
+                </option>
+              </select>
+              <p class="text-xs text-digimon-dark-400 mt-1">
+                Assign an evolution line to allow this NPC to digivolve during combat
               </p>
             </div>
 
