@@ -254,6 +254,14 @@ export function useEncounters() {
     const participants = encounter.participants as CombatParticipant[]
     const turnOrder = encounter.turnOrder as string[]
     let nextIndex = (encounter.currentTurnIndex + 1) % turnOrder.length
+
+    // Skip any turn-order slots whose participant was removed from the encounter
+    let skipped = 0
+    while (!participants.find((p) => p.id === turnOrder[nextIndex]) && skipped < turnOrder.length) {
+      nextIndex = (nextIndex + 1) % turnOrder.length
+      skipped++
+    }
+
     let newRound = encounter.round
 
     // If we've wrapped around, start a new round

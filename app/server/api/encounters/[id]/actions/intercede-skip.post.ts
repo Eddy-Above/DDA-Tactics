@@ -38,6 +38,7 @@ export default defineEventHandler(async (event) => {
   let participants = parseJsonField(encounter.participants)
   let pendingRequests = parseJsonField(encounter.pendingRequests)
   let battleLog = parseJsonField(encounter.battleLog)
+  let turnOrder = parseJsonField(encounter.turnOrder)
 
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -179,10 +180,14 @@ export default defineEventHandler(async (event) => {
           round: encounter.round || 0,
           attackerName: request.data.attackerName,
           targetName: request.data.targetName,
+          turnOrder,
         })
 
         updateData.participants = JSON.stringify(result.participants)
         updateData.battleLog = JSON.stringify(result.battleLog)
+        if (result.turnOrder) {
+          updateData.turnOrder = JSON.stringify(result.turnOrder)
+        }
       }
     }
   } else {

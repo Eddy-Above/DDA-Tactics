@@ -75,13 +75,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Participant cannot act right now' })
   }
 
-  if (!tamerParticipant) {
-    throw createError({ statusCode: 400, message: 'No partner tamer found for this Digimon' })
-  }
+  // Determine who pays the action cost: tamer for partner digimon, digimon itself for NPCs
+  const actingParticipant = tamerParticipant ?? participant
 
-  // Check action cost (tamer needs 1 simple action)
-  if ((tamerParticipant.actionsRemaining?.simple || 0) < 1) {
-    throw createError({ statusCode: 400, message: 'Tamer does not have enough actions to digivolve' })
+  // Check action cost (1 simple action from tamer or digimon)
+  if ((actingParticipant.actionsRemaining?.simple || 0) < 1) {
+    throw createError({ statusCode: 400, message: 'Not enough actions to digivolve' })
   }
 
   // Fetch evolution line
@@ -119,7 +118,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Only one digivolve attempt per turn (evolving only, devolving is always allowed)
-  if (isEvolve && tamerParticipant.hasAttemptedDigivolve) {
+  if (isEvolve && actingParticipant.hasAttemptedDigivolve) {
     throw createError({ statusCode: 400, message: 'Already attempted digivolution this turn' })
   }
 
@@ -141,8 +140,8 @@ export default defineEventHandler(async (event) => {
   const newName = targetEntry.species
 
   participants = participants.map((p: any) => {
-    // Deduct 1 simple action from the tamer
-    if (p.id === tamerParticipant.id) {
+    // Deduct 1 simple action from the acting participant (tamer for partner, digimon for NPC)
+    if (p.id === actingParticipant.id) {
       return {
         ...p,
         actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) },

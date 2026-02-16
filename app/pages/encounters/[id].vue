@@ -2149,10 +2149,10 @@ async function handleUpdateHazard(hazard: Hazard) {
                       <button
                         v-for="target in getParticipantEvolutionOptions(item.participant).evolveTargets"
                         :key="`evo-main-${target.chainIndex}`"
-                        :disabled="(item.participant.actionsRemaining?.simple || 0) < 2"
+                        :disabled="(item.participant.actionsRemaining?.simple || 0) < 1"
                         :class="[
                           'text-xs px-2 py-1 rounded font-medium',
-                          (item.participant.actionsRemaining?.simple || 0) >= 2
+                          (item.participant.actionsRemaining?.simple || 0) >= 1
                             ? 'bg-purple-600 hover:bg-purple-500 text-white cursor-pointer'
                             : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
                         ]"
@@ -2162,10 +2162,10 @@ async function handleUpdateHazard(hazard: Hazard) {
                       </button>
                       <button
                         v-if="getParticipantEvolutionOptions(item.participant).canDevolve"
-                        :disabled="(item.participant.actionsRemaining?.simple || 0) < 2"
+                        :disabled="(item.participant.actionsRemaining?.simple || 0) < 1"
                         :class="[
                           'text-xs px-2 py-1 rounded font-medium',
-                          (item.participant.actionsRemaining?.simple || 0) >= 2
+                          (item.participant.actionsRemaining?.simple || 0) >= 1
                             ? 'bg-amber-700 hover:bg-amber-600 text-white cursor-pointer'
                             : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
                         ]"
