@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, digimon } from '../../../../db'
-import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '../../../../../utils/specialOrders'
+import { getUnlockedSpecialOrders, getOrderActionCost } from '../../../../../utils/specialOrders'
 
 interface SpecialOrderBody {
   participantId: string
@@ -62,8 +62,15 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Tamer not found' })
   }
 
-  const tamerAttributes = typeof tamer.attributes === 'string' ? JSON.parse(tamer.attributes) : tamer.attributes
-  const tamerXpBonuses = typeof tamer.xpBonuses === 'string' ? JSON.parse(tamer.xpBonuses) : tamer.xpBonuses
+  let tamerAttributes
+  let tamerXpBonuses
+
+  try {
+    tamerAttributes = typeof tamer.attributes === 'string' ? JSON.parse(tamer.attributes) : tamer.attributes
+    tamerXpBonuses = typeof tamer.xpBonuses === 'string' ? JSON.parse(tamer.xpBonuses) : tamer.xpBonuses
+  } catch (e: any) {
+    throw createError({ statusCode: 400, message: `Failed to parse tamer data: ${e.message}` })
+  }
 
   const unlockedOrders = getUnlockedSpecialOrders(tamerAttributes, tamerXpBonuses, tamer.campaignLevel)
   const order = unlockedOrders.find(o => o.name === body.orderName)
@@ -84,12 +91,6 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Not enough actions (requires ${actionCost} simple action(s))` })
   }
 
-  // Find partner digimon for tamer
-  const partnerDigimon = participants.find((p: any) => {
-    if (p.type !== 'digimon') return false
-    return true // We'll check via DB
-  })
-
   // Find the actual partner via DB lookup
   let partnerParticipant: any = null
   for (const p of participants) {
@@ -103,7 +104,6 @@ export default defineEventHandler(async (event) => {
 
   // Apply mechanical effects
   let effectDescription = ''
-  const usageLimit = getOrderUsageLimit(order.type)
 
   switch (body.orderName) {
     case 'Energy Burst': {
@@ -231,19 +231,21 @@ export default defineEventHandler(async (event) => {
   }
 
   // Update encounter
-  const [updated] = await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify([...battleLog, logEntry]),
+  await db.update(encounters).set({
+    participants: JSON.stringify(participants) as any,
+    battleLog: JSON.stringify([...battleLog, logEntry]) as any,
     updatedAt: new Date(),
-  }).where(eq(encounters.id, encounterId)).returning()
+  }).where(eq(encounters.id, encounterId))
+
+  const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   return {
     ...updated,
-    participants: typeof updated.participants === 'string' ? JSON.parse(updated.participants) : updated.participants,
-    turnOrder: typeof updated.turnOrder === 'string' ? JSON.parse(updated.turnOrder) : updated.turnOrder,
-    battleLog: typeof updated.battleLog === 'string' ? JSON.parse(updated.battleLog) : updated.battleLog,
-    pendingRequests: typeof updated.pendingRequests === 'string' ? JSON.parse(updated.pendingRequests as string) : updated.pendingRequests,
-    requestResponses: typeof updated.requestResponses === 'string' ? JSON.parse(updated.requestResponses as string) : updated.requestResponses,
-    hazards: typeof updated.hazards === 'string' ? JSON.parse(updated.hazards as string) : updated.hazards,
+    participants: parseJsonField(updated.participants),
+    turnOrder: parseJsonField(updated.turnOrder),
+    battleLog: parseJsonField(updated.battleLog),
+    pendingRequests: parseJsonField(updated.pendingRequests),
+    requestResponses: parseJsonField(updated.requestResponses),
+    hazards: parseJsonField(updated.hazards),
   }
 })

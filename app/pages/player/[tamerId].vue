@@ -5,6 +5,7 @@ import { skillsByAttribute, skillLabels } from '../../constants/tamer-skills'
 import type { DigimonStage } from '../../types'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC } from '../../types'
 import { getStageColor } from '../../utils/displayHelpers'
+import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '../../utils/specialOrders'
 
 definePageMeta({
   layout: 'player',
@@ -54,6 +55,7 @@ const pendingAttacks = ref<Array<{
 
 // Attack result modal state - queue to handle multiple attacks in one turn
 const showAttackResultModal = ref(false)
+const showPlayerSpecialOrdersModal = ref(false)
 const attackResultQueue = ref<Array<{
   responseId: string
   attackerName: string
@@ -405,6 +407,13 @@ const tamerStats = computed(() => {
     damage: getTotalAttribute('body') + getTotalSkill('fight'),
     maxInspiration: Math.max(1, getTotalAttribute('willpower')),
   }
+})
+
+const specialOrders = computed(() => {
+  if (!tamer.value) return []
+  const attrs = typeof tamer.value.attributes === 'string' ? JSON.parse(tamer.value.attributes) : tamer.value.attributes
+  const xpB = typeof tamer.value.xpBonuses === 'string' ? JSON.parse(tamer.value.xpBonuses) : tamer.value.xpBonuses
+  return getUnlockedSpecialOrders(attrs, xpB, tamer.value.campaignLevel)
 })
 
 // Get current stage digimon for this tamer (for digimon selection)
@@ -900,6 +909,41 @@ function canUseAttack(participant: CombatParticipant, attack: any): boolean {
   // Attacks cost 1 simple action
   const requiredActions = 1
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
+}
+
+function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any): boolean {
+  // Can't use if already used
+  if ((participant.usedSpecialOrders || []).includes(order.name)) {
+    return false
+  }
+  // Passive abilities don't consume actions
+  if (getOrderUsageLimit(order.type) === 'passive') {
+    return false
+  }
+  // Check if tamer has enough actions
+  const requiredActions = getOrderActionCost(order.type)
+  return (participant.actionsRemaining?.simple || 0) >= requiredActions
+}
+
+function getEntityName(participant: CombatParticipant): string {
+  if (participant.type === 'tamer') {
+    const t = allTamers.value.find((tam) => tam.id === participant.entityId)
+    return t?.name || 'Unknown Tamer'
+  } else if (participant.type === 'digimon') {
+    const d = allDigimon.value.find((dig) => dig.id === participant.entityId)
+    return d?.name || 'Unknown Digimon'
+  }
+  return 'Unknown'
+}
+
+function getTamerSpecialOrders(participant: CombatParticipant): any[] {
+  if (participant.type !== 'tamer') return []
+  const tamedData = allTamers.value.find((t) => t.id === participant.entityId)
+  if (!tamedData) return []
+
+  const attrs = typeof tamedData.attributes === 'string' ? JSON.parse(tamedData.attributes) : tamedData.attributes
+  const xpB = typeof tamedData.xpBonuses === 'string' ? JSON.parse(tamedData.xpBonuses) : tamedData.xpBonuses
+  return getUnlockedSpecialOrders(attrs, xpB, tamedData.campaignLevel)
 }
 
 function getParticipantImage(participant: CombatParticipant): string | null {
@@ -1765,6 +1809,21 @@ async function handleIntercedeOptOut() {
   }
 }
 
+async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
+  if (!activeEncounter.value) return
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
+      method: 'POST',
+      body: { participantId: participant.id, orderName, targetId },
+    })
+    await loadData()
+    showPlayerSpecialOrdersModal.value = false
+  } catch (e: any) {
+    console.error('Special order failed:', e)
+    alert(e?.data?.message || 'Failed to use special order')
+  }
+}
+
 // Parse rank from tag with roman or arabic numerals (e.g., "Weapon II" = 2, "Weapon 3" = 3)
 function parseTagRank(tag: string, prefix: string): number {
   const romanToNumber: Record<string, number> = {
@@ -2285,7 +2344,58 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                     </button>
                   </div>
                 </div>
+
+                <!-- Special Orders (Tamer Only) -->
+                <div v-if="participant.type === 'tamer' && getTamerSpecialOrders(participant).length > 0" class="mb-3">
+                  <label class="block text-xs text-digimon-dark-400 mb-2 font-semibold">✨ Special Orders</label>
+                  <div class="space-y-2">
+                    <button
+                      v-for="order in getTamerSpecialOrders(participant)"
+                      :key="order.name"
+                      :disabled="!canUseSpecialOrderInCombat(participant, order)"
+                      @click="
+                        order.name === 'Enemy Scan'
+                          ? (showPlayerSpecialOrdersModal = true)
+                          : handleUseSpecialOrder(participant, order.name)
+                      "
+                      :class="[
+                        'w-full text-left text-xs px-3 py-2 rounded transition-colors',
+                        !canUseSpecialOrderInCombat(participant, order)
+                          ? 'bg-digimon-dark-700 text-digimon-dark-500 cursor-not-allowed opacity-50'
+                          : 'bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 cursor-pointer'
+                      ]"
+                    >
+                      <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ order.name }}</span>
+                        <span class="text-digimon-dark-400 text-xs">
+                          {{ getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1' : '2' }}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
               </div>
+
+              <!-- Enemy Scan Target Modal (Player) -->
+              <Teleport to="body">
+                <div v-if="showPlayerSpecialOrdersModal && participant.type === 'tamer'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showPlayerSpecialOrdersModal = false">
+                  <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-600 max-w-md w-full mx-4">
+                    <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
+                    <div class="space-y-2 max-h-60 overflow-y-auto">
+                      <button
+                        v-for="p in (activeEncounter?.participants as CombatParticipant[] || []).filter(p => p.id !== participant.id && p.type !== 'gm')"
+                        :key="p.id"
+                        class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
+                        @click="handleUseSpecialOrder(participant, 'Enemy Scan', p.id); showPlayerSpecialOrdersModal = false"
+                      >
+                        {{ getEntityName(p) }}
+                        <span class="text-digimon-dark-400 text-xs ml-2">({{ p.currentWounds }}/{{ p.maxWounds }} wounds)</span>
+                      </button>
+                    </div>
+                    <button class="mt-4 text-sm text-digimon-dark-400 hover:text-white" @click="showPlayerSpecialOrdersModal = false">Cancel</button>
+                  </div>
+                </div>
+              </Teleport>
 
               <!-- Digivolve / Devolve (digimon with evolution line) -->
               <div
@@ -2701,6 +2811,32 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 <p class="text-xs text-digimon-dark-500 mt-2">
                   Roll: 3d6 + Willpower ({{ tamer.attributes.willpower }}) - unmarked boxes vs TN 12
                 </p>
+              </div>
+            </div>
+
+            <!-- Special Orders -->
+            <div v-if="specialOrders.length > 0" class="mt-4 pt-4 border-t border-digimon-dark-700">
+              <h3 class="text-sm font-semibold text-digimon-dark-400 mb-3">Special Orders</h3>
+              <div class="space-y-2">
+                <div
+                  v-for="order in specialOrders"
+                  :key="order.name"
+                  class="bg-digimon-dark-700 rounded-lg p-3"
+                >
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-white">{{ order.name }}</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-300">
+                      {{ getOrderUsageLimit(order.type) === 'passive' ? 'Passive' : getOrderUsageLimit(order.type) === 'per-day' ? 'Once/Day' : 'Once/Battle' }}
+                    </span>
+                  </div>
+                  <p class="text-xs text-digimon-dark-400 mb-1">{{ order.effect }}</p>
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-digimon-dark-400">{{ order.attribute.charAt(0).toUpperCase() + order.attribute.slice(1) }}</span>
+                    <span v-if="getOrderUsageLimit(order.type) !== 'passive'" class="text-digimon-dark-400">
+                      {{ getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
