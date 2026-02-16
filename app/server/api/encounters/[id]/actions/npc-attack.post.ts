@@ -3,6 +3,7 @@ import { db, encounters, digimon, tamers, evolutionLines } from '../../../../db'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage } from '../../../../../types'
+import { resolveParticipantName } from '../../../../utils/participantName'
 
 interface NpcAttackBody {
   participantId: string
@@ -301,12 +302,14 @@ export default defineEventHandler(async (event) => {
       const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
       const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
+      const baseOldDigimonName = oldDigimon?.name || 'Digimon'
+      const oldDigimonName = resolveParticipantName(damagedTarget, participants, baseOldDigimonName, oldDigimon?.isEnemy || false)
       autoDevolveLog = {
         id: `log-${Date.now()}-autodevolve`,
         timestamp: new Date().toISOString(),
         round: encounter.round,
         actorId: damagedTarget.id,
-        actorName: oldDigimon?.name || 'Digimon',
+        actorName: oldDigimonName,
         action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
         target: null,
         result: `Wounds restored to ${previousState.wounds}`,
@@ -323,7 +326,8 @@ export default defineEventHandler(async (event) => {
     attackerName = tamerEntity?.name || `Tamer ${actor.entityId}`
   } else if (actor.type === 'digimon') {
     // We already queried attackerDigimon above, reuse it
-    attackerName = attackerDigimon?.name || `Digimon ${actor.entityId}`
+    const baseDigimonName = attackerDigimon?.name || `Digimon ${actor.entityId}`
+    attackerName = resolveParticipantName(actor, participants, baseDigimonName, attackerDigimon?.isEnemy || false)
   }
 
   // Get target name
@@ -334,7 +338,8 @@ export default defineEventHandler(async (event) => {
   } else if (target.type === 'digimon') {
     // Query target digimon for name
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    targetName = targetDigimon?.name || `Digimon ${target.entityId}`
+    const baseDigimonName = targetDigimon?.name || `Digimon ${target.entityId}`
+    targetName = resolveParticipantName(target, participants, baseDigimonName, targetDigimon?.isEnemy || false)
   }
 
   // Add battle log entries

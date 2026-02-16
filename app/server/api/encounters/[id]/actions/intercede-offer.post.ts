@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
+import { resolveParticipantName } from '~/server/utils/participantName'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -81,11 +82,13 @@ export default defineEventHandler(async (event) => {
   let targetName = 'Unknown'
   if (attacker.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-    attackerName = d?.name || 'Digimon'
+    const baseDigimonName = d?.name || 'Digimon'
+    attackerName = resolveParticipantName(attacker, participants, baseDigimonName, d?.isEnemy || false)
   }
   if (target.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    targetName = d?.name || 'Digimon'
+    const baseDigimonName = d?.name || 'Digimon'
+    targetName = resolveParticipantName(target, participants, baseDigimonName, d?.isEnemy || false)
   } else if (target.type === 'tamer') {
     const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
     targetName = t?.name || 'Tamer'

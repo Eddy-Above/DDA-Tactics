@@ -191,6 +191,32 @@ const canStartCombat = computed(() => {
   return true
 })
 
+// Get display name with numbering for duplicate enemies
+function getDisplayName(participant: CombatParticipant): string {
+  const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
+
+  let baseName: string
+  if (participant.type === 'digimon') {
+    baseName = digimonMap.value.get(participant.entityId)?.name || 'Unknown'
+  } else {
+    baseName = tamerMap.value.get(participant.entityId)?.name || 'Unknown'
+  }
+
+  // Only number enemy digimon when duplicates exist
+  if (participant.type === 'digimon') {
+    const digimonEntry = digimonMap.value.get(participant.entityId)
+    if (digimonEntry?.isEnemy) {
+      const duplicates = participants.filter(p => p.entityId === participant.entityId)
+      if (duplicates.length > 1) {
+        const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
+        const index = sorted.findIndex(p => p.id === participant.id)
+        return `${baseName} ${index + 1}`
+      }
+    }
+  }
+  return baseName
+}
+
 // Get entity details for a participant
 function getEntityDetails(participant: CombatParticipant) {
   if (participant.type === 'digimon') {
@@ -198,7 +224,7 @@ function getEntityDetails(participant: CombatParticipant) {
     if (!digimon) return null
     const derived = calcDigimonStats(digimon)
     return {
-      name: digimon.name,
+      name: getDisplayName(participant),
       species: digimon.species,
       stage: digimon.stage,
       isEnemy: digimon.isEnemy,
@@ -526,7 +552,7 @@ function getDodgePool(participant: CombatParticipant): number {
 function getParticipantName(participantId: string): string | null {
   if (!currentEncounter.value) return null
 
-  const participants = currentEncounter.value.participants || []
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
   const participant = participants.find((p: any) => p.id === participantId)
   if (!participant) return null
 
@@ -534,8 +560,7 @@ function getParticipantName(participantId: string): string | null {
     const tamer = tamerMap.value.get(participant.entityId)
     return tamer?.name || null
   } else if (participant.type === 'digimon') {
-    const digimon = digimonMap.value.get(participant.entityId)
-    return digimon?.name || null
+    return getDisplayName(participant as CombatParticipant)
   }
   return null
 }
