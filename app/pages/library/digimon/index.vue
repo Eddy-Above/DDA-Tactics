@@ -11,15 +11,27 @@ const { digimonList, loading, error, fetchDigimon, deleteDigimon, copyDigimon, c
 const { tamers, fetchTamers } = useTamers()
 
 const filter = ref<'all' | 'partners' | 'enemies'>('all')
+const selectedTamerIds = ref<string[]>([])
 
 const filteredDigimon = computed(() => {
+  let list = digimonList.value
   if (filter.value === 'partners') {
-    return digimonList.value.filter((d) => !d.isEnemy)
+    list = list.filter((d) => !d.isEnemy)
+  } else if (filter.value === 'enemies') {
+    list = list.filter((d) => d.isEnemy)
   }
-  if (filter.value === 'enemies') {
-    return digimonList.value.filter((d) => d.isEnemy)
+
+  if (selectedTamerIds.value.length > 0) {
+    list = list.filter((d) => d.partnerId && selectedTamerIds.value.includes(d.partnerId))
   }
-  return digimonList.value
+
+  return list
+})
+
+watch(filter, (val) => {
+  if (val !== 'partners') {
+    selectedTamerIds.value = []
+  }
 })
 
 const tamerMap = computed(() => {
@@ -42,6 +54,15 @@ async function handleCopy(digimon: typeof digimonList.value[0]) {
   const copy = await copyDigimon(digimon)
   if (copy) {
     router.push(`/library/digimon/${copy.id}`)
+  }
+}
+
+function toggleTamer(id: string) {
+  const idx = selectedTamerIds.value.indexOf(id)
+  if (idx === -1) {
+    selectedTamerIds.value.push(id)
+  } else {
+    selectedTamerIds.value.splice(idx, 1)
   }
 }
 
@@ -80,6 +101,23 @@ async function handleCopy(digimon: typeof digimonList.value[0]) {
         @click="filter = f"
       >
         {{ f }}
+      </button>
+    </div>
+
+    <!-- Tamer filter (only visible when Partners tab is selected) -->
+    <div v-if="filter === 'partners' && tamers.length > 0" class="mb-6 flex flex-wrap gap-2">
+      <button
+        v-for="tamer in tamers"
+        :key="tamer.id"
+        :class="[
+          'px-4 py-2 rounded-lg font-medium transition-colors',
+          selectedTamerIds.includes(tamer.id)
+            ? 'bg-digimon-orange-500 text-white'
+            : 'bg-digimon-dark-800 text-digimon-dark-400 hover:text-white',
+        ]"
+        @click="toggleTamer(tamer.id)"
+      >
+        {{ tamer.name }}
       </button>
     </div>
 

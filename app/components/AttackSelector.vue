@@ -50,6 +50,7 @@ const emit = defineEmits<{
 const showSelector = ref(false)
 const searchQuery = ref('')
 const filterStage = ref<'all' | DigimonStage>('all')
+const filterValidOnly = ref(false)
 
 // Map tag prefixes to quality IDs
 const TAG_TO_QUALITY: Record<string, string> = {
@@ -182,10 +183,9 @@ const availableAttacks = computed(() => {
   attacks = attacks.filter((a) => !currentIds.includes(a.id))
 
   // Add status to each attack
-  return attacks.map(attack => ({
-    ...attack,
-    ...getAttackStatus(attack)
-  }))
+  return attacks
+    .map(attack => ({ ...attack, ...getAttackStatus(attack) }))
+    .filter(attack => !filterValidOnly.value || attack.canSelect)
 })
 
 function selectAttack(template: AttackTemplate & { canSelect: boolean }) {
@@ -498,6 +498,15 @@ function getAttackStats(attack: Attack) {
             <option value="mega">Mega</option>
             <option value="ultra">Ultra</option>
           </select>
+          <label class="flex items-center gap-2 cursor-pointer text-sm text-digimon-dark-300 whitespace-nowrap">
+            <input
+              v-model="filterValidOnly"
+              type="checkbox"
+              class="w-4 h-4 bg-digimon-dark-700 border border-digimon-dark-600 rounded
+                     text-digimon-orange-500 focus:ring-digimon-orange-500"
+            />
+            Valid only
+          </label>
         </div>
 
         <!-- Attack list -->
