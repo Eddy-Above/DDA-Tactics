@@ -878,6 +878,12 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
     notes.push(`Directed +${directedEffect.value}`)
   }
 
+  // Combat Monster bonus (accumulated damage for next attack)
+  const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
+  if (combatMonsterBonus > 0 && hasQuality('combat-monster')) {
+    damageBonus += combatMonsterBonus
+  }
+
   const stats = calcDigimonStats(digimon)
 
   // Per-attack range: melee = 1 (or Reach x 2), ranged = calculated
@@ -1377,6 +1383,14 @@ function showAttackResult(
           }
         }
       }
+    }
+  }
+
+  // Apply combat monster bonus (accumulated damage added to next hit)
+  if (attackerParticipant) {
+    const cmBonus = (attackerParticipant as any).combatMonsterBonus ?? 0
+    if (cmBonus > 0) {
+      baseDamage += cmBonus
     }
   }
 
