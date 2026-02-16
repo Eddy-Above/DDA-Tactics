@@ -192,7 +192,7 @@ const canStartCombat = computed(() => {
   return true
 })
 
-// Get display name with numbering for duplicate enemies
+// Get display name with numbering for duplicate digimon
 function getDisplayName(participant: CombatParticipant): string {
   const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
 
@@ -203,16 +203,13 @@ function getDisplayName(participant: CombatParticipant): string {
     baseName = tamerMap.value.get(participant.entityId)?.name || 'Unknown'
   }
 
-  // Only number enemy digimon when duplicates exist
+  // Number all digimon when duplicates exist
   if (participant.type === 'digimon') {
-    const digimonEntry = digimonMap.value.get(participant.entityId)
-    if (digimonEntry?.isEnemy) {
-      const duplicates = participants.filter(p => p.entityId === participant.entityId)
-      if (duplicates.length > 1) {
-        const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
-        const index = sorted.findIndex(p => p.id === participant.id)
-        return `${baseName} ${index + 1}`
-      }
+    const duplicates = participants.filter(p => p.entityId === participant.entityId)
+    if (duplicates.length > 1) {
+      const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
+      const index = sorted.findIndex(p => p.id === participant.id)
+      return `${baseName} ${index + 1}`
     }
   }
   return baseName

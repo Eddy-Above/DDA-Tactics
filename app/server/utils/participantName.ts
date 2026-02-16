@@ -7,8 +7,8 @@ export function resolveParticipantName(
 ): string {
   const name = baseName || 'Digimon'
 
-  // Only number enemy digimon when duplicates exist
-  if (participant.type === 'digimon' && isEnemy) {
+  // Number all digimon when duplicates exist
+  if (participant.type === 'digimon') {
     const duplicates = allParticipants.filter(p => p.entityId === participant.entityId)
     if (duplicates.length > 1) {
       const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
