@@ -178,6 +178,17 @@ export function useDigimon() {
     const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') totalStats.armor += 2
 
+    // Digizoid Armor stat bonuses
+    const digizoidArmor = qualities.find((q: any) => q.id === 'digizoid-armor')
+    if (digizoidArmor) {
+      const cid = digizoidArmor.choiceId
+      if (cid === 'red') totalStats.armor += 4
+      else totalStats.armor += 2
+      if (cid === 'chrome' || cid === 'gold' || cid === 'obsidian') totalStats.health += 1
+      if (cid === 'red') totalStats.health += 2
+      if (cid === 'blue') totalStats.dodge += 2
+    }
+
     // Primary Derived Stats (always round down)
     // Size affects Body and Agility differently (page 110)
     const brains = Math.floor(totalStats.accuracy / 2) + stageConfig.brainsBonus
@@ -209,6 +220,9 @@ export function useDigimon() {
 
     // Boosting quality modifiers
     if (instinct) effectiveBase += instinctRanks
+
+    // Digizoid Armor: Blue movement bonus
+    if (digizoidArmor?.choiceId === 'blue') effectiveBase += 4
 
     // Ensure minimum effective base of 1
     effectiveBase = Math.max(1, effectiveBase)

@@ -139,12 +139,23 @@ export function useDigimonStats(form: Ref<any> | any) {
 
     const accuracy = f.baseStats.accuracy + (f.bonusStats?.accuracy || 0)
     const damage = f.baseStats.damage + (f.bonusStats?.damage || 0)
-    const dodge = f.baseStats.dodge + (f.bonusStats?.dodge || 0) + instinctRanks
+    let dodge = f.baseStats.dodge + (f.bonusStats?.dodge || 0) + instinctRanks
     let armor = f.baseStats.armor + (f.bonusStats?.armor || 0)
-    const health = f.baseStats.health + (f.bonusStats?.health || 0) + instinctRanks
+    let health = f.baseStats.health + (f.bonusStats?.health || 0) + instinctRanks
 
     const dataOpt = qualities.find((q) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') armor += 2
+
+    // Digizoid Armor stat bonuses
+    const digizoidArmor = qualities.find((q) => q.id === 'digizoid-armor')
+    if (digizoidArmor) {
+      const cid = digizoidArmor.choiceId
+      if (cid === 'red') armor += 4
+      else armor += 2
+      if (cid === 'chrome' || cid === 'gold' || cid === 'obsidian') health += 1
+      if (cid === 'red') health += 2
+      if (cid === 'blue') dodge += 2
+    }
 
     const brains = Math.floor(accuracy / 2) + stageConfig.brainsBonus
     const body = Math.max(0, Math.floor((health + damage + armor) / 3) + sizeConfig.bodyBonus)
@@ -173,6 +184,9 @@ export function useDigimonStats(form: Ref<any> | any) {
 
     // Boosting quality modifiers
     if (instinct) effectiveBase += instinctRanks
+
+    // Digizoid Armor: Blue movement bonus
+    if (digizoidArmor?.choiceId === 'blue') effectiveBase += 4
 
     // Ensure minimum effective base of 1
     effectiveBase = Math.max(1, effectiveBase)

@@ -175,11 +175,22 @@ const derivedStats = computed(() => {
 
   const accuracy = form.baseStats.accuracy + (form.bonusStats?.accuracy || 0)
   const damage = form.baseStats.damage + (form.bonusStats?.damage || 0)
-  const dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0) + instinctRanks
-  const armor = form.baseStats.armor + (form.bonusStats?.armor || 0)
-  const health = form.baseStats.health + (form.bonusStats?.health || 0) + instinctRanks
+  let dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0) + instinctRanks
+  let armor = form.baseStats.armor + (form.bonusStats?.armor || 0)
+  let health = form.baseStats.health + (form.bonusStats?.health || 0) + instinctRanks
   const stageConfig = currentStageConfig.value
   const sizeConfig = currentSizeConfig.value
+
+  // Digizoid Armor stat bonuses
+  const digizoidArmor = qualities.find((q) => q.id === 'digizoid-armor')
+  if (digizoidArmor) {
+    const cid = digizoidArmor.choiceId
+    if (cid === 'red') armor += 4
+    else armor += 2
+    if (cid === 'chrome' || cid === 'gold' || cid === 'obsidian') health += 1
+    if (cid === 'red') health += 2
+    if (cid === 'blue') dodge += 2
+  }
 
   const brains = Math.floor(accuracy / 2) + stageConfig.brainsBonus
   const body = Math.max(0, Math.floor((health + damage + armor) / 3) + sizeConfig.bodyBonus)
@@ -189,7 +200,8 @@ const derivedStats = computed(() => {
   const cpu = Math.floor(body / 10) + stageConfig.stageBonus
   const ram = Math.floor(agility / 10) + stageConfig.stageBonus
 
-  const baseMovement = stageConfig.movement
+  let baseMovement = stageConfig.movement
+  if (digizoidArmor?.choiceId === 'blue') baseMovement += 4
   const speedyQuality = (form.qualities || []).find(q => q.id === 'speedy')
   const speedyRanks = speedyQuality?.ranks || 0
   const speedyBonus = speedyRanks * 2

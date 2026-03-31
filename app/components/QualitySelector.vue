@@ -13,6 +13,7 @@ import {
   arePrerequisitesMet,
   hasExclusiveConflict,
   getQualityById,
+  compareStages,
   type QualityTemplate,
   type QualityTypeTag,
   type QualityType,
@@ -495,6 +496,12 @@ function isChoicePrereqMet(choice: NonNullable<QualityTemplate['choices']>[0]): 
 
   return { met: missing.length === 0, missing }
 }
+
+// Check if a choice's per-choice stage requirement is met
+function isChoiceStageAvailable(choice: NonNullable<QualityTemplate['choices']>[0]): boolean {
+  if (!choice.stageRequirement) return true
+  return compareStages(props.stage, choice.stageRequirement) >= 0
+}
 </script>
 
 <template>
@@ -762,6 +769,24 @@ function isChoicePrereqMet(choice: NonNullable<QualityTemplate['choices']>[0]): 
                   <p class="text-sm text-digimon-dark-500 whitespace-pre-line">{{ choice.effect }}</p>
                   <p class="text-xs text-red-400 mt-2">
                     Requires: {{ isChoicePrereqMet(choice).missing.join(', ') }}
+                  </p>
+                </div>
+              </template>
+              <!-- Check if choice has a per-choice stage requirement not met -->
+              <template v-else-if="!isChoiceStageAvailable(choice)">
+                <div class="w-full text-left bg-digimon-dark-800 border border-digimon-dark-700 rounded-lg p-4 opacity-50">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="font-semibold text-digimon-dark-400">{{ choice.name }}</span>
+                    <span
+                      v-if="choice.dpCost !== undefined && choice.dpCost !== pendingQuality?.dpCost"
+                      class="text-xs px-2 py-0.5 rounded bg-digimon-dark-700 text-digimon-dark-500"
+                    >
+                      +{{ choice.dpCost }} DP
+                    </span>
+                  </div>
+                  <p class="text-sm text-digimon-dark-500 whitespace-pre-line">{{ choice.effect }}</p>
+                  <p class="text-xs text-red-400 mt-2">
+                    Requires {{ choice.stageRequirement }} stage
                   </p>
                 </div>
               </template>
