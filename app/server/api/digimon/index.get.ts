@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm'
-import { db, digimon } from '../../db'
+import { eq, or, inArray } from 'drizzle-orm'
+import { db, digimon, tamers } from '../../db'
 import { parseDigimonData } from '../../utils/parsers'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
@@ -16,7 +16,13 @@ export default defineEventHandler(async (event) => {
   let queryBuilder = db.select().from(digimon)
 
   if (campaignId) {
-    queryBuilder = queryBuilder.where(eq(digimon.campaignId, campaignId)) as typeof queryBuilder
+    const campaignTamerIds = db.select({ id: tamers.id }).from(tamers).where(eq(tamers.campaignId, campaignId))
+    queryBuilder = queryBuilder.where(
+      or(
+        eq(digimon.campaignId, campaignId),
+        inArray(digimon.partnerId, campaignTamerIds)
+      )
+    ) as typeof queryBuilder
   }
 
   if (partnerId) {
