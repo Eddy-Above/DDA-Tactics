@@ -9,7 +9,7 @@ export default defineEventHandler(async () => {
     level: c.level,
     hasPassword: !!c.passwordHash,
     hasDmPassword: !!c.dmPasswordHash,
-    rulesSettings: typeof c.rulesSettings === 'string' ? JSON.parse(c.rulesSettings) : (c.rulesSettings || {}),
+    rulesSettings: (() => { try { return typeof c.rulesSettings === 'string' ? JSON.parse(c.rulesSettings) : (c.rulesSettings || {}) } catch { return {} } })(),
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   }))

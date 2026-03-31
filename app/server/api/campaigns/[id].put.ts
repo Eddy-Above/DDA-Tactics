@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
     level: updated.level,
     hasPassword: !!updated.passwordHash,
     hasDmPassword: !!updated.dmPasswordHash,
-    rulesSettings: typeof updated.rulesSettings === 'string' ? JSON.parse(updated.rulesSettings) : (updated.rulesSettings || {}),
+    rulesSettings: (() => { try { return typeof updated.rulesSettings === 'string' ? JSON.parse(updated.rulesSettings) : (updated.rulesSettings || {}) } catch { return {} } })(),
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   }

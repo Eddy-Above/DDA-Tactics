@@ -27,7 +27,7 @@ export default defineEventHandler(async (event) => {
     level: campaign.level,
     hasPassword: !!campaign.passwordHash,
     hasDmPassword: !!campaign.dmPasswordHash,
-    rulesSettings: typeof campaign.rulesSettings === 'string' ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {}),
+    rulesSettings: (() => { try { return typeof campaign.rulesSettings === 'string' ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {}) } catch { return {} } })(),
     createdAt: campaign.createdAt,
     updatedAt: campaign.updatedAt,
   }

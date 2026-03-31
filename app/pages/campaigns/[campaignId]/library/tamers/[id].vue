@@ -643,6 +643,13 @@ async function handleSubmit() {
               </p>
             </div>
           </div>
+        <!-- Validation message -->
+        <div
+          v-if="torments.length > 0 && !tormentValidation.isValid"
+          class="mt-4 text-xs text-red-400"
+        >
+          {{ tormentValidation.message }}
+        </div>
         </div>
       </div>
 
@@ -904,7 +911,7 @@ async function handleSubmit() {
       <div class="flex gap-4">
         <button
           type="submit"
-          :disabled="loading"
+          :disabled="loading || !tormentValidation.isValid"
           class="bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50
                  text-white px-6 py-2 rounded-lg font-semibold transition-colors"
         >
