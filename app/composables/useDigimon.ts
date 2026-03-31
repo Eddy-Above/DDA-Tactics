@@ -170,6 +170,11 @@ export function useDigimon() {
 
     // Apply quality bonuses to stats before calculating derived stats
     const qualities = (digimon as any).qualities || []
+    const instinct = qualities.find((q: any) => q.id === 'instinct')
+    const instinctRanks = instinct?.ranks || 0
+    totalStats.dodge += instinctRanks
+    totalStats.health += instinctRanks
+
     const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') totalStats.armor += 2
 
@@ -203,8 +208,7 @@ export function useDigimon() {
     if (bulky) effectiveBase -= (bulky.ranks || 0) * 3
 
     // Boosting quality modifiers
-    const instinct = qualities.find((q: any) => q.id === 'instinct')
-    if (instinct) effectiveBase += instinct.ranks || 0
+    if (instinct) effectiveBase += instinctRanks
 
     // Ensure minimum effective base of 1
     effectiveBase = Math.max(1, effectiveBase)
@@ -225,7 +229,9 @@ export function useDigimon() {
     const effectiveLimit = Math.floor(totalStats.accuracy / 2) + brains + bit
 
     return {
+      dodge: totalStats.dodge,
       armor: totalStats.armor,
+      health: totalStats.health,
       brains,
       body,
       agility,

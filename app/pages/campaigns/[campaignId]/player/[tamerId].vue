@@ -546,10 +546,8 @@ const dodgeDicePool = computed(() => {
   if (targetParticipant.type === 'digimon') {
     const digi = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
     if (digi) {
-      const baseStats = typeof digi.baseStats === 'string' ? JSON.parse(digi.baseStats) : digi.baseStats
-      const bonusStats = typeof (digi as any).bonusStats === 'string' ? JSON.parse((digi as any).bonusStats) : (digi as any).bonusStats
-      const totalDodge = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0)
-      pool = totalDodge || 3
+      const stats = calcDigimonStats(digi)
+      pool = stats.dodge || 3
     }
   } else if (targetParticipant.type === 'tamer') {
     const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
@@ -3031,7 +3029,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 </div>
                 <div class="text-center bg-digimon-dark-700 rounded-lg p-2">
                   <div class="text-xs text-digimon-dark-400">DOD</div>
-                  <div class="text-lg font-semibold text-white">{{ getCurrentForm(chain.chainId)!.baseStats.dodge + (getCurrentForm(chain.chainId)!.bonusStats?.dodge || 0) }}</div>
+                  <div class="text-lg font-semibold text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).dodge }}</div>
                 </div>
                 <div class="text-center bg-digimon-dark-700 rounded-lg p-2">
                   <div class="text-xs text-digimon-dark-400">ARM</div>
@@ -3039,7 +3037,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 </div>
                 <div class="text-center bg-digimon-dark-700 rounded-lg p-2">
                   <div class="text-xs text-digimon-dark-400">HP</div>
-                  <div class="text-lg font-semibold text-white">{{ getCurrentForm(chain.chainId)!.baseStats.health + (getCurrentForm(chain.chainId)!.bonusStats?.health || 0) }}</div>
+                  <div class="text-lg font-semibold text-white">{{ calcDigimonStats(getCurrentForm(chain.chainId)!).health }}</div>
                 </div>
               </div>
 

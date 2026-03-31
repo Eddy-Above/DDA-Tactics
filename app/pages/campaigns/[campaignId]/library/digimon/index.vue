@@ -196,15 +196,15 @@ function toggleTamer(id: string) {
                 </div>
                 <div class="text-center">
                   <div class="text-xs text-digimon-dark-400">DOD</div>
-                  <div class="font-semibold text-white">{{ digimon.baseStats.dodge + (digimon.bonusStats?.dodge || 0) }}</div>
+                  <div class="font-semibold text-white">{{ calculateDerivedStats(digimon).dodge }}</div>
                 </div>
                 <div class="text-center">
                   <div class="text-xs text-digimon-dark-400">ARM</div>
-                  <div class="font-semibold text-white">{{ digimon.baseStats.armor + (digimon.bonusStats?.armor || 0) }}</div>
+                  <div class="font-semibold text-white">{{ calculateDerivedStats(digimon).armor }}</div>
                 </div>
                 <div class="text-center">
                   <div class="text-xs text-digimon-dark-400">HP</div>
-                  <div class="font-semibold text-white">{{ digimon.baseStats.health + (digimon.bonusStats?.health || 0) }}</div>
+                  <div class="font-semibold text-white">{{ calculateDerivedStats(digimon).health }}</div>
                 </div>
               </div>
 

@@ -169,11 +169,15 @@ const dpRemaining = computed(() => baseDPRemaining.value)
 
 // Derived Stats calculation
 const derivedStats = computed(() => {
+  const qualities = form.qualities || []
+  const instinct = qualities.find(q => q.id === 'instinct')
+  const instinctRanks = instinct?.ranks || 0
+
   const accuracy = form.baseStats.accuracy + (form.bonusStats?.accuracy || 0)
   const damage = form.baseStats.damage + (form.bonusStats?.damage || 0)
-  const dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0)
+  const dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0) + instinctRanks
   const armor = form.baseStats.armor + (form.bonusStats?.armor || 0)
-  const health = form.baseStats.health + (form.bonusStats?.health || 0)
+  const health = form.baseStats.health + (form.bonusStats?.health || 0) + instinctRanks
   const stageConfig = currentStageConfig.value
   const sizeConfig = currentSizeConfig.value
 

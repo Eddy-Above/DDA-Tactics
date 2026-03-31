@@ -129,16 +129,20 @@ export function useDigimonStats(form: Ref<any> | any) {
   // ========================
   const derivedStats = computed(() => {
     const f = formRef.value
-    const accuracy = f.baseStats.accuracy + (f.bonusStats?.accuracy || 0)
-    const damage = f.baseStats.damage + (f.bonusStats?.damage || 0)
-    const dodge = f.baseStats.dodge + (f.bonusStats?.dodge || 0)
-    let armor = f.baseStats.armor + (f.bonusStats?.armor || 0)
-    const health = f.baseStats.health + (f.bonusStats?.health || 0)
     const stageConfig = currentStageConfig.value
     const sizeConfig = currentSizeConfig.value
     const qualities = f.qualities || []
 
     // Apply quality bonuses before computing derived stats
+    const instinct = qualities.find((q) => q.id === 'instinct')
+    const instinctRanks = instinct?.ranks || 0
+
+    const accuracy = f.baseStats.accuracy + (f.bonusStats?.accuracy || 0)
+    const damage = f.baseStats.damage + (f.bonusStats?.damage || 0)
+    const dodge = f.baseStats.dodge + (f.bonusStats?.dodge || 0) + instinctRanks
+    let armor = f.baseStats.armor + (f.bonusStats?.armor || 0)
+    const health = f.baseStats.health + (f.bonusStats?.health || 0) + instinctRanks
+
     const dataOpt = qualities.find((q) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') armor += 2
 
@@ -168,8 +172,7 @@ export function useDigimonStats(form: Ref<any> | any) {
     if (bulky) effectiveBase -= (bulky.ranks || 0) * 3
 
     // Boosting quality modifiers
-    const instinct = qualities.find((q) => q.id === 'instinct')
-    if (instinct) effectiveBase += instinct.ranks || 0
+    if (instinct) effectiveBase += instinctRanks
 
     // Ensure minimum effective base of 1
     effectiveBase = Math.max(1, effectiveBase)
