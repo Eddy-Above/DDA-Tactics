@@ -55,6 +55,7 @@ interface CreateDigimonBody {
   bonusDP?: number
   bonusDPForQualities?: number
   partnerId?: string
+  campaignId?: string
   isEnemy?: boolean
   notes?: string
   spriteUrl?: string
@@ -108,6 +109,7 @@ export default defineEventHandler(async (event) => {
     evolutionPathIds: JSON.stringify(body.evolutionPathIds || []),
     evolvesFromId: body.evolvesFromId || null,
     partnerId: body.partnerId || null,
+    campaignId: body.campaignId || null,
     isEnemy: body.isEnemy || false,
     notes: body.notes || '',
     spriteUrl: body.spriteUrl || null,

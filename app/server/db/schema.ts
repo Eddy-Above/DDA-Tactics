@@ -9,7 +9,7 @@ export const tamers = pgTable('tamers', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   age: integer('age').notNull(),
-  campaignLevel: text('campaign_level').notNull().$type<'standard' | 'enhanced' | 'extreme'>(),
+  campaignId: text('campaign_id').references(() => campaigns.id),
 
   // Attributes (stored as JSON for flexibility)
   attributes: text('attributes', { mode: 'json' }).notNull().$type<{
@@ -169,6 +169,7 @@ export const digimon = pgTable('digimon', {
 
   partnerId: text('partner_id').references(() => tamers.id),
   isEnemy: boolean('is_enemy').notNull().default(false),
+  campaignId: text('campaign_id').references(() => campaigns.id),
 
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),
@@ -266,6 +267,8 @@ export const encounters = pgTable('encounters', {
     }
   }>>(),
 
+  campaignId: text('campaign_id').references(() => campaigns.id),
+
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -280,10 +283,9 @@ export const campaigns = pgTable('campaigns', {
   description: text('description').notNull().default(''),
   level: text('level').notNull().default('standard').$type<'standard' | 'enhanced' | 'extreme'>(),
 
-  // Related entity IDs
-  tamerIds: text('tamer_ids', { mode: 'json' }).notNull().$type<string[]>(),
-  encounterIds: text('encounter_ids', { mode: 'json' }).notNull().$type<string[]>(),
-  currentEncounterId: text('current_encounter_id'),
+  passwordHash: text('password_hash'),
+  dmPasswordHash: text('dm_password_hash'),
+  rulesSettings: text('rules_settings', { mode: 'json' }).notNull().default('{}').$type<Record<string, any>>(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -312,6 +314,7 @@ export const evolutionLines = pgTable('evolution_lines', {
 
   // Which tamer owns this evolution line (for partner Digimon)
   partnerId: text('partner_id').references(() => tamers.id),
+  campaignId: text('campaign_id').references(() => campaigns.id),
 
   // Current stage index in the chain (0 = first stage, always unlocked)
   // Tracks which form the Digimon is currently in during the session
@@ -325,7 +328,18 @@ export const evolutionLines = pgTable('evolution_lines', {
 // Relations
 // =====================================
 
-export const tamersRelations = relations(tamers, ({ many }) => ({
+export const campaignsRelations = relations(campaigns, ({ many }) => ({
+  tamers: many(tamers),
+  digimon: many(digimon),
+  encounters: many(encounters),
+  evolutionLines: many(evolutionLines),
+}))
+
+export const tamersRelations = relations(tamers, ({ one, many }) => ({
+  campaign: one(campaigns, {
+    fields: [tamers.campaignId],
+    references: [campaigns.id],
+  }),
   partnerDigimon: many(digimon),
   evolutionLines: many(evolutionLines),
 }))
@@ -335,12 +349,27 @@ export const digimonRelations = relations(digimon, ({ one }) => ({
     fields: [digimon.partnerId],
     references: [tamers.id],
   }),
+  campaign: one(campaigns, {
+    fields: [digimon.campaignId],
+    references: [campaigns.id],
+  }),
+}))
+
+export const encountersRelations = relations(encounters, ({ one }) => ({
+  campaign: one(campaigns, {
+    fields: [encounters.campaignId],
+    references: [campaigns.id],
+  }),
 }))
 
 export const evolutionLinesRelations = relations(evolutionLines, ({ one }) => ({
   partner: one(tamers, {
     fields: [evolutionLines.partnerId],
     references: [tamers.id],
+  }),
+  campaign: one(campaigns, {
+    fields: [evolutionLines.campaignId],
+    references: [campaigns.id],
   }),
 }))
 

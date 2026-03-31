@@ -73,11 +73,12 @@ export function useEncounters() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchEncounters() {
+  async function fetchEncounters(campaignId?: string) {
     loading.value = true
     error.value = null
     try {
-      encounters.value = await $fetch<Encounter[]>('/api/encounters')
+      const query = campaignId ? `?campaignId=${campaignId}` : ''
+      encounters.value = await $fetch<Encounter[]>(`/api/encounters${query}`)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch encounters'
       console.error('Failed to fetch encounters:', e)
@@ -102,13 +103,13 @@ export function useEncounters() {
     }
   }
 
-  async function createEncounter(name: string, description?: string): Promise<Encounter | null> {
+  async function createEncounter(name: string, description?: string, campaignId?: string): Promise<Encounter | null> {
     loading.value = true
     error.value = null
     try {
       const newEncounter = await $fetch<Encounter>('/api/encounters', {
         method: 'POST',
-        body: { name, description },
+        body: { name, description, campaignId },
       })
       encounters.value = [...encounters.value, newEncounter]
       return newEncounter

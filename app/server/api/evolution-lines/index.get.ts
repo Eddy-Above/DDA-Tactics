@@ -4,13 +4,19 @@ import { db, evolutionLines } from '../../db'
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const partnerId = query.partnerId as string | undefined
+  const campaignId = query.campaignId as string | undefined
 
-  let lines
-  if (partnerId) {
-    lines = await db.select().from(evolutionLines).where(eq(evolutionLines.partnerId, partnerId))
-  } else {
-    lines = await db.select().from(evolutionLines)
+  let queryBuilder = db.select().from(evolutionLines)
+
+  if (campaignId) {
+    queryBuilder = queryBuilder.where(eq(evolutionLines.campaignId, campaignId)) as typeof queryBuilder
   }
+
+  if (partnerId) {
+    queryBuilder = queryBuilder.where(eq(evolutionLines.partnerId, partnerId)) as typeof queryBuilder
+  }
+
+  const lines = await queryBuilder
 
   // Parse chain from JSON string to array for all lines
   return lines.map((line) => ({

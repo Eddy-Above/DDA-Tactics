@@ -11,8 +11,13 @@ export default defineEventHandler(async (event) => {
   const partnerId = query.partnerId as string | undefined
   const isEnemy = query.isEnemy === 'true'
   const stage = query.stage as DigimonStage | undefined
+  const campaignId = query.campaignId as string | undefined
 
   let queryBuilder = db.select().from(digimon)
+
+  if (campaignId) {
+    queryBuilder = queryBuilder.where(eq(digimon.campaignId, campaignId)) as typeof queryBuilder
+  }
 
   if (partnerId) {
     queryBuilder = queryBuilder.where(eq(digimon.partnerId, partnerId)) as typeof queryBuilder

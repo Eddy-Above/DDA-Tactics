@@ -14,6 +14,7 @@ export interface CreateEvolutionLineData {
   description?: string
   chain: EvolutionChainEntry[] // All entries must have valid digimonId
   partnerId?: string
+  campaignId?: string
 }
 
 export function useEvolution() {
@@ -21,11 +22,14 @@ export function useEvolution() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchEvolutionLines(partnerId?: string) {
+  async function fetchEvolutionLines(partnerId?: string, campaignId?: string) {
     loading.value = true
     error.value = null
     try {
-      const query = partnerId ? `?partnerId=${partnerId}` : ''
+      const params = new URLSearchParams()
+      if (partnerId) params.set('partnerId', partnerId)
+      if (campaignId) params.set('campaignId', campaignId)
+      const query = params.toString() ? `?${params}` : ''
       evolutionLines.value = await $fetch<EvolutionLine[]>(`/api/evolution-lines${query}`)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch evolution lines'

@@ -1,10 +1,22 @@
 <script setup lang="ts">
-const navItems = [
-  { name: 'Dashboard', path: '/', icon: 'home' },
-  { name: 'Library', path: '/library', icon: 'book' },
-  { name: 'Encounters', path: '/encounters', icon: 'swords' },
-  { name: 'Player View', path: '/player', icon: 'tv' },
-]
+const route = useRoute()
+const campaignId = computed(() => route.params.campaignId as string | undefined)
+
+const navItems = computed(() => {
+  if (!campaignId.value) {
+    return [
+      { name: 'Campaigns', path: '/' },
+    ]
+  }
+  const base = `/campaigns/${campaignId.value}`
+  return [
+    { name: 'Hub', path: base },
+    { name: 'Library', path: `${base}/library` },
+    { name: 'Encounters', path: `${base}/encounters` },
+    { name: 'Player View', path: `${base}/player` },
+    { name: 'Settings', path: `${base}/settings` },
+  ]
+})
 </script>
 
 <template>
@@ -26,6 +38,14 @@ const navItems = [
 
           <!-- Navigation -->
           <nav class="flex items-center gap-1">
+            <NuxtLink
+              v-if="campaignId"
+              to="/"
+              class="px-3 py-2 rounded-lg text-xs font-medium transition-colors
+                     text-digimon-dark-400 hover:text-white hover:bg-digimon-dark-700"
+            >
+              All Campaigns
+            </NuxtLink>
             <NuxtLink
               v-for="item in navItems"
               :key="item.path"

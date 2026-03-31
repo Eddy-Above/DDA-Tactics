@@ -5,7 +5,7 @@ import { parseTamerData } from '../../utils/parsers'
 interface CreateTamerBody {
   name: string
   age: number
-  campaignLevel: 'standard' | 'enhanced' | 'extreme'
+  campaignId?: string
   attributes: {
     agility: number
     body: number
@@ -66,10 +66,10 @@ export default defineEventHandler(async (event) => {
   )
 
   // Validate required fields
-  if (!body.name || !body.age || !body.campaignLevel || !body.attributes || !body.skills) {
+  if (!body.name || !body.age || !body.attributes || !body.skills) {
     throw createError({
       statusCode: 400,
-      message: 'Missing required fields: name, age, campaignLevel, attributes, skills',
+      message: 'Missing required fields: name, age, attributes, skills',
     })
   }
 
@@ -98,7 +98,7 @@ export default defineEventHandler(async (event) => {
     id,
     name: body.name,
     age: body.age,
-    campaignLevel: body.campaignLevel,
+    campaignId: body.campaignId || null,
     attributes: JSON.stringify(attributes),
     skills: JSON.stringify(skills),
     aspects: JSON.stringify(body.aspects || []),

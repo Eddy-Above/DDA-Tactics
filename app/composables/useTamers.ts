@@ -3,7 +3,7 @@ import type { Tamer } from '../server/db/schema'
 export interface CreateTamerData {
   name: string
   age: number
-  campaignLevel: 'standard' | 'enhanced' | 'extreme'
+  campaignId?: string
   attributes: {
     agility: number
     body: number
@@ -41,11 +41,12 @@ export function useTamers() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchTamers() {
+  async function fetchTamers(campaignId?: string) {
     loading.value = true
     error.value = null
     try {
-      tamers.value = await $fetch<Tamer[]>('/api/tamers')
+      const query = campaignId ? `?campaignId=${campaignId}` : ''
+      tamers.value = await $fetch<Tamer[]>(`/api/tamers${query}`)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch tamers'
       console.error('Failed to fetch tamers:', e)

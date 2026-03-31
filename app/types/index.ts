@@ -151,7 +151,7 @@ export interface Tamer {
   id: string
   name: string
   age: number
-  campaignLevel: CampaignLevel
+  campaignId: string | null
   attributes: TamerAttributes
   skills: TamerSkills
   derivedStats: TamerDerivedStats
@@ -321,9 +321,9 @@ export interface Campaign {
   name: string
   description: string
   level: CampaignLevel
-  tamers: string[]        // Tamer IDs
-  encounters: string[]    // Encounter IDs
-  currentEncounterId: string | null
+  hasPassword: boolean
+  hasDmPassword: boolean
+  rulesSettings: Record<string, any>
   createdAt: Date
   updatedAt: Date
 }

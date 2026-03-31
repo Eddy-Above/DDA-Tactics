@@ -5,7 +5,7 @@
  */
 
 import type { CreateTamerData } from './useTamers'
-import { getTormentBoxCount, type TormentSeverity } from '../types'
+import { getTormentBoxCount, type TormentSeverity, type CampaignLevel } from '../types'
 import { skillsByAttribute, skillLabels } from '../constants/tamer-skills'
 import { specialOrderThresholds, specialOrdersData } from '../data/special-orders'
 
@@ -19,7 +19,13 @@ export interface TormentEntry {
   cpMarkedBoxes: number
 }
 
-export function useTamerForm(initialData?: Partial<CreateTamerData>) {
+export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLevelOverride?: Ref<CampaignLevel> | CampaignLevel) {
+  // Campaign level from parameter (defaults to 'standard')
+  const campaignLevel = computed<CampaignLevel>(() => {
+    if (!campaignLevelOverride) return 'standard'
+    return isRef(campaignLevelOverride) ? campaignLevelOverride.value : campaignLevelOverride
+  })
+
   // ========================
   // Form State
   // ========================
@@ -29,7 +35,6 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>) {
   }>({
     name: initialData?.name || '',
     age: initialData?.age || 14,
-    campaignLevel: initialData?.campaignLevel || 'standard',
     attributes: {
       agility: initialData?.attributes?.agility || 2,
       body: initialData?.attributes?.body || 2,
@@ -227,7 +232,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>) {
   // Campaign Configuration
   // ========================
   const campaignConfig = computed(() => {
-    switch (form.campaignLevel) {
+    switch (campaignLevel.value) {
       case 'enhanced':
         return { startingCP: 40, attrCap: 18, skillCap: 22, startingCap: 5, finalCap: 7 }
       case 'extreme':
@@ -378,7 +383,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>) {
   // Special Orders
   // ========================
   const unlockedSpecialOrders = computed(() => {
-    const thresholds = specialOrderThresholds[form.campaignLevel]
+    const thresholds = specialOrderThresholds[campaignLevel.value]
     const unlocked: { attribute: string; orders: { name: string; type: string; effect: string; tier: number }[] }[] = []
 
     for (const [attr, orders] of Object.entries(specialOrdersData)) {
@@ -440,6 +445,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>) {
     updateTormentSeverity,
 
     // Computed values
+    campaignLevel,
     campaignConfig,
     attributePoints,
     skillPoints,

@@ -1,7 +1,17 @@
+import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../db'
 
-export default defineEventHandler(async () => {
-  const allEncounters = await db.select().from(encounters)
+export default defineEventHandler(async (event) => {
+  const query = getQuery(event)
+  const campaignId = query.campaignId as string | undefined
+
+  let queryBuilder = db.select().from(encounters)
+
+  if (campaignId) {
+    queryBuilder = queryBuilder.where(eq(encounters.campaignId, campaignId)) as typeof queryBuilder
+  }
+
+  const allEncounters = await queryBuilder
 
   // Explicitly parse JSON fields in case they're stored as strings
   const parseJsonField = (field: any) => {

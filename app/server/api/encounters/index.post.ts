@@ -4,6 +4,7 @@ import { generateId } from '../../utils/id'
 interface CreateEncounterBody {
   name: string
   description?: string
+  campaignId?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -19,10 +20,11 @@ export default defineEventHandler(async (event) => {
   const id = generateId()
   const now = new Date()
 
-  const newEncounter: NewEncounter = {
+  const newEncounter: any = {
     id,
     name: body.name,
     description: body.description || '',
+    campaignId: body.campaignId || null,
     round: 0,
     phase: 'setup',
     participants: [],

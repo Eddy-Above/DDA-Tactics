@@ -11,6 +11,7 @@ interface CreateEvolutionLineBody {
     isUnlocked?: boolean
   }>
   partnerId?: string
+  campaignId?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -46,6 +47,7 @@ export default defineEventHandler(async (event) => {
     description: body.description || '',
     chain: JSON.stringify(chain), // Explicitly stringify to ensure proper JSON storage
     partnerId: body.partnerId || null,
+    campaignId: body.campaignId || null,
     currentStageIndex: 0,
     createdAt: now,
     updatedAt: now,

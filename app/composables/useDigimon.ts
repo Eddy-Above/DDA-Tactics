@@ -32,6 +32,7 @@ export interface CreateDigimonData {
   dataOptimization?: string
   bonusDP?: number
   partnerId?: string
+  campaignId?: string
   isEnemy?: boolean
   notes?: string
   spriteUrl?: string
@@ -42,11 +43,12 @@ export function useDigimon() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchDigimon(filters?: { partnerId?: string; isEnemy?: boolean }) {
+  async function fetchDigimon(filters?: { partnerId?: string; isEnemy?: boolean; campaignId?: string }) {
     loading.value = true
     error.value = null
     try {
       const query = new URLSearchParams()
+      if (filters?.campaignId) query.set('campaignId', filters.campaignId)
       if (filters?.partnerId) query.set('partnerId', filters.partnerId)
       if (filters?.isEnemy !== undefined) query.set('isEnemy', String(filters.isEnemy))
 

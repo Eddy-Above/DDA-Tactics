@@ -29,6 +29,13 @@
       "when": 1769993619888,
       "tag": "0003_sparkling_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774000000000,
+      "tag": "0005_add_campaign_support",
+      "breakpoints": true
     }
   ]
 }

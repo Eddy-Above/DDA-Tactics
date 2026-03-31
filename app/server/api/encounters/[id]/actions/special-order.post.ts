@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, tamers, digimon } from '../../../../db'
+import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders, getOrderActionCost } from '../../../../../utils/specialOrders'
 
 interface SpecialOrderBody {
@@ -72,7 +72,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: `Failed to parse tamer data: ${e.message}` })
   }
 
-  const unlockedOrders = getUnlockedSpecialOrders(tamerAttributes, tamerXpBonuses, tamer.campaignLevel)
+  // Look up campaign level from the campaign
+  let campaignLevel: string = 'standard'
+  if (tamer.campaignId) {
+    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, tamer.campaignId))
+    if (campaign) campaignLevel = campaign.level
+  }
+
+  const unlockedOrders = getUnlockedSpecialOrders(tamerAttributes, tamerXpBonuses, campaignLevel as any)
   const order = unlockedOrders.find(o => o.name === body.orderName)
 
   if (!order) {
