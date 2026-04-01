@@ -11,11 +11,12 @@ definePageMeta({
 })
 
 const router = useRouter()
-const { campaignId, eddySoulRules } = useCampaignContext()
+const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
 const { createDigimon, fetchDigimonById, getPreviousStages, getNextStages } = useDigimon()
 const { tamers, fetchTamers } = useTamers()
 
-onMounted(() => {
+onMounted(async () => {
+  await loadCampaign()
   fetchTamers(campaignId.value)
 })
 

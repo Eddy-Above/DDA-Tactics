@@ -12,7 +12,7 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, eddySoulRules } = useCampaignContext()
+const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
 const tamerId = computed(() => route.params.tamerId as string)
 const digimonId = computed(() => route.params.id as string)
 
@@ -160,7 +160,10 @@ async function loadDigimon() {
   }
 }
 
-onMounted(loadDigimon)
+onMounted(async () => {
+  await loadCampaign()
+  await loadDigimon()
+})
 
 // Evolution chain helpers
 async function fetchAllAncestors(digimonId: string): Promise<Digimon[]> {

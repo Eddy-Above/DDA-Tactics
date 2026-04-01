@@ -13,10 +13,14 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, eddySoulRules } = useCampaignContext()
+const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
 const tamerId = computed(() => route.params.tamerId as string)
 
 const { createDigimon, fetchDigimonById, loading, error, getPreviousStages, getNextStages } = useDigimon()
+
+onMounted(() => {
+  loadCampaign()
+})
 
 const form = reactive<CreateDigimonData & {
   bonusStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
