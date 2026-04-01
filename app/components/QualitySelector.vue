@@ -148,8 +148,8 @@ function getFullQualityStatus(template: QualityTemplate): { canSelect: boolean; 
   if (template.type === 'purchasable') {
     if (!props.canAdd) {
       reasons.push('No DP remaining for qualities')
-    } else if (template.dpCost > props.availableDP) {
-      reasons.push(`Costs ${template.dpCost} DP (${props.availableDP} available)`)
+    } else if (getTemplateDPCost(template) > props.availableDP) {
+      reasons.push(`Costs ${getTemplateDPCost(template)} DP (${props.availableDP} available)`)
     }
   }
 
@@ -255,7 +255,7 @@ function selectQuality(template: QualityTemplate) {
       id: template.id,
       name: template.name,
       type: template.qualityType,
-      dpCost: template.dpCost,
+      dpCost: getTemplateDPCost(template),
       description: template.description,
       effect: template.effect,
       ranks: 1,
@@ -282,7 +282,7 @@ function selectChoice(template: QualityTemplate, choice: NonNullable<QualityTemp
       id: template.id,
       name: template.name,
       type: template.qualityType,
-      dpCost: choice.dpCost ?? template.dpCost,
+      dpCost: choice.dpCost ?? getTemplateDPCost(template),
       description: template.description,
       effect: choice.effect,
       ranks: 1,
@@ -322,16 +322,21 @@ function getCostColor(template: QualityTemplate) {
   return 'bg-digimon-orange-900/30 text-digimon-orange-400'
 }
 
+function getTemplateDPCost(template: QualityTemplate): number {
+  if (props.eddySoulRules?.chargeAttackCosts3DP && template.id === 'charge-attack') return 3
+  return template.dpCost
+}
+
 function getCostDisplay(template: QualityTemplate) {
   if (template.type === 'free') return 'Free'
   if (template.type === 'negative') return `${template.dpCost} DP`
-  if (template.freeFirstRank) return `Free 1st, +${template.dpCost}/rank`
+  if (template.freeFirstRank) return `Free 1st, +${getTemplateDPCost(template)}/rank`
   if (template.firstRankDiscountAtStage) {
     const { stage: discountStage, discount } = template.firstRankDiscountAtStage
     const stageName = discountStage.charAt(0).toUpperCase() + discountStage.slice(1)
-    return `+${template.dpCost} DP (${stageName}+: -${discount})`
+    return `+${getTemplateDPCost(template)} DP (${stageName}+: -${discount})`
   }
-  return `+${template.dpCost} DP`
+  return `+${getTemplateDPCost(template)} DP`
 }
 
 function formatQualityTypes(qualityType: QualityTypeTag | QualityTypeTag[]): string {
