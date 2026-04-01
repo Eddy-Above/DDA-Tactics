@@ -1,5 +1,5 @@
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily } from '../types'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily, type EddySoulRules } from '../types'
 
 // Extended type for update requests with sync option
 export type UpdateDigimonData = Partial<Digimon> & {
@@ -153,7 +153,7 @@ export function useDigimon() {
   }
 
   // Calculate derived stats from base stats, stage, and size (DDA 1.4 page 111)
-  function calculateDerivedStats(digimon: Digimon) {
+  function calculateDerivedStats(digimon: Digimon, eddySoulRules?: EddySoulRules) {
     const { baseStats, stage, size } = digimon
     const bonusStats = (digimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }
     const stageConfig = STAGE_CONFIG[stage as DigimonStage]
@@ -172,8 +172,13 @@ export function useDigimon() {
     const qualities = (digimon as any).qualities || []
     const instinct = qualities.find((q: any) => q.id === 'instinct')
     const instinctRanks = instinct?.ranks || 0
+    const instinctBoostsArmor = eddySoulRules?.instinctBoostsDodgeArmorSpeed
     totalStats.dodge += instinctRanks
-    totalStats.health += instinctRanks
+    if (instinctBoostsArmor) {
+      totalStats.armor += instinctRanks
+    } else {
+      totalStats.health += instinctRanks
+    }
 
     const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') totalStats.armor += 2

@@ -41,7 +41,8 @@ const {
   deleteResponse,
 } = useEncounters()
 
-const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: calcDigimonStats } = useDigimon()
+const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats } = useDigimon()
+const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
 const { tamers, fetchTamers, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage, getEvolutionOptions, updateEvolutionLine } = useEvolution()
 

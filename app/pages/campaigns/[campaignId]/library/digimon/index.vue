@@ -7,8 +7,9 @@ definePageMeta({
 })
 
 const router = useRouter()
-const { campaignId } = useCampaignContext()
-const { digimonList, loading, error, fetchDigimon, deleteDigimon, copyDigimon, calculateDerivedStats } = useDigimon()
+const { campaignId, eddySoulRules } = useCampaignContext()
+const { digimonList, loading, error, fetchDigimon, deleteDigimon, copyDigimon, calculateDerivedStats: _calculateDerivedStats } = useDigimon()
+const calculateDerivedStats = (digimon: any) => _calculateDerivedStats(digimon, eddySoulRules.value)
 const { tamers, fetchTamers } = useTamers()
 
 const filter = ref<'all' | 'partners' | 'enemies'>('all')

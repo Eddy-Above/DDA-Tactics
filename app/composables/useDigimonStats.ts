@@ -139,9 +139,10 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
 
     const accuracy = f.baseStats.accuracy + (f.bonusStats?.accuracy || 0)
     const damage = f.baseStats.damage + (f.bonusStats?.damage || 0)
+    const instinctBoostsArmor = eddySoulRules?.value?.instinctBoostsDodgeArmorSpeed
     let dodge = f.baseStats.dodge + (f.bonusStats?.dodge || 0) + instinctRanks
-    let armor = f.baseStats.armor + (f.bonusStats?.armor || 0)
-    let health = f.baseStats.health + (f.bonusStats?.health || 0) + instinctRanks
+    let armor = f.baseStats.armor + (f.bonusStats?.armor || 0) + (instinctBoostsArmor ? instinctRanks : 0)
+    let health = f.baseStats.health + (f.bonusStats?.health || 0) + (instinctBoostsArmor ? 0 : instinctRanks)
 
     const dataOpt = qualities.find((q) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') armor += 2

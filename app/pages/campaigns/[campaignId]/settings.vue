@@ -32,6 +32,7 @@ const form = reactive({
     armorIsWillpowerEndurance: false,
     baseStatRangesEnabled: false,
     chargeAttackCosts3DP: false,
+    instinctBoostsDodgeArmorSpeed: false,
   },
 })
 
@@ -70,6 +71,7 @@ onMounted(async () => {
       form.eddySoulRules.armorIsWillpowerEndurance = eddySoul.armorIsWillpowerEndurance ?? false
       form.eddySoulRules.baseStatRangesEnabled = eddySoul.baseStatRangesEnabled ?? false
       form.eddySoulRules.chargeAttackCosts3DP = eddySoul.chargeAttackCosts3DP ?? false
+      form.eddySoulRules.instinctBoostsDodgeArmorSpeed = eddySoul.instinctBoostsDodgeArmorSpeed ?? false
     }
   }
   loading.value = false
@@ -111,13 +113,14 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
         ...(form.eddySoulRules.armorIsWillpowerEndurance && { armorIsWillpowerEndurance: true }),
         ...(form.eddySoulRules.baseStatRangesEnabled && { baseStatRangesEnabled: true }),
         ...(form.eddySoulRules.chargeAttackCosts3DP && { chargeAttackCosts3DP: true }),
+        ...(form.eddySoulRules.instinctBoostsDodgeArmorSpeed && { instinctBoostsDodgeArmorSpeed: true }),
       },
     }),
   }
@@ -375,6 +378,18 @@ async function handleSave() {
             <div>
               <span class="text-digimon-dark-300">Charge Attack costs 3 DP</span>
               <p class="text-xs text-digimon-dark-500">Default: 1 DP</p>
+            </div>
+          </label>
+
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.eddySoulRules.instinctBoostsDodgeArmorSpeed"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Instinct boosts Dodge, Armour & Speed</span>
+              <p class="text-xs text-digimon-dark-500">Default: +1 Dodge, Health, Base Movement per rank</p>
             </div>
           </label>
         </div>

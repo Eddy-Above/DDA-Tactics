@@ -196,9 +196,10 @@ const derivedStats = computed(() => {
 
   const accuracy = form.baseStats.accuracy + (form.bonusStats?.accuracy || 0)
   const damage = form.baseStats.damage + (form.bonusStats?.damage || 0)
+  const instinctBoostsArmor = eddySoulRules.value?.instinctBoostsDodgeArmorSpeed
   let dodge = form.baseStats.dodge + (form.bonusStats?.dodge || 0) + instinctRanks
-  let armor = form.baseStats.armor + (form.bonusStats?.armor || 0)
-  let health = form.baseStats.health + (form.bonusStats?.health || 0) + instinctRanks
+  let armor = form.baseStats.armor + (form.bonusStats?.armor || 0) + (instinctBoostsArmor ? instinctRanks : 0)
+  let health = form.baseStats.health + (form.bonusStats?.health || 0) + (instinctBoostsArmor ? 0 : instinctRanks)
   const stageConfig = currentStageConfig.value
   const sizeConfig = currentSizeConfig.value
 

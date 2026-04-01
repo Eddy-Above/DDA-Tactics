@@ -75,6 +75,7 @@ export interface EddySoulRules {
   armorIsWillpowerEndurance?: boolean
   baseStatRangesEnabled?: boolean
   chargeAttackCosts3DP?: boolean
+  instinctBoostsDodgeArmorSpeed?: boolean
 }
 
 export interface CampaignRulesSettings {

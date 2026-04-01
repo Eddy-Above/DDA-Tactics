@@ -13,7 +13,7 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { campaignId, campaignLevel, skillRenames, eddySoulRules } = useCampaignContext()
+const { campaignId, campaignLevel, skillRenames, eddySoulRules, loadCampaign } = useCampaignContext()
 const skillLabels = computed(() => getResolvedSkillLabels(skillRenames.value))
 const tamerId = computed(() => route.params.tamerId as string)
 
@@ -137,7 +137,8 @@ const bolsterAttackType = ref<'damage-accuracy' | 'bit-cpu'>('damage-accuracy')
 
 // Composables
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
-const { fetchDigimon, calculateDerivedStats: calcDigimonStats } = useDigimon()
+const { fetchDigimon, calculateDerivedStats: _calcDigimonStats } = useDigimon()
+const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
 const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
@@ -147,6 +148,9 @@ let refreshInterval: ReturnType<typeof setInterval>
 async function loadData() {
   loading.value = true
   try {
+    // Load campaign settings (including EddySoul rules)
+    await loadCampaign()
+
     // Fetch tamer
     const fetchedTamer = await fetchTamer(tamerId.value)
     tamer.value = fetchedTamer
