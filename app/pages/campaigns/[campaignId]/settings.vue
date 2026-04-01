@@ -33,6 +33,7 @@ const form = reactive({
     baseStatRangesEnabled: false,
     chargeAttackCosts3DP: false,
     instinctBoostsDodgeArmorSpeed: false,
+    hugeSizeRequiresMega: false,
   },
 })
 
@@ -72,6 +73,7 @@ onMounted(async () => {
       form.eddySoulRules.baseStatRangesEnabled = eddySoul.baseStatRangesEnabled ?? false
       form.eddySoulRules.chargeAttackCosts3DP = eddySoul.chargeAttackCosts3DP ?? false
       form.eddySoulRules.instinctBoostsDodgeArmorSpeed = eddySoul.instinctBoostsDodgeArmorSpeed ?? false
+      form.eddySoulRules.hugeSizeRequiresMega = eddySoul.hugeSizeRequiresMega ?? false
     }
   }
   loading.value = false
@@ -113,7 +115,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -121,6 +123,7 @@ async function handleSave() {
         ...(form.eddySoulRules.baseStatRangesEnabled && { baseStatRangesEnabled: true }),
         ...(form.eddySoulRules.chargeAttackCosts3DP && { chargeAttackCosts3DP: true }),
         ...(form.eddySoulRules.instinctBoostsDodgeArmorSpeed && { instinctBoostsDodgeArmorSpeed: true }),
+        ...(form.eddySoulRules.hugeSizeRequiresMega && { hugeSizeRequiresMega: true }),
       },
     }),
   }
@@ -390,6 +393,18 @@ async function handleSave() {
             <div>
               <span class="text-digimon-dark-300">Instinct boosts Dodge, Armour & Speed</span>
               <p class="text-xs text-digimon-dark-500">Default: +1 Dodge, Health, Base Movement per rank</p>
+            </div>
+          </label>
+
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.eddySoulRules.hugeSizeRequiresMega"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Huge/Gigantic size requires Mega+</span>
+              <p class="text-xs text-digimon-dark-500">Default: No size restriction by stage</p>
             </div>
           </label>
         </div>

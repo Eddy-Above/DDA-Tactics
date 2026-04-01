@@ -76,6 +76,7 @@ export interface EddySoulRules {
   baseStatRangesEnabled?: boolean
   chargeAttackCosts3DP?: boolean
   instinctBoostsDodgeArmorSpeed?: boolean
+  hugeSizeRequiresMega?: boolean
 }
 
 export interface CampaignRulesSettings {

@@ -256,6 +256,7 @@ export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulR
     // Stats composable exports (23 total)
     stages: statsComposable.stages,
     sizes: statsComposable.sizes,
+    availableSizes: statsComposable.availableSizes,
     attributes: statsComposable.attributes,
     families: statsComposable.families,
     familyLabels: statsComposable.familyLabels,

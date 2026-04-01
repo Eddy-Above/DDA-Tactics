@@ -37,6 +37,7 @@ const {
   bonusDPExpanded,
   stages,
   sizes,
+  availableSizes,
   attributes,
   families,
   familyLabels,
@@ -326,7 +327,7 @@ async function handleCopy() {
               class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
                      text-white focus:border-digimon-orange-500 focus:outline-none capitalize"
             >
-              <option v-for="size in sizes" :key="size" :value="size" class="capitalize">
+              <option v-for="size in availableSizes" :key="size" :value="size" class="capitalize">
                 {{ size }}
               </option>
             </select>

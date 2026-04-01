@@ -120,6 +120,18 @@ const familyLabels: Record<DigimonFamily, string> = {
 const currentSizeConfig = computed(() => SIZE_CONFIG[form.size || 'medium'])
 const currentStageConfig = computed(() => STAGE_CONFIG[form.stage])
 
+const availableSizes = computed(() => {
+  if (!eddySoulRules.value?.hugeSizeRequiresMega) return sizes
+  if (['mega', 'ultra'].includes(form.stage)) return sizes
+  return sizes.filter(s => s !== 'huge' && s !== 'gigantic')
+})
+
+watch(availableSizes, (newSizes) => {
+  if (!newSizes.includes(form.size)) {
+    form.size = 'large'
+  }
+})
+
 // DP calculations
 const dpUsedOnStats = computed(() => {
   return Object.values(form.baseStats).reduce((a, b) => a + b, 0)
@@ -929,7 +941,7 @@ function handleCancel() {
                   class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
                          text-white focus:border-digimon-orange-500 focus:outline-none capitalize"
                 >
-                  <option v-for="size in sizes" :key="size" :value="size" class="capitalize">
+                  <option v-for="size in availableSizes" :key="size" :value="size" class="capitalize">
                     {{ size }}
                   </option>
                 </select>

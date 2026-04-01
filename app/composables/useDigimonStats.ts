@@ -105,6 +105,21 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
     return config
   })
 
+  // Filtered sizes: when hugeSizeRequiresMega is enabled, hide huge/gigantic for non-Mega+ stages
+  const megaPlusStages: DigimonStage[] = ['mega', 'ultra']
+  const availableSizes = computed(() => {
+    if (!eddySoulRules?.value?.hugeSizeRequiresMega) return sizes
+    if (megaPlusStages.includes(formRef.value.stage)) return sizes
+    return sizes.filter(s => s !== 'huge' && s !== 'gigantic')
+  })
+
+  // Auto-reset size if it becomes unavailable
+  watch(availableSizes, (newSizes) => {
+    if (!newSizes.includes(formRef.value.size)) {
+      formRef.value.size = 'large'
+    }
+  })
+
   // ========================
   // DP Calculations
   // ========================
@@ -281,6 +296,7 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
     // Config
     stages,
     sizes,
+    availableSizes,
     attributes,
     families,
     familyLabels,
