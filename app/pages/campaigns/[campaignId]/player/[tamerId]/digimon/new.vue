@@ -562,7 +562,14 @@ type Quality = NonNullable<CreateDigimonData['qualities']>[0]
 
 function handleAddQuality(quality: Quality) {
   // Check if adding this quality would exceed the budget
-  const qualityCost = (quality.dpCost || 0) * (quality.ranks || 1)
+  const template = QUALITY_DATABASE.find((t) => t.id === quality.id)
+  const baseCost = (quality.dpCost || 0) as number
+  let qualityCost: number
+  if (template) {
+    qualityCost = getEffectiveDPCost(template, quality.ranks || 1, baseCost, form.stage, true, eddySoulRules.value)
+  } else {
+    qualityCost = baseCost * (quality.ranks || 1)
+  }
   const baseDPAvailableForQualities = Math.max(0, baseDP.value - dpUsedOnStats.value)
   const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
   const newTotalUsed = dpUsedOnQualities.value + qualityCost
@@ -1426,6 +1433,7 @@ function handleCancel() {
             :current-qualities="form.qualities || []"
             :can-add="canAddQualities"
             :available-d-p="availableDPForQualities"
+            :eddy-soul-rules="eddySoulRules"
             @add="handleAddQuality"
             @remove="removeQuality"
             @update-ranks="handleUpdateQualityRanks"
