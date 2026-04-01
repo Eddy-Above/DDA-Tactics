@@ -12,13 +12,13 @@ export const specialOrderThresholds = {
 export const specialOrdersData: Record<string, { name: string; type: string; effect: string }[]> = {
   agility: [
     { name: 'Strike First!', type: 'Passive', effect: '+1 Initiative and 2 Base Movement' },
-    { name: 'Strike Fast!', type: 'Once Per Day / Complex', effect: 'Target\'s Dodge Pools halved for one attack (no Huge Power/Overkill)' },
-    { name: 'Strike Last!', type: 'Once Per Day / Intercede', effect: 'Counter Blow on any attack, hit or miss (no Huge Power/Overkill)' },
+    { name: 'Strike Fast!', type: 'Once Per Day / Complex', effect: 'Target\'s Dodge Pools halved for one attack (no Huge Power)' },
+    { name: 'Strike Last!', type: 'Once Per Day / Intercede', effect: 'Counter Blow on any attack, hit or miss (no Huge Power)' },
   ],
   body: [
     { name: 'Energy Burst', type: 'Once Per Day / Complex', effect: 'Digimon recovers 5 wound boxes' },
     { name: 'Enduring Soul', type: 'Passive', effect: 'Survive one fatal blow with 1 Wound Box (once per battle)' },
-    { name: 'Finishing Touch', type: 'Once Per Day / Simple', effect: '4s count as successes on Accuracy Roll (no Huge Power/Overkill)' },
+    { name: 'Finishing Touch', type: 'Once Per Day / Simple', effect: '4s count as successes on Accuracy Roll (no Huge Power)' },
   ],
   charisma: [
     { name: 'Swagger', type: 'Once Per Battle / Simple', effect: 'Taunt for 3 rounds, auto-aggro at CPUx2' },

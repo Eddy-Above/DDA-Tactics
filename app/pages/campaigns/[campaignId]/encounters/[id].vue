@@ -370,11 +370,6 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
     }
   }
 
-  // Overkill: Reroll 2s on Accuracy (once per round)
-  if (hasQuality('overkill')) {
-    notes.push('Reroll 2s (1/round)')
-  }
-
   // Aggressive Flank: +RAM to Accuracy when near allies
   if (hasQuality('aggressive-flank')) {
     notes.push('+RAM ACC (near ally)')

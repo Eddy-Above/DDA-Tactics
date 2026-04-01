@@ -35,6 +35,7 @@ const form = reactive({
     instinctBoostsDodgeArmorSpeed: false,
     hugeSizeRequiresMega: false,
     hugePowerOncePerTurn: false,
+    agilityRank2RequiresUltimate: false,
   },
 })
 
@@ -76,6 +77,7 @@ onMounted(async () => {
       form.eddySoulRules.instinctBoostsDodgeArmorSpeed = eddySoul.instinctBoostsDodgeArmorSpeed ?? false
       form.eddySoulRules.hugeSizeRequiresMega = eddySoul.hugeSizeRequiresMega ?? false
       form.eddySoulRules.hugePowerOncePerTurn = eddySoul.hugePowerOncePerTurn ?? false
+      form.eddySoulRules.agilityRank2RequiresUltimate = eddySoul.agilityRank2RequiresUltimate ?? false
     }
   }
   loading.value = false
@@ -117,7 +119,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -127,6 +129,7 @@ async function handleSave() {
         ...(form.eddySoulRules.instinctBoostsDodgeArmorSpeed && { instinctBoostsDodgeArmorSpeed: true }),
         ...(form.eddySoulRules.hugeSizeRequiresMega && { hugeSizeRequiresMega: true }),
         ...(form.eddySoulRules.hugePowerOncePerTurn && { hugePowerOncePerTurn: true }),
+        ...(form.eddySoulRules.agilityRank2RequiresUltimate && { agilityRank2RequiresUltimate: true }),
       },
     }),
   }
@@ -420,6 +423,17 @@ async function handleSave() {
             <div>
               <span class="text-digimon-dark-300">Huge Power once per turn & Rank 2 requires Ultimate+</span>
               <p class="text-xs text-digimon-dark-500">Default: Rank 1 unlimited for melee, 1/round for ranged. Rank 2 available at any stage</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.eddySoulRules.agilityRank2RequiresUltimate"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Agility Rank 2 requires Ultimate+</span>
+              <p class="text-xs text-digimon-dark-500">Default: Rank 2 available at any stage</p>
             </div>
           </label>
         </div>

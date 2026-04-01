@@ -216,6 +216,12 @@ export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulR
           if (!isUltimatePlus) maxRanks = Math.min(maxRanks, 1)
         }
 
+        // EddySoul: Agility Rank 2 requires Ultimate+
+        if (eddySoulRules?.value?.agilityRank2RequiresUltimate && quality.id === 'agility') {
+          const isUltimatePlus = compareStages(newStage, 'ultimate') >= 0
+          if (!isUltimatePlus) maxRanks = Math.min(maxRanks, 1)
+        }
+
         if ((quality.ranks || 1) > maxRanks) {
           return { ...quality, ranks: maxRanks }
         }

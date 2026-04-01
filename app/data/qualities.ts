@@ -320,11 +320,11 @@ Tamer must make Charisma Check (Complex Action):
     qualityType: 'trigger',
     dpCost: -2,
     maxRanks: 2,
-    prerequisites: ['Huge Power (Rank 1)', 'Overkill (Rank 2)'],
+    prerequisites: ['Huge Power (Rank 1)', 'Huge Power (Rank 2)'],
     description: 'Must reroll successful dice. Only applies to [Damage] attacks.',
     effect: `Rank 1 (requires Huge Power): Huge Power always activates on first attack. Second attack must reroll all 5s, take second result.
 
-Rank 2 (requires Overkill): First attack activates both Huge Power and Overkill. Second attack must reroll all successful Accuracy dice, take second result.`,
+Rank 2 (requires Huge Power Rank 2): First attack activates Huge Power (both ranks). Second attack must reroll all successful Accuracy dice, take second result.`,
   },
   {
     id: 'broadside',
@@ -334,11 +334,11 @@ Rank 2 (requires Overkill): First attack activates both Huge Power and Overkill.
     qualityType: 'trigger',
     dpCost: -2,
     maxRanks: 2,
-    prerequisites: ['Agility (Rank 1)', 'Avoidance (Rank 2)'],
+    prerequisites: ['Agility (Rank 1)', 'Agility (Rank 2)'],
     description: 'Must reroll successful dodge dice.',
     effect: `Rank 1 (requires Agility): After Agility triggers, must reroll all 5s on next dodge, take second result.
 
-Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll all successful Dodge dice, take second result.`,
+Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must reroll all successful Dodge dice, take second result.`,
   },
   {
     id: 'decreased-derived-stat',
@@ -716,18 +716,6 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     effect: `Rank 1: Reroll 1s on Accuracy. Once per round for [Ranged], unlimited for [Melee]. Rank 2: Also reroll 2s. Once per round (any attack type). Rank 1 still triggers when using Rank 2.`,
   },
   {
-    id: 'overkill',
-    name: 'Overkill',
-    type: 'purchasable',
-    category: 'offensive',
-    qualityType: ['trigger', 'attack'],
-    dpCost: 2,
-    maxRanks: 1,
-    prerequisites: ['Huge Power'],
-    description: 'Reroll 2s on Accuracy.',
-    effect: `Once per round, reroll 2s on Accuracy.`,
-  },
-  {
     id: 'aggressive-flank',
     name: 'Aggressive Flank',
     type: 'purchasable',
@@ -911,22 +899,10 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     category: 'defensive',
     qualityType: 'trigger',
     dpCost: 2,
-    maxRanks: 1,
+    maxRanks: 2,
     prerequisites: [],
-    description: 'Reroll 1s on Dodge.',
-    effect: `Once per round, reroll 1s on Dodge.`,
-  },
-  {
-    id: 'avoidance',
-    name: 'Avoidance',
-    type: 'purchasable',
-    category: 'defensive',
-    qualityType: 'trigger',
-    dpCost: 2,
-    maxRanks: 1,
-    prerequisites: ['Agility'],
-    description: 'Reroll 2s on Dodge.',
-    effect: `Once per round, reroll 2s on Dodge.`,
+    description: 'Reroll low dice on Dodge.',
+    effect: `Rank 1: Reroll 1s on Dodge. Once per round. Rank 2: Also reroll 2s on Dodge. Once per round.`,
   },
   {
     id: 'combat-awareness',
@@ -1206,7 +1182,7 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     maxRanks: 1,
     prerequisites: ['Quick Healer', 'Regenerator Rank 1'],
     description: 'Recovery during combat.',
-    effect: `Make Recovery Check as Simple Action in combat. Cannot attack that turn. Not affected by Huge Power/Overkill.`,
+    effect: `Make Recovery Check as Simple Action in combat. Cannot attack that turn. Not affected by Huge Power.`,
   },
   {
     id: 'resistant',
@@ -1673,7 +1649,7 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     maxRanks: 1,
     prerequisites: ['Element Master'],
     description: '[Stationary] Earth/Darkness: Lifesteal chance.',
-    effect: `Create Stationary Domain (Complex Action). Roll 1d6 per target (up to BIT). On 5+, inflict [Lifesteal] stealing 1 WB. Not affected by Huge Power/Overkill.`,
+    effect: `Create Stationary Domain (Complex Action). Roll 1d6 per target (up to BIT). On 5+, inflict [Lifesteal] stealing 1 WB. Not affected by Huge Power.`,
   },
   {
     id: 'domain-control-gusty-garden',
@@ -2066,7 +2042,7 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     stageRequirement: 'mega',
     exclusiveWith: ['overwrite', 'undying-inforce', 'omniscient-inforce', 'digital-hazard', 'zero-unit'],
     description: 'Control initiative, reroll attacks.',
-    effect: `Don't roll Initiative—choose your position after others roll. Every other turn, adjust position (unless Lagged). Once/battle: reroll Huge Power or Overkill (if you have them).`,
+    effect: `Don't roll Initiative—choose your position after others roll. Every other turn, adjust position (unless Lagged). Once/battle: reroll Huge Power (if you have it).`,
   },
   {
     id: 'omniscient-inforce',
@@ -2080,7 +2056,7 @@ Rank 2 (requires Avoidance): After Agility and Avoidance trigger, must reroll al
     stageRequirement: 'mega',
     exclusiveWith: ['overwrite', 'undying-inforce', 'temporal-inforce', 'digital-hazard', 'zero-unit'],
     description: 'Ready Actions, reroll dodges.',
-    effect: `Once/round: declare [Ready Action]—if prediction true, act for free (e.g., "Intercede if X targeted"). Once/battle: reroll Agility or Avoidance (if you have them).`,
+    effect: `Once/round: declare [Ready Action]—if prediction true, act for free (e.g., "Intercede if X targeted"). Once/battle: reroll Agility (if you have it).`,
   },
   {
     id: 'digital-hazard',

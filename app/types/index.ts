@@ -78,6 +78,7 @@ export interface EddySoulRules {
   instinctBoostsDodgeArmorSpeed?: boolean
   hugeSizeRequiresMega?: boolean
   hugePowerOncePerTurn?: boolean
+  agilityRank2RequiresUltimate?: boolean
 }
 
 export interface CampaignRulesSettings {

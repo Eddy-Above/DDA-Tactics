@@ -843,9 +843,6 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
       notes.push(attack.range === 'melee' ? 'Reroll 1s' : 'Reroll 1s (1/round)')
     }
   }
-  if (hasQuality('overkill')) {
-    notes.push('Reroll 2s (1/round)')
-  }
   if (hasQuality('aggressive-flank')) {
     notes.push('+RAM ACC (near ally)')
   }
