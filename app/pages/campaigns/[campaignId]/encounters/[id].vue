@@ -12,7 +12,7 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, campaignLevel, eddySoulRules } = useCampaignContext()
+const { campaignId, campaignLevel, eddySoulRules, loadCampaign } = useCampaignContext()
 
 const {
   currentEncounter,
@@ -1801,6 +1801,7 @@ let refreshInterval: ReturnType<typeof setInterval>
 
 onMounted(async () => {
   await Promise.all([
+    loadCampaign(),
     fetchEncounter(route.params.id as string),
     fetchDigimon({ campaignId: campaignId.value }),
     fetchTamers(campaignId.value),
