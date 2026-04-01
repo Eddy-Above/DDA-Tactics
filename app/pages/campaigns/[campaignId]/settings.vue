@@ -319,7 +319,7 @@ async function handleSave() {
       <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
         <h3 class="font-semibold text-white mb-2">EddySoul Rules</h3>
         <p class="text-sm text-digimon-dark-400 mb-4">
-          Optional rule overrides for human (tamer) combat stats. Each can be toggled independently.
+          Alternative rules by EddySoul
         </p>
 
         <div class="space-y-3">
