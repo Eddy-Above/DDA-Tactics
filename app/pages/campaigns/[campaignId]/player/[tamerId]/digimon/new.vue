@@ -122,8 +122,16 @@ const currentStageConfig = computed(() => STAGE_CONFIG[form.stage])
 
 const availableSizes = computed(() => {
   if (!eddySoulRules.value?.hugeSizeRequiresMega) return sizes
-  if (['ultimate', 'mega', 'ultra'].includes(form.stage)) return sizes
-  return sizes.filter(s => s !== 'gigantic')
+  const stage = form.stage
+  // Gigantic requires Mega+
+  if (!['mega', 'ultra'].includes(stage)) {
+    return sizes.filter(s => s !== 'gigantic')
+  }
+  // Huge requires Ultimate+, so filter at stages below that too
+  if (!['ultimate', 'mega', 'ultra'].includes(stage)) {
+    return sizes.filter(s => s !== 'huge' && s !== 'gigantic')
+  }
+  return sizes
 })
 
 watch(availableSizes, (newSizes) => {
