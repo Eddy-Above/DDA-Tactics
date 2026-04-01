@@ -12,6 +12,8 @@ interface IntercedeOfferBody {
   attackData: any // Full attack data for later resolution
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
+  hugePowerUsed?: boolean
+  hugePowerAttackRange?: 'melee' | 'ranged'
   skipActionDeduction?: boolean // When called from attack.post.ts which already deducted actions
 }
 
@@ -71,6 +73,10 @@ export default defineEventHandler(async (event) => {
           if (body.bolsterType === 'bit-cpu') {
             updated.lastBitCpuBolsterRound = encounter.round
           }
+        }
+        // Track Huge Power usage for ranged attacks (once per round)
+        if (body.hugePowerUsed && body.hugePowerAttackRange === 'ranged') {
+          updated.lastHugePowerRound = encounter.round
         }
         return updated
       }

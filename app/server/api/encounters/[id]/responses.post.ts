@@ -445,6 +445,7 @@ export default defineEventHandler(async (event) => {
       effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
 
       // Damage calculation breakdown (same as NPC attacks)
+      attackerParticipantId: request.data.attackerParticipantId,
       baseDamage: attackBaseDamage,
       netSuccesses: netSuccesses,
       targetArmor: targetArmor,
@@ -452,6 +453,9 @@ export default defineEventHandler(async (event) => {
       effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
       finalDamage: hit ? damageDealt : 0,
       hit: hit,
+      dodgeDicePool: body.response.dodgeDicePool,
+      dodgeDiceResults: body.response.dodgeDiceResults,
+      dodgeSuccesses: body.response.dodgeSuccesses,
     }
 
     battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : [])]

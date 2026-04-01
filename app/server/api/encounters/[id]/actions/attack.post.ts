@@ -12,6 +12,8 @@ interface AttackActionBody {
   tamerId: string
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
+  hugePowerUsed?: boolean
+  hugePowerAttackRange?: 'melee' | 'ranged'
 }
 
 export default defineEventHandler(async (event) => {
@@ -179,6 +181,10 @@ export default defineEventHandler(async (event) => {
           updated.lastBitCpuBolsterRound = encounter.round
         }
       }
+      // Track Huge Power usage for ranged attacks (once per round)
+      if (body.hugePowerUsed && body.hugePowerAttackRange === 'ranged') {
+        updated.lastHugePowerRound = encounter.round
+      }
       return updated
     }
     return p
@@ -283,6 +289,8 @@ export default defineEventHandler(async (event) => {
       },
       bolstered: body.bolstered || false,
       bolsterType: body.bolsterType,
+      hugePowerUsed: body.hugePowerUsed || false,
+      hugePowerAttackRange: body.hugePowerAttackRange,
       skipActionDeduction: true,
     },
   })

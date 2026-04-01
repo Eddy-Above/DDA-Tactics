@@ -132,6 +132,7 @@ const pendingDirectBolstered = ref(false)
 // Bolster attack state
 const bolsterAttackEnabled = ref(false)
 const bolsterAttackType = ref<'damage-accuracy' | 'bit-cpu'>('damage-accuracy')
+const hugePowerEnabled = ref(false)
 
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
@@ -310,14 +311,14 @@ watch(
       const matchingResponse = responses.find((resp: any) =>
         resp.response?.type === 'dodge-rolled' &&
         resp.attackerParticipantId === pendingAttack.participantId &&
-        Math.abs(new Date(resp.response?.timestamp || 0).getTime() - pendingAttack.timestamp) < 30000
+        Math.abs(new Date(resp.response?.timestamp || 0).getTime() - pendingAttack.timestamp) < 120000
       )
 
       if (!matchingResponse) {
         console.log('[ATTACK RESULT] No matching response yet for:', pendingAttack.attackName)
         // Clean up expired attacks (>60 seconds)
         const now = Date.now()
-        if (now - pendingAttack.timestamp > 60000) {
+        if (now - pendingAttack.timestamp > 300000) {
           console.log('[ATTACK RESULT] Removing expired attack:', pendingAttack.attackName)
           pendingAttacks.value.splice(i, 1)
         }
@@ -350,6 +351,33 @@ watch(
     }
   },
   { deep: true, immediate: true }
+)
+
+// Watch battle log for async attack resolutions (intercede claims, all-skip NPC resolve)
+watch(
+  () => activeEncounter.value?.battleLog,
+  (newBattleLog) => {
+    if (!newBattleLog || !activeEncounter.value || pendingAttacks.value.length === 0) return
+
+    for (let i = pendingAttacks.value.length - 1; i >= 0; i--) {
+      const pendingAttack = pendingAttacks.value[i]
+
+      // Find a Dodge or Intercede battle log entry matching this attacker
+      const matchingLogEntry = ([...(newBattleLog as any[])]).reverse().find(
+        (entry: any) =>
+          (entry.action === 'Dodge' || entry.effects?.includes('Intercede')) &&
+          entry.attackerParticipantId === pendingAttack.participantId &&
+          entry.hit !== undefined &&
+          new Date(entry.timestamp).getTime() > pendingAttack.timestamp - 5000
+      )
+
+      if (matchingLogEntry) {
+        showAttackResultFromBattleLog(pendingAttack, matchingLogEntry)
+        pendingAttacks.value.splice(i, 1)
+      }
+    }
+  },
+  { deep: true }
 )
 
 // Helper functions to calculate total values (base + xpBonuses)
@@ -1097,6 +1125,16 @@ function canBolsterAttack(participant: CombatParticipant, attack: any): boolean 
   return true
 }
 
+// Check if Huge Power can be used on this attack
+function canUseHugePower(participant: CombatParticipant, attack: any): boolean {
+  if (participant.type !== 'digimon') return false
+  const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
+  if (!digimon?.qualities?.some((q: any) => q.id === 'huge-power')) return false
+  if (attack.range === 'melee') return true
+  // Ranged: once per round
+  return participant.lastHugePowerRound !== (activeEncounter.value?.round || 0)
+}
+
 function canParticipantAct(participant: CombatParticipant): boolean {
   if (!activeEncounter.value) return false
 
@@ -1245,6 +1283,7 @@ async function selectAttackAndShowTargets(participant: CombatParticipant, attack
   selectedAttack.value = { participant, attack }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
+  hugePowerEnabled.value = false
   showTargetSelector.value = true
 }
 
@@ -1261,10 +1300,20 @@ async function confirmAttack(target: CombatParticipant) {
     }
 
     // Roll accuracy (count successes: 5+ = 1 success)
-    const accuracyDiceResults = []
+    const accuracyDiceResults: number[] = []
     for (let i = 0; i < accuracyPool; i++) {
       accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
+
+    // Huge Power: reroll any dice showing 1
+    if (hugePowerEnabled.value) {
+      for (let i = 0; i < accuracyDiceResults.length; i++) {
+        if (accuracyDiceResults[i] === 1) {
+          accuracyDiceResults[i] = Math.floor(Math.random() * 6) + 1
+        }
+      }
+    }
+
     const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
     // Submit attack to server
@@ -1282,6 +1331,10 @@ async function confirmAttack(target: CombatParticipant) {
       bolsterAttackEnabled.value ? {
         bolstered: true,
         bolsterType: bolsterAttackType.value,
+      } : undefined,
+      hugePowerEnabled.value ? {
+        hugePowerUsed: true,
+        attackRange: attack.range,
       } : undefined
     )
 
@@ -1308,19 +1361,43 @@ async function confirmAttack(target: CombatParticipant) {
         })
         showAttackResultModal.value = true
       } else {
-        // Store pending attack for result tracking (await dodge response)
-        const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-        pendingAttacks.value.push({
-          trackingId: trackingId,
-          timestamp: Date.now(),
-          attackName: attack.name,
-          targetName: getParticipantName(target),
-          accuracyDicePool: accuracyPool,
-          accuracyDiceResults: accuracyDiceResults,
-          accuracySuccesses: accuracySuccesses,
-          participantId: participant.id,
-          attackData: attack
-        })
+        // Check if the attack was immediately resolved (NPC auto-resolve, no interceptors)
+        const returnedBattleLog = (result.battleLog as any[]) || []
+        const resolvedLogEntry = [...returnedBattleLog].reverse().find(
+          (entry: any) =>
+            (entry.action === 'Dodge' || entry.effects?.includes('Intercede')) &&
+            entry.attackerParticipantId === participant.id &&
+            entry.hit !== undefined
+        )
+
+        if (resolvedLogEntry) {
+          // Attack was immediately resolved -- show result from battle log
+          showAttackResultFromBattleLog(
+            {
+              attackName: attack.name,
+              targetName: getParticipantName(target),
+              accuracyDicePool: accuracyPool,
+              accuracyDiceResults: accuracyDiceResults,
+              accuracySuccesses: accuracySuccesses,
+              participantId: participant.id,
+            },
+            resolvedLogEntry
+          )
+        } else {
+          // Attack is pending (waiting for dodge or intercede decisions)
+          const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          pendingAttacks.value.push({
+            trackingId: trackingId,
+            timestamp: Date.now(),
+            attackName: attack.name,
+            targetName: getParticipantName(target),
+            accuracyDicePool: accuracyPool,
+            accuracyDiceResults: accuracyDiceResults,
+            accuracySuccesses: accuracySuccesses,
+            participantId: participant.id,
+            attackData: attack
+          })
+        }
       }
 
       // Show feedback and close modal
@@ -1489,6 +1566,32 @@ function showAttackResult(
   // Show modal (will display the first item in the queue)
   showAttackResultModal.value = true
   console.log('[ATTACK RESULT] Modal flag set to true')
+}
+
+function showAttackResultFromBattleLog(
+  pendingAttack: { attackName: string; targetName: string; accuracyDicePool: number; accuracyDiceResults: number[]; accuracySuccesses: number; participantId: string },
+  logEntry: any
+) {
+  // Battle log entries already have all calculated damage values from the server
+  attackResultQueue.value.push({
+    responseId: `log-${logEntry.id}`,
+    attackerName: tamer.value?.name || 'You',
+    attackName: pendingAttack.attackName,
+    targetName: logEntry.effects?.includes('Intercede') ? logEntry.actorName : pendingAttack.targetName,
+    accuracyDicePool: pendingAttack.accuracyDicePool,
+    accuracyDiceResults: pendingAttack.accuracyDiceResults,
+    accuracySuccesses: pendingAttack.accuracySuccesses,
+    dodgeDicePool: logEntry.dodgeDicePool ?? 0,
+    dodgeDiceResults: logEntry.dodgeDiceResults ?? [],
+    dodgeSuccesses: logEntry.dodgeSuccesses ?? 0,
+    netSuccesses: logEntry.netSuccesses,
+    hit: logEntry.hit,
+    baseDamage: logEntry.baseDamage,
+    armorPiercing: logEntry.armorPiercing,
+    targetArmor: logEntry.targetArmor,
+    finalDamage: logEntry.finalDamage,
+  })
+  showAttackResultModal.value = true
 }
 
 async function closeAttackResultModal() {
@@ -2481,48 +2584,39 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                     :disabled="!canUseAttack(participant, attack)"
                     @click="selectAttackAndShowTargets(participant, attack)"
                     :class="[
-                      'w-full text-left bg-digimon-dark-700 rounded-lg p-2 transition-colors',
+                      'w-full text-left bg-digimon-dark-700 rounded-lg p-3 transition-colors',
                       canUseAttack(participant, attack)
                         ? 'hover:bg-digimon-dark-600 cursor-pointer'
                         : 'opacity-50 cursor-not-allowed'
                     ]"
                   >
-                    <div class="flex justify-between items-start gap-2">
-                      <div class="flex-1 min-w-0">
-                        <div class="font-semibold text-white text-sm">{{ attack.name }}</div>
-                        <div class="flex flex-wrap gap-1 mt-1">
-                          <span
-                            :class="[
-                              'text-xs px-1.5 py-0.5 rounded',
-                              attack.range === 'melee' ? 'bg-red-900/50 text-red-400' : 'bg-blue-900/50 text-blue-400'
-                            ]"
-                          >
-                            {{ attack.range }}
-                          </span>
-                          <span
-                            :class="[
-                              'text-xs px-1.5 py-0.5 rounded',
-                              attack.effect ? 'bg-green-900/50 text-green-400' : 'bg-orange-900/50 text-orange-400'
-                            ]"
-                          >
-                            {{ attack.effect || 'Damage' }}
-                          </span>
-                          <span v-for="note in getAttackStats(participant, attack).notes" :key="note" class="text-xs px-1.5 py-0.5 rounded bg-cyan-900/30 text-cyan-400">
-                            {{ note }}
-                          </span>
-                        </div>
+                    <div class="flex items-center justify-between flex-wrap gap-2">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="font-semibold text-white">{{ attack.name }}</span>
+                        <span :class="[
+                          'text-xs px-1.5 py-0.5 rounded',
+                          attack.range === 'melee' ? 'bg-red-900/50 text-red-400' : 'bg-blue-900/50 text-blue-400'
+                        ]">
+                          [{{ attack.range === 'melee' ? 'Melee' : 'Ranged' }}]
+                        </span>
+                        <span :class="[
+                          'text-xs px-1.5 py-0.5 rounded',
+                          attack.type === 'damage' ? 'bg-orange-900/50 text-orange-400' : 'bg-green-900/50 text-green-400'
+                        ]">
+                          [{{ attack.type === 'damage' ? 'Damage' : 'Support' }}]
+                        </span>
                       </div>
-                      <div class="text-right flex-shrink-0">
-                        <div class="text-cyan-400 text-sm font-semibold">
-                          {{ getAttackStats(participant, attack).accuracy }}d6
+                      <div class="flex items-center gap-3 text-sm">
+                        <span class="text-cyan-400">
+                          ACC: {{ getAttackStats(participant, attack).accuracy }}d6
                           <span v-if="getAttackStats(participant, attack).accuracyBonus > 0" class="text-green-400 text-xs">
                             (+{{ getAttackStats(participant, attack).accuracyBonus }})
                           </span>
                           <span v-else-if="getAttackStats(participant, attack).accuracyBonus < 0" class="text-red-400 text-xs">
                             ({{ getAttackStats(participant, attack).accuracyBonus }})
                           </span>
-                        </div>
-                        <div v-if="attack.type === 'damage'" class="text-orange-400 text-sm font-semibold mt-0.5">
+                        </span>
+                        <span v-if="attack.type === 'damage'" class="text-orange-400">
                           DMG: {{ getAttackStats(participant, attack).damage }}
                           <span v-if="getAttackStats(participant, attack).damageBonus > 0" class="text-green-400 text-xs">
                             (+{{ getAttackStats(participant, attack).damageBonus }})
@@ -2530,11 +2624,33 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                           <span v-else-if="getAttackStats(participant, attack).damageBonus < 0" class="text-red-400 text-xs">
                             ({{ getAttackStats(participant, attack).damageBonus }})
                           </span>
-                        </div>
-                        <div v-if="getAttackStats(participant, attack).attackRange != null" class="text-digimon-dark-400 text-xs mt-0.5">
+                        </span>
+                        <span v-if="getAttackStats(participant, attack).attackRange != null" class="text-digimon-dark-400">
                           Range: {{ getAttackStats(participant, attack).attackRange }}m<template v-if="getAttackStats(participant, attack).attackEffectiveLimit != null"> | Limit: {{ getAttackStats(participant, attack).attackEffectiveLimit }}m</template>
-                        </div>
+                        </span>
                       </div>
+                    </div>
+                    <div v-if="attack.tags && attack.tags.length > 0" class="flex gap-1 mt-2 flex-wrap">
+                      <span
+                        v-for="tag in attack.tags"
+                        :key="tag"
+                        class="text-xs bg-digimon-dark-600 text-digimon-dark-300 px-2 py-0.5 rounded"
+                      >
+                        {{ tag }}
+                      </span>
+                    </div>
+                    <div v-if="getAttackStats(participant, attack).notes.length > 0" class="flex gap-1 mt-1 flex-wrap">
+                      <span v-for="note in getAttackStats(participant, attack).notes" :key="note" class="text-xs px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-400">
+                        {{ note }}
+                      </span>
+                    </div>
+                    <div v-if="attack.effect" class="mt-1">
+                      <span class="text-xs bg-purple-900/30 text-purple-400 px-2 py-0.5 rounded">
+                        Effect: {{ attack.effect }}
+                      </span>
+                    </div>
+                    <div v-if="attack.description" class="text-sm text-digimon-dark-400 mt-1 italic">
+                      {{ attack.description }}
                     </div>
                   </button>
                 </div>
@@ -3158,7 +3274,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                   <strong class="text-white">Attack:</strong> 3d6 + Accuracy vs 3d6 + Dodge
                 </div>
                 <div class="text-digimon-dark-400">
-                  <strong class="text-white">Damage:</strong> Net Successes + Damage + Stage Bonus - Armor
+                  <strong class="text-white">Damage:</strong> Net Successes + Damage - Armor
                 </div>
               </div>
             </div>
@@ -3603,6 +3719,27 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           </div>
         </div>
 
+        <!-- Huge Power Toggle -->
+        <div
+          v-if="selectedAttack && canUseHugePower(selectedAttack.participant, selectedAttack.attack)"
+          class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
+        >
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              v-model="hugePowerEnabled"
+              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-cyan-500"
+            />
+            <span class="text-sm text-cyan-400 font-medium">Huge Power (Reroll 1s)</span>
+            <span v-if="selectedAttack.attack.range === 'ranged'" class="text-xs text-digimon-dark-400 ml-auto">
+              Available (1/round)
+            </span>
+            <span v-else class="text-xs text-digimon-dark-400 ml-auto">
+              Unlimited (Melee)
+            </span>
+          </label>
+        </div>
+
         <!-- Action buttons -->
         <div class="flex gap-3">
           <button
@@ -3610,7 +3747,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             :disabled="!selectedTargetId"
             class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
           >
-            {{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
+            {{ hugePowerEnabled ? 'Huge Power ' : '' }}{{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
           </button>
           <button
             @click="showTargetSelector = false; selectedAttack = null; selectedTargetId = null"

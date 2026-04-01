@@ -33,6 +33,7 @@ export interface CombatParticipant {
   hasDirectedThisTurn?: boolean
   digimonBolsterCount?: number
   lastBitCpuBolsterRound?: number
+  lastHugePowerRound?: number
   isEnemy?: boolean
 }
 
@@ -530,6 +531,10 @@ export function useEncounters() {
     bolsterData?: {
       bolstered: boolean
       bolsterType?: 'damage-accuracy' | 'bit-cpu'
+    },
+    hugePowerData?: {
+      hugePowerUsed: boolean
+      attackRange: 'melee' | 'ranged'
     }
   ): Promise<Encounter | null> {
     loading.value = true
@@ -547,6 +552,8 @@ export function useEncounters() {
           tamerId,
           bolstered: bolsterData?.bolstered || false,
           bolsterType: bolsterData?.bolsterType,
+          hugePowerUsed: hugePowerData?.hugePowerUsed || false,
+          hugePowerAttackRange: hugePowerData?.attackRange,
         },
       })
       // Update local state

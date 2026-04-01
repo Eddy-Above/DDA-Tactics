@@ -303,6 +303,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     result: `${dodgePool}d6 => [${dodgeDiceResults.join(',')}] = ${dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
     effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+    attackerParticipantId: params.attackerParticipantId,
     baseDamage: attackBaseDamage,
     netSuccesses,
     targetArmor,
@@ -310,6 +311,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
     finalDamage: hit ? damageDealt : 0,
     hit,
+    dodgeDicePool: dodgePool,
+    dodgeDiceResults,
+    dodgeSuccesses,
   }
 
   battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : [])]

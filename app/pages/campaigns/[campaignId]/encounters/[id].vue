@@ -64,6 +64,7 @@ const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
 const bolsterAttackEnabled = ref(false)
 const bolsterAttackType = ref<'damage-accuracy' | 'bit-cpu'>('damage-accuracy')
+const hugePowerEnabled = ref(false)
 
 // Direct action state
 const showDirectTargetSelector = ref(false)
@@ -645,6 +646,7 @@ function selectAttackAndShowTargets(participant: CombatParticipant, attack: any)
   selectedAttack.value = { participant, attack }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
+  hugePowerEnabled.value = false
   showTargetSelector.value = true
 }
 
@@ -655,6 +657,16 @@ function canBolsterAttack(participant: CombatParticipant, attack: any): boolean 
   if ((participant.digimonBolsterCount ?? 0) >= 2) return false
   if (attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) return false
   return true
+}
+
+// Check if Huge Power can be used on this attack
+function canUseHugePower(participant: CombatParticipant, attack: any): boolean {
+  if (participant.type !== 'digimon') return false
+  const digimon = digimonMap.value.get(participant.entityId)
+  if (!digimon?.qualities?.some((q: any) => q.id === 'huge-power')) return false
+  if (attack.range === 'melee') return true
+  // Ranged: once per round
+  return participant.lastHugePowerRound !== (currentEncounter.value?.round || 0)
 }
 
 // Confirm attack and execute
@@ -672,10 +684,21 @@ async function confirmAttack(target: CombatParticipant) {
     }
 
     // Roll accuracy (count successes: 5+ = 1 success)
-    const accuracyDiceResults = []
+    const accuracyDiceResults: number[] = []
     for (let i = 0; i < accuracyPool; i++) {
       accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
+
+    // Huge Power: reroll any dice showing 1
+    const originalDiceResults = [...accuracyDiceResults]
+    if (hugePowerEnabled.value) {
+      for (let i = 0; i < accuracyDiceResults.length; i++) {
+        if (accuracyDiceResults[i] === 1) {
+          accuracyDiceResults[i] = Math.floor(Math.random() * 6) + 1
+        }
+      }
+    }
+
     const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
     // ALL attacks route through intercede-offer
@@ -695,18 +718,23 @@ async function confirmAttack(target: CombatParticipant) {
           },
           bolstered: bolsterAttackEnabled.value,
           bolsterType: bolsterAttackEnabled.value ? bolsterAttackType.value : undefined,
+          hugePowerUsed: hugePowerEnabled.value,
+          hugePowerAttackRange: hugePowerEnabled.value ? attack.range : undefined,
         },
       })
       // Add attack log entry
       const entity = getEntityDetails(participant)
       const targetEntity = getEntityDetails(target)
+      const logResult = hugePowerEnabled.value && originalDiceResults.some(d => d === 1)
+        ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => HP reroll => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
+        : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
       await addBattleLogEntry(currentEncounter.value.id, {
         round: currentEncounter.value.round,
         actorId: participant.id,
         actorName: entity?.name || 'Unknown',
         action: 'Attack',
         target: targetEntity?.name || 'Unknown',
-        result: `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`,
+        result: logResult,
         damage: null,
         effects: ['Attack'],
       })
@@ -3114,6 +3142,27 @@ async function handleUpdateHazard(hazard: Hazard) {
               </div>
             </div>
 
+            <!-- Huge Power Toggle -->
+            <div
+              v-if="selectedAttack && canUseHugePower(selectedAttack.participant, selectedAttack.attack)"
+              class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
+            >
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="hugePowerEnabled"
+                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-cyan-500"
+                />
+                <span class="text-sm text-cyan-400 font-medium">Huge Power (Reroll 1s)</span>
+                <span v-if="selectedAttack.attack.range === 'ranged'" class="text-xs text-digimon-dark-400 ml-auto">
+                  Available (1/round)
+                </span>
+                <span v-else class="text-xs text-digimon-dark-400 ml-auto">
+                  Unlimited (Melee)
+                </span>
+              </label>
+            </div>
+
             <!-- Action buttons -->
             <div class="flex gap-3">
               <button
@@ -3121,7 +3170,7 @@ async function handleUpdateHazard(hazard: Hazard) {
                 :disabled="!selectedTargetId"
                 class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
               >
-                {{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
+                {{ hugePowerEnabled ? 'Huge Power ' : '' }}{{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
               </button>
               <button
                 @click="cancelAttackSelection"

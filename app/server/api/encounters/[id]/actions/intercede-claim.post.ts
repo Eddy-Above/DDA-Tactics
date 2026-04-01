@@ -235,6 +235,7 @@ export default defineEventHandler(async (event) => {
     result: `Takes hit with 0 dodge - ${damageDealt} damage dealt`,
     damage: damageDealt,
     effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
+    attackerParticipantId: request.data.attackerId,
     baseDamage: attackBaseDamage,
     netSuccesses,
     targetArmor: interceptorArmor,
@@ -242,6 +243,9 @@ export default defineEventHandler(async (event) => {
     effectiveArmor,
     finalDamage: damageDealt,
     hit: true,
+    dodgeDicePool: 0,
+    dodgeDiceResults: [],
+    dodgeSuccesses: 0,
   }
 
   // Update encounter
