@@ -159,7 +159,7 @@ export default defineEventHandler(async (event) => {
   // EddySoul: Combat Monster + Area Attack requires a Complex Action (unless no bonus)
   const campaignRulesSettings = typeof campaign?.rulesSettings === 'string' ? JSON.parse(campaign.rulesSettings) : (campaign?.rulesSettings || {})
   const eddySoulRules = campaignRulesSettings?.eddySoulRules
-  if (!body.bolstered && eddySoulRules?.combatMonsterAreaAttackRequiresComplex) {
+  if (eddySoulRules?.combatMonsterAreaAttackRequiresComplex) {
     const combatMonsterBonus = (actor as any).combatMonsterBonus ?? 0
     if (combatMonsterBonus > 0 && actor.type === 'digimon') {
       const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
@@ -168,6 +168,12 @@ export default defineEventHandler(async (event) => {
           ? JSON.parse(actorDigimon.attacks) : actorDigimon.attacks
         const attackDef = attacks?.find((a: any) => a.id === body.attackId)
         if (attackDef?.tags?.some((t: string) => t.startsWith('Area Attack'))) {
+          if (body.bolstered) {
+            throw createError({
+              statusCode: 403,
+              message: 'Cannot bolster an Area Attack when Combat Monster bonus is active (already requires Complex Action)',
+            })
+          }
           actionCostSimple = 2
         }
       }
