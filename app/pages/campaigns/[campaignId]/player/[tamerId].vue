@@ -1133,6 +1133,12 @@ function canBolsterAttack(participant: CombatParticipant, attack: any): boolean 
   if ((participant.actionsRemaining?.simple || 0) < 2) return false
   if ((participant.digimonBolsterCount ?? 0) >= 2) return false
   if (attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) return false
+  // EddySoul: Combat Monster + Area Attack already requires Complex Action, cannot bolster
+  if (eddySoulRules.value?.combatMonsterAreaAttackRequiresComplex) {
+    const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
+    const isAreaAttack = attack.tags?.some((t: string) => t.startsWith('Area Attack'))
+    if (combatMonsterBonus > 0 && isAreaAttack) return false
+  }
   return true
 }
 
