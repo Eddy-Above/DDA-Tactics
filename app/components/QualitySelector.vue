@@ -55,7 +55,7 @@ const emit = defineEmits<{
 
 const showSelector = ref(false)
 const searchQuery = ref('')
-const filterType = ref<'all' | 'free' | 'negative' | 'purchasable'>('all')
+const filterType = ref<'all' | 'free' | 'negative' | 'purchasable' | 'attack-effects'>('all')
 const filterCategory = ref<QualityCategory | 'all'>('all')
 
 // For qualities with choices (sub-options)
@@ -118,6 +118,8 @@ const filteredQualities = computed(() => {
     qualities = getNegativeQualities()
   } else if (filterType.value === 'purchasable') {
     qualities = getPurchasableQualities()
+  } else if (filterType.value === 'attack-effects') {
+    qualities = qualities.filter((q) => q.category === 'attack-effects')
   }
 
   // Filter by category (only for purchasable)
@@ -682,6 +684,7 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
             <option value="free">Free (0 DP)</option>
             <option value="negative">Negative (-DP)</option>
             <option value="purchasable">Purchasable (+DP)</option>
+            <option value="attack-effects">Attack Effects</option>
           </select>
           <select
             v-if="filterType === 'purchasable'"
