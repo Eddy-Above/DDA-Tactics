@@ -178,7 +178,21 @@ export default defineEventHandler(async (event) => {
   // GM always gets intercede modal unless explicitly opted out via "Never Intercede"
   const gmParticipant = participants.find((p: any) => p.id === 'gm')
   const gmOptOuts: string[] = gmParticipant?.intercedeOptOuts || []
-  const gmEligible = !gmOptOuts.includes(body.targetId)
+  let gmEligible = !gmOptOuts.includes(body.targetId)
+
+  // Check per-character opt-outs: if GM has opted out all possible interceptors for this target, skip
+  if (gmEligible) {
+    const gmCharacterOptOuts: Record<string, string[]> = gmParticipant?.gmCharacterOptOuts || {}
+    const optedOutForTarget = gmCharacterOptOuts[body.targetId] || []
+    const possibleInterceptors = participants.filter((p: any) =>
+      (p.type === 'tamer' || p.type === 'digimon') &&
+      p.id !== body.attackerId &&
+      p.id !== body.targetId
+    )
+    if (possibleInterceptors.length > 0 && possibleInterceptors.every((p: any) => optedOutForTarget.includes(p.id))) {
+      gmEligible = false
+    }
+  }
 
   if (eligibleTamerIds.length === 0 && !gmEligible) {
     // No eligible tamers and GM not eligible — check if target is player-controlled or NPC
