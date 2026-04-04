@@ -7,11 +7,17 @@ definePageMeta({
 })
 
 const { campaignId, campaign, loadCampaign } = useCampaignContext()
-const { updateCampaign } = useCampaigns()
+const { updateCampaign, deleteCampaign, verifyDmPassword } = useCampaigns()
 
 const loading = ref(true)
 const saving = ref(false)
 const saved = ref(false)
+
+const showDeleteModal = ref(false)
+const deleteConfirmText = ref('')
+const deleteDmPassword = ref('')
+const deleteError = ref('')
+const deleting = ref(false)
 
 const form = reactive({
   name: '',
@@ -162,6 +168,44 @@ async function handleSave() {
   saving.value = false
   saved.value = true
   setTimeout(() => { saved.value = false }, 2000)
+}
+
+function openDeleteModal() {
+  deleteConfirmText.value = ''
+  deleteDmPassword.value = ''
+  deleteError.value = ''
+  showDeleteModal.value = true
+}
+
+async function handleDelete() {
+  deleteError.value = ''
+  deleting.value = true
+
+  try {
+    // Verify DM password if campaign has one
+    if (campaign.value?.hasDmPassword) {
+      const isValid = await verifyDmPassword(campaignId.value, deleteDmPassword.value)
+      if (!isValid) {
+        deleteError.value = 'Invalid DM password'
+        deleting.value = false
+        return
+      }
+    }
+
+    // Check confirmation text
+    if (deleteConfirmText.value !== 'DELETE') {
+      deleteError.value = 'Please type "DELETE" to confirm'
+      deleting.value = false
+      return
+    }
+
+    // Delete the campaign
+    await deleteCampaign(campaignId.value)
+    navigateTo('/')
+  } catch (error) {
+    deleteError.value = error instanceof Error ? error.message : 'Failed to delete campaign'
+    deleting.value = false
+  }
 }
 </script>
 
@@ -555,5 +599,93 @@ async function handleSave() {
         <span v-if="saved" class="text-green-400 text-sm">Saved!</span>
       </div>
     </form>
+
+    <!-- Danger Zone -->
+    <div v-if="!loading" class="mt-12 pt-8 border-t border-digimon-dark-700">
+      <div class="bg-red-900/20 border border-red-900/50 rounded-xl p-6">
+        <h3 class="font-semibold text-red-400 mb-2">Danger Zone</h3>
+        <p class="text-sm text-digimon-dark-300 mb-4">
+          Permanently delete this campaign and all associated data. This action cannot be undone.
+        </p>
+        <button
+          type="button"
+          @click="openDeleteModal"
+          class="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+        >
+          Delete Campaign
+        </button>
+      </div>
+    </div>
   </div>
+
+  <!-- Delete Confirmation Modal -->
+  <Teleport to="body">
+    <div
+      v-if="showDeleteModal"
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      @click.self="showDeleteModal = false"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-8 border border-digimon-dark-700 max-w-md w-full mx-4">
+        <h2 class="text-xl font-bold text-white mb-4">Delete Campaign?</h2>
+        <p class="text-digimon-dark-300 mb-6">
+          This will permanently delete the campaign and all associated tamers, digimon, evolution lines, and encounters.
+        </p>
+
+        <!-- DM Password Field (if campaign has one) -->
+        <div v-if="campaign?.hasDmPassword" class="mb-6">
+          <label class="block text-sm font-medium text-digimon-dark-300 mb-2">DM Password</label>
+          <input
+            v-model="deleteDmPassword"
+            type="password"
+            placeholder="Enter DM password"
+            :disabled="deleting"
+            class="w-full bg-digimon-dark-900 border border-digimon-dark-600 rounded-lg px-4 py-2 text-white
+                   focus:border-digimon-orange-500 focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        <!-- Confirmation Text Field -->
+        <div class="mb-6">
+          <label class="block text-sm font-medium text-digimon-dark-300 mb-2">
+            Type "DELETE" to confirm
+          </label>
+          <input
+            v-model="deleteConfirmText"
+            type="text"
+            placeholder="DELETE"
+            :disabled="deleting"
+            class="w-full bg-digimon-dark-900 border border-digimon-dark-600 rounded-lg px-4 py-2 text-white
+                   focus:border-digimon-orange-500 focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        <!-- Error Message -->
+        <div v-if="deleteError" class="mb-6 p-3 bg-red-900/30 border border-red-900/50 rounded-lg">
+          <p class="text-red-400 text-sm">{{ deleteError }}</p>
+        </div>
+
+        <!-- Buttons -->
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            @click="showDeleteModal = false"
+            :disabled="deleting"
+            class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50
+                   text-white px-4 py-2 rounded-lg font-medium transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            @click="handleDelete"
+            :disabled="deleteConfirmText !== 'DELETE' || deleting"
+            class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50
+                   text-white px-4 py-2 rounded-lg font-medium transition-colors"
+          >
+            {{ deleting ? 'Deleting...' : 'Delete Campaign' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>

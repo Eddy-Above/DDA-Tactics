@@ -20,12 +20,11 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Orphan associated entities by setting campaign_id to null
-  await db.update(tamers).set({ campaignId: null }).where(eq(tamers.campaignId, id))
-  await db.update(digimon).set({ campaignId: null }).where(eq(digimon.campaignId, id))
-  await db.update(encounters).set({ campaignId: null }).where(eq(encounters.campaignId, id))
-  await db.update(evolutionLines).set({ campaignId: null }).where(eq(evolutionLines.campaignId, id))
-
+  // Delete in child-first order for FK safety
+  await db.delete(evolutionLines).where(eq(evolutionLines.campaignId, id))
+  await db.delete(digimon).where(eq(digimon.campaignId, id))
+  await db.delete(encounters).where(eq(encounters.campaignId, id))
+  await db.delete(tamers).where(eq(tamers.campaignId, id))
   await db.delete(campaigns).where(eq(campaigns.id, id))
 
   return { success: true, id }
