@@ -84,7 +84,12 @@ export interface EddySoulRules {
   digizoidArmourRequiresInstinct?: boolean
 }
 
+export interface HouseRules {
+  stunMaxDuration1?: boolean
+}
+
 export interface CampaignRulesSettings {
+  houseRules?: HouseRules
   tormentRequirements?: TormentRequirements
   skillRenames?: SkillRenames
   eddySoulRules?: EddySoulRules

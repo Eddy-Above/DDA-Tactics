@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '~/data/attackConstants'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
@@ -25,6 +25,17 @@ export default defineEventHandler(async (event) => {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
+  }
+
+  // Fetch campaign house rules
+  let houseRules: { stunMaxDuration1?: boolean } | undefined
+  if (encounter.campaignId) {
+    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
+    if (campaign) {
+      const rulesSettings = typeof campaign.rulesSettings === 'string'
+        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
+      houseRules = rulesSettings.houseRules
+    }
   }
 
   const parseJsonField = (field: any) => {
@@ -198,7 +209,7 @@ export default defineEventHandler(async (event) => {
             potency: supportPotency,
             potencyStat: supportPotencyStat,
           }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData)
+          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData, houseRules)
           appliedEffectName = npcAttackDef.effect
         }
 
@@ -322,7 +333,7 @@ export default defineEventHandler(async (event) => {
             potency: dmgPotency,
             potencyStat: dmgPotencyStat,
           }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData)
+          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData, houseRules)
           appliedEffectName = npcAttackDef.effect
         }
       }

@@ -30,7 +30,8 @@ interface ActiveEffect extends EffectInput {
  */
 export function applyEffectToParticipant(
   activeEffects: ActiveEffect[],
-  newEffect: EffectInput
+  newEffect: EffectInput,
+  houseRules?: { stunMaxDuration1?: boolean }
 ): ActiveEffect[] {
   // Don't persist instant effects
   if (INSTANT_EFFECTS.has(newEffect.name)) {
@@ -43,6 +44,9 @@ export function applyEffectToParticipant(
   if (limits) {
     if (limits.min !== undefined) duration = Math.max(limits.min, duration)
     if (limits.max !== undefined) duration = Math.min(limits.max, duration)
+  }
+  if (houseRules?.stunMaxDuration1 && newEffect.name === 'Stun') {
+    duration = Math.min(1, duration)
   }
 
   // Remove mutually exclusive effects

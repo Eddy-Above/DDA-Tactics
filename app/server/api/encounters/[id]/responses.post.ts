@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, evolutionLines } from '../../../db'
+import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../db'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
@@ -47,6 +47,17 @@ export default defineEventHandler(async (event) => {
       statusCode: 404,
       message: `Encounter with ID ${encounterId} not found`,
     })
+  }
+
+  // Fetch campaign house rules
+  let houseRules: { stunMaxDuration1?: boolean } | undefined
+  if (encounter.campaignId) {
+    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
+    if (campaign) {
+      const rulesSettings = typeof campaign.rulesSettings === 'string'
+        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
+      houseRules = rulesSettings.houseRules
+    }
   }
 
   // Parse existing requests and responses
@@ -263,7 +274,7 @@ export default defineEventHandler(async (event) => {
               potency,
               potencyStat,
             }
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules)
             appliedEffectName = attackDef.effect
           }
 
@@ -487,7 +498,7 @@ export default defineEventHandler(async (event) => {
                   potency: damageEffectPotency,
                   potencyStat: damageEffectPotencyStat,
                 }
-                updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect)
+                updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules)
                 appliedEffectName = attackDef.effect
               }
             }
@@ -617,7 +628,7 @@ export default defineEventHandler(async (event) => {
         if (p.id === request.targetParticipantId) {
           return {
             ...p,
-            activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData),
+            activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, houseRules),
           }
         }
         return p

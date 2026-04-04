@@ -25,6 +25,9 @@ const form = reactive({
     major: 0,
     terrible: 0,
   },
+  houseRules: {
+    stunMaxDuration1: false,
+  },
   skillRenames: {} as Record<string, string>,
   eddySoulRules: {
     accuracyIsAgilityAthletics: false,
@@ -61,6 +64,12 @@ onMounted(async () => {
         form.tormentMinimums.major = rules.minCounts.major ?? 0
         form.tormentMinimums.terrible = rules.minCounts.terrible ?? 0
       }
+    }
+
+    // Load house rules
+    const houseRules = campaign.value.rulesSettings?.houseRules
+    if (houseRules) {
+      form.houseRules.stunMaxDuration1 = houseRules.stunMaxDuration1 ?? false
     }
 
     // Load skill renames
@@ -112,6 +121,11 @@ async function handleSave() {
   )
 
   data.rulesSettings = {
+    ...(form.houseRules.stunMaxDuration1 && {
+      houseRules: {
+        ...(form.houseRules.stunMaxDuration1 && { stunMaxDuration1: true }),
+      },
+    }),
     tormentRequirements: {
       mode: form.tormentMode,
       ...(form.tormentMode === 'custom' && {
@@ -249,6 +263,24 @@ async function handleSave() {
           <p v-else class="text-sm text-digimon-dark-500">
             {{ campaign?.hasDmPassword ? 'DM password is set' : 'No DM password set' }}
           </p>
+        </div>
+      </div>
+
+      <!-- House Rules -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h3 class="font-semibold text-white mb-4">House Rules</h3>
+        <div class="space-y-3">
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.houseRules.stunMaxDuration1"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Stun duration max 1 round</span>
+              <p class="text-xs text-digimon-dark-500">Default: Stun duration equals leftover accuracy successes</p>
+            </div>
+          </label>
         </div>
       </div>
 

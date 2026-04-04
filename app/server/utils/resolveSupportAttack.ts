@@ -30,6 +30,7 @@ interface SupportAttackParams {
   turnOrder?: string[]
   bolstered?: boolean
   bolsterType?: string
+  houseRules?: { stunMaxDuration1?: boolean }
 }
 
 interface SupportAttackResult {
@@ -150,7 +151,7 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
     if (p.id === params.targetParticipantId) {
       return {
         ...p,
-        activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData),
+        activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, params.houseRules),
       }
     }
     return p
@@ -278,7 +279,7 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
       if (p.id === params.targetParticipantId) {
         return {
           ...p,
-          activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData),
+          activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, params.houseRules),
         }
       }
       return p
@@ -378,7 +379,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
           attackerDerived,
           targetDerived
         )
-        updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData)
+        updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
         appliedEffectName = params.attackDef.effect
       }
 

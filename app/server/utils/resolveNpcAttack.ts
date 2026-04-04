@@ -20,6 +20,7 @@ interface ResolveNpcAttackParams {
   attackerName: string
   targetName: string
   turnOrder?: string[]
+  houseRules?: { stunMaxDuration1?: boolean }
 }
 
 /**
@@ -176,7 +177,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             potency,
             potencyStat,
           }
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
           appliedEffectName = attackDef.effect
         }
 
@@ -310,7 +311,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
               potency: effectPotency,
               potencyStat: effectPotencyStat,
             }
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
             appliedEffectName = attackDef.effect
           }
         }
