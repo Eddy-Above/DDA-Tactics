@@ -6,7 +6,7 @@ import type { DigimonStage, EddySoulRules } from '~/types'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
-import { getEffectStatModifiers } from '~/data/attackConstants'
+import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
   layout: 'player',
@@ -872,13 +872,15 @@ function getParticipantAttacks(participant: CombatParticipant): any[] {
   const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
   const attacks = digimon?.attacks || []
   const usedIds = new Set(participant.usedAttackIds || [])
-  return attacks.filter((a: any) => {
+  const filtered = attacks.filter((a: any) => {
     if (usedIds.has(a.id)) return false
     if (houseRules.value?.signatureMoveBattery && a.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
       if (((participant as any).battery ?? 0) < 1) return false
     }
     return true
   })
+  const basicAttacks = BASIC_ATTACKS.filter(a => !usedIds.has(a.id))
+  return [...filtered, ...basicAttacks]
 }
 
 function getAttackStats(participant: CombatParticipant, attack: any) {

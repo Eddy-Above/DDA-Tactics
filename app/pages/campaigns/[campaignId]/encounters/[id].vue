@@ -5,7 +5,7 @@ import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '~/data/attackConstants'
+import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
   title: 'Encounter',
@@ -334,7 +334,7 @@ function getParticipantAttacks(participant: CombatParticipant) {
   const attacks = digimon?.attacks || []
   // Filter out attacks already used this turn
   const usedIds = new Set(participant.usedAttackIds || [])
-  return attacks.filter((a: any) => {
+  const filtered = attacks.filter((a: any) => {
     if (usedIds.has(a.id)) return false
     // Signature Move Battery: require at least 1 battery to use
     if (houseRules.value?.signatureMoveBattery && a.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
@@ -342,6 +342,8 @@ function getParticipantAttacks(participant: CombatParticipant) {
     }
     return true
   })
+  const basicAttacks = BASIC_ATTACKS.filter(a => !usedIds.has(a.id))
+  return [...filtered, ...basicAttacks]
 }
 
 // Calculate attack stats based on digimon stats, qualities, and tags (mirrors AttackSelector logic)

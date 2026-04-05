@@ -290,3 +290,22 @@ export function isTagValidForAttack(
   if (restriction.type && restriction.type !== type) return false
   return true
 }
+
+export const BASIC_ATTACKS = [
+  {
+    id: 'basic-melee',
+    name: 'Basic Melee Attack',
+    range: 'melee' as const,
+    type: 'damage' as const,
+    tags: [] as string[],
+    description: 'A simple melee strike with no special properties.',
+  },
+  {
+    id: 'basic-ranged',
+    name: 'Basic Ranged Attack',
+    range: 'ranged' as const,
+    type: 'damage' as const,
+    tags: [] as string[],
+    description: 'A basic ranged attack with no special properties.',
+  },
+]
