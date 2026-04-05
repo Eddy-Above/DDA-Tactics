@@ -16,17 +16,11 @@ const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
 const tamerId = computed(() => route.params.tamerId as string)
 const digimonId = computed(() => route.params.id as string)
 
-const { updateDigimon, fetchDigimonById, loading, error, getPreviousStages, getNextStages } = useDigimon()
+const { digimonList, fetchDigimon, updateDigimon, fetchDigimonById, loading, error, getPreviousStages, getNextStages, getEvolutionChain } = useDigimon()
 
 // Load existing Digimon and verify ownership
 const initialDigimon = ref<Digimon | null>(null)
 const loadError = ref<string | null>(null)
-
-// Evolution preview state
-const linkedEvolvesFrom = ref<Digimon | null>(null)
-const linkedEvolvesTo = ref<Digimon[]>([])
-const fullChainAncestors = ref<Digimon[]>([])
-const fullChainDescendantsTree = ref<any[]>([])
 
 // Use the extracted form composable
 const {
@@ -130,7 +124,7 @@ async function loadDigimon() {
     notes: digimon.notes || '',
     spriteUrl: digimon.spriteUrl || '',
     evolvesFromId: digimon.evolvesFromId || null,
-    evolutionPathIds: digimon.evolutionPathIds || [],
+    evolutionPathIds: Array.isArray(digimon.evolutionPathIds) ? digimon.evolutionPathIds : [],
     syncBonusDP: true,
   })
 
@@ -138,27 +132,8 @@ async function loadDigimon() {
   basicInfoExpanded.value = false
   baseStatsExpanded.value = false
 
-  // Load linked Digimon for preview
-  if (form.evolvesFromId) {
-    const linked = await fetchDigimonById(form.evolvesFromId)
-    if (linked) linkedEvolvesFrom.value = linked
-  }
-  if (form.evolutionPathIds && form.evolutionPathIds.length > 0) {
-    const fetched: Digimon[] = []
-    for (const id of form.evolutionPathIds) {
-      const d = await fetchDigimonById(id)
-      if (d) fetched.push(d)
-    }
-    linkedEvolvesTo.value = fetched
-  }
-
-  // Load full chain
-  if (form.evolvesFromId) {
-    fullChainAncestors.value = await fetchAllAncestors(form.evolvesFromId)
-  }
-  if (form.evolutionPathIds && form.evolutionPathIds.length > 0) {
-    fullChainDescendantsTree.value = await fetchDescendantsTree(form.evolutionPathIds)
-  }
+  // Load all campaign digimon for evolution chain computation
+  await fetchDigimon({ campaignId: campaignId.value })
 }
 
 onMounted(async () => {
@@ -166,33 +141,11 @@ onMounted(async () => {
   await loadDigimon()
 })
 
-// Evolution chain helpers
-async function fetchAllAncestors(digimonId: string): Promise<Digimon[]> {
-  const ancestors: Digimon[] = []
-  let currentId: string | null = digimonId
-  while (currentId) {
-    const d = await fetchDigimonById(currentId)
-    if (d) {
-      ancestors.unshift(d)
-      currentId = d.evolvesFromId
-    } else {
-      break
-    }
-  }
-  return ancestors
-}
-
-async function fetchDescendantsTree(ids: string[]): Promise<any[]> {
-  const result: any[] = []
-  for (const id of ids) {
-    const d = await fetchDigimonById(id)
-    if (d) {
-      const children = d.evolutionPathIds && d.evolutionPathIds.length > 0 ? await fetchDescendantsTree(d.evolutionPathIds) : []
-      result.push({ digimon: d, children })
-    }
-  }
-  return result
-}
+// Cached evolution chain (computed from digimonList, same approach as library page)
+const evolutionChain = computed(() => {
+  if (!initialDigimon.value || digimonList.value.length === 0) return null
+  return getEvolutionChain(initialDigimon.value, digimonList.value)
+})
 
 // Save function
 async function handleSave() {
@@ -972,11 +925,11 @@ const hasLinkedEvolutions = computed(() => {
         </div>
 
         <!-- Evolution Chain Preview -->
-        <div v-if="initialDigimon && fullChainAncestors.length > 0 || fullChainDescendantsTree.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
+        <div v-if="evolutionChain" class="mt-6 pt-4 border-t border-digimon-dark-600">
           <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain</h3>
           <div class="flex items-center gap-2 flex-wrap">
             <!-- Ancestors -->
-            <template v-for="(ancestor, index) in fullChainAncestors" :key="ancestor.id">
+            <template v-for="(ancestor, index) in evolutionChain.ancestors" :key="ancestor.id">
               <NuxtLink
                 :to="`/campaigns/${campaignId}/player/${tamerId}/digimon/${ancestor.id}`"
                 class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
@@ -1016,11 +969,11 @@ const hasLinkedEvolutions = computed(() => {
             </div>
 
             <!-- Descendants (tree structure with hierarchy) -->
-            <template v-if="fullChainDescendantsTree.length > 0">
+            <template v-if="evolutionChain.descendantsTree.length > 0">
               <span class="text-digimon-dark-500 self-center">→</span>
-              <div :class="fullChainDescendantsTree.length > 1 ? 'flex flex-col gap-2 items-center' : 'flex items-center'">
+              <div :class="evolutionChain.descendantsTree.length > 1 ? 'flex flex-col gap-2' : ''">
                 <EvolutionTreeBranch
-                  v-for="node in fullChainDescendantsTree"
+                  v-for="node in evolutionChain.descendantsTree"
                   :key="node.digimon.id"
                   :node="node"
                   :link-base="`/campaigns/${campaignId}/player/${tamerId}/digimon`"
@@ -1030,7 +983,7 @@ const hasLinkedEvolutions = computed(() => {
 
             <!-- No links message -->
             <span
-              v-if="fullChainAncestors.length === 0 && fullChainDescendantsTree.length === 0"
+              v-if="evolutionChain.ancestors.length === 0 && evolutionChain.descendants.length === 0"
               class="text-digimon-dark-500 text-sm ml-2"
             >
               No evolution links yet

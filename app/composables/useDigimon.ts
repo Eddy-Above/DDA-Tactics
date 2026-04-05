@@ -317,17 +317,18 @@ export function useDigimon() {
     digimon: Digimon,
     allDigimon: Digimon[]
   ): { ancestors: Digimon[]; current: Digimon; descendants: Digimon[]; descendantsTree: EvolutionTreeNode[] } {
+    const digimonById = new Map(allDigimon.map((d) => [d.id, d]))
     const ancestors: Digimon[] = []
     const descendants: Digimon[] = []
 
     // Find ancestors (follow evolvesFromId chain)
     let currentAncestor = digimon.evolvesFromId
-      ? allDigimon.find((d) => d.id === digimon.evolvesFromId)
+      ? digimonById.get(digimon.evolvesFromId) ?? null
       : null
     while (currentAncestor) {
       ancestors.unshift(currentAncestor)
       currentAncestor = currentAncestor.evolvesFromId
-        ? allDigimon.find((d) => d.id === currentAncestor!.evolvesFromId)
+        ? digimonById.get(currentAncestor.evolvesFromId) ?? null
         : null
     }
 
@@ -336,7 +337,7 @@ export function useDigimon() {
       const nodes: EvolutionTreeNode[] = []
       for (const pathId of parent.evolutionPathIds || []) {
         if (visited.has(pathId)) continue
-        const descendant = allDigimon.find((d) => d.id === pathId)
+        const descendant = digimonById.get(pathId)
         if (descendant) {
           visited.add(pathId)
           descendants.push(descendant) // Keep flat array for backward compatibility
