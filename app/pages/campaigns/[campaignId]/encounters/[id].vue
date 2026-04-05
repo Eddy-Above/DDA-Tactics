@@ -696,8 +696,7 @@ function getAttackTargets(attackerId: string, attack?: any): CombatParticipant[]
           if (attack.effect === 'Shield' && !attack.tags?.some((t: string) => t.startsWith('Area Attack'))) return false
           return true
         }
-        // Must be on the same side as attacker
-        return isEnemyParticipant(p) === attackerIsEnemy
+        return true
       })
     }
 
