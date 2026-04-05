@@ -51,6 +51,11 @@ export const SPECIAL_P_EFFECTS = new Set(['Shield', 'Haste', 'Purify', 'Revitali
 export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal'])
 
 /**
+ * Permanent effects — no round duration; persist until replaced or removed by game event
+ */
+export const PERMANENT_EFFECTS = new Set(['Shield'])
+
+/**
  * Duration caps/floors per effect
  */
 export const EFFECT_DURATION_LIMITS: Record<string, { min?: number; max?: number }> = {

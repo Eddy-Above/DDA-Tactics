@@ -485,6 +485,9 @@ export default defineEventHandler(async (event) => {
             const tempAbsorb = Math.min(tempAvailable, damageDealt)
             const remainder = damageDealt - tempAbsorb
             updated.currentTempWounds = tempAvailable - tempAbsorb
+            if (tempAbsorb > 0 && updated.currentTempWounds === 0) {
+              updated.activeEffects = (updated.activeEffects || []).filter((e: any) => e.name !== 'Shield')
+            }
             updated.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + remainder)
 
             // Accumulate Combat Monster bonus for target (only from real wound damage)

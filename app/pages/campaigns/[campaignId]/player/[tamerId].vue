@@ -2646,9 +2646,9 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
               </div>
 
               <!-- Effects -->
-              <div v-if="participant.activeEffects.length > 0" class="flex flex-wrap gap-1 mt-2">
+              <div v-if="participant.activeEffects.filter(e => e.name !== 'Shield').length > 0" class="flex flex-wrap gap-1 mt-2">
                 <span
-                  v-for="effect in participant.activeEffects"
+                  v-for="effect in participant.activeEffects.filter(e => e.name !== 'Shield')"
                   :key="effect.id"
                   :class="[
                     'text-xs px-1.5 py-0.5 rounded',

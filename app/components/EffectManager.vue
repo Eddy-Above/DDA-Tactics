@@ -127,7 +127,7 @@ function getEffectColor(type: string) {
           <div class="flex items-center gap-2">
             <span class="font-medium">{{ effect.name }}</span>
             <span v-if="effect.potency" class="text-xs opacity-75 ml-1">{{ effect.potency }}</span>
-            <span class="text-xs opacity-75">({{ effect.duration }} rounds)</span>
+            <span v-if="effect.duration > 0" class="text-xs opacity-75">({{ effect.duration }} rounds)</span>
           </div>
           <p v-if="effect.description" class="text-xs opacity-75 mt-1">
             {{ effect.description }}

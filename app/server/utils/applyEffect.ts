@@ -2,6 +2,7 @@ import {
   EFFECT_DURATION_LIMITS,
   MUTUALLY_EXCLUSIVE_EFFECTS,
   INSTANT_EFFECTS,
+  PERMANENT_EFFECTS,
 } from '../../data/attackConstants'
 
 interface EffectInput {
@@ -36,6 +37,27 @@ export function applyEffectToParticipant(
   // Don't persist instant effects
   if (INSTANT_EFFECTS.has(newEffect.name)) {
     return [...activeEffects]
+  }
+
+  // Permanent effects: no duration, always replace any existing instance
+  if (PERMANENT_EFFECTS.has(newEffect.name)) {
+    let effects = [...activeEffects]
+    const existingIdx = effects.findIndex(e => e.name === newEffect.name)
+    const replacement: ActiveEffect = {
+      id: existingIdx >= 0 ? effects[existingIdx].id : `effect-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      name: newEffect.name,
+      type: newEffect.type,
+      duration: 0,
+      source: newEffect.source,
+      description: newEffect.description || '',
+      ...(newEffect.value !== undefined ? { value: newEffect.value } : {}),
+      ...(newEffect.potency !== undefined ? { potency: newEffect.potency } : {}),
+      ...(newEffect.potencyStat ? { potencyStat: newEffect.potencyStat } : {}),
+    }
+    if (existingIdx >= 0) {
+      return [...effects.slice(0, existingIdx), replacement, ...effects.slice(existingIdx + 1)]
+    }
+    return [...effects, replacement]
   }
 
   // Apply duration limits

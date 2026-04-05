@@ -1,6 +1,7 @@
 import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
+import { PERMANENT_EFFECTS } from '../data/attackConstants'
 
 export interface CombatParticipant {
   id: string
@@ -286,15 +287,10 @@ export function useEncounters() {
           p.actionsRemaining.simple = Math.max(0, 2 - p.interceptPenalty)
           p.interceptPenalty = 0
         }
-        // Decrement effect durations; clear temp wounds if Shield expires
-        const hadShield = (p.activeEffects || []).some((e) => e.name === 'Shield')
+        // Decrement effect durations; skip permanent effects
         p.activeEffects = (p.activeEffects || [])
-          .map((e) => ({ ...e, duration: e.duration - 1 }))
-          .filter((e) => e.duration > 0)
-        const stillHasShield = p.activeEffects.some((e) => e.name === 'Shield')
-        if (hadShield && !stillHasShield) {
-          p.currentTempWounds = 0
-        }
+          .map((e) => PERMANENT_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
+          .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name))
       })
     }
 

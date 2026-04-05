@@ -2398,9 +2398,9 @@ async function handleUpdateHazard(hazard: Hazard) {
                     </div>
 
                     <!-- Effects -->
-                    <div v-if="item.participant.activeEffects.length > 0" class="flex flex-wrap gap-1 mt-2">
+                    <div v-if="item.participant.activeEffects.filter(e => e.name !== 'Shield').length > 0" class="flex flex-wrap gap-1 mt-2">
                       <span
-                        v-for="effect in item.participant.activeEffects"
+                        v-for="effect in item.participant.activeEffects.filter(e => e.name !== 'Shield')"
                         :key="effect.id"
                         :class="[
                           'text-xs px-2 py-0.5 rounded',
@@ -2586,9 +2586,9 @@ async function handleUpdateHazard(hazard: Hazard) {
                 </div>
 
                 <!-- Active Effects (if any) -->
-                <div v-if="item.partnerDigimon.activeEffects.length > 0" class="flex flex-wrap gap-1 mt-2">
+                <div v-if="item.partnerDigimon.activeEffects.filter(e => e.name !== 'Shield').length > 0" class="flex flex-wrap gap-1 mt-2">
                   <span
-                    v-for="effect in item.partnerDigimon.activeEffects"
+                    v-for="effect in item.partnerDigimon.activeEffects.filter(e => e.name !== 'Shield')"
                     :key="effect.id"
                     :class="[
                       'text-xs px-1.5 py-0.5 rounded',
