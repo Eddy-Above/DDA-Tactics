@@ -13,7 +13,7 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
+const { campaignId, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
 const tamerId = computed(() => route.params.tamerId as string)
 
 const { createDigimon, fetchDigimonById, loading, error, getPreviousStages, getNextStages } = useDigimon()
@@ -1489,6 +1489,7 @@ function handleCancel() {
             :can-add="canAddQualities"
             :available-d-p="availableDPForQualities"
             :eddy-soul-rules="eddySoulRules"
+            :house-rules="houseRules"
             @add="handleAddQuality"
             @remove="removeQuality"
             @update-ranks="handleUpdateQualityRanks"

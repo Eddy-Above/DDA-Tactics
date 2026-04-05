@@ -12,7 +12,7 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
+const { campaignId, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
 const tamerId = computed(() => route.params.tamerId as string)
 const digimonId = computed(() => route.params.id as string)
 
@@ -829,6 +829,7 @@ const hasLinkedEvolutions = computed(() => {
           :available-d-p="availableDPForQualities"
           :speedy-max-ranks="currentSpeedyMaxRanks"
           :eddy-soul-rules="eddySoulRules"
+          :house-rules="houseRules"
           @add="handleAddQuality"
           @remove="removeQuality"
           @update-ranks="handleUpdateQualityRanks"

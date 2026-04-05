@@ -11,7 +11,7 @@ definePageMeta({
 })
 
 const router = useRouter()
-const { campaignId, eddySoulRules, loadCampaign } = useCampaignContext()
+const { campaignId, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
 const { createDigimon, fetchDigimonById, getPreviousStages, getNextStages } = useDigimon()
 const { tamers, fetchTamers } = useTamers()
 
@@ -872,6 +872,7 @@ async function handleSubmit() {
           :available-d-p="availableDPForQualities"
           :speedy-max-ranks="currentSpeedyMaxRanks"
           :eddy-soul-rules="eddySoulRules"
+          :house-rules="houseRules"
           @add="handleAddQuality"
           @remove="removeQuality"
           @update-ranks="handleUpdateQualityRanks"

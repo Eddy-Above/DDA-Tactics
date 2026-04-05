@@ -1250,11 +1250,11 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     type: 'purchasable',
     category: 'signature-move',
     qualityType: ['trigger', 'attack'],
-    dpCost: 0,
+    dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: 'Powerful signature attack powered by Battery.',
-    effect: `Gives an attack the [Signature Move] Tag. Stage 2 (Champion) or above only. 0 DP. Uses Battery: gain 1 Battery at end of each turn the attack is not used (cap = Stage number). Battery fully expended on use. [Damage]: adds Battery to Accuracy and Damage. [Support]: adds Battery to the SPEC Value used for [Effect]. Requires at least 1 Battery to use. Cannot combine with [Armor Piercing].`,
+    description: 'Powerful attack with cooldown.',
+    effect: `Available Round 3+. [Damage] type: +Attacks to Accuracy and Damage. [Support] type: +2 to favored Spec Value. 2 full rounds cooldown. Cannot use with [Poison], [Hazard], [Revitalize], or Complex Action effects.`,
   },
 
   // === ATTACK EFFECTS (Section 3.09) ===

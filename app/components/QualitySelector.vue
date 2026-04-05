@@ -19,7 +19,7 @@ import {
   type QualityType,
   type QualityCategory,
 } from '../data/qualities'
-import type { DigimonStage, EddySoulRules } from '../types'
+import type { DigimonStage, EddySoulRules, HouseRules } from '../types'
 
 interface Quality {
   id: string
@@ -40,6 +40,7 @@ interface Props {
   availableDP?: number // How much DP is available for qualities (to grey out expensive ones)
   speedyMaxRanks?: number // Effective max ranks for Speedy based on base movement modifiers
   eddySoulRules?: EddySoulRules
+  houseRules?: HouseRules
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -138,7 +139,7 @@ const filteredQualities = computed(() => {
     )
   }
 
-  return qualities
+  return qualities.map(getEffectiveTemplate)
 })
 
 // Get detailed availability status for a quality
@@ -266,13 +267,14 @@ function selectQuality(template: QualityTemplate) {
     showChoiceSelector.value = true
   } else {
     // Add new quality without choices
+    const effective = getEffectiveTemplate(template)
     const quality: Quality = {
-      id: template.id,
-      name: template.name,
-      type: template.qualityType,
-      dpCost: getTemplateDPCost(template),
-      description: template.description,
-      effect: template.effect,
+      id: effective.id,
+      name: effective.name,
+      type: effective.qualityType,
+      dpCost: getTemplateDPCost(effective),
+      description: effective.description,
+      effect: effective.effect,
       ranks: 1,
     }
     emit('add', quality)
@@ -337,8 +339,22 @@ function getCostColor(template: QualityTemplate) {
   return 'bg-digimon-orange-900/30 text-digimon-orange-400'
 }
 
+function getEffectiveTemplate(template: QualityTemplate): QualityTemplate {
+  if (template.id === 'signature-move' && props.houseRules?.signatureMoveBattery) {
+    return {
+      ...template,
+      dpCost: 0,
+      stageRequirement: 'champion',
+      description: 'Powerful signature attack powered by Battery.',
+      effect: `Gives an attack the [Signature Move] Tag. Stage 2 (Champion) or above only. 0 DP. Uses Battery: gain 1 Battery at end of each turn the attack is not used (cap = Stage number). Battery fully expended on use. [Damage]: adds Battery to Accuracy and Damage. [Support]: adds Battery to the SPEC Value used for [Effect]. Requires at least 1 Battery to use. Cannot combine with [Armor Piercing].`,
+    }
+  }
+  return template
+}
+
 function getTemplateDPCost(template: QualityTemplate): number {
   if (props.eddySoulRules?.chargeAttackCosts3DP && template.id === 'charge-attack') return 3
+  if (template.id === 'signature-move' && props.houseRules?.signatureMoveBattery) return 0
   return template.dpCost
 }
 
