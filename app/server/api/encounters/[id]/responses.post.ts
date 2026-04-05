@@ -590,13 +590,18 @@ export default defineEventHandler(async (event) => {
     const accuracySuccesses = request.data.accuracySuccesses
     const healthSuccesses = body.response.healthSuccesses!
     const isAoe = request.data.isAoe || false
+    const buffingContested = request.data.buffingContested || false
 
     // Calculate duration
     let duration: number
     if (isAoe) {
-      duration = healthSuccesses - accuracySuccesses
+      duration = buffingContested
+        ? accuracySuccesses - healthSuccesses
+        : healthSuccesses - accuracySuccesses
     } else {
-      duration = Math.max(1, healthSuccesses - accuracySuccesses + 1)
+      duration = buffingContested
+        ? Math.max(1, accuracySuccesses - healthSuccesses)
+        : Math.max(1, healthSuccesses - accuracySuccesses + 1)
     }
 
     const effectName = request.data.effectName

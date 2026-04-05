@@ -49,6 +49,7 @@ const form = reactive({
     combatMonsterAreaAttackRequiresComplex: false,
     chromeWeaponNoWeaponRankRequired: false,
     digizoidArmourRequiresInstinct: false,
+    buffingContested: false,
   },
 })
 
@@ -101,6 +102,7 @@ onMounted(async () => {
       form.eddySoulRules.combatMonsterAreaAttackRequiresComplex = eddySoul.combatMonsterAreaAttackRequiresComplex ?? false
       form.eddySoulRules.chromeWeaponNoWeaponRankRequired = eddySoul.chromeWeaponNoWeaponRankRequired ?? false
       form.eddySoulRules.digizoidArmourRequiresInstinct = eddySoul.digizoidArmourRequiresInstinct ?? false
+      form.eddySoulRules.buffingContested = eddySoul.buffingContested ?? false
     }
   }
   loading.value = false
@@ -148,7 +150,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -162,6 +164,7 @@ async function handleSave() {
         ...(form.eddySoulRules.combatMonsterAreaAttackRequiresComplex && { combatMonsterAreaAttackRequiresComplex: true }),
         ...(form.eddySoulRules.chromeWeaponNoWeaponRankRequired && { chromeWeaponNoWeaponRankRequired: true }),
         ...(form.eddySoulRules.digizoidArmourRequiresInstinct && { digizoidArmourRequiresInstinct: true }),
+        ...(form.eddySoulRules.buffingContested && { buffingContested: true }),
       },
     }),
   }
@@ -568,6 +571,18 @@ async function handleDelete() {
             <div>
               <span class="text-digimon-dark-300">Non-Chrome Digizoid Armour requires Instinct Rank 1</span>
               <p class="text-xs text-digimon-dark-500">All non-Chrome Digizoid Armour choices require Instinct Rank 1. Chrome remains freely available.</p>
+            </div>
+          </label>
+
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.eddySoulRules.buffingContested"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Buffing effects contested by health roll</span>
+              <p class="text-xs text-digimon-dark-500">Default: buff duration uses health-first formula. With this rule: Duration = Accuracy successes − target Health successes, min 1. Applies to Vigor, Fury, Strengthen, Vigilance, Swiftness, Regenerate, and AOE versions of Shield/Haste/Revitalize.</p>
             </div>
           </label>
         </div>

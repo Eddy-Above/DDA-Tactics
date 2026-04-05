@@ -82,6 +82,7 @@ export interface EddySoulRules {
   combatMonsterAreaAttackRequiresComplex?: boolean
   chromeWeaponNoWeaponRankRequired?: boolean
   digizoidArmourRequiresInstinct?: boolean
+  buffingContested?: boolean
 }
 
 export interface HouseRules {

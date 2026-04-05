@@ -9,7 +9,7 @@ import {
   getEffectStatModifiers,
 } from '../../data/attackConstants'
 import { calculateDigimonDerivedStats } from '../../types'
-import type { DigimonBaseStats, DigimonStage, DigimonSize } from '../../types'
+import type { DigimonBaseStats, DigimonStage, DigimonSize, EddySoulRules } from '../../types'
 import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
@@ -31,6 +31,7 @@ interface SupportAttackParams {
   bolstered?: boolean
   bolsterType?: string
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
+  eddySoulRules?: EddySoulRules
 }
 
 interface SupportAttackResult {
@@ -238,6 +239,7 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
         healthDicePool: healthPool,
         isAoe,
         isSupportAttack: true,
+        buffingContested: !!params.eddySoulRules?.buffingContested,
       },
     }
 
@@ -253,8 +255,11 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
     const healthSuccesses = healthDiceResults.filter((d: number) => d >= 5).length
 
     let duration: number
+    const buffingContested = !!params.eddySoulRules?.buffingContested
     if (isAoe) {
-      duration = healthSuccesses - params.accuracySuccesses
+      duration = buffingContested
+        ? params.accuracySuccesses - healthSuccesses
+        : healthSuccesses - params.accuracySuccesses
       if (duration <= 0) {
         // No buff applied
         const logEntry = {
@@ -265,7 +270,9 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
           actorName: params.attackerName,
           action: 'Support',
           target: params.targetName,
-          result: `${params.attackDef.effect} failed — Health ${healthPool}d6 => [${healthDiceResults.join(',')}] = ${healthSuccesses} successes (needed > ${params.accuracySuccesses})`,
+          result: buffingContested
+            ? `${params.attackDef.effect} failed — Health ${healthPool}d6 => [${healthDiceResults.join(',')}] = ${healthSuccesses} successes (Accuracy ${params.accuracySuccesses} − Health ${healthSuccesses} ≤ 0)`
+            : `${params.attackDef.effect} failed — Health ${healthPool}d6 => [${healthDiceResults.join(',')}] = ${healthSuccesses} successes (needed > ${params.accuracySuccesses})`,
           damage: 0,
           effects: ['Support', 'Buff Failed'],
           hit: false,
@@ -274,7 +281,9 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
         return { participants, battleLog, pendingRequests, resolved: true }
       }
     } else {
-      duration = Math.max(1, healthSuccesses - params.accuracySuccesses + 1)
+      duration = buffingContested
+        ? Math.max(1, params.accuracySuccesses - healthSuccesses)
+        : Math.max(1, healthSuccesses - params.accuracySuccesses + 1)
     }
 
     const effectData = buildEffectData(

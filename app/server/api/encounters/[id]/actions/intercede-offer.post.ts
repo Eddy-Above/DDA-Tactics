@@ -40,12 +40,14 @@ export default defineEventHandler(async (event) => {
 
   // Fetch campaign house rules
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let eddySoulRules: import('~/types').EddySoulRules | undefined
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = typeof campaign.rulesSettings === 'string'
         ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
       houseRules = rulesSettings.houseRules
+      eddySoulRules = rulesSettings.eddySoulRules
     }
   }
 
@@ -196,6 +198,7 @@ export default defineEventHandler(async (event) => {
       bolstered: body.bolstered,
       bolsterType: body.bolsterType,
       houseRules,
+      eddySoulRules,
     }
 
     let supportResult: any = null
