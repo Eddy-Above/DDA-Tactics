@@ -44,7 +44,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
   },
 
   // ==========================================
-  // ROOKIE STAGE - Digimon Adventure
+  // ROOKIE STAGE
   // ==========================================
   // Agumon
   {
@@ -53,7 +53,8 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     range: 'ranged',
     type: 'damage',
     tags: [],
-    description: 'Spits a ball of flame from its mouth.',
+    effect: 'Burn',
+    description: 'Spits a ball of flame from its mouth that scorches the target.',
     stage: 'rookie',
     digimon: 'Agumon',
   },
@@ -63,55 +64,10 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     range: 'melee',
     type: 'damage',
     tags: [],
-    description: 'Attacks with its claws.',
+    effect: 'Blind',
+    description: 'Rakes with its claws, kicking up dust and debris that blinds the target.',
     stage: 'rookie',
     digimon: 'Agumon',
-  },
-
-  // Gabumon
-  {
-    id: 'blue-blaster',
-    name: 'Blue Blaster',
-    range: 'ranged',
-    type: 'damage',
-    tags: [],
-    description: 'Fires a stream of blue flames from its mouth.',
-    stage: 'rookie',
-    digimon: 'Gabumon',
-  },
-  {
-    id: 'horn-attack',
-    name: 'Horn Attack',
-    range: 'melee',
-    type: 'damage',
-    tags: [],
-    description: 'Attacks with its horn.',
-    stage: 'rookie',
-    digimon: 'Gabumon',
-  },
-
-  // Biyomon
-  {
-    id: 'spiral-twister',
-    name: 'Spiral Twister',
-    range: 'ranged',
-    type: 'damage',
-    tags: [],
-    description: 'Creates a spiraling flame that hits the opponent.',
-    stage: 'rookie',
-    digimon: 'Biyomon',
-  },
-
-  // Tentomon
-  {
-    id: 'super-shocker',
-    name: 'Super Shocker',
-    range: 'ranged',
-    type: 'damage',
-    tags: [],
-    description: 'Fires an electric bolt from its antennae.',
-    stage: 'rookie',
-    digimon: 'Tentomon',
   },
 
   // Palmon
@@ -139,19 +95,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Gomamon',
   },
 
-  // Patamon
-  {
-    id: 'boom-bubble',
-    name: 'Boom Bubble',
-    range: 'ranged',
-    type: 'damage',
-    tags: [],
-    description: 'Shoots a ball of compressed air.',
-    stage: 'rookie',
-    digimon: 'Patamon',
-  },
-
-  // Gatomon (Rookie-level stats in Adventure)
+  // Gatomon
   {
     id: 'lightning-paw',
     name: 'Lightning Paw',
@@ -201,16 +145,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
 
   // Guilmon (Tamers)
   {
-    id: 'pyro-sphere',
-    name: 'Pyro Sphere',
-    range: 'ranged',
-    type: 'damage',
-    tags: [],
-    description: 'Spits a concentrated ball of fire.',
-    stage: 'rookie',
-    digimon: 'Guilmon',
-  },
-  {
     id: 'rock-breaker',
     name: 'Rock Breaker',
     range: 'melee',
@@ -227,8 +161,8 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     name: 'Bunny Blast',
     range: 'ranged',
     type: 'damage',
-    tags: [],
-    description: 'Fires a ball of green energy.',
+    tags: ['Weapon I'],
+    description: 'Fires a focused ball of green energy.',
     stage: 'rookie',
     digimon: 'Terriermon',
   },
@@ -255,8 +189,73 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Renamon',
   },
 
+  // Salamon
+  {
+    id: 'puppy-howling',
+    name: 'Puppy Howling',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Fear',
+    description: 'Lets out a haunting howl that fills enemies with dread.',
+    stage: 'rookie',
+    digimon: 'Salamon',
+  },
+
+  // Patamon
+  {
+    id: 'angel-help',
+    name: 'Angel Help',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Revitalize',
+    description: 'Channels a gentle wave of holy energy that restores an ally.',
+    stage: 'rookie',
+    digimon: 'Patamon',
+  },
+
+  // Floramon
+  {
+    id: 'rain-of-pollen',
+    name: 'Rain of Pollen',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Weaken',
+    description: 'Releases a cloud of heavy pollen that saps the strength of those it coats.',
+    stage: 'rookie',
+    digimon: 'Floramon',
+  },
+
+  // DemiDevimon
+  {
+    id: 'evil-whisper',
+    name: 'Evil Whisper',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Distract',
+    description: 'Whispers dark suggestions that shatter an enemy\'s focus.',
+    stage: 'rookie',
+    digimon: 'DemiDevimon',
+  },
+
+  // Elecmon
+  {
+    id: 'thunder-cloud',
+    name: 'Thunder Cloud',
+    range: 'ranged',
+    type: 'support',
+    tags: ['Area Attack: Burst'],
+    effect: 'Paralysis',
+    description: 'Generates a static field that seizes the muscles of all nearby enemies.',
+    stage: 'rookie',
+    digimon: 'Elecmon',
+  },
+
   // ==========================================
-  // CHAMPION STAGE - Digimon Adventure
+  // CHAMPION STAGE
   // ==========================================
   // Greymon
   {
@@ -278,18 +277,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     description: 'Charges and rams with its horns.',
     stage: 'champion',
     digimon: 'Greymon',
-  },
-
-  // Garurumon
-  {
-    id: 'howling-blaster',
-    name: 'Howling Blaster',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon II'],
-    description: 'Fires a powerful stream of blue flames.',
-    stage: 'champion',
-    digimon: 'Garurumon',
   },
 
   // Birdramon
@@ -339,25 +326,13 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Togemon',
   },
 
-  // Ikkakumon
-  {
-    id: 'harpoon-torpedo',
-    name: 'Harpoon Torpedo',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon II'],
-    description: 'Fires its horn like a torpedo.',
-    stage: 'champion',
-    digimon: 'Ikkakumon',
-  },
-
   // Angemon
   {
     id: 'hand-of-fate',
     name: 'Hand of Fate',
     range: 'ranged',
     type: 'damage',
-    tags: ['Weapon II', 'Armor Piercing I'],
+    tags: ['Weapon II', 'Armor Piercing II'],
     description: 'Fires a beam of holy energy from its fist.',
     stage: 'champion',
     digimon: 'Angemon',
@@ -373,53 +348,19 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Angemon',
   },
 
-  // ExVeemon (Adventure 02)
-  {
-    id: 'vee-laser',
-    name: 'Vee Laser',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon II'],
-    description: 'Fires an X-shaped laser from its chest.',
-    stage: 'champion',
-    digimon: 'ExVeemon',
-  },
-
-  // Stingmon
+  // Stingmon (Adventure 02)
   {
     id: 'spiking-strike',
     name: 'Spiking Strike',
     range: 'melee',
     type: 'damage',
-    tags: ['Weapon II', 'Armor Piercing I'],
+    tags: ['Weapon II', 'Armor Piercing II'],
     description: 'Stabs with its spikes.',
     stage: 'champion',
     digimon: 'Stingmon',
   },
 
-  // Growlmon (Tamers)
-  {
-    id: 'pyro-blaster',
-    name: 'Pyro Blaster',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon II'],
-    description: 'Fires a powerful stream of flames.',
-    stage: 'champion',
-    digimon: 'Growlmon',
-  },
-  {
-    id: 'dragon-slash',
-    name: 'Dragon Slash',
-    range: 'melee',
-    type: 'damage',
-    tags: ['Weapon II', 'Armor Piercing I'],
-    description: 'Slashes with its arm blades.',
-    stage: 'champion',
-    digimon: 'Growlmon',
-  },
-
-  // Gargomon
+  // Gargomon (Tamers)
   {
     id: 'gargo-laser',
     name: 'Gargo Laser',
@@ -453,8 +394,98 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Kyubimon',
   },
 
+  // Leomon — Mighty Blow gap
+  {
+    id: 'iron-fist',
+    name: 'Iron Fist',
+    range: 'melee',
+    type: 'damage',
+    tags: ['Mighty Blow'],
+    description: 'A devastating heavy punch that can stun on a powerful hit.',
+    stage: 'champion',
+    digimon: 'Leomon',
+  },
+
+  // Devimon
+  {
+    id: 'touch-of-evil',
+    name: 'Touch of Evil',
+    range: 'melee',
+    type: 'support',
+    tags: [],
+    effect: 'Immobilize',
+    description: 'Grabs an enemy with dark tendrils, rooting them in place.',
+    stage: 'champion',
+    digimon: 'Devimon',
+  },
+
+  // Cockatrimon
+  {
+    id: 'petra-fire',
+    name: 'Petra Fire',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Stun',
+    description: 'Fires a petrifying ray that freezes enemies solid.',
+    stage: 'champion',
+    digimon: 'Cockatrimon',
+  },
+
+  // Garurumon
+  {
+    id: 'wolf-cry',
+    name: 'Wolf Cry',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Fear',
+    description: 'Lets loose a bone-chilling howl that sends enemies into a panic.',
+    stage: 'champion',
+    digimon: 'Garurumon',
+  },
+
+  // IceDevimon
+  {
+    id: 'frozen-tundra',
+    name: 'Frozen Tundra',
+    range: 'ranged',
+    type: 'support',
+    tags: ['Area Attack: Burst'],
+    effect: 'Weaken',
+    description: 'Radiates intense cold across the area, sapping enemy strength.',
+    stage: 'champion',
+    digimon: 'IceDevimon',
+  },
+
+  // Angemon
+  {
+    id: 'holy-shoot',
+    name: 'Holy Shoot',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Revitalize',
+    description: 'Fires a sphere of holy light that heals an ally on contact.',
+    stage: 'champion',
+    digimon: 'Angemon',
+  },
+
+  // Centarumon
+  {
+    id: 'solar-ray',
+    name: 'Solar Ray',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Blind',
+    description: 'Emits a concentrated beam of solar energy that blinds the target.',
+    stage: 'champion',
+    digimon: 'Centarumon',
+  },
+
   // ==========================================
-  // ULTIMATE STAGE - Digimon Adventure
+  // ULTIMATE STAGE
   // ==========================================
   // MetalGreymon
   {
@@ -531,7 +562,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     name: 'Flower Cannon',
     range: 'ranged',
     type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing I'],
+    tags: ['Weapon III', 'Armor Piercing III'],
     description: 'Fires energy from its flower hands.',
     stage: 'ultimate',
     digimon: 'Lillymon',
@@ -543,7 +574,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     name: "Vulcan's Hammer",
     range: 'melee',
     type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing II'],
+    tags: ['Weapon III', 'Armor Piercing III'],
     description: 'Strikes with its powerful hammer.',
     stage: 'ultimate',
     digimon: 'Zudomon',
@@ -557,16 +588,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     type: 'damage',
     tags: ['Weapon III', 'Signature Move'],
     description: 'Opens a portal that sucks in and destroys enemies.',
-    stage: 'ultimate',
-    digimon: 'MagnaAngemon',
-  },
-  {
-    id: 'excalibur',
-    name: 'Excalibur',
-    range: 'melee',
-    type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing II'],
-    description: 'Extends a blade of holy energy from its arm.',
     stage: 'ultimate',
     digimon: 'MagnaAngemon',
   },
@@ -594,41 +615,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Angewomon',
   },
 
-  // Paildramon (Adventure 02)
-  {
-    id: 'desperado-blaster',
-    name: 'Desperado Blaster',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon III', 'Ammo'],
-    description: 'Rapid-fires energy bullets from hip guns.',
-    stage: 'ultimate',
-    digimon: 'Paildramon',
-  },
-
-  // WarGrowlmon (Tamers)
-  {
-    id: 'atomic-blaster',
-    name: 'Atomic Blaster',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon III', 'Area Attack: Line'],
-    description: 'Fires beams from the cannons on its chest.',
-    stage: 'ultimate',
-    digimon: 'WarGrowlmon',
-  },
-  {
-    id: 'radiation-blade',
-    name: 'Radiation Blade',
-    range: 'melee',
-    type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing II'],
-    description: 'Extends energy blades from its arms.',
-    stage: 'ultimate',
-    digimon: 'WarGrowlmon',
-  },
-
-  // Rapidmon
+  // Rapidmon (Tamers)
   {
     id: 'rapid-fire',
     name: 'Rapid Fire',
@@ -650,20 +637,82 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     digimon: 'Rapidmon',
   },
 
-  // Taomon
+  // Generic Ultimate — fills the Area Attack: Close Blast gap
   {
-    id: 'talisman-of-light',
-    name: 'Talisman of Light',
-    range: 'ranged',
+    id: 'shockwave',
+    name: 'Shockwave',
+    range: 'melee',
     type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing II'],
-    description: 'Throws a massive calligraphy brush.',
+    tags: ['Weapon III', 'Area Attack: Close Blast'],
+    description: 'Releases a devastating pulse of energy that strikes all adjacent enemies.',
     stage: 'ultimate',
-    digimon: 'Taomon',
+  },
+
+  // Myotismon
+  {
+    id: 'grisly-wing',
+    name: 'Grisly Wing',
+    range: 'ranged',
+    type: 'support',
+    tags: ['Area Attack: Blast'],
+    effect: 'Fear',
+    description: 'Summons a massive swarm of bats that engulfs enemies and fills them with terror.',
+    stage: 'ultimate',
+    digimon: 'Myotismon',
+  },
+  {
+    id: 'nightmare-claw',
+    name: 'Nightmare Claw',
+    range: 'melee',
+    type: 'support',
+    tags: [],
+    effect: 'Blind',
+    description: 'Rakes with claws wreathed in dark energy that plunges the target into darkness.',
+    stage: 'ultimate',
+    digimon: 'Myotismon',
+  },
+
+  // Angewomon
+  {
+    id: 'saint-air',
+    name: 'Saint Air',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Shield',
+    description: 'Surrounds an ally in a barrier of holy light that absorbs incoming damage.',
+    stage: 'ultimate',
+    digimon: 'Angewomon',
+  },
+
+  // Lillymon
+  {
+    id: 'temptation',
+    name: 'Temptation',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Confuse',
+    description: 'Releases an enchanting fragrance that confuses enemies into erratic action.',
+    stage: 'ultimate',
+    digimon: 'Lillymon',
+  },
+
+  // MagnaAngemon
+  {
+    id: 'soul-vanisher',
+    name: 'Soul Vanisher',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Revitalize',
+    description: 'Fires a purifying beam of holy energy that restores an ally\'s vitality.',
+    stage: 'ultimate',
+    digimon: 'MagnaAngemon',
   },
 
   // ==========================================
-  // MEGA STAGE - Digimon Adventure
+  // MEGA STAGE
   // ==========================================
   // WarGreymon
   {
@@ -671,7 +720,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     name: 'Terra Force',
     range: 'ranged',
     type: 'damage',
-    tags: ['Weapon VII', 'Signature Move', 'Area Attack: Blast'],
+    tags: ['Weapon III', 'Signature Move', 'Area Attack: Blast'],
     description: 'Gathers energy to form a massive sphere and hurls it.',
     stage: 'mega',
     digimon: 'WarGreymon',
@@ -731,16 +780,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
 
   // Phoenixmon
   {
-    id: 'crimson-flame',
-    name: 'Crimson Flame',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon III', 'Area Attack: Cone'],
-    description: 'Breathes holy flames.',
-    stage: 'mega',
-    digimon: 'Phoenixmon',
-  },
-  {
     id: 'starlight-explosion',
     name: 'Starlight Explosion',
     range: 'ranged',
@@ -775,16 +814,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     stage: 'mega',
     digimon: 'Seraphimon',
   },
-  {
-    id: 'seven-heavens',
-    name: 'Seven Heavens',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon III', 'Area Attack: Blast'],
-    description: 'Fires seven balls of holy light.',
-    stage: 'mega',
-    digimon: 'Seraphimon',
-  },
 
   // Imperialdramon (Adventure 02)
   {
@@ -794,16 +823,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     type: 'damage',
     tags: ['Weapon III', 'Area Attack: Line'],
     description: 'Fires a devastating beam from its cannon.',
-    stage: 'mega',
-    digimon: 'Imperialdramon',
-  },
-  {
-    id: 'mega-crusher',
-    name: 'Mega Crusher',
-    range: 'melee',
-    type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing III'],
-    description: 'Crushes enemies with its massive claws.',
     stage: 'mega',
     digimon: 'Imperialdramon',
   },
@@ -824,7 +843,7 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     name: 'Transcendent Sword',
     range: 'melee',
     type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing IV'],
+    tags: ['Weapon III', 'Armor Piercing III', 'Signature Move'],
     description: 'Slashes with the Grey Sword extending from its arm.',
     stage: 'mega',
     digimon: 'Omnimon',
@@ -863,16 +882,6 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     stage: 'mega',
     digimon: 'MegaGargomon',
   },
-  {
-    id: 'gargo-missiles',
-    name: 'Gargo Missiles',
-    range: 'ranged',
-    type: 'damage',
-    tags: ['Weapon III', 'Area Attack: Blast'],
-    description: 'Launches missiles from its shoulders.',
-    stage: 'mega',
-    digimon: 'MegaGargomon',
-  },
 
   // Sakuyamon
   {
@@ -907,37 +916,109 @@ export const ATTACK_DATABASE: AttackTemplate[] = [
     stage: 'mega',
     digimon: 'Beelzemon',
   },
+
+  // Seraphimon
   {
-    id: 'darkness-claw',
-    name: 'Darkness Claw',
-    range: 'melee',
-    type: 'damage',
-    tags: ['Weapon III', 'Armor Piercing II'],
-    description: 'Slashes with claws infused with dark power.',
+    id: 'seven-heavens',
+    name: 'Seven Heavens',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Shield',
+    description: 'Creates seven orbs of holy light that surround and protect an ally.',
     stage: 'mega',
-    digimon: 'Beelzemon',
+    digimon: 'Seraphimon',
+  },
+
+  // Piedmon
+  {
+    id: 'clown-trick',
+    name: 'Clown Trick',
+    range: 'ranged',
+    type: 'support',
+    tags: ['Area Attack: Burst'],
+    effect: 'Confuse',
+    description: 'Unleashes a burst of disorienting illusions that confuse all nearby enemies.',
+    stage: 'mega',
+    digimon: 'Piedmon',
+  },
+
+  // Puppetmon
+  {
+    id: 'puppet-curse',
+    name: 'Puppet Curse',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Weaken',
+    description: 'Places a dark curse on an enemy that saps their power.',
+    stage: 'mega',
+    digimon: 'Puppetmon',
+  },
+
+  // Sakuyamon
+  {
+    id: 'fox-drive',
+    name: 'Fox Drive',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Regenerate',
+    description: 'Channels the power of fox spirits to steadily restore an ally\'s vitality.',
+    stage: 'mega',
+    digimon: 'Sakuyamon',
+  },
+
+  // Gallantmon
+  {
+    id: 'final-elysion',
+    name: 'Final Elysion',
+    range: 'ranged',
+    type: 'support',
+    tags: [],
+    effect: 'Cleanse',
+    description: 'Fires a beam of pure light from its Aegis shield that purifies all negative effects.',
+    stage: 'mega',
+    digimon: 'Gallantmon',
+  },
+
+  // Ophanimon
+  {
+    id: 'holy-hug',
+    name: 'Holy Hug',
+    range: 'melee',
+    type: 'support',
+    tags: [],
+    effect: 'Revitalize',
+    description: 'Enfolds an ally in a warm embrace of divine energy that restores them.',
+    stage: 'mega',
+    digimon: 'Ophanimon',
   },
 
   // ==========================================
   // UNIVERSAL ATTACKS (any stage)
   // ==========================================
   {
-    id: 'basic-attack',
-    name: 'Basic Attack',
+    id: 'body-blow',
+    name: 'Body Blow',
     range: 'melee',
     type: 'damage',
     tags: [],
-    description: 'A standard physical attack.',
+    effect: 'Weaken',
+    description: 'A powerful strike to the body that leaves the target weakened.',
     stage: 'any',
+    digimon: 'Various',
   },
   {
-    id: 'basic-ranged',
-    name: 'Basic Ranged Attack',
+    id: 'flame',
+    name: 'Flame',
     range: 'ranged',
     type: 'damage',
     tags: [],
-    description: 'A basic ranged attack.',
+    effect: 'Fear',
+    description: 'Breathes or projects a gout of flame that frightens the target.',
     stage: 'any',
+    digimon: 'Various',
   },
 ]
 
