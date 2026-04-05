@@ -153,7 +153,7 @@ export function useDigimon() {
   }
 
   // Calculate derived stats from base stats, stage, and size (DDA 1.4 page 111)
-  function calculateDerivedStats(digimon: Digimon, eddySoulRules?: EddySoulRules) {
+  function calculateDerivedStats(digimon: Digimon, eddySoulRules?: EddySoulRules, partnerStrikeFirst?: boolean) {
     const { baseStats, stage, size } = digimon
     const bonusStats = (digimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }
     const stageConfig = STAGE_CONFIG[stage as DigimonStage]
@@ -228,6 +228,9 @@ export function useDigimon() {
 
     // Digizoid Armor: Blue movement bonus
     if (digizoidArmor?.choiceId === 'blue') effectiveBase += 4
+
+    // Partner tamer Strike First! bonus
+    if (partnerStrikeFirst) effectiveBase += 2
 
     // Ensure minimum effective base of 1
     effectiveBase = Math.max(1, effectiveBase)

@@ -153,7 +153,7 @@ const hugePowerRank2Enabled = ref(false)
 // Composables
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, calculateDerivedStats: _calcDigimonStats } = useDigimon()
-const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
+const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
 const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
@@ -478,6 +478,10 @@ const specialOrders = computed(() => {
   return getUnlockedSpecialOrders(attrs, xpB, campaignLevel.value)
 })
 
+const hasStrikeFirst = computed(() =>
+  specialOrders.value.some((o) => o.name === 'Strike First!')
+)
+
 // Get current stage digimon for this tamer (for digimon selection)
 const currentPartnerDigimon = computed(() => {
   if (!tamer.value) return []
@@ -709,7 +713,8 @@ const initiativeModifierB = computed(() => {
 })
 
 const initiativeModifier = computed(() => {
-  return Math.max(initiativeModifierA.value, initiativeModifierB.value)
+  const base = Math.max(initiativeModifierA.value, initiativeModifierB.value)
+  return base + (hasStrikeFirst.value ? 1 : 0)
 })
 
 // Turn tracking
