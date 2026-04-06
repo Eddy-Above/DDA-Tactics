@@ -296,7 +296,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
   })
 
   const tormentCP = computed(() => {
-    return torments.value.reduce((sum, t) => sum + t.markedBoxes, 0)
+    return torments.value.reduce((sum, t) => sum + t.cpMarkedBoxes, 0)
   })
 
   const totalCP = computed(() => {

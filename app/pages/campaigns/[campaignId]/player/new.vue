@@ -426,7 +426,7 @@ async function handleSubmit() {
                   ]"
                   :disabled="i > tormentMarkingLimits[torment.severity] && i > torment.markedBoxes"
                   :title="i > tormentMarkingLimits[torment.severity] ? 'Cannot mark more than ' + tormentMarkingLimits[torment.severity] + ' boxes at creation' : ''"
-                  @click="torment.markedBoxes = torment.markedBoxes >= i ? i - 1 : Math.min(i, tormentMarkingLimits[torment.severity])"
+                  @click="torment.markedBoxes = torment.markedBoxes >= i ? i - 1 : Math.min(i, tormentMarkingLimits[torment.severity]); torment.cpMarkedBoxes = torment.markedBoxes"
                 />
               </div>
               <span class="text-xs text-digimon-dark-400">
