@@ -68,7 +68,18 @@ export async function getDigimonDerivedStats(entityId: string) {
   const stage = dig.stage as DigimonStage
   const size = ((dig as any).size || 'medium') as DigimonSize
 
-  return calculateDigimonDerivedStats(totalBaseStats, stage, size)
+  const derived = calculateDigimonDerivedStats(totalBaseStats, stage, size)
+
+  // Apply Quality bonuses to derived Spec Values
+  const qualities = typeof (dig as any).qualities === 'string'
+    ? JSON.parse((dig as any).qualities) : ((dig as any).qualities ?? [])
+  if (qualities.some((q: any) => q.choiceId === 'effect-warrior')) {
+    derived.bit += 1
+    derived.cpu += 1
+    derived.ram += 1
+  }
+
+  return derived
 }
 
 /**
