@@ -803,7 +803,7 @@ async function confirmAttack(target: CombatParticipant) {
     // ALL attacks route through intercede-offer
     // Server handles: intercede offers, dodge requests, or NPC auto-resolve
     try {
-      await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
+      const intercedResult = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
         method: 'POST',
         body: {
           attackerId: participant.id,
@@ -826,6 +826,9 @@ async function confirmAttack(target: CombatParticipant) {
           batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
         },
       })
+      if (intercedResult) {
+        currentEncounter.value = intercedResult as any
+      }
       // Add attack log entry
       const entity = getEntityDetails(participant)
       const targetEntity = getEntityDetails(target)

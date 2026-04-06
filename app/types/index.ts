@@ -352,6 +352,7 @@ export interface CombatParticipant {
   clash?: ClashState            // Active clash state (if currently clashing)
   clashCooldownUntilRound?: number  // Cannot initiate a new clash until this round
   usedFreeClashThisRound?: boolean  // Wrestlemania: free clash initiation used this round
+  stunActionReducedThisRound?: boolean  // Stun already reduced actions this round (prevents double-reduction at rollover)
 }
 
 export interface ActiveEffect {

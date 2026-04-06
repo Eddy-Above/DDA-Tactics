@@ -305,6 +305,14 @@ export function useEncounters() {
           p.actionsRemaining.simple = Math.max(0, 2 - p.interceptPenalty)
           p.interceptPenalty = 0
         }
+        // Apply Stun action penalty (skip if already reduced mid-round when Stun was applied)
+        if (!p.stunActionReducedThisRound) {
+          const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
+          if (stunEffect) {
+            p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
+          }
+        }
+        p.stunActionReducedThisRound = false
         // Decrement effect durations; skip permanent effects
         p.activeEffects = (p.activeEffects || [])
           .map((e) => PERMANENT_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
@@ -347,6 +355,25 @@ export function useEncounters() {
           effects: ['Poison'],
         })
       })
+
+      // Signature Move Battery: grant +1 Battery at end of round to digimon who did not use Signature Move
+      if (houseRules?.signatureMoveBattery && digimonMap) {
+        participants.forEach((p) => {
+          if (p.type !== 'digimon') return
+          const digimon = digimonMap.get(p.entityId)
+          const stage = digimon?.stage as string | undefined
+          const stageBatteryCapacity: Record<string, number> = {
+            'champion': 2, 'ultimate': 3, 'mega': 4, 'ultra': 5,
+          }
+          const cap = stage ? (stageBatteryCapacity[stage] ?? 0) : 0
+          if (cap > 0) {
+            if (!p.usedSignatureMoveThisTurn) {
+              p.battery = Math.min(cap, (p.battery ?? 0) + 1)
+            }
+            p.usedSignatureMoveThisTurn = false
+          }
+        })
+      }
     }
 
     // Mark current participant as having acted
@@ -355,22 +382,6 @@ export function useEncounters() {
     if (currentParticipant) {
       currentParticipant.hasActed = true
       currentParticipant.isActive = false
-
-      // Signature Move Battery: grant +1 Battery at end of turn if rule is active
-      if (houseRules?.signatureMoveBattery && currentParticipant.type === 'digimon' && digimonMap) {
-        const digimon = digimonMap.get(currentParticipant.entityId)
-        const stage = digimon?.stage as string | undefined
-        const stageBatteryCapacity: Record<string, number> = {
-          'champion': 2, 'ultimate': 3, 'mega': 4, 'ultra': 5,
-        }
-        const cap = stage ? (stageBatteryCapacity[stage] ?? 0) : 0
-        if (cap > 0) {
-          if (!currentParticipant.usedSignatureMoveThisTurn) {
-            currentParticipant.battery = Math.min(cap, (currentParticipant.battery ?? 0) + 1)
-          }
-          currentParticipant.usedSignatureMoveThisTurn = false
-        }
-      }
     }
 
     // Mark next participant as active

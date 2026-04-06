@@ -186,6 +186,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           }
           updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
           appliedEffectName = attackDef.effect
+          // Stun: immediately reduce actions if target hasn't taken their turn yet this round
+          if (attackDef.effect === 'Stun' && !p.hasActed) {
+            updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
+            updated.stunActionReducedThisRound = true
+          }
         }
 
         return updated
@@ -309,7 +314,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         // Accumulate Combat Monster bonus for target (only from real wound damage)
         if (targetHasCombatMonster && remainder > 0) {
           updated.combatMonsterBonus = Math.min(
-            targetHealthStat,
+            p.maxWounds,
             (p.combatMonsterBonus ?? 0) + remainder
           )
         }
@@ -331,6 +336,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             }
             updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
             appliedEffectName = attackDef.effect
+            // Stun: immediately reduce actions if target hasn't taken their turn yet this round
+            if (attackDef.effect === 'Stun' && !p.hasActed) {
+              updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
+              updated.stunActionReducedThisRound = true
+            }
           }
         }
       }
@@ -360,6 +370,13 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
       const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
       const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+
+      const devolvedQualities = typeof newDigimon?.qualities === 'string'
+        ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+      const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
+      damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
+        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.maxWounds)
+        : 0
 
       autoDevolveLog = {
         id: `log-${Date.now()}-autodevolve`,

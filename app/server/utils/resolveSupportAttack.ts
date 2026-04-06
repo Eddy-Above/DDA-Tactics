@@ -118,7 +118,10 @@ export function calculateEffectPotency(
     return { potency, potencyStat: targetPotencyDef.stat }
   }
 
-  const potencyStat = EFFECT_POTENCY_STAT[effectName] || 'bit'
+  if (!EFFECT_POTENCY_STAT[effectName]) {
+    return { potency: 0, potencyStat: '' }
+  }
+  const potencyStat = EFFECT_POTENCY_STAT[effectName]
   const potency = attackerDerived ? (attackerDerived[potencyStat] ?? 0) : 0
   return { potency, potencyStat }
 }

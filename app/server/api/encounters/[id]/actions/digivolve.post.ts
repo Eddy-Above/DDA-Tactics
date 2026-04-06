@@ -209,6 +209,10 @@ export default defineEventHandler(async (event) => {
   const stageConfig = STAGE_CONFIG[newStage]
   const newMaxWounds = (baseStats?.health || 0) + (bonusStats?.health || 0) + (stageConfig?.woundBonus || 0)
 
+  const newQualities = typeof newDigimon.qualities === 'string'
+    ? JSON.parse(newDigimon.qualities) : (newDigimon.qualities || [])
+  const newHasCombatMonster = (newQualities as any[]).some((q: any) => q.id === 'combat-monster')
+
   // Update participant
   const oldName = currentEntry.species
   const newName = targetEntry.species
@@ -244,17 +248,20 @@ export default defineEventHandler(async (event) => {
           maxWounds: newMaxWounds,
           currentWounds: 0,
           woundsHistory,
+          combatMonsterBonus: newHasCombatMonster ? Math.min(p.combatMonsterBonus ?? 0, newMaxWounds) : 0,
           ...(isNpc ? { npcStageIndex: body.targetChainIndex } : {}),
         }
       } else {
         // Devolve: restore wounds from history
         const woundsHistory = [...(p.woundsHistory || [])]
         const previousState = woundsHistory.pop()
+        const devolvedMaxWounds = previousState?.maxWounds || newMaxWounds
         evoChanges = {
           entityId: previousState?.entityId || newDigimon.id,
-          maxWounds: previousState?.maxWounds || newMaxWounds,
+          maxWounds: devolvedMaxWounds,
           currentWounds: previousState?.wounds ?? 0,
           woundsHistory,
+          combatMonsterBonus: newHasCombatMonster ? Math.min(p.combatMonsterBonus ?? 0, devolvedMaxWounds) : 0,
           ...(isNpc ? { npcStageIndex: previousState?.stageIndex ?? body.targetChainIndex } : {}),
         }
       }

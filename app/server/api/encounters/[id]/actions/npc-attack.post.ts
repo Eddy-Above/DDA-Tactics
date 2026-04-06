@@ -204,6 +204,93 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // Support attack: skip damage, apply effect only, return early
+  if (npcAttackDef?.type === 'support') {
+    let appliedEffectName: string | null = null
+    const supportParticipants = updatedParticipants.map((p: any) => {
+      if (p.id === body.targetId && hit && npcAttackDef.effect) {
+        const effectDuration = Math.max(1, netSuccesses)
+        const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
+        const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+        const newEffect = {
+          id: `effect-${Date.now()}`,
+          name: npcAttackDef.effect,
+          type: effectType,
+          duration: effectDuration,
+          source: 'Attack',
+          description: '',
+        }
+        appliedEffectName = npcAttackDef.effect
+        return { ...p, activeEffects: [...(p.activeEffects || []), newEffect] }
+      }
+      return p
+    })
+
+    // Resolve names
+    let supportAttackerName = 'Unknown'
+    if (actor.type === 'tamer') {
+      const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
+      supportAttackerName = tamerEntity?.name || `Tamer ${actor.entityId}`
+    } else if (actor.type === 'digimon') {
+      const baseDigimonName = attackerDigimon?.name || `Digimon ${actor.entityId}`
+      supportAttackerName = resolveParticipantName(actor, participants, baseDigimonName, attackerDigimon?.isEnemy || false)
+    }
+
+    let supportTargetName = 'Unknown'
+    if (target.type === 'tamer') {
+      const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
+      supportTargetName = targetTamer?.name || `Tamer ${target.entityId}`
+    } else if (target.type === 'digimon') {
+      const [tgt] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+      const baseName = tgt?.name || `Digimon ${target.entityId}`
+      supportTargetName = resolveParticipantName(target, participants, baseName, tgt?.isEnemy || false)
+    }
+
+    const supportAttackLog = {
+      id: `log-${Date.now()}-attack`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: actor.id,
+      actorName: supportAttackerName,
+      action: 'Attack',
+      target: supportTargetName,
+      result: `${body.accuracyDicePool}d6 => [${body.accuracyDiceResults.join(',')}] = ${body.accuracySuccesses} successes`,
+      damage: null,
+      effects: ['Attack'],
+    }
+
+    const supportDodgeLog = {
+      id: `log-${Date.now() + 1}-dodge`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: target.id,
+      actorName: supportTargetName,
+      action: 'Dodge (Support)',
+      target: null,
+      result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
+      damage: 0,
+      effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+      hit,
+    }
+
+    await db.update(encounters).set({
+      participants: JSON.stringify(supportParticipants),
+      battleLog: JSON.stringify([...battleLog, supportAttackLog, supportDodgeLog]),
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const [supportUpdated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...supportUpdated,
+      participants: parseJsonField(supportUpdated.participants),
+      turnOrder: parseJsonField(supportUpdated.turnOrder),
+      battleLog: parseJsonField(supportUpdated.battleLog),
+      hazards: parseJsonField(supportUpdated.hazards),
+      pendingRequests: parseJsonField(supportUpdated.pendingRequests),
+      requestResponses: parseJsonField(supportUpdated.requestResponses),
+    }
+  }
+
   // Combat Monster for attacker
   let attackerHasCombatMonster = false
   let attackerHealthStat = 0
@@ -294,7 +381,7 @@ export default defineEventHandler(async (event) => {
       // Accumulate Combat Monster bonus for target
       if (targetDigimon?._hasCombatMonster) {
         updated.combatMonsterBonus = Math.min(
-          targetDigimon._healthStat,
+          p.maxWounds,
           (p.combatMonsterBonus ?? 0) + damageDealt
         )
       }
@@ -347,6 +434,13 @@ export default defineEventHandler(async (event) => {
       // Get old and new names for log
       const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
       const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+
+      const devolvedQualities = typeof newDigimon?.qualities === 'string'
+        ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+      const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
+      damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
+        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.maxWounds)
+        : 0
 
       const baseOldDigimonName = oldDigimon?.name || 'Digimon'
       const oldDigimonName = resolveParticipantName(damagedTarget, participants, baseOldDigimonName, oldDigimon?.isEnemy || false)
