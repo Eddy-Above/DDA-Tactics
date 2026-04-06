@@ -182,6 +182,7 @@ export function useDigimon() {
 
     const dataOpt = qualities.find((q: any) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') totalStats.armor += 2
+    if (dataOpt?.choiceId === 'effect-warrior') totalStats.armor -= 2
 
     // Digizoid Armor stat bonuses
     const digizoidArmor = qualities.find((q: any) => q.id === 'digizoid-armor')
@@ -201,9 +202,10 @@ export function useDigimon() {
     const agility = Math.max(0, Math.floor((totalStats.accuracy + totalStats.dodge) / 2) + sizeConfig.agilityBonus)
 
     // Spec Values (derived from derived stats)
-    const bit = Math.floor(brains / 10) + stageConfig.stageBonus
-    const cpu = Math.floor(body / 10) + stageConfig.stageBonus
-    const ram = Math.floor(agility / 10) + stageConfig.stageBonus
+    let bit = Math.floor(brains / 10) + stageConfig.stageBonus
+    let cpu = Math.floor(body / 10) + stageConfig.stageBonus
+    let ram = Math.floor(agility / 10) + stageConfig.stageBonus
+    if (dataOpt?.choiceId === 'effect-warrior') { bit += 1; cpu += 1; ram += 1 }
 
     // Calculate movement with all modifiers
     const stageBaseMovement = stageConfig.movement

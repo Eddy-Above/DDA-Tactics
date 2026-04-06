@@ -168,6 +168,7 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
 
     const dataOpt = qualities.find((q) => q.id === 'data-optimization')
     if (dataOpt?.choiceId === 'guardian') armor += 2
+    if (dataOpt?.choiceId === 'effect-warrior') armor -= 2
 
     // Digizoid Armor stat bonuses
     const digizoidArmor = qualities.find((q) => q.id === 'digizoid-armor')
@@ -184,9 +185,10 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
     const body = Math.max(0, Math.floor((health + damage + armor) / 3) + sizeConfig.bodyBonus)
     const agility = Math.max(0, Math.floor((accuracy + dodge) / 2) + sizeConfig.agilityBonus)
 
-    const bit = Math.floor(brains / 10) + stageConfig.stageBonus
-    const cpu = Math.floor(body / 10) + stageConfig.stageBonus
-    const ram = Math.floor(agility / 10) + stageConfig.stageBonus
+    let bit = Math.floor(brains / 10) + stageConfig.stageBonus
+    let cpu = Math.floor(body / 10) + stageConfig.stageBonus
+    let ram = Math.floor(agility / 10) + stageConfig.stageBonus
+    if (dataOpt?.choiceId === 'effect-warrior') { bit += 1; cpu += 1; ram += 1 }
 
     const stageBaseMovement = stageConfig.movement
 
