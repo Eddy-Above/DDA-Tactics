@@ -2,7 +2,7 @@
 import type { CreateDigimonData } from '~/composables/useDigimon'
 import type { Digimon } from '~/server/db/schema'
 import { STAGE_CONFIG, SIZE_CONFIG, BASE_STAT_RANGES, type DigimonStage, type DigimonSize, type DigimonFamily } from '~/types'
-import { QUALITY_DATABASE, getMaxRanksAtStage, getEffectiveDPCost, compareStages } from '~/data/qualities'
+import { QUALITY_DATABASE, getMaxRanksAtStage, getEffectiveDPCost, compareStages, STAGE_ORDER } from '~/data/qualities'
 import { isEffectValidForType, EFFECT_ALIGNMENT, EFFECT_ATTACK_TYPE_RESTRICTIONS } from '~/data/attackConstants'
 import { useBaseStatRanges } from '~/composables/useBaseStatRanges'
 
@@ -83,6 +83,15 @@ watch([() => form.stage, () => eddySoulRules.value?.baseStatRangesEnabled], () =
 // Linked Digimon data for Evolution Chain Preview
 const linkedEvolvesFrom = ref<Digimon | null>(null)
 const linkedEvolvesTo = ref<Digimon[]>([])
+
+const ROW_HEIGHT = 88
+const linkedEvolvesToMinStage = computed(() => {
+  if (linkedEvolvesTo.value.length === 0) return 0
+  return Math.min(...linkedEvolvesTo.value.map(e => STAGE_ORDER.indexOf(e.stage as typeof STAGE_ORDER[number])))
+})
+function linkedEvolvesToOffset(evo: Digimon): number {
+  return (STAGE_ORDER.indexOf(evo.stage as typeof STAGE_ORDER[number]) - linkedEvolvesToMinStage.value) * ROW_HEIGHT
+}
 
 // Collapsible sections
 const basicInfoExpanded = ref(true)
@@ -1570,7 +1579,7 @@ function handleCancel() {
 
           <div v-if="linkedEvolvesFrom || linkedEvolvesTo.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
             <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain Preview</h3>
-            <div class="flex items-center gap-2 flex-wrap">
+            <div class="flex flex-col items-center">
               <template v-if="linkedEvolvesFrom">
                 <div class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2">
                   <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
@@ -1587,7 +1596,7 @@ function handleCancel() {
                     <div class="text-xs text-digimon-dark-400 capitalize">{{ linkedEvolvesFrom.stage }}</div>
                   </div>
                 </div>
-                <span class="text-digimon-dark-500 self-center">→</span>
+                <div class="w-px h-4 bg-digimon-dark-500"></div>
               </template>
 
               <div class="flex items-center gap-2 bg-digimon-orange-500/20 border border-digimon-orange-500 rounded-lg px-3 py-2">
@@ -1607,16 +1616,11 @@ function handleCancel() {
               </div>
 
               <template v-if="linkedEvolvesTo.length > 0">
-                <span class="text-digimon-dark-500 self-center">→</span>
                 <template v-if="linkedEvolvesTo.length === 1">
+                  <div class="w-px h-4 bg-digimon-dark-500"></div>
                   <div class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2">
                     <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                      <img
-                        v-if="linkedEvolvesTo[0].spriteUrl"
-                        :src="linkedEvolvesTo[0].spriteUrl"
-                        :alt="linkedEvolvesTo[0].name"
-                        class="max-w-full max-h-full object-contain"
-                      />
+                      <img v-if="linkedEvolvesTo[0].spriteUrl" :src="linkedEvolvesTo[0].spriteUrl" :alt="linkedEvolvesTo[0].name" class="max-w-full max-h-full object-contain" />
                       <span v-else class="text-sm">🦖</span>
                     </div>
                     <div>
@@ -1626,26 +1630,33 @@ function handleCancel() {
                   </div>
                 </template>
                 <template v-else>
-                  <div class="flex flex-col gap-2">
+                  <div class="flex flex-col items-center">
+                  <div class="w-px h-3 bg-digimon-dark-500"></div>
+                  <div class="flex">
                     <div
-                      v-for="evo in linkedEvolvesTo"
+                      v-for="(evo, i) in linkedEvolvesTo"
                       :key="evo.id"
-                      class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2"
+                      class="flex flex-col items-center px-2"
                     >
-                      <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                        <img
-                          v-if="evo.spriteUrl"
-                          :src="evo.spriteUrl"
-                          :alt="evo.name"
-                          class="max-w-full max-h-full object-contain"
-                        />
-                        <span v-else class="text-sm">🦖</span>
+                      <div class="relative w-full" :style="{ height: (16 + linkedEvolvesToOffset(evo)) + 'px' }">
+                        <div
+                          class="absolute top-0 h-px bg-digimon-dark-500"
+                          :class="i === 0 ? 'left-1/2 -right-2' : i === linkedEvolvesTo.length - 1 ? '-left-2 right-1/2' : '-inset-x-2'"
+                        ></div>
+                        <div class="absolute left-1/2 top-px bottom-0 w-px bg-digimon-dark-500"></div>
                       </div>
-                      <div>
-                        <div class="text-white text-sm font-medium">{{ evo.name }}</div>
-                        <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
+                      <div class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2">
+                        <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                          <img v-if="evo.spriteUrl" :src="evo.spriteUrl" :alt="evo.name" class="max-w-full max-h-full object-contain" />
+                          <span v-else class="text-sm">🦖</span>
+                        </div>
+                        <div>
+                          <div class="text-white text-sm font-medium">{{ evo.name }}</div>
+                          <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
+                        </div>
                       </div>
                     </div>
+                  </div>
                   </div>
                 </template>
               </template>

@@ -4,6 +4,7 @@ import type { Digimon } from '~/server/db/schema'
 import { useDigimonForm } from '~/composables/useDigimonForm'
 import { useBaseStatRanges } from '~/composables/useBaseStatRanges'
 import { BASE_STAT_RANGES } from '~/types'
+import { STAGE_ORDER } from '~/data/qualities'
 
 definePageMeta({
   title: 'Edit Digimon',
@@ -110,6 +111,16 @@ const evolutionChain = computed(() => {
   if (!digimon.value || digimonList.value.length === 0) return null
   return getEvolutionChain(digimon.value, digimonList.value)
 })
+
+const ROW_HEIGHT = 88
+const descendantsMinStage = computed(() => {
+  const tree = evolutionChain.value?.descendantsTree
+  if (!tree || tree.length === 0) return 0
+  return Math.min(...tree.map(n => STAGE_ORDER.indexOf(n.digimon.stage as typeof STAGE_ORDER[number])))
+})
+function descendantOffset(node: { digimon: { stage: string } }): number {
+  return (STAGE_ORDER.indexOf(node.digimon.stage as typeof STAGE_ORDER[number]) - descendantsMinStage.value) * ROW_HEIGHT
+}
 
 async function loadDigimon() {
   try {
@@ -1025,7 +1036,7 @@ async function handleCopy() {
         <!-- Evolution Chain Preview -->
         <div v-if="evolutionChain" class="mt-6 pt-4 border-t border-digimon-dark-600">
           <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain</h3>
-          <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex flex-col items-center">
             <!-- Ancestors -->
             <template v-for="(ancestor, index) in evolutionChain.ancestors" :key="ancestor.id">
               <NuxtLink
@@ -1046,7 +1057,7 @@ async function handleCopy() {
                   <div class="text-xs text-digimon-dark-400 capitalize">{{ ancestor.stage }}</div>
                 </div>
               </NuxtLink>
-              <span class="text-digimon-dark-500 self-center">→</span>
+              <div class="w-px h-4 bg-digimon-dark-500"></div>
             </template>
 
             <!-- Current (highlighted) -->
@@ -1068,21 +1079,37 @@ async function handleCopy() {
 
             <!-- Descendants (tree structure with hierarchy) -->
             <template v-if="evolutionChain.descendantsTree.length > 0">
-              <span class="text-digimon-dark-500 self-center">→</span>
-              <div :class="evolutionChain.descendantsTree.length > 1 ? 'flex flex-col gap-2' : ''">
-                <EvolutionTreeBranch
-                  v-for="node in evolutionChain.descendantsTree"
-                  :key="node.digimon.id"
-                  :node="node"
-                  :link-base="`/campaigns/${campaignId}/library/digimon`"
-                />
-              </div>
+              <template v-if="evolutionChain.descendantsTree.length === 1">
+                <div class="w-px h-4 bg-digimon-dark-500"></div>
+                <EvolutionTreeBranch :node="evolutionChain.descendantsTree[0]" :link-base="`/campaigns/${campaignId}/library/digimon`" />
+              </template>
+              <template v-else>
+                <div class="flex flex-col items-center">
+                  <div class="w-px h-3 bg-digimon-dark-500"></div>
+                  <div class="flex">
+                    <div
+                      v-for="(node, i) in evolutionChain.descendantsTree"
+                      :key="node.digimon.id"
+                      class="flex flex-col items-center px-2"
+                    >
+                      <div class="relative w-full" :style="{ height: (16 + descendantOffset(node)) + 'px' }">
+                        <div
+                          class="absolute top-0 h-px bg-digimon-dark-500"
+                          :class="i === 0 ? 'left-1/2 -right-2' : i === evolutionChain.descendantsTree.length - 1 ? '-left-2 right-1/2' : '-inset-x-2'"
+                        ></div>
+                        <div class="absolute left-1/2 top-px bottom-0 w-px bg-digimon-dark-500"></div>
+                      </div>
+                      <EvolutionTreeBranch :node="node" :link-base="`/campaigns/${campaignId}/library/digimon`" />
+                    </div>
+                  </div>
+                </div>
+              </template>
             </template>
 
             <!-- No links message -->
             <span
               v-if="evolutionChain.ancestors.length === 0 && evolutionChain.descendants.length === 0"
-              class="text-digimon-dark-500 text-sm ml-2"
+              class="text-digimon-dark-500 text-sm"
             >
               No evolution links yet
             </span>

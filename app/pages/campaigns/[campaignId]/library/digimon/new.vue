@@ -5,6 +5,7 @@ import type { Digimon } from '~/server/db/schema'
 import { useDigimonForm } from '~/composables/useDigimonForm'
 import { useBaseStatRanges } from '~/composables/useBaseStatRanges'
 import { SIZE_CONFIG, BASE_STAT_RANGES } from '~/types'
+import { STAGE_ORDER } from '~/data/qualities'
 
 definePageMeta({
   title: 'New Digimon',
@@ -96,6 +97,15 @@ function handleAddAttack(attack: any) {
 // Evolution preview state (page-specific)
 const linkedEvolvesFrom = ref<Digimon | null>(null)
 const linkedEvolvesTo = ref<Digimon[]>([])
+
+const ROW_HEIGHT = 88
+const linkedEvolvesToMinStage = computed(() => {
+  if (linkedEvolvesTo.value.length === 0) return 0
+  return Math.min(...linkedEvolvesTo.value.map(e => STAGE_ORDER.indexOf(e.stage as typeof STAGE_ORDER[number])))
+})
+function linkedEvolvesToOffset(evo: Digimon): number {
+  return (STAGE_ORDER.indexOf(evo.stage as typeof STAGE_ORDER[number]) - linkedEvolvesToMinStage.value) * ROW_HEIGHT
+}
 const bonusDPExpanded = ref(false)
 
 // Start with basic info expanded for new Digimon
@@ -961,7 +971,7 @@ async function handleSubmit() {
         <!-- Evolution Chain Preview -->
         <div v-if="linkedEvolvesFrom || linkedEvolvesTo.length > 0" class="mt-6 pt-4 border-t border-digimon-dark-600">
           <h3 class="text-sm font-semibold text-digimon-dark-300 mb-3">Evolution Chain Preview</h3>
-          <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex flex-col items-center">
             <!-- Evolves From -->
             <template v-if="linkedEvolvesFrom">
               <NuxtLink
@@ -982,7 +992,7 @@ async function handleSubmit() {
                   <div class="text-xs text-digimon-dark-400 capitalize">{{ linkedEvolvesFrom.stage }}</div>
                 </div>
               </NuxtLink>
-              <span class="text-digimon-dark-500 self-center">→</span>
+              <div class="w-px h-4 bg-digimon-dark-500"></div>
             </template>
 
             <!-- Current (New Digimon being created) -->
@@ -1002,22 +1012,16 @@ async function handleSubmit() {
               </div>
             </div>
 
-            <!-- Evolves To (tree structure) -->
+            <!-- Evolves To -->
             <template v-if="linkedEvolvesTo.length > 0">
-              <span class="text-digimon-dark-500 self-center">→</span>
-              <!-- Single evolution - show inline -->
               <template v-if="linkedEvolvesTo.length === 1">
+                <div class="w-px h-4 bg-digimon-dark-500"></div>
                 <NuxtLink
                   :to="`/campaigns/${campaignId}/library/digimon/${linkedEvolvesTo[0].id}`"
                   class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
                 >
                   <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                    <img
-                      v-if="linkedEvolvesTo[0].spriteUrl"
-                      :src="linkedEvolvesTo[0].spriteUrl"
-                      :alt="linkedEvolvesTo[0].name"
-                      class="max-w-full max-h-full object-contain"
-                    />
+                    <img v-if="linkedEvolvesTo[0].spriteUrl" :src="linkedEvolvesTo[0].spriteUrl" :alt="linkedEvolvesTo[0].name" class="max-w-full max-h-full object-contain" />
                     <span v-else class="text-sm">🦖</span>
                   </div>
                   <div>
@@ -1026,29 +1030,37 @@ async function handleSubmit() {
                   </div>
                 </NuxtLink>
               </template>
-              <!-- Multiple evolutions - show as vertical branch -->
               <template v-else>
-                <div class="flex flex-col gap-2">
-                  <NuxtLink
-                    v-for="evo in linkedEvolvesTo"
+                <div class="flex flex-col items-center">
+                <div class="w-px h-3 bg-digimon-dark-500"></div>
+                <div class="flex">
+                  <div
+                    v-for="(evo, i) in linkedEvolvesTo"
                     :key="evo.id"
-                    :to="`/campaigns/${campaignId}/library/digimon/${evo.id}`"
-                    class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                    class="flex flex-col items-center px-2"
                   >
-                    <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                      <img
-                        v-if="evo.spriteUrl"
-                        :src="evo.spriteUrl"
-                        :alt="evo.name"
-                        class="max-w-full max-h-full object-contain"
-                      />
-                      <span v-else class="text-sm">🦖</span>
+                    <div class="relative w-full" :style="{ height: (16 + linkedEvolvesToOffset(evo)) + 'px' }">
+                      <div
+                        class="absolute top-0 h-px bg-digimon-dark-500"
+                        :class="i === 0 ? 'left-1/2 -right-2' : i === linkedEvolvesTo.length - 1 ? '-left-2 right-1/2' : '-inset-x-2'"
+                      ></div>
+                      <div class="absolute left-1/2 top-px bottom-0 w-px bg-digimon-dark-500"></div>
                     </div>
-                    <div>
-                      <div class="text-white text-sm font-medium">{{ evo.name }}</div>
-                      <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
-                    </div>
-                  </NuxtLink>
+                    <NuxtLink
+                      :to="`/campaigns/${campaignId}/library/digimon/${evo.id}`"
+                      class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
+                    >
+                      <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
+                        <img v-if="evo.spriteUrl" :src="evo.spriteUrl" :alt="evo.name" class="max-w-full max-h-full object-contain" />
+                        <span v-else class="text-sm">🦖</span>
+                      </div>
+                      <div>
+                        <div class="text-white text-sm font-medium">{{ evo.name }}</div>
+                        <div class="text-xs text-digimon-dark-400 capitalize">{{ evo.stage }}</div>
+                      </div>
+                    </NuxtLink>
+                  </div>
+                </div>
                 </div>
               </template>
             </template>
