@@ -36,12 +36,17 @@ const myRequests = ref<any[]>([])
 const initiativeRollResult = ref<{ rolls: number[]; total: number } | null>(null)
 const dodgeRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
 const healthRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
+const clashCheckRollResult = ref<{ rolls: number[]; total: number } | null>(null)
+const clashInitiateRollResult = ref<{ rolls: number[]; total: number } | null>(null)
+const clashCheckResultData = ref<{ youControl: boolean; waiting: boolean; opponentName: string; playerRoll: number; playerRollDice: number[]; bodyBonus: number; opponentRollTotal?: number } | null>(null)
 const hasRolledInitiative = ref(false)
 const hasRolledDodge = ref(false)
 const hasRolledHealth = ref(false)
 const selectedAttack = ref<any>(null)
 const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
+
+// Clash state
 const selectedDigimonId = ref<string | null>(null)
 const allTamers = ref<Tamer[]>([])
 
@@ -153,7 +158,7 @@ const hugePowerRank2Enabled = ref(false)
 
 // Composables
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
-const { fetchDigimon, calculateDerivedStats: _calcDigimonStats } = useDigimon()
+const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
 const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
@@ -164,27 +169,23 @@ let refreshInterval: ReturnType<typeof setInterval>
 async function loadData() {
   loading.value = true
   try {
-    // Load campaign settings (including EddySoul rules)
-    await loadCampaign()
-
-    // Fetch tamer
-    const fetchedTamer = await fetchTamer(tamerId.value)
+    // Phase 1: parallel — all fetches that only need campaignId or tamerId
+    const [fetchedTamer] = await Promise.all([
+      fetchTamer(tamerId.value),
+      loadCampaign(),
+      fetchTamers(campaignId.value),
+      fetchEncounters(campaignId.value),
+    ])
     tamer.value = fetchedTamer
+    allTamers.value = allTamersFromComposable.value
 
     if (fetchedTamer) {
-      // Fetch partner Digimon
-      await fetchDigimon({ partnerId: fetchedTamer.id, campaignId: campaignId.value })
-      partnerDigimon.value = await $fetch<Digimon[]>(`/api/digimon?partnerId=${fetchedTamer.id}`)
-
-      // Fetch evolution lines for current stage filtering
-      await fetchEvolutionLines(fetchedTamer.id, campaignId.value)
-
-      // Fetch encounters to find active one
-      await fetchEncounters(campaignId.value)
-
-      // Fetch all tamers for turn tracker participant images
-      await fetchTamers(campaignId.value)
-      allTamers.value = allTamersFromComposable.value
+      // Phase 2: parallel — fetches that need the tamer's ID
+      await Promise.all([
+        fetchDigimon({ partnerId: fetchedTamer.id, campaignId: campaignId.value }),
+        fetchEvolutionLines(fetchedTamer.id, campaignId.value),
+      ])
+      partnerDigimon.value = digimonList.value.filter((d: Digimon) => d.partnerId === fetchedTamer.id)
 
       // Find an active encounter that this tamer is relevant to.
       // Only show encounter UI if:
@@ -534,6 +535,24 @@ const hasInitiativeRequest = computed(() => myRequests.value.some((r) => r.type 
 const hasDodgeRequest = computed(() => myRequests.value.some((r) => r.type === 'dodge-roll'))
 const hasHealthRequest = computed(() => myRequests.value.some((r) => r.type === 'health-roll'))
 const hasIntercedeRequest = computed(() => myRequests.value.some((r) => r.type === 'intercede-offer'))
+const hasClashCheckRequest = computed(() => myRequests.value.some((r) => r.type === 'clash-check'))
+const currentClashCheckRequest = computed(() => myRequests.value.find((r) => r.type === 'clash-check'))
+const clashCheckNeededParticipant = computed(() =>
+  myParticipants.value.find((p) => (p as any).clash?.clashCheckNeeded)
+)
+const clashCheckRequestParticipant = computed(() => {
+  if (!currentClashCheckRequest.value || !activeEncounter.value) return null
+  const participants = activeEncounter.value.participants as CombatParticipant[]
+  return participants.find(p => p.id === currentClashCheckRequest.value!.targetParticipantId) ?? null
+})
+
+const activeClashes = computed(() => {
+  if (!activeEncounter.value) return new Set<string>()
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const ids = new Set<string>()
+  participants.forEach(p => { if ((p as any).clash?.clashId) ids.add((p as any).clash.clashId) })
+  return ids
+})
 
 const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type === 'digimon-selection'))
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
@@ -551,6 +570,18 @@ watch(() => currentInitiativeRequest.value?.id, () => {
 watch(() => currentDodgeRequest.value?.id, () => {
   hasRolledDodge.value = false
   dodgeRollResult.value = null
+})
+
+watch(() => currentClashCheckRequest.value?.id, (newId) => {
+  if (!newId) return
+  clashCheckRollResult.value = null
+  clashCheckResultData.value = null
+})
+
+watch(() => clashCheckNeededParticipant.value?.id, (newId) => {
+  if (!newId) return
+  clashCheckRollResult.value = null
+  clashCheckResultData.value = null
 })
 
 watch(() => currentHealthRequest.value?.id, () => {
@@ -1054,6 +1085,7 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
 }
 
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
+  if ((participant as any).clash) return false
   let requiredActions = 1
   if (eddySoulRules.value?.combatMonsterAreaAttackRequiresComplex) {
     const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
@@ -1124,6 +1156,7 @@ function getParticipantImage(participant: CombatParticipant): string | null {
 // Player combat actions (stance, movement, tamer direct)
 async function changePlayerStance(participant: CombatParticipant, stance: CombatParticipant['currentStance']) {
   if (!activeEncounter.value || !tamer.value) return
+  if ((participant as any).clash) return
   if ((participant.actionsRemaining?.simple || 0) < 1) return
   if (participant.currentStance === stance) return
 
@@ -2529,6 +2562,172 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
   return movements
 }
+
+// === Clash actions ===
+
+function openClashTargetSelector(participantId: string) {
+  if (!activeEncounter.value) return
+  const participant = (activeEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
+  if (!participant) return
+  selectedAttack.value = { participant, attack: { id: 'clash-initiate', name: 'Initiate Clash', type: 'clash-initiate' } }
+  selectedTargetId.value = null
+  clashInitiateRollResult.value = null
+  showTargetSelector.value = true
+}
+
+function getClashTargets(): CombatParticipant[] {
+  if (!activeEncounter.value) return []
+  const myIds = new Set(myParticipants.value.map(p => p.id))
+  return (activeEncounter.value.participants as CombatParticipant[]).filter(
+    p => !myIds.has(p.id) && p.type !== 'gm' && !(p as any).clash
+  )
+}
+
+async function handleInitiateClash(participantId: string, targetId: string, preRolled?: { roll: number; diceResults: number[] }) {
+  if (!activeEncounter.value || !tamer.value) return
+  try {
+    const participants = activeEncounter.value.participants as CombatParticipant[]
+    const actor = participants.find(p => p.id === participantId)
+    const target = participants.find(p => p.id === targetId)
+    const actorTamerId = actor?.type === 'tamer' ? actor.entityId : undefined
+    const bodyDiceResults = preRolled?.diceResults ?? Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1)
+    const bodyRoll = preRolled?.roll ?? bodyDiceResults.reduce((a, b) => a + b, 0)
+    const response = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/clash-initiate`, {
+      method: 'POST',
+      body: { participantId, targetId, tamerId: actorTamerId, bodyRoll, bodyDiceResults },
+    })
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    clashInitiateRollResult.value = null
+    // If clash resolved immediately (NPC target auto-rolled), show the outcome
+    const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
+    if (updatedParticipant?.clash && updatedParticipant.clash.pendingRoll === undefined) {
+      clashCheckResultData.value = {
+        youControl: updatedParticipant.clash.isController ?? false,
+        waiting: false,
+        opponentName: target ? getEntityName(target) : '?',
+        playerRoll: bodyRoll,
+        playerRollDice: bodyDiceResults,
+        bodyBonus: actor ? getParticipantBodyScore(actor) : 0,
+        opponentRollTotal: response?.opponentRollTotal,
+      }
+    }
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to initiate clash')
+  }
+}
+
+function getParticipantBodyScore(participant: CombatParticipant): number {
+  if (participant.type === 'tamer') return getTotalAttribute('body')
+  const digimonEntity = partnerDigimon.value.find(d => d.id === participant.entityId)
+  if (!digimonEntity) return 0
+  return calcDigimonStats(digimonEntity).body
+}
+
+async function handleClashCheck(participantId: string, preRolled?: { roll: number; diceResults: number[] }) {
+  if (!activeEncounter.value || !tamer.value) return
+  const participants = activeEncounter.value.participants as CombatParticipant[]
+  const participant = participants.find(p => p.id === participantId)
+  if (!(participant as any)?.clash?.clashId) return
+  const opponentId = (participant as any).clash.opponentParticipantId
+  const opponentParticipant = participants.find(p => p.id === opponentId)
+  const opponentName = opponentParticipant ? getEntityName(opponentParticipant) : '?'
+  const bodyBonus = participant ? getParticipantBodyScore(participant) : 0
+  try {
+    const actorTamerId = participant?.type === 'tamer' ? participant.entityId : undefined
+    const diceResults = preRolled?.diceResults ?? Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1)
+    const roll = preRolled?.roll ?? diceResults.reduce((a, b) => a + b, 0)
+    const response = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/clash-check`, {
+      method: 'POST',
+      body: { clashId: (participant as any).clash.clashId, participantId, tamerId: actorTamerId, roll, diceResults },
+    })
+    const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
+    const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
+    clashCheckResultData.value = {
+      youControl: updatedParticipant?.clash?.isController ?? false,
+      waiting,
+      opponentName,
+      playerRoll: roll,
+      playerRollDice: diceResults,
+      bodyBonus,
+      opponentRollTotal: response?.opponentRollTotal,
+    }
+    clashCheckRollResult.value = null
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to submit clash check')
+  }
+}
+
+async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResults: number[] }) {
+  if (!activeEncounter.value || !tamer.value || !currentClashCheckRequest.value) return
+  const req = currentClashCheckRequest.value
+  const participantId = req.targetParticipantId
+  if (!participantId) return
+  const participants = activeEncounter.value.participants as CombatParticipant[]
+  const initiatorId = req.data?.initiatorParticipantId
+  const initiatorParticipant = participants.find(p => p.id === initiatorId)
+  const opponentName = initiatorParticipant ? getEntityName(initiatorParticipant) : '?'
+  const myParticipant = participants.find(p => p.id === participantId)
+  const bodyBonus = myParticipant ? getParticipantBodyScore(myParticipant) : 0
+  try {
+    const diceResults = preRolled?.diceResults ?? Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1)
+    const roll = preRolled?.roll ?? diceResults.reduce((a, b) => a + b, 0)
+    const response = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/clash-check`, {
+      method: 'POST',
+      body: { clashId: req.data?.clashId, participantId, tamerId: tamer.value.id, roll, diceResults },
+    })
+    const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
+    const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
+    clashCheckResultData.value = {
+      youControl: updatedParticipant?.clash?.isController ?? false,
+      waiting,
+      opponentName,
+      playerRoll: roll,
+      playerRollDice: diceResults,
+      bodyBonus,
+      opponentRollTotal: response?.opponentRollTotal,
+    }
+    clashCheckRollResult.value = null
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to submit clash response')
+  }
+}
+
+async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw') {
+  if (!activeEncounter.value || !tamer.value) return
+  const participants = activeEncounter.value.participants as CombatParticipant[]
+  const participant = participants.find(p => p.id === participantId)
+  if (!(participant as any)?.clash?.clashId) return
+  try {
+    const actorTamerId = participant?.type === 'tamer' ? participant.entityId : undefined
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/clash-action`, {
+      method: 'POST',
+      body: { clashId: (participant as any).clash.clashId, participantId, tamerId: actorTamerId, actionType },
+    })
+  } catch (e: any) {
+    alert(e?.data?.message || `Failed to execute clash ${actionType}`)
+  }
+}
+
+async function handleBreakClash(participantId: string, clashId: string) {
+  if (!activeEncounter.value || !tamer.value) return
+  try {
+    const participants = activeEncounter.value.participants as CombatParticipant[]
+    const breaker = participants.find(p => p.id === participantId)
+    const actorTamerId = breaker?.type === 'tamer' ? breaker.entityId : undefined
+    const diceResults: number[] = []
+    for (let i = 0; i < 3; i++) {
+      diceResults.push(Math.floor(Math.random() * 6) + 1)
+    }
+    const roll = diceResults.reduce((a, b) => a + b, 0)
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/clash-break`, {
+      method: 'POST',
+      body: { clashId, breakerId: participantId, tamerId: actorTamerId, roll, diceResults },
+    })
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to break clash')
+  }
+}
 </script>
 
 <template>
@@ -2697,19 +2896,88 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 </span>
               </div>
 
+              <!-- Clash Status (always visible when in clash) -->
+              <div v-if="(participant as any).clash" class="mt-2 px-2 py-1.5 bg-orange-900/20 border border-orange-500/40 rounded-lg">
+                <div class="text-xs font-semibold text-orange-300">Clash Active</div>
+                <div class="text-xs text-digimon-dark-300">
+                  vs {{ (activeEncounter?.participants as CombatParticipant[] || []).find(p => p.id === (participant as any).clash.opponentParticipantId) ? getEntityName((activeEncounter?.participants as CombatParticipant[] || []).find(p => p.id === (participant as any).clash.opponentParticipantId)!) : '?' }}
+                  <span v-if="(participant as any).clash.isController" class="ml-1 text-green-400 font-semibold">— YOU CONTROL</span>
+                  <span v-else class="ml-1 text-digimon-dark-400">— opponent controls</span>
+                </div>
+                <div v-if="(participant as any).clash.isPinned" class="text-xs text-red-400 font-semibold mt-0.5">PINNED</div>
+              </div>
+
               <!-- Combat Actions (when it's this participant's turn) -->
-              <div v-if="canParticipantAct(participant) && isMyTurn" class="mt-3 pt-3 border-t border-digimon-dark-600">
+              <div v-if="canParticipantAct(participant) && isMyTurn" class="mt-3">
                 <div class="flex flex-wrap gap-2 mb-3">
                   <!-- Movement -->
                   <button
+                    v-if="!(participant as any).clash || (participant as any).clash.isController"
                     :disabled="participant.actionsRemaining.simple < 1"
                     class="text-xs px-2 py-1 rounded bg-teal-900/50 text-teal-400 hover:bg-teal-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
                     @click="usePlayerAction(participant, 'movement')"
                   >
                     Move (1)
                   </button>
+                  <!-- Initiate Clash -->
+                  <template v-if="!(participant as any).clash && ((participant as any).clashCooldownUntilRound == null || (participant as any).clashCooldownUntilRound <= (activeEncounter?.round || 0))">
+                    <button
+                      :disabled="participant.actionsRemaining.simple < 1"
+                      class="text-xs px-2 py-1 rounded bg-orange-900/50 text-orange-300 hover:bg-orange-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      @click="openClashTargetSelector(participant.id)"
+                    >
+                      Initiate Clash (1)
+                    </button>
+                  </template>
+                  <span v-else-if="!(participant as any).clash && (participant as any).clashCooldownUntilRound > (activeEncounter?.round || 0)" class="text-xs text-digimon-dark-400 italic self-center">
+                    Clash locked until next round
+                  </span>
+                  <!-- Break Clash -->
+                  <button
+                    v-if="!(participant as any).clash && activeClashes.size > 0"
+                    :disabled="participant.actionsRemaining.simple < 2"
+                    class="text-xs px-2 py-1 rounded bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    @click="handleBreakClash(participant.id, [...activeClashes][0])"
+                  >
+                    Break Clash (2)
+                  </button>
+                  <!-- Clash actions (when in clash) -->
+                  <template v-if="(participant as any).clash">
+                    <template v-if="(participant as any).clash.isController && !(participant as any).clash.clashCheckNeeded">
+                      <button
+                        :disabled="participant.actionsRemaining.simple < 2"
+                        class="text-xs px-2 py-1 rounded bg-red-900/50 text-red-300 hover:bg-red-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                        @click="executeClashAction(participant.id, 'attack')"
+                      >
+                        Clash Attack (2)
+                      </button>
+                      <button
+                        :disabled="participant.actionsRemaining.simple < 2"
+                        class="text-xs px-2 py-1 rounded bg-purple-900/50 text-purple-300 hover:bg-purple-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                        @click="executeClashAction(participant.id, 'pin')"
+                      >
+                        Pin Opponent (2)
+                      </button>
+                      <button
+                        :disabled="participant.actionsRemaining.simple < 2"
+                        class="text-xs px-2 py-1 rounded bg-amber-900/50 text-amber-300 hover:bg-amber-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                        @click="executeClashAction(participant.id, 'throw')"
+                      >
+                        Throw (2)
+                      </button>
+                      <button
+                        class="text-xs px-2 py-1 rounded bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500"
+                        @click="executeClashAction(participant.id, 'end')"
+                      >
+                        End Clash (free)
+                      </button>
+                    </template>
+                    <span v-else-if="!(participant as any).clash.isController" class="text-xs text-digimon-dark-400 italic self-center">
+                      Opponent controls — cannot act
+                    </span>
+                  </template>
                   <!-- Tamer Direct Actions -->
-                  <template v-if="participant.type === 'tamer'">
+                  <template v-if="participant.type === 'tamer' && !(participant as any).clash">
                     <button
                       :disabled="participant.actionsRemaining.simple < 1 || participant.hasDirectedThisTurn"
                       class="text-xs px-2 py-1 rounded bg-amber-900/50 text-amber-400 hover:bg-amber-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2727,7 +2995,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                   </template>
                 </div>
                 <!-- Stance Selector -->
-                <div class="mb-3">
+                <div v-if="!(participant as any).clash" class="mb-3">
                   <label class="block text-xs text-digimon-dark-400 mb-1">Stance (1 Simple)</label>
                   <div class="flex flex-wrap gap-1">
                     <button
@@ -2750,7 +3018,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
                 </div>
 
                 <!-- Special Orders (Tamer Only) -->
-                <div v-if="participant.type === 'tamer' && getTamerSpecialOrders(participant).length > 0" class="mb-3">
+                <div v-if="participant.type === 'tamer' && getTamerSpecialOrders(participant).length > 0 && (!(participant as any).clash || (participant as any).clash.isController)" class="mb-3">
                   <label class="block text-xs text-digimon-dark-400 mb-2 font-semibold">✨ Special Orders</label>
                   <div class="space-y-2">
                     <button
@@ -3930,6 +4198,136 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
     </div>
   </Teleport>
 
+  <!-- Clash Check Request Modal -->
+  <Teleport to="body">
+    <div
+      v-if="(hasClashCheckRequest && currentClashCheckRequest) || clashCheckNeededParticipant || clashCheckResultData"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+      :class="{ 'animate-pulse': !clashCheckResultData && !clashCheckRollResult }"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-orange-500">
+        <!-- Result view (after submit) -->
+        <template v-if="clashCheckResultData">
+          <h2 class="font-display text-xl font-semibold text-orange-400 mb-4">
+            Clash Check — Result
+          </h2>
+
+          <div class="mb-4 p-3 bg-orange-900/20 rounded-lg">
+            <p class="text-white text-sm">vs {{ clashCheckResultData.opponentName }}</p>
+            <p class="text-digimon-dark-300 text-sm mt-1">
+              3d6 + {{ clashCheckResultData.bodyBonus }} (Body)
+            </p>
+          </div>
+
+          <div class="mb-4">
+            <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center">
+              <div class="text-sm text-digimon-dark-400 mb-2">Your Roll</div>
+              <div class="flex justify-center gap-1 mb-2">
+                <span
+                  v-for="(die, idx) in clashCheckResultData.playerRollDice"
+                  :key="idx"
+                  class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-digimon-dark-600 text-white"
+                >
+                  {{ die }}
+                </span>
+                <span class="w-8 h-8 flex items-center justify-center text-digimon-dark-400 font-bold">+</span>
+                <span class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-orange-700 text-white">
+                  {{ clashCheckResultData.bodyBonus }}
+                </span>
+              </div>
+              <div class="text-3xl font-bold mb-1 text-orange-400">
+                {{ clashCheckResultData.playerRoll + clashCheckResultData.bodyBonus }}
+                <template v-if="clashCheckResultData.opponentRollTotal !== undefined">
+                  <span class="text-digimon-dark-400 text-2xl font-normal mx-1">vs</span>
+                  <span :class="clashCheckResultData.youControl ? 'text-red-400' : 'text-green-400'">{{ clashCheckResultData.opponentRollTotal }}</span>
+                </template>
+              </div>
+              <div v-if="clashCheckResultData.waiting" class="text-sm text-yellow-300">
+                PENDING <span class="text-digimon-dark-400 ml-1">(waiting for {{ clashCheckResultData.opponentName }})</span>
+              </div>
+              <div v-else class="text-sm font-semibold" :class="clashCheckResultData.youControl ? 'text-green-400' : 'text-red-400'">
+                {{ clashCheckResultData.youControl ? 'YOU CONTROL' : 'OPPONENT CONTROLS' }}
+                <span class="text-digimon-dark-400 font-normal ml-1">(vs {{ clashCheckResultData.opponentName }})</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            @click="clashCheckResultData = null; loadData()"
+          >
+            Close
+          </button>
+        </template>
+
+        <!-- Roll view -->
+        <template v-else>
+          <h2 class="font-display text-xl font-semibold text-orange-400 mb-4">
+            Clash Check!
+          </h2>
+
+          <div class="mb-4 p-3 bg-orange-900/20 rounded-lg">
+            <p class="text-white text-sm">
+              <template v-if="clashCheckNeededParticipant">New round — roll to maintain or contest control.</template>
+              <template v-else>You've been drawn into a clash! Roll to determine who takes control.</template>
+            </p>
+            <p class="text-digimon-dark-300 text-sm mt-1">
+              3d6 + {{ clashCheckNeededParticipant ? getParticipantBodyScore(clashCheckNeededParticipant) : clashCheckRequestParticipant ? getParticipantBodyScore(clashCheckRequestParticipant) : getTotalAttribute('body') }} (Body)
+            </p>
+          </div>
+
+          <div class="mb-4">
+            <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
+              <div class="flex gap-2 items-center justify-center mb-4">
+                <span class="text-white font-semibold">3d6 + Body</span>
+              </div>
+              <button
+                :disabled="!!clashCheckRollResult"
+                :class="[
+                  'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+                  clashCheckRollResult ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'
+                ]"
+                @click="(() => { const rolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1); clashCheckRollResult = { rolls, total: rolls.reduce((a, b) => a + b, 0) } })()"
+              >
+                {{ clashCheckRollResult ? 'Already Rolled' : 'Roll Clash Check' }}
+              </button>
+            </div>
+
+            <div v-if="clashCheckRollResult" class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center">
+              <div class="text-sm text-digimon-dark-400 mb-2">Your Roll</div>
+              <div class="flex justify-center gap-1 mb-2">
+                <span
+                  v-for="(die, idx) in clashCheckRollResult.rolls"
+                  :key="idx"
+                  class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-digimon-dark-600 text-white"
+                >
+                  {{ die }}
+                </span>
+                <span class="w-8 h-8 flex items-center justify-center text-digimon-dark-400 font-bold">+</span>
+                <span class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-orange-700 text-white">
+                  {{ clashCheckNeededParticipant ? getParticipantBodyScore(clashCheckNeededParticipant) : clashCheckRequestParticipant ? getParticipantBodyScore(clashCheckRequestParticipant) : getTotalAttribute('body') }}
+                </span>
+              </div>
+              <div class="text-3xl font-bold text-orange-400">
+                {{ clashCheckRollResult.total + (clashCheckNeededParticipant ? getParticipantBodyScore(clashCheckNeededParticipant) : clashCheckRequestParticipant ? getParticipantBodyScore(clashCheckRequestParticipant) : getTotalAttribute('body')) }}
+              </div>
+            </div>
+          </div>
+
+          <button
+            :disabled="!clashCheckRollResult"
+            class="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            @click="clashCheckNeededParticipant
+              ? handleClashCheck(clashCheckNeededParticipant.id, clashCheckRollResult ? { roll: clashCheckRollResult.total, diceResults: clashCheckRollResult.rolls } : undefined)
+              : handleClashCheckFromRequest(clashCheckRollResult ? { roll: clashCheckRollResult.total, diceResults: clashCheckRollResult.rolls } : undefined)"
+          >
+            Submit
+          </button>
+        </template>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- Intercede Offer Modal -->
   <Teleport to="body">
     <div
@@ -4000,12 +4398,74 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
           Select Target for {{ selectedAttack.attack.name }}
         </h2>
 
-        <div v-if="getEnemyTargets().length === 0" class="text-white text-sm p-4 bg-digimon-dark-700 rounded-lg">
-          No enemies to target
+        <!-- Clash target list -->
+        <div v-if="selectedAttack.attack.type === 'clash-initiate'" class="mb-4">
+          <div class="space-y-2 mb-4 max-h-48 overflow-y-auto">
+            <div v-if="getClashTargets().length === 0" class="text-white text-sm p-4 bg-digimon-dark-700 rounded-lg">
+              No valid clash targets
+            </div>
+            <button
+              v-for="target in getClashTargets()"
+              :key="target.id"
+              @click="selectedTargetId = target.id; clashInitiateRollResult = null"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
+              :class="{ 'bg-orange-500/20 border border-orange-500': selectedTargetId === target.id }"
+            >
+              <div class="flex items-center gap-2">
+                <div class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0">
+                  <span v-if="selectedTargetId === target.id" class="text-orange-400">✓</span>
+                </div>
+                <span class="font-semibold">{{ getParticipantName(target) }}</span>
+              </div>
+            </button>
+          </div>
+
+          <!-- Roll step (shown after target selected) -->
+          <div v-if="selectedTargetId" class="mb-2">
+            <div class="bg-digimon-dark-700 rounded-lg p-4 mb-3">
+              <div class="flex gap-2 items-center justify-center mb-3">
+                <span class="text-white font-semibold">3d6 + Body</span>
+              </div>
+              <button
+                :disabled="!!clashInitiateRollResult"
+                :class="[
+                  'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+                  clashInitiateRollResult ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700'
+                ]"
+                @click="(() => { const rolls = Array.from({ length: 3 }, () => Math.floor(Math.random() * 6) + 1); clashInitiateRollResult = { rolls, total: rolls.reduce((a, b) => a + b, 0) } })()"
+              >
+                {{ clashInitiateRollResult ? 'Already Rolled' : 'Roll Body Check' }}
+              </button>
+            </div>
+            <div v-if="clashInitiateRollResult" class="bg-digimon-dark-700 rounded-lg p-4 mb-3 text-center">
+              <div class="text-sm text-digimon-dark-400 mb-2">Your Roll</div>
+              <div class="flex justify-center gap-1 mb-2">
+                <span
+                  v-for="(die, idx) in clashInitiateRollResult.rolls"
+                  :key="idx"
+                  class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-digimon-dark-600 text-white"
+                >
+                  {{ die }}
+                </span>
+                <span class="w-8 h-8 flex items-center justify-center text-digimon-dark-400 font-bold">+</span>
+                <span class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-orange-700 text-white">
+                  {{ getParticipantBodyScore(selectedAttack.participant) }}
+                </span>
+              </div>
+              <div class="text-3xl font-bold text-orange-400">
+                {{ clashInitiateRollResult.total + getParticipantBodyScore(selectedAttack.participant) }}
+              </div>
+            </div>
+          </div>
         </div>
 
+        <!-- Attack target list -->
         <div v-else class="space-y-2 mb-6 max-h-96 overflow-y-auto">
+          <div v-if="getEnemyTargets().length === 0" class="text-white text-sm p-4 bg-digimon-dark-700 rounded-lg">
+            No enemies to target
+          </div>
           <button
+            v-else
             v-for="target in getEnemyTargets()"
             :key="target.id"
             @click="selectedTargetId = target.id"
@@ -4054,7 +4514,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
         <!-- Bolster Attack Toggle -->
         <div
-          v-if="selectedAttack && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+          v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
           class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
         >
           <label class="flex items-center gap-2 cursor-pointer mb-2">
@@ -4099,7 +4559,7 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
 
         <!-- Huge Power Toggle -->
         <div
-          v-if="selectedAttack && (canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1 || canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2)"
+          v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && (canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1 || canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2)"
           class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600 space-y-2"
         >
           <label class="flex items-center gap-2 cursor-pointer">
@@ -4132,6 +4592,15 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
         <!-- Action buttons -->
         <div class="flex gap-3">
           <button
+            v-if="selectedAttack.attack.type === 'clash-initiate'"
+            @click="handleInitiateClash(selectedAttack.participant.id, selectedTargetId!, clashInitiateRollResult ? { roll: clashInitiateRollResult.total, diceResults: clashInitiateRollResult.rolls } : undefined)"
+            :disabled="!selectedTargetId || !clashInitiateRollResult"
+            class="flex-1 bg-orange-700 hover:bg-orange-600 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Initiate Clash
+          </button>
+          <button
+            v-else
             @click="confirmAttack(getEnemyTargets().find(t => t.id === selectedTargetId))"
             :disabled="!selectedTargetId"
             class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
@@ -4139,8 +4608,9 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
             {{ hugePowerEnabled ? (hugePowerRank2Enabled ? 'Huge Power 2 ' : 'Huge Power ') : '' }}{{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
           </button>
           <button
-            @click="showTargetSelector = false; selectedAttack = null; selectedTargetId = null"
-            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            @click="showTargetSelector = false; selectedAttack = null; selectedTargetId = null; clashInitiateRollResult = null"
+            :disabled="selectedAttack?.attack?.type === 'clash-initiate' && !!clashInitiateRollResult"
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:bg-digimon-dark-800 disabled:text-digimon-dark-500 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
           >
             Cancel
           </button>
