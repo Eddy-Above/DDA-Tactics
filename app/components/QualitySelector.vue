@@ -112,20 +112,27 @@ const hasFreeQuality = computed(() => {
 const filteredQualities = computed(() => {
   let qualities = QUALITY_DATABASE
 
-  // Filter by type
-  if (filterType.value === 'free') {
-    qualities = getFreeQualities()
-  } else if (filterType.value === 'negative') {
-    qualities = getNegativeQualities()
-  } else if (filterType.value === 'purchasable') {
-    qualities = getPurchasableQualities()
-  } else if (filterType.value === 'attack-effects') {
-    qualities = qualities.filter((q) => q.category === 'attack-effects')
-  }
+  // When no DP remaining, only show qualities that cost 0 DP
+  if (!props.canAdd) {
+    qualities = QUALITY_DATABASE.filter(
+      (q) => getEffectiveDPCost(q, 1, getTemplateDPCost(q), props.stage, true, props.eddySoulRules) <= 0
+    )
+  } else {
+    // Filter by type
+    if (filterType.value === 'free') {
+      qualities = getFreeQualities()
+    } else if (filterType.value === 'negative') {
+      qualities = getNegativeQualities()
+    } else if (filterType.value === 'purchasable') {
+      qualities = getPurchasableQualities()
+    } else if (filterType.value === 'attack-effects') {
+      qualities = qualities.filter((q) => q.category === 'attack-effects')
+    }
 
-  // Filter by category (only for purchasable)
-  if (filterCategory.value !== 'all' && filterType.value === 'purchasable') {
-    qualities = qualities.filter((q) => q.category === filterCategory.value)
+    // Filter by category (only for purchasable)
+    if (filterCategory.value !== 'all' && filterType.value === 'purchasable') {
+      qualities = qualities.filter((q) => q.category === filterCategory.value)
+    }
   }
 
   // Search filter
@@ -149,10 +156,11 @@ function getFullQualityStatus(template: QualityTemplate): { canSelect: boolean; 
 
   // Check if there's DP available for purchasable qualities (adding new or increasing ranks)
   if (template.type === 'purchasable') {
-    if (!props.canAdd) {
+    const cost = getTemplateDPCost(template)
+    if (cost > 0 && !props.canAdd) {
       reasons.push('No DP remaining for qualities')
-    } else if (getTemplateDPCost(template) > props.availableDP) {
-      reasons.push(`Costs ${getTemplateDPCost(template)} DP (${props.availableDP} available)`)
+    } else if (cost > props.availableDP) {
+      reasons.push(`Costs ${cost} DP (${props.availableDP} available)`)
     }
   }
 
@@ -661,16 +669,10 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
     <div v-if="!showSelector">
       <button
         type="button"
-        :disabled="!canAdd"
-        :class="[
-          'w-full border-2 border-dashed rounded-lg p-4 transition-colors',
-          canAdd
-            ? 'border-digimon-dark-600 text-digimon-dark-400 hover:border-digimon-dark-500 hover:text-digimon-dark-300'
-            : 'border-red-900/50 text-red-400/50 cursor-not-allowed'
-        ]"
-        @click="canAdd && (showSelector = true)"
+        class="w-full border-2 border-dashed rounded-lg p-4 transition-colors border-digimon-dark-600 text-digimon-dark-400 hover:border-digimon-dark-500 hover:text-digimon-dark-300"
+        @click="showSelector = true"
       >
-        {{ canAdd ? '+ Add Quality' : 'No DP remaining for qualities' }}
+        {{ canAdd ? '+ Add Quality' : '+ Add Free Quality' }}
       </button>
     </div>
 

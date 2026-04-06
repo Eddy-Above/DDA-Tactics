@@ -61,7 +61,7 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
     const totalDPForQualitiesVal = baseDPAvailableForQualities + (formRef.value.bonusDPForQualities || 0)
     const newTotalUsed = dpUsedOnQualities.value + qualityCost
 
-    if (newTotalUsed > totalDPForQualitiesVal) {
+    if (qualityCost > 0 && newTotalUsed > totalDPForQualitiesVal) {
       return
     }
 

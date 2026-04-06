@@ -624,7 +624,7 @@ function handleAddQuality(quality: Quality) {
   const totalDPForQualitiesVal = baseDPAvailableForQualities + (form.bonusDPForQualities || 0)
   const newTotalUsed = dpUsedOnQualities.value + qualityCost
 
-  if (newTotalUsed > totalDPForQualitiesVal) {
+  if (qualityCost > 0 && newTotalUsed > totalDPForQualitiesVal) {
     // Would exceed budget - don't add
     return
   }
