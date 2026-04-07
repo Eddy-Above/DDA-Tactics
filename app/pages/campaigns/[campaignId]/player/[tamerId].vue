@@ -681,6 +681,11 @@ const dodgeDicePool = computed(() => {
     pool += directedEffect.value
   }
 
+  // Counterattack: target rolls only half their Dodge Pool
+  if (currentDodgeRequest.value?.data?.halfDodge) {
+    pool = Math.max(1, Math.floor(pool / 2))
+  }
+
   return Math.max(1, pool)
 })
 
