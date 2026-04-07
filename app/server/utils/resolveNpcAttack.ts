@@ -190,6 +190,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           if (attackDef.effect === 'Stun' && !p.hasActed) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
             updated.stunActionReducedThisRound = true
+          } else if (attackDef.effect === 'Stun' && p.hasActed) {
+            // Target already went — reduce intercede capacity this round and carry -1 action to next round
+            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+            updated.stunActionReducedThisRound = true
           }
         }
 
@@ -287,10 +291,22 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   // --- Apply damage, effects, dodge penalty ---
   let appliedEffectName: string | null = null
+  let lifestealHealAmount = 0
   participants = participants.map((p: any) => {
-    // Handle attacker: reset Combat Monster bonus on hit
-    if (p.id === params.attackerParticipantId && hit && attackerHasCombatMonster) {
-      return { ...p, combatMonsterBonus: 0 }
+    // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing
+    if (p.id === params.attackerParticipantId) {
+      const attackerUpdates: any = {}
+      if (hit && attackerHasCombatMonster) {
+        attackerUpdates.combatMonsterBonus = 0
+      }
+      if (hit && attackDef?.effect === 'Lifesteal' && damageDealt >= 2) {
+        // effectPotency is the attacker's CPU value (from calculateEffectPotency above)
+        lifestealHealAmount = Math.min(damageDealt, effectPotency)
+        attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
+      }
+      if (Object.keys(attackerUpdates).length > 0) {
+        return { ...p, ...attackerUpdates }
+      }
     }
 
     // Handle target: apply damage and Combat Monster accumulation
@@ -339,6 +355,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             // Stun: immediately reduce actions if target hasn't taken their turn yet this round
             if (attackDef.effect === 'Stun' && !p.hasActed) {
               updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
+              updated.stunActionReducedThisRound = true
+            } else if (attackDef.effect === 'Stun' && p.hasActed) {
+              // Target already went — reduce intercede capacity this round and carry -1 action to next round
+              updated.interceptPenalty = (p.interceptPenalty || 0) + 1
               updated.stunActionReducedThisRound = true
             }
           }
@@ -428,7 +448,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     target: null,
     result: `${dodgePool}d6 => [${dodgeDiceResults.join(',')}] = ${dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
-    effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+    effects: [
+      'Dodge',
+      ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
+      ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
+    ],
     attackerParticipantId: params.attackerParticipantId,
     baseDamage: attackBaseDamage,
     netSuccesses,

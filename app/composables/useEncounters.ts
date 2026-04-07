@@ -115,6 +115,7 @@ export function useEncounters() {
     try {
       const encounter = await $fetch<Encounter>(`/api/encounters/${id}`)
       currentEncounter.value = encounter
+      encounters.value = encounters.value.map((e) => e.id === id ? encounter : e)
       return encounter
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch encounter'
@@ -631,6 +632,9 @@ export function useEncounters() {
       attackRange: 'melee' | 'ranged'
       hugePowerRank?: number
       hugePowerTrackAll?: boolean
+    },
+    lifestealData?: {
+      lifestealed: boolean
     }
   ): Promise<Encounter | null> {
     loading.value = true
@@ -653,6 +657,7 @@ export function useEncounters() {
           hugePowerAttackRange: hugePowerData?.attackRange,
           hugePowerRank: hugePowerData?.hugePowerRank,
           hugePowerTrackAll: hugePowerData?.hugePowerTrackAll,
+          lifestealed: lifestealData?.lifestealed || false,
         },
       })
       // Update local state

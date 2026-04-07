@@ -65,6 +65,7 @@ const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
 const bolsterAttackEnabled = ref(false)
 const bolsterAttackType = ref<'damage-accuracy' | 'bit-cpu'>('damage-accuracy')
+const lifestealComplexEnabled = ref(false)
 const hugePowerEnabled = ref(false)
 const hugePowerRank2Enabled = ref(false)
 
@@ -723,6 +724,7 @@ function selectAttackAndShowTargets(participant: CombatParticipant, attack: any)
   selectedAttack.value = { participant, attack }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
+  lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
   showTargetSelector.value = true
@@ -818,6 +820,7 @@ async function confirmAttack(target: CombatParticipant) {
           },
           bolstered: bolsterAttackEnabled.value,
           bolsterType: bolsterAttackEnabled.value ? bolsterAttackType.value : undefined,
+          lifestealed: lifestealComplexEnabled.value || false,
           hugePowerUsed: hugePowerEnabled.value,
           hugePowerAttackRange: hugePowerEnabled.value ? attack.range : undefined,
           hugePowerRank: hugePowerEnabled.value ? (hugePowerRank2Enabled.value ? 2 : 1) : undefined,
@@ -2016,6 +2019,7 @@ onMounted(async () => {
   refreshInterval = setInterval(() => {
     fetchEncounter(route.params.id as string)
     fetchEvolutionLines()
+    fetchTamers(campaignId.value)
   }, 5000)
 })
 
@@ -3655,7 +3659,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
             <!-- Bolster Attack Toggle -->
             <div
-              v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+              v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack) && !lifestealComplexEnabled"
               class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
             >
               <label class="flex items-center gap-2 cursor-pointer mb-2">
@@ -3696,6 +3700,22 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   +1 BIT/CPU (Effect)
                 </button>
               </div>
+            </div>
+
+            <!-- Lifesteal Complex Action Toggle -->
+            <div
+              v-if="selectedAttack && selectedAttack.attack.effect === 'Lifesteal' && (selectedAttack.participant.actionsRemaining?.simple || 0) >= 2 && !bolsterAttackEnabled"
+              class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
+            >
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="lifestealComplexEnabled"
+                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-green-500"
+                />
+                <span class="text-sm text-green-400 font-medium">Lifesteal Complex Action (2 Simple Actions)</span>
+                <span class="text-xs text-digimon-dark-400 ml-auto">Double potency</span>
+              </label>
             </div>
 
             <!-- Huge Power Toggle -->

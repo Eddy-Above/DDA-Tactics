@@ -222,13 +222,15 @@ export default defineEventHandler(async (event) => {
         }
         appliedEffectName = npcAttackDef.effect
         const stunImmediate = npcAttackDef.effect === 'Stun' && !p.hasActed
+        const stunDeferred = npcAttackDef.effect === 'Stun' && p.hasActed
         return {
           ...p,
           activeEffects: [...(p.activeEffects || []), newEffect],
-          ...(stunImmediate ? {
-            actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) },
-            stunActionReducedThisRound: true,
-          } : {}),
+          ...(stunImmediate
+            ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }, stunActionReducedThisRound: true }
+            : stunDeferred
+              ? { interceptPenalty: (p.interceptPenalty || 0) + 1, stunActionReducedThisRound: true }
+              : {}),
         }
       }
       return p

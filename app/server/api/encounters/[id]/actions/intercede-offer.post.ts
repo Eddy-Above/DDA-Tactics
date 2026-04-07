@@ -15,6 +15,7 @@ interface IntercedeOfferBody {
   attackData: any // Full attack data for later resolution
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
+  lifestealed?: boolean
   hugePowerUsed?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
   skipActionDeduction?: boolean // When called from attack.post.ts which already deducted actions
@@ -349,6 +350,7 @@ export default defineEventHandler(async (event) => {
           bolsterType: body.bolsterType || null,
           bolsterDamageBonus: body.bolstered && body.bolsterType === 'damage-accuracy' ? 2 : 0,
           bolsterBitCpuBonus: body.bolstered && body.bolsterType === 'bit-cpu' ? 1 : 0,
+          lifestealed: body.lifestealed || false,
           // Support attack flag — downstream handlers skip damage
           isSupportAttack: isSupportAttack || false,
           // Signature Move Battery bonus

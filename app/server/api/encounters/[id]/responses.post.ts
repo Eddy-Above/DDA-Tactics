@@ -313,6 +313,10 @@ export default defineEventHandler(async (event) => {
             if (attackDef.effect === 'Stun' && !p.hasActed) {
               updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
               updated.stunActionReducedThisRound = true
+            } else if (attackDef.effect === 'Stun' && p.hasActed) {
+              // Target already went — reduce intercede capacity this round and carry -1 action to next round
+              updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+              updated.stunActionReducedThisRound = true
             }
           }
 
@@ -533,10 +537,24 @@ export default defineEventHandler(async (event) => {
         damageEffectPotencyStat = result.potencyStat
       }
 
+      let lifestealHealAmount = 0
       participants = participants.map((p: any) => {
-        // Handle attacker: reset Combat Monster bonus on hit
-        if (p.id === request.data.attackerParticipantId && hit && attackerHasCombatMonster) {
-          return { ...p, combatMonsterBonus: 0 }
+        // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing
+        if (p.id === request.data.attackerParticipantId) {
+          const attackerUpdates: any = {}
+          if (hit && attackerHasCombatMonster) {
+            attackerUpdates.combatMonsterBonus = 0
+          }
+          if (hit && attackDef?.effect === 'Lifesteal' && damageDealt >= 2) {
+            const lifestealPotency = request.data.lifestealed
+              ? damageEffectPotency * 2
+              : damageEffectPotency
+            lifestealHealAmount = Math.min(damageDealt, lifestealPotency)
+            attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
+          }
+          if (Object.keys(attackerUpdates).length > 0) {
+            return { ...p, ...attackerUpdates }
+          }
         }
 
         if (p.id === request.targetParticipantId) {
@@ -587,6 +605,10 @@ export default defineEventHandler(async (event) => {
                 // Stun: immediately reduce actions if target hasn't taken their turn yet this round
                 if (attackDef.effect === 'Stun' && !p.hasActed) {
                   updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
+                  updated.stunActionReducedThisRound = true
+                } else if (attackDef.effect === 'Stun' && p.hasActed) {
+                  // Target already went — reduce intercede capacity this round and carry -1 action to next round
+                  updated.interceptPenalty = (p.interceptPenalty || 0) + 1
                   updated.stunActionReducedThisRound = true
                 }
               }
@@ -680,7 +702,11 @@ export default defineEventHandler(async (event) => {
         target: null,
         result: `${body.response.dodgeDicePool}d6 => [${body.response.dodgeDiceResults.join(',')}] = ${body.response.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
         damage: hit ? damageDealt : 0,
-        effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+        effects: [
+          'Dodge',
+          ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
+          ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
+        ],
         attackerParticipantId: request.data.attackerParticipantId,
         baseDamage: attackBaseDamage,
         netSuccesses: netSuccesses,

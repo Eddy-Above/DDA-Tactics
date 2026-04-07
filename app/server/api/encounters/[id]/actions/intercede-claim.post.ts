@@ -224,6 +224,10 @@ export default defineEventHandler(async (event) => {
           if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
             updated.stunActionReducedThisRound = true
+          } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
+            // Interceptor already went — reduce intercede capacity this round and carry -1 action to next round
+            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+            updated.stunActionReducedThisRound = true
           }
         }
 
@@ -352,6 +356,10 @@ export default defineEventHandler(async (event) => {
           // Stun: immediately reduce actions if interceptor hasn't taken their turn yet this round
           if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
+            updated.stunActionReducedThisRound = true
+          } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
+            // Interceptor already went — reduce intercede capacity this round and carry -1 action to next round
+            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
             updated.stunActionReducedThisRound = true
           }
         }

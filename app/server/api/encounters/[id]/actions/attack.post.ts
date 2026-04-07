@@ -13,6 +13,7 @@ interface AttackActionBody {
   attackName?: string
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
+  lifestealed?: boolean
   hugePowerUsed?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
 }
@@ -158,8 +159,16 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // Attacks cost 1 simple action, or 2 if bolstered
-  let actionCostSimple = body.bolstered ? 2 : 1
+  // Cannot bolster and use Lifesteal Complex Action simultaneously
+  if (body.bolstered && body.lifestealed) {
+    throw createError({
+      statusCode: 400,
+      message: 'Cannot bolster and use Lifesteal Complex Action simultaneously',
+    })
+  }
+
+  // Attacks cost 1 simple action, or 2 if bolstered or Lifesteal Complex Action
+  let actionCostSimple = (body.bolstered || body.lifestealed) ? 2 : 1
 
   // EddySoul: Combat Monster + Area Attack requires a Complex Action (unless no bonus)
   const campaignRulesSettings = typeof campaign?.rulesSettings === 'string' ? JSON.parse(campaign.rulesSettings) : (campaign?.rulesSettings || {})
@@ -406,6 +415,7 @@ export default defineEventHandler(async (event) => {
       },
       bolstered: body.bolstered || false,
       bolsterType: body.bolsterType,
+      lifestealed: body.lifestealed || false,
       hugePowerUsed: body.hugePowerUsed || false,
       hugePowerAttackRange: body.hugePowerAttackRange,
       isSignatureMove,
