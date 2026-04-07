@@ -353,6 +353,7 @@ export interface CombatParticipant {
   clashCooldownUntilRound?: number  // Cannot initiate a new clash until this round
   usedFreeClashThisRound?: boolean  // Wrestlemania: free clash initiation used this round
   stunActionReducedThisRound?: boolean  // Stun already reduced actions this round (prevents double-reduction at rollover)
+  moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
 }
 
 export interface ActiveEffect {

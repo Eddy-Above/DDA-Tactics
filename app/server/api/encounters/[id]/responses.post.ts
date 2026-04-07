@@ -212,6 +212,10 @@ export default defineEventHandler(async (event) => {
     // Parse encounter data
     let participants = parseJsonField(encounter.participants)
     let battleLog = parseJsonField(encounter.battleLog)
+    const turnOrder = parseJsonField(encounter.turnOrder)
+    const currentTurnIndex = encounter.currentTurnIndex ?? 0
+    const targetIdx = turnOrder.indexOf(request.targetParticipantId)
+    const targetHasGone = targetIdx !== -1 && targetIdx < currentTurnIndex
 
     // Calculate hit/miss
     const accuracySuccesses = request.data.accuracySuccesses
@@ -310,10 +314,10 @@ export default defineEventHandler(async (event) => {
             updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules)
             appliedEffectName = attackDef.effect
             // Stun: immediately reduce actions if target hasn't taken their turn yet this round
-            if (attackDef.effect === 'Stun' && !p.hasActed) {
+            if (attackDef.effect === 'Stun' && !targetHasGone) {
               updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
               updated.stunActionReducedThisRound = true
-            } else if (attackDef.effect === 'Stun' && p.hasActed) {
+            } else if (attackDef.effect === 'Stun' && targetHasGone) {
               // Target already went — reduce intercede capacity this round and carry -1 action to next round
               updated.interceptPenalty = (p.interceptPenalty || 0) + 1
               updated.stunActionReducedThisRound = true
@@ -429,6 +433,8 @@ export default defineEventHandler(async (event) => {
       let attackerHasCombatMonster = false
       let attackerHealthStat = 0
       let attackerCombatMonsterBonus = 0
+      let attackerHasPositiveReinforcement = false
+      let attackerMoodValue = 3
       if (attackerParticipant?.type === 'digimon') {
         const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
         if (attackerDigimon) {
@@ -445,6 +451,8 @@ export default defineEventHandler(async (event) => {
             : attackerDigimon.qualities
           attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
           attackerCombatMonsterBonus = attackerParticipant.combatMonsterBonus ?? 0
+          attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
+          attackerMoodValue = attackerParticipant.moodValue ?? 3
         }
       }
 
@@ -455,6 +463,8 @@ export default defineEventHandler(async (event) => {
       let targetHasCombatMonster = false
       let targetHealthStat = 0
       let targetDigimonRef: any = null
+      let targetHasPositiveReinforcement = false
+      let targetMoodValue = 3
       if (targetParticipant?.type === 'digimon') {
         const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
         targetDigimonRef = targetDigimon
@@ -477,6 +487,8 @@ export default defineEventHandler(async (event) => {
             targetArmor += 2
           }
           targetHasCombatMonster = (targetQualities || []).some((q: any) => q.id === 'combat-monster')
+          targetHasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')
+          targetMoodValue = targetParticipant.moodValue ?? 3
         }
       } else if (targetParticipant?.type === 'tamer') {
         const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
@@ -510,6 +522,14 @@ export default defineEventHandler(async (event) => {
       const targetEffectMods = getEffectStatModifiers(targetParticipant?.activeEffects || [])
       targetArmor += targetEffectMods.armor
 
+      // Apply Positive Reinforcement mood modifiers to damage and armor
+      if (attackerHasPositiveReinforcement && attackerMoodValue >= 5) {
+        attackBaseDamage += attackerMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
+      }
+      if (targetHasPositiveReinforcement && targetMoodValue <= 2) {
+        targetArmor -= (3 - targetMoodValue)  // Mood 2 → –1, Mood 1 → –2
+      }
+
       // Calculate final damage
       let damageDealt = 0
       if (hit) {
@@ -539,7 +559,7 @@ export default defineEventHandler(async (event) => {
 
       let lifestealHealAmount = 0
       participants = participants.map((p: any) => {
-        // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing
+        // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing + Positive Reinforcement mood
         if (p.id === request.data.attackerParticipantId) {
           const attackerUpdates: any = {}
           if (hit && attackerHasCombatMonster) {
@@ -552,17 +572,25 @@ export default defineEventHandler(async (event) => {
             lifestealHealAmount = Math.min(damageDealt, lifestealPotency)
             attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
           }
+          if (attackerHasPositiveReinforcement) {
+            // Land attack → +1 Mood; Miss → –1 Mood
+            attackerUpdates.moodValue = Math.min(6, Math.max(1, (p.moodValue ?? 3) + (hit ? 1 : -1)))
+          }
           if (Object.keys(attackerUpdates).length > 0) {
             return { ...p, ...attackerUpdates }
           }
         }
 
         if (p.id === request.targetParticipantId) {
-          const updated = {
+          const updated: any = {
             ...p,
             dodgePenalty: (p.dodgePenalty ?? 0) + 1,
             // Consume Directed effect (bonus was applied client-side to dodge pool)
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+          }
+          // Positive Reinforcement: get hit → –1 Mood; successfully dodge → +1 Mood
+          if (targetHasPositiveReinforcement) {
+            updated.moodValue = Math.min(6, Math.max(1, (p.moodValue ?? 3) + (hit ? -1 : 1)))
           }
 
           // Apply damage and effects only if hit
@@ -603,10 +631,10 @@ export default defineEventHandler(async (event) => {
                 updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules)
                 appliedEffectName = attackDef.effect
                 // Stun: immediately reduce actions if target hasn't taken their turn yet this round
-                if (attackDef.effect === 'Stun' && !p.hasActed) {
+                if (attackDef.effect === 'Stun' && !targetHasGone) {
                   updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
                   updated.stunActionReducedThisRound = true
-                } else if (attackDef.effect === 'Stun' && p.hasActed) {
+                } else if (attackDef.effect === 'Stun' && targetHasGone) {
                   // Target already went — reduce intercede capacity this round and carry -1 action to next round
                   updated.interceptPenalty = (p.interceptPenalty || 0) + 1
                   updated.stunActionReducedThisRound = true

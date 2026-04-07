@@ -1909,6 +1909,36 @@ async function updateCombatMonsterBonus(participantId: string, newValue: number)
   await updateEncounter(currentEncounter.value.id, { participants })
 }
 
+async function updateMoodValue(participantId: string, newValue: number) {
+  if (!currentEncounter.value) return
+  const participants = currentEncounter.value.participants as CombatParticipant[]
+  const participant = participants.find((p) => p.id === participantId)
+  if (!participant) return
+  participant.moodValue = Math.max(1, Math.min(6, newValue))
+  await updateEncounter(currentEncounter.value.id, { participants })
+}
+
+const cheerUpTargets = computed(() => {
+  if (!currentEncounter.value || !activeParticipant.value || activeParticipant.value.type !== 'tamer') return []
+  const tamerEntityId = activeParticipant.value.entityId
+  return (currentEncounter.value.participants as CombatParticipant[]).filter(p => {
+    if (p.type !== 'digimon' || p.isEnemy || (p.moodValue ?? 3) !== 1) return false
+    const digimon = digimonMap.value.get(p.entityId)
+    return digimon?.partnerId === tamerEntityId &&
+      digimon?.qualities?.some((q: any) => q.id === 'positive-reinforcement')
+  })
+})
+
+async function executeCheerUp() {
+  if (!currentEncounter.value || cheerUpTargets.value.length === 0) return
+  const target = cheerUpTargets.value[0]
+  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/cheer-up`, {
+    method: 'POST',
+    body: { participantId: activeParticipant.value!.id, targetParticipantId: target.id },
+  })
+  await fetchEncounter(currentEncounter.value.id)
+}
+
 // Force stance change (no action cost, Manage modal)
 async function forceChangeStance(participantId: string, stance: CombatParticipant['currentStance']) {
   if (!currentEncounter.value) return
@@ -3090,6 +3120,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
               >
                 Bolster Direct (2 Simple){{ activeParticipant.hasDirectedThisTurn ? ' - Used' : '' }}
               </button>
+              <button
+                v-if="activeParticipant.type === 'tamer' && cheerUpTargets.length > 0"
+                :disabled="activeParticipant.actionsRemaining.simple < 2"
+                class="w-full bg-pink-700 hover:bg-pink-800 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-sm font-medium"
+                @click="executeCheerUp()"
+              >
+                Cheer Up (2 Simple)
+              </button>
             </div>
 
             <!-- Special Orders (Tamer only) -->
@@ -3633,6 +3671,29 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   class="bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white w-8 h-8 rounded text-lg font-bold"
                   @click="updateCombatMonsterBonus(selectedParticipant.id, (selectedParticipant.combatMonsterBonus ?? 0) + 1)"
                 >+</button>
+              </div>
+            </div>
+
+            <!-- Mood Meter (Digimon with Positive Reinforcement quality only) -->
+            <div v-if="selectedParticipant.type === 'digimon' && digimonMap.get(selectedParticipant.entityId)?.qualities?.some((q: any) => q.id === 'positive-reinforcement')" class="mb-6 bg-digimon-dark-700 rounded-lg p-4">
+              <h3 class="font-semibold text-white mb-3">Mood Meter</h3>
+              <div class="flex items-center gap-3">
+                <button
+                  class="bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white w-8 h-8 rounded text-lg font-bold"
+                  @click="updateMoodValue(selectedParticipant.id, (selectedParticipant.moodValue ?? 3) - 1)"
+                >–</button>
+                <span class="text-white font-semibold text-lg">{{ selectedParticipant.moodValue ?? 3 }}</span>
+                <span class="text-digimon-dark-400">/6</span>
+                <button
+                  class="bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white w-8 h-8 rounded text-lg font-bold"
+                  @click="updateMoodValue(selectedParticipant.id, (selectedParticipant.moodValue ?? 3) + 1)"
+                >+</button>
+                <span
+                  class="text-xs ml-2"
+                  :class="(selectedParticipant.moodValue ?? 3) >= 5 ? 'text-green-400' : (selectedParticipant.moodValue ?? 3) <= 2 ? 'text-red-400' : 'text-digimon-dark-400'"
+                >
+                  {{ (selectedParticipant.moodValue ?? 3) >= 5 ? `Good (+${(selectedParticipant.moodValue ?? 3) - 4} Dodge/Dmg)` : (selectedParticipant.moodValue ?? 3) <= 2 ? `Poor (-${3 - (selectedParticipant.moodValue ?? 3)} Acc/Armor)` : 'Neutral' }}
+                </span>
               </div>
             </div>
 

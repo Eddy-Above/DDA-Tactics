@@ -20,6 +20,7 @@ interface ResolveNpcAttackParams {
   attackerName: string
   targetName: string
   turnOrder?: string[]
+  currentTurnIndex?: number
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
   outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
@@ -36,6 +37,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   turnOrder?: string[]
 }> {
   let { participants, battleLog } = params
+
+  const currentTurnIndex = params.currentTurnIndex ?? 0
+  const targetIdx = (params.turnOrder || []).indexOf(params.targetParticipantId)
+  const targetHasGone = targetIdx !== -1 && targetIdx < currentTurnIndex
 
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
   const target = participants.find((p: any) => p.id === params.targetParticipantId)
@@ -88,6 +93,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let attackerHasCombatMonster = false
   let attackerHealthStat = 0
   let attackerCombatMonsterBonus = 0
+  let attackerHasPositiveReinforcement = false
+  let attackerMoodValue = 3
   if (attacker.type === 'digimon') {
     const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
     if (attackerDigimon) {
@@ -101,6 +108,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         ? JSON.parse(attackerDigimon.qualities) : attackerDigimon.qualities
       attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
       attackerCombatMonsterBonus = attacker.combatMonsterBonus ?? 0
+      attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
+      attackerMoodValue = attacker.moodValue ?? 3
     }
   }
 
@@ -131,6 +140,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // Apply active effect dodge modifiers
   const targetEffectMods = getEffectStatModifiers(target.activeEffects || [])
   dodgePool += targetEffectMods.dodge
+
+  // Apply Positive Reinforcement mood dodge bonus for target
+  if (targetHasPositiveReinforcement && targetMoodValue >= 5) {
+    dodgePool += targetMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
+  }
 
   // Apply Directed bonus to dodge pool (for NPC targets that were directed by a tamer)
   const directedEffect = (target.activeEffects || []).find((e: any) => e.name === 'Directed')
@@ -187,10 +201,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
           appliedEffectName = attackDef.effect
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
-          if (attackDef.effect === 'Stun' && !p.hasActed) {
+          if (attackDef.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
             updated.stunActionReducedThisRound = true
-          } else if (attackDef.effect === 'Stun' && p.hasActed) {
+          } else if (attackDef.effect === 'Stun' && targetHasGone) {
             // Target already went — reduce intercede capacity this round and carry -1 action to next round
             updated.interceptPenalty = (p.interceptPenalty || 0) + 1
             updated.stunActionReducedThisRound = true
@@ -236,6 +250,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let targetArmor = 0
   let targetHasCombatMonster = false
   let targetHealthStat = 0
+  let targetHasPositiveReinforcement = false
+  let targetMoodValue = 3
   if (target.type === 'digimon') {
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
     if (targetDigimon) {
@@ -251,6 +267,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       const dataOpt = qualities?.find((q: any) => q.id === 'data-optimization')
       if (dataOpt?.choiceId === 'guardian') targetArmor += 2
       targetHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
+      targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
+      targetMoodValue = target.moodValue ?? 3
     }
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
@@ -267,6 +285,14 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   const attackerEffectMods = getEffectStatModifiers(attacker.activeEffects || [])
   attackBaseDamage += attackerEffectMods.damage
   targetArmor += targetEffectMods.armor
+
+  // Apply Positive Reinforcement mood modifiers to damage and armor
+  if (attackerHasPositiveReinforcement && attackerMoodValue >= 5) {
+    attackBaseDamage += attackerMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
+  }
+  if (targetHasPositiveReinforcement && targetMoodValue <= 2) {
+    targetArmor -= (3 - targetMoodValue)  // Mood 2 → –1, Mood 1 → –2
+  }
 
   let damageDealt = 0
   if (hit) {
@@ -293,7 +319,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let appliedEffectName: string | null = null
   let lifestealHealAmount = 0
   participants = participants.map((p: any) => {
-    // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing
+    // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing + Positive Reinforcement mood
     if (p.id === params.attackerParticipantId) {
       const attackerUpdates: any = {}
       if (hit && attackerHasCombatMonster) {
@@ -304,6 +330,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         lifestealHealAmount = Math.min(damageDealt, effectPotency)
         attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
       }
+      if (attackerHasPositiveReinforcement) {
+        // Land attack → +1 Mood; Miss → –1 Mood
+        attackerUpdates.moodValue = Math.min(6, Math.max(1, (p.moodValue ?? 3) + (hit ? 1 : -1)))
+      }
       if (Object.keys(attackerUpdates).length > 0) {
         return { ...p, ...attackerUpdates }
       }
@@ -311,11 +341,15 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
     // Handle target: apply damage and Combat Monster accumulation
     if (p.id === params.targetParticipantId) {
-      const updated = {
+      const updated: any = {
         ...p,
         dodgePenalty: (p.dodgePenalty ?? 0) + 1,
         // Consume Directed effect (bonus was applied to dodge pool above)
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+      }
+      // Positive Reinforcement: get hit → –1 Mood; successfully dodge → +1 Mood
+      if (targetHasPositiveReinforcement) {
+        updated.moodValue = Math.min(6, Math.max(1, (p.moodValue ?? 3) + (hit ? -1 : 1)))
       }
       if (hit) {
         const tempAvailable = p.currentTempWounds ?? 0

@@ -56,6 +56,7 @@ export interface CombatParticipant {
   }
   clashCooldownUntilRound?: number
   usedFreeClashThisRound?: boolean
+  moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
 }
 
 export interface BattleLogEntry {
@@ -275,7 +276,7 @@ export function useEncounters() {
   }
 
   async function nextTurn(encounterId: string, digimonMap?: Map<string, any>, houseRules?: { signatureMoveBattery?: boolean } | null): Promise<Encounter | null> {
-    const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
+    const encounter = await fetchEncounter(encounterId)
     if (!encounter) return null
 
     const participants = encounter.participants as CombatParticipant[]
