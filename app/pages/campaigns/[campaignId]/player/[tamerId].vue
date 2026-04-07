@@ -1716,8 +1716,23 @@ function showAttackResult(
     }
   }
 
-  // Apply combat monster bonus (accumulated damage added to next hit)
-  if (attackerParticipant) {
+  // Try to get server-authoritative damage values from battle log
+  // (client-side combatMonsterBonus is already reset to 0 by the server before we read it)
+  const battleLog = (activeEncounter.value?.battleLog as any[]) || []
+  const matchingLogEntry = [...battleLog].reverse().find(
+    (entry: any) =>
+      (entry.action === 'Dodge' || entry.action === 'Dodge (Support)') &&
+      entry.attackerParticipantId === pendingAttack.participantId &&
+      entry.hit !== undefined
+  )
+
+  if (matchingLogEntry?.baseDamage != null) {
+    baseDamage = matchingLogEntry.baseDamage
+    armorPiercing = matchingLogEntry.armorPiercing ?? armorPiercing
+  }
+
+  // Fallback: apply combat monster bonus from participant if no battle log entry found
+  if (matchingLogEntry?.baseDamage == null && attackerParticipant) {
     const cmBonus = (attackerParticipant as any).combatMonsterBonus ?? 0
     if (cmBonus > 0) {
       baseDamage += cmBonus
@@ -1766,8 +1781,12 @@ function showAttackResult(
   let finalDamage: number | null = null
   const isSupport = pendingAttack.attackData?.type === 'support'
   if (hit && !isSupport) {
-    const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
-    finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
+    if (matchingLogEntry?.finalDamage != null) {
+      finalDamage = matchingLogEntry.finalDamage
+    } else {
+      const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+      finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
+    }
   }
 
   console.log('[ATTACK RESULT] About to add to queue, current length:', attackResultQueue.value.length)
