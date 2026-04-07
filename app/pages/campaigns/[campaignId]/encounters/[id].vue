@@ -1159,6 +1159,9 @@ async function handleAddParticipant() {
         initiativeRoll = result.roll
         const derived = calcDigimonStats(digimon)
         maxWounds = derived.woundBoxes
+        if (digimon.isEnemy && eddySoulRules.value?.enemyDoubleWounds) {
+          maxWounds = maxWounds * 2
+        }
       }
     }
 
