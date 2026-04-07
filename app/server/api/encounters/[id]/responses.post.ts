@@ -214,8 +214,27 @@ export default defineEventHandler(async (event) => {
     let battleLog = parseJsonField(encounter.battleLog)
     const turnOrder = parseJsonField(encounter.turnOrder)
     const currentTurnIndex = encounter.currentTurnIndex ?? 0
-    const targetIdx = turnOrder.indexOf(request.targetParticipantId)
-    const targetHasGone = targetIdx !== -1 && targetIdx < currentTurnIndex
+    // Determine if target has already gone this round.
+    // Digimon are not in turnOrder — use their partner Tamer's position instead.
+    const targetParticipantForTurn = participants.find((p: any) => p.id === request.targetParticipantId)
+    let targetHasGone = false
+    if (targetParticipantForTurn?.type === 'tamer') {
+      const idx = turnOrder.indexOf(targetParticipantForTurn.id)
+      targetHasGone = idx >= 0 && idx < currentTurnIndex
+    } else if (targetParticipantForTurn?.type === 'digimon') {
+      const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+      if (targetDigimonForTurn?.partnerId) {
+        const tamerOfTarget = participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
+        if (tamerOfTarget) {
+          const idx = turnOrder.indexOf(tamerOfTarget.id)
+          targetHasGone = idx >= 0 && idx < currentTurnIndex
+        }
+      } else {
+        // NPC digimon — appears in turnOrder directly
+        const idx = turnOrder.indexOf(targetParticipantForTurn.id)
+        targetHasGone = idx >= 0 && idx < currentTurnIndex
+      }
+    }
 
     // Calculate hit/miss
     const accuracySuccesses = request.data.accuracySuccesses

@@ -207,6 +207,26 @@ export default defineEventHandler(async (event) => {
   // Support attack: skip damage, apply effect only, return early
   if (npcAttackDef?.type === 'support') {
     let appliedEffectName: string | null = null
+    // Digimon are not in turnOrder — use their partner Tamer's position instead.
+    const targetParticipantForTurn = participants.find((p: any) => p.id === body.targetId)
+    let targetHasGone = false
+    if (targetParticipantForTurn?.type === 'tamer') {
+      const idx = turnOrder.indexOf(targetParticipantForTurn.id)
+      targetHasGone = idx >= 0 && idx < currentIndex
+    } else if (targetParticipantForTurn?.type === 'digimon') {
+      const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+      if (targetDigimonForTurn?.partnerId) {
+        const tamerOfTarget = participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
+        if (tamerOfTarget) {
+          const idx = turnOrder.indexOf(tamerOfTarget.id)
+          targetHasGone = idx >= 0 && idx < currentIndex
+        }
+      } else {
+        // NPC digimon — appears in turnOrder directly
+        const idx = turnOrder.indexOf(targetParticipantForTurn.id)
+        targetHasGone = idx >= 0 && idx < currentIndex
+      }
+    }
     const supportParticipants = updatedParticipants.map((p: any) => {
       if (p.id === body.targetId && hit && npcAttackDef.effect) {
         const effectDuration = Math.max(1, netSuccesses)
@@ -221,8 +241,8 @@ export default defineEventHandler(async (event) => {
           description: '',
         }
         appliedEffectName = npcAttackDef.effect
-        const stunImmediate = npcAttackDef.effect === 'Stun' && !p.hasActed
-        const stunDeferred = npcAttackDef.effect === 'Stun' && p.hasActed
+        const stunImmediate = npcAttackDef.effect === 'Stun' && !targetHasGone
+        const stunDeferred = npcAttackDef.effect === 'Stun' && targetHasGone
         return {
           ...p,
           activeEffects: [...(p.activeEffects || []), newEffect],

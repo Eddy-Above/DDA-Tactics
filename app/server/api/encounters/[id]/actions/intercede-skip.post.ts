@@ -184,6 +184,7 @@ export default defineEventHandler(async (event) => {
           attackerName: request.data.attackerName,
           targetName: request.data.targetName,
           turnOrder,
+          currentTurnIndex: encounter.currentTurnIndex || 0,
         })
 
         updateData.participants = JSON.stringify(result.participants)

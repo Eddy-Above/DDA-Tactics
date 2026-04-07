@@ -395,6 +395,7 @@ export default defineEventHandler(async (event) => {
         round: encounter.round || 0,
         attackerName, targetName,
         turnOrder,
+        currentTurnIndex: encounter.currentTurnIndex || 0,
         houseRules,
         clashAttack: body.clashAttack,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty,

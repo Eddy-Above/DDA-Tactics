@@ -39,8 +39,26 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let { participants, battleLog } = params
 
   const currentTurnIndex = params.currentTurnIndex ?? 0
-  const targetIdx = (params.turnOrder || []).indexOf(params.targetParticipantId)
-  const targetHasGone = targetIdx !== -1 && targetIdx < currentTurnIndex
+  // Digimon are not in turnOrder — use their partner Tamer's position instead.
+  const targetParticipantForTurn = params.participants.find((p: any) => p.id === params.targetParticipantId)
+  let targetHasGone = false
+  if (targetParticipantForTurn?.type === 'tamer') {
+    const idx = (params.turnOrder || []).indexOf(targetParticipantForTurn.id)
+    targetHasGone = idx >= 0 && idx < currentTurnIndex
+  } else if (targetParticipantForTurn?.type === 'digimon') {
+    const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+    if (targetDigimonForTurn?.partnerId) {
+      const tamerOfTarget = params.participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
+      if (tamerOfTarget) {
+        const idx = (params.turnOrder || []).indexOf(tamerOfTarget.id)
+        targetHasGone = idx >= 0 && idx < currentTurnIndex
+      }
+    } else {
+      // NPC digimon — appears in turnOrder directly
+      const idx = (params.turnOrder || []).indexOf(targetParticipantForTurn.id)
+      targetHasGone = idx >= 0 && idx < currentTurnIndex
+    }
+  }
 
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
   const target = participants.find((p: any) => p.id === params.targetParticipantId)
@@ -387,10 +405,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
             appliedEffectName = attackDef.effect
             // Stun: immediately reduce actions if target hasn't taken their turn yet this round
-            if (attackDef.effect === 'Stun' && !p.hasActed) {
+            if (attackDef.effect === 'Stun' && !targetHasGone) {
               updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
               updated.stunActionReducedThisRound = true
-            } else if (attackDef.effect === 'Stun' && p.hasActed) {
+            } else if (attackDef.effect === 'Stun' && targetHasGone) {
               // Target already went — reduce intercede capacity this round and carry -1 action to next round
               updated.interceptPenalty = (p.interceptPenalty || 0) + 1
               updated.stunActionReducedThisRound = true
