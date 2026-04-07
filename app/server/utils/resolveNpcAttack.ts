@@ -23,6 +23,7 @@ interface ResolveNpcAttackParams {
   currentTurnIndex?: number
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
+  counterattack?: boolean      // If true, target's dodge pool is halved (Counterattack mechanic)
   outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
 }
 
@@ -35,6 +36,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   participants: any[]
   battleLog: any[]
   turnOrder?: string[]
+  hit: boolean
 }> {
   let { participants, battleLog } = params
 
@@ -175,6 +177,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     dodgePool = Math.max(1, Math.floor(dodgePool / 2))
   }
 
+  // Counterattack: target can only use half their dodge pool
+  if (params.counterattack) {
+    dodgePool = Math.max(1, Math.floor(dodgePool / 2))
+  }
+
   dodgePool = Math.max(1, dodgePool)
 
   // Roll dodge
@@ -252,7 +259,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     }
 
     battleLog = [...battleLog, supportDodgeLog]
-    return { participants, battleLog, turnOrder: params.turnOrder }
+    return { participants, battleLog, turnOrder: params.turnOrder, hit }
   }
 
   // --- Damage calculation ---
@@ -520,5 +527,5 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : [])]
 
-  return { participants, battleLog, turnOrder: params.turnOrder }
+  return { participants, battleLog, turnOrder: params.turnOrder, hit }
 }

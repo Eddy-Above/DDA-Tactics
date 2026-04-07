@@ -3,12 +3,14 @@ import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../.
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
+import { triggerCounterattack } from '../../../utils/triggerCounterattack'
+import { resolveNpcAttack } from '../../../utils/resolveNpcAttack'
 
 interface SubmitResponseBody {
   requestId: string
   tamerId: string
   response: {
-    type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled'
+    type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered'
     digimonId?: string
     initiative?: number
     initiativeRoll?: number
@@ -18,6 +20,11 @@ interface SubmitResponseBody {
     healthDicePool?: number
     healthSuccesses?: number
     healthDiceResults?: number[]
+    attackId?: string
+    attackName?: string
+    accuracyDicePool?: number
+    accuracySuccesses?: number
+    accuracyDiceResults?: number[]
   }
 }
 
@@ -149,6 +156,26 @@ export default defineEventHandler(async (event) => {
         message: 'healthDicePool, healthSuccesses, and healthDiceResults are required for health-rolled response',
       })
     }
+  } else if (body.response.type === 'counterattack-declined') {
+    if (request.type !== 'counterattack-prompt') {
+      throw createError({
+        statusCode: 400,
+        message: 'Response type does not match request type',
+      })
+    }
+  } else if (body.response.type === 'counterattack-triggered') {
+    if (request.type !== 'counterattack-prompt') {
+      throw createError({
+        statusCode: 400,
+        message: 'Response type does not match request type',
+      })
+    }
+    if (!body.response.attackId || body.response.accuracySuccesses === undefined || !body.response.accuracyDiceResults || body.response.accuracyDicePool === undefined) {
+      throw createError({
+        statusCode: 400,
+        message: 'attackId, accuracyDicePool, accuracySuccesses, and accuracyDiceResults are required for counterattack-triggered response',
+      })
+    }
   }
 
   // Auto-process digimon-selected: immediately create initiative-roll request
@@ -240,8 +267,8 @@ export default defineEventHandler(async (event) => {
     const accuracySuccesses = request.data.accuracySuccesses
     let dodgeSuccesses = body.response.dodgeSuccesses ?? 0
 
-    // Clash Attack: target may only use half their dodge pool — recount successes from capped dice
-    if (request.data.clashAttack) {
+    // Clash Attack / Counterattack halfDodge: target may only use half their dodge pool — recount successes from capped dice
+    if (request.data.clashAttack || request.data.halfDodge) {
       const targetParticipantForDodge = participants.find((p: any) => p.id === request.data.targetParticipantId)
       let fullDodgePool = 3
       if (targetParticipantForDodge?.type === 'digimon') {
@@ -396,6 +423,31 @@ export default defineEventHandler(async (event) => {
       battleLog = [...battleLog, dodgeLogEntry]
       updateData.participants = JSON.stringify(participants)
       updateData.battleLog = JSON.stringify(battleLog)
+
+      // Check for Counterattack on miss (support branch)
+      if (!hit && request.targetParticipantId) {
+        const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
+        if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
+          const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+          const tgtQ = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+          if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
+            const caResult = await triggerCounterattack({
+              participants,
+              battleLog,
+              pendingRequests: pendingRequests.filter((r: any) => r.id !== body.requestId),
+              round: encounter.round || 0,
+              counterattackerParticipantId: request.targetParticipantId,
+              originalAttackerParticipantId: request.data.attackerParticipantId,
+              houseRules,
+            })
+            participants = caResult.participants
+            battleLog = caResult.battleLog
+            updateData.participants = JSON.stringify(participants)
+            updateData.battleLog = JSON.stringify(battleLog)
+            updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+          }
+        }
+      }
 
     } else {
       // === DAMAGE ATTACK: existing damage calculation flow ===
@@ -771,6 +823,32 @@ export default defineEventHandler(async (event) => {
 
       updateData.participants = JSON.stringify(participants)
       updateData.battleLog = JSON.stringify(battleLog)
+
+      // Check for Counterattack on miss (damage branch)
+      if (!hit && request.targetParticipantId) {
+        const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
+        if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
+          const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+          const tgtQ = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+          if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
+            const caResult = await triggerCounterattack({
+              participants,
+              battleLog,
+              pendingRequests: pendingRequests.filter((r: any) => r.id !== body.requestId),
+              round: encounter.round || 0,
+              counterattackerParticipantId: request.targetParticipantId,
+              originalAttackerParticipantId: request.data.attackerParticipantId,
+              houseRules,
+            })
+            participants = caResult.participants
+            battleLog = caResult.battleLog
+            updateData.participants = JSON.stringify(participants)
+            updateData.battleLog = JSON.stringify(battleLog)
+            updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+          }
+        }
+      }
+
     } // end damage attack branch
   }
 
@@ -857,6 +935,229 @@ export default defineEventHandler(async (event) => {
 
     updateData.participants = JSON.stringify(participants)
     updateData.battleLog = JSON.stringify(battleLog)
+  }
+
+  // === COUNTERATTACK-DECLINED: player declines the free retaliation ===
+  if (body.response.type === 'counterattack-declined') {
+    const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+    const battleLog = parseJsonField(encounter.battleLog)
+
+    const declineLog = {
+      id: `log-${Date.now()}-ca-decline`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: request.targetParticipantId,
+      actorName: request.data?.counterattackerName || 'Digimon',
+      action: 'Counterattack',
+      target: request.data?.originalAttackerName || 'Unknown',
+      result: 'Counterattack declined',
+      damage: 0,
+      effects: ['Counterattack', 'Declined'],
+    }
+
+    await db.update(encounters).set({
+      pendingRequests: JSON.stringify(filteredRequests),
+      battleLog: JSON.stringify([...battleLog, declineLog]),
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
+  }
+
+  // === COUNTERATTACK-TRIGGERED: player submits their chosen attack + accuracy roll ===
+  if (body.response.type === 'counterattack-triggered') {
+    let participants = parseJsonField(encounter.participants)
+    let battleLog = parseJsonField(encounter.battleLog)
+    const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+
+    const counterattackerParticipantId = request.data?.counterattackerParticipantId
+    const originalAttackerParticipantId = request.data?.originalAttackerParticipantId
+    const counterattackerName = request.data?.counterattackerName || 'Digimon'
+    const originalAttackerName = request.data?.originalAttackerName || 'Unknown'
+
+    const accuracySuccesses = body.response.accuracySuccesses!
+    const accuracyDiceResults = body.response.accuracyDiceResults!
+    const accuracyDicePool = body.response.accuracyDicePool!
+    const attackId = body.response.attackId!
+    const attackName = body.response.attackName || 'Counterattack'
+
+    // Mark used
+    participants = participants.map((p: any) =>
+      p.id === counterattackerParticipantId
+        ? { ...p, usedCounterattackThisCombat: true }
+        : p,
+    )
+
+    // Log accuracy roll
+    battleLog = [
+      ...battleLog,
+      {
+        id: `log-${Date.now()}-ca-accuracy`,
+        timestamp: new Date().toISOString(),
+        round: encounter.round,
+        actorId: counterattackerParticipantId,
+        actorName: counterattackerName,
+        action: 'Counterattack Accuracy',
+        target: originalAttackerName,
+        result: `${accuracyDicePool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`,
+        damage: null,
+        effects: ['Counterattack', 'Accuracy Roll'],
+      },
+    ]
+
+    if (accuracySuccesses === 0) {
+      battleLog = [
+        ...battleLog,
+        {
+          id: `log-${Date.now()}-ca-miss`,
+          timestamp: new Date().toISOString(),
+          round: encounter.round,
+          actorId: counterattackerParticipantId,
+          actorName: counterattackerName,
+          action: 'Counterattack Result',
+          target: originalAttackerName,
+          result: 'AUTO MISS - 0 accuracy successes',
+          damage: 0,
+          effects: ['Counterattack', 'Miss'],
+          hit: false,
+        },
+      ]
+
+      await db.update(encounters).set({
+        participants: JSON.stringify(participants),
+        battleLog: JSON.stringify(battleLog),
+        pendingRequests: JSON.stringify(filteredRequests),
+        updatedAt: new Date(),
+      }).where(eq(encounters.id, encounterId))
+
+      const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+      return {
+        ...updated,
+        participants: parseJsonField(updated.participants),
+        turnOrder: parseJsonField(updated.turnOrder),
+        battleLog: parseJsonField(updated.battleLog),
+        hazards: parseJsonField(updated.hazards),
+        pendingRequests: parseJsonField(updated.pendingRequests),
+        requestResponses: parseJsonField(updated.requestResponses),
+      }
+    }
+
+    // accuracySuccesses > 0 — determine if original attacker is player or NPC
+    const originalAttacker = participants.find((p: any) => p.id === originalAttackerParticipantId)
+    const counterattacker = participants.find((p: any) => p.id === counterattackerParticipantId)
+
+    let originalAttackerIsPlayer = false
+    let originalAttackerTamerId: string | null = null
+
+    if (originalAttacker?.type === 'tamer') {
+      originalAttackerIsPlayer = true
+      originalAttackerTamerId = originalAttacker.entityId
+    } else if (originalAttacker?.type === 'digimon') {
+      const [origDig] = await db.select().from(digimon).where(eq(digimon.id, originalAttacker.entityId))
+      if (origDig?.partnerId && !origDig.isEnemy) {
+        originalAttackerIsPlayer = true
+        originalAttackerTamerId = origDig.partnerId
+      }
+    }
+
+    // Look up the chosen attack definition
+    let chosenAttack: any = null
+    if (counterattacker?.type === 'digimon') {
+      const [caDig] = await db.select().from(digimon).where(eq(digimon.id, counterattacker.entityId))
+      if (caDig?.attacks) {
+        const attacks = typeof caDig.attacks === 'string' ? JSON.parse(caDig.attacks) : caDig.attacks
+        chosenAttack = (attacks as any[]).find((a: any) => a.id === attackId) || null
+      }
+    }
+
+    if (originalAttackerIsPlayer && originalAttackerTamerId) {
+      // Create dodge-roll directly (bypassing intercede-offer) with halfDodge: true
+      const dodgeRequest = {
+        id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        type: 'dodge-roll',
+        targetTamerId: originalAttackerTamerId,
+        targetParticipantId: originalAttackerParticipantId,
+        timestamp: new Date().toISOString(),
+        data: {
+          attackerName: counterattackerName,
+          targetName: originalAttackerName,
+          attackName,
+          accuracySuccesses,
+          accuracyDice: accuracyDiceResults,
+          attackId,
+          attackData: chosenAttack,
+          attackerEntityId: counterattacker?.entityId,
+          attackerParticipantId: counterattackerParticipantId,
+          targetEntityId: originalAttacker?.entityId,
+          dodgePenalty: originalAttacker?.dodgePenalty ?? 0,
+          bolstered: false,
+          bolsterType: null,
+          bolsterDamageBonus: 0,
+          bolsterBitCpuBonus: 0,
+          lifestealed: false,
+          isSupportAttack: chosenAttack?.type === 'support',
+          isSignatureMove: false,
+          batteryCount: 0,
+          clashAttack: false,
+          outsideClashCpuPenalty: 0,
+          halfDodge: true,
+          isCounterattack: true,
+        },
+      }
+
+      await db.update(encounters).set({
+        participants: JSON.stringify(participants),
+        battleLog: JSON.stringify(battleLog),
+        pendingRequests: JSON.stringify([...filteredRequests, dodgeRequest]),
+        updatedAt: new Date(),
+      }).where(eq(encounters.id, encounterId))
+    } else {
+      // NPC original attacker — call resolveNpcAttack with counterattack: true
+      const result = await resolveNpcAttack({
+        participants,
+        battleLog,
+        attackerParticipantId: counterattackerParticipantId,
+        targetParticipantId: originalAttackerParticipantId,
+        attackId,
+        accuracySuccesses,
+        accuracyDice: accuracyDiceResults,
+        round: encounter.round || 0,
+        attackerName: counterattackerName,
+        targetName: originalAttackerName,
+        turnOrder: parseJsonField(encounter.turnOrder),
+        currentTurnIndex: encounter.currentTurnIndex ?? 0,
+        houseRules,
+        counterattack: true,
+      })
+
+      await db.update(encounters).set({
+        participants: JSON.stringify(result.participants),
+        battleLog: JSON.stringify(result.battleLog),
+        pendingRequests: JSON.stringify(filteredRequests),
+        ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
+        updatedAt: new Date(),
+      }).where(eq(encounters.id, encounterId))
+    }
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
   }
 
   // Update encounter

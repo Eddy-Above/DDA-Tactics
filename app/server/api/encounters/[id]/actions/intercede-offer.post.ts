@@ -4,6 +4,7 @@ import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
+import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -407,6 +408,30 @@ export default defineEventHandler(async (event) => {
         ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
+
+      // Check for Counterattack quality on the target (the one who was missed)
+      if (!result.hit && target?.type === 'digimon' && !target?.usedCounterattackThisCombat) {
+        const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+        const tgtQualities = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+        if ((tgtQualities as any[]).some((q: any) => q.id === 'counterattack')) {
+          const freshEnc = await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0])
+          const caResult = await triggerCounterattack({
+            participants: parseJsonField(freshEnc.participants),
+            battleLog: parseJsonField(freshEnc.battleLog),
+            pendingRequests: parseJsonField(freshEnc.pendingRequests),
+            round: encounter.round || 0,
+            counterattackerParticipantId: body.targetId,
+            originalAttackerParticipantId: body.attackerId,
+            houseRules,
+          })
+          await db.update(encounters).set({
+            participants: JSON.stringify(caResult.participants),
+            battleLog: JSON.stringify(caResult.battleLog),
+            pendingRequests: JSON.stringify(caResult.pendingRequests),
+            updatedAt: new Date(),
+          }).where(eq(encounters.id, encounterId))
+        }
+      }
 
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 

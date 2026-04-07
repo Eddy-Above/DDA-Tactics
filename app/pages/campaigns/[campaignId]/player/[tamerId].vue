@@ -42,6 +42,9 @@ const clashCheckResultData = ref<{ youControl: boolean; waiting: boolean; oppone
 const hasRolledInitiative = ref(false)
 const hasRolledDodge = ref(false)
 const hasRolledHealth = ref(false)
+const hasRolledCounterattack = ref(false)
+const counterattackSelectedAttack = ref<any>(null)
+const counterattackRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
 const selectedAttack = ref<any>(null)
 const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
@@ -561,6 +564,8 @@ const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.t
 const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
 const currentHealthRequest = computed(() => myRequests.value.find((r) => r.type === 'health-roll'))
 const currentIntercedeRequest = computed(() => myRequests.value.find((r) => r.type === 'intercede-offer'))
+const hasCounterattackRequest = computed(() => myRequests.value.some((r) => r.type === 'counterattack-prompt'))
+const currentCounterattackRequest = computed(() => myRequests.value.find((r) => r.type === 'counterattack-prompt'))
 
 // Reset roll flags when requests change (new request arrives)
 // Watch by ID to avoid resetting on every 5-second data refresh (new object references)
@@ -589,6 +594,12 @@ watch(() => clashCheckNeededParticipant.value?.id, (newId) => {
 watch(() => currentHealthRequest.value?.id, () => {
   hasRolledHealth.value = false
   healthRollResult.value = null
+})
+
+watch(() => currentCounterattackRequest.value?.id, () => {
+  hasRolledCounterattack.value = false
+  counterattackRollResult.value = null
+  counterattackSelectedAttack.value = null
 })
 
 watch(() => currentDigimonRequest.value?.id, () => {
@@ -671,6 +682,41 @@ const dodgeDicePool = computed(() => {
   }
 
   return Math.max(1, pool)
+})
+
+const counterattackAccuracyPool = computed(() => {
+  if (!activeEncounter.value || !currentCounterattackRequest.value) return 3
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const counterattackerParticipantId = currentCounterattackRequest.value.data?.counterattackerParticipantId
+  const counterattackerParticipant = participants.find((p) => p.id === counterattackerParticipantId)
+  if (!counterattackerParticipant || counterattackerParticipant.type !== 'digimon') return 3
+
+  const digi = allDigimon.value.find((d) => d.id === counterattackerParticipant.entityId)
+  if (!digi) return 3
+
+  const darkEvoBonus = (digi as any).isDarkEvolution ? 2 : 0
+  const rawAccuracy = ((digi as any).baseStats?.accuracy ?? 0) + ((digi as any).bonusStats?.accuracy ?? 0) + darkEvoBonus
+  const accuracyWithStance = applyStanceToAccuracy(rawAccuracy, counterattackerParticipant.currentStance)
+
+  const effectMods = getEffectStatModifiers(counterattackerParticipant.activeEffects || [])
+  return Math.max(1, accuracyWithStance + effectMods.accuracy)
+})
+
+const counterattackAvailableAttacks = computed(() => {
+  if (!activeEncounter.value || !currentCounterattackRequest.value) return []
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const counterattackerParticipantId = currentCounterattackRequest.value.data?.counterattackerParticipantId
+  const counterattackerParticipant = participants.find((p) => p.id === counterattackerParticipantId)
+  if (!counterattackerParticipant || counterattackerParticipant.type !== 'digimon') return []
+
+  const digi = allDigimon.value.find((d) => d.id === counterattackerParticipant.entityId)
+  if (!digi || !digi.attacks) return []
+
+  return digi.attacks.filter(
+    (a: any) => !(a.tags || []).some((t: string) => t.startsWith('Area Attack'))
+  )
 })
 
 const hasUnrespondedHealthRequest = computed(() => {
@@ -2157,6 +2203,49 @@ async function submitDodgeRoll() {
     }
   } catch (error) {
     console.error('Error submitting dodge roll:', error)
+  }
+}
+
+async function declineCounterattack() {
+  if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value) return
+  try {
+    await respondToRequest(
+      activeEncounter.value.id,
+      currentCounterattackRequest.value.id,
+      tamer.value.id,
+      { type: 'counterattack-declined' }
+    )
+    counterattackRollResult.value = null
+    counterattackSelectedAttack.value = null
+    hasRolledCounterattack.value = false
+    await loadData()
+  } catch (error) {
+    console.error('Error declining counterattack:', error)
+  }
+}
+
+async function submitCounterattack() {
+  if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value || !counterattackRollResult.value || !counterattackSelectedAttack.value) return
+  try {
+    await respondToRequest(
+      activeEncounter.value.id,
+      currentCounterattackRequest.value.id,
+      tamer.value.id,
+      {
+        type: 'counterattack-triggered',
+        attackId: counterattackSelectedAttack.value.id,
+        attackName: counterattackSelectedAttack.value.name,
+        accuracyDicePool: counterattackRollResult.value.dicePool,
+        accuracySuccesses: counterattackRollResult.value.successes,
+        accuracyDiceResults: counterattackRollResult.value.rolls,
+      }
+    )
+    counterattackRollResult.value = null
+    counterattackSelectedAttack.value = null
+    hasRolledCounterattack.value = false
+    await loadData()
+  } catch (error) {
+    console.error('Error submitting counterattack:', error)
   }
 }
 
@@ -4263,6 +4352,106 @@ async function handleBreakClash(participantId: string, clashId: string) {
         >
           Submit Dodge
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Counterattack Prompt Modal -->
+  <Teleport to="body">
+    <div
+      v-if="hasCounterattackRequest"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-pulse"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
+        <h2 class="font-display text-xl font-semibold text-yellow-400 mb-1">
+          ⚡ Counterattack!
+        </h2>
+        <p class="text-digimon-dark-400 text-xs mb-4">Once per combat — target rolls ½ Dodge</p>
+
+        <div v-if="currentCounterattackRequest" class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+          <p class="text-white text-sm">
+            <span class="font-semibold">{{ currentCounterattackRequest.data?.originalAttackerName }}</span> missed!
+            <span class="font-semibold">{{ currentCounterattackRequest.data?.counterattackerName }}</span> may Counterattack.
+          </p>
+        </div>
+
+        <!-- Attack Selector -->
+        <div class="mb-4">
+          <p class="text-white text-sm font-semibold mb-2">Choose attack:</p>
+          <div class="flex flex-col gap-2">
+            <button
+              v-for="atk in counterattackAvailableAttacks"
+              :key="atk.id"
+              @click="counterattackSelectedAttack = atk"
+              :class="[
+                'text-left px-3 py-2 rounded-lg text-sm font-semibold transition-colors border',
+                counterattackSelectedAttack?.id === atk.id
+                  ? 'bg-yellow-600 border-yellow-400 text-white'
+                  : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-200 hover:bg-digimon-dark-600'
+              ]"
+            >
+              {{ atk.name }}
+              <span class="text-xs font-normal ml-1 opacity-70">{{ atk.type }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Accuracy Dice Roller -->
+        <div class="mb-4">
+          <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
+            <div class="flex gap-2 items-center justify-center mb-4">
+              <span class="text-white font-semibold">{{ counterattackAccuracyPool }}d6</span>
+              <span class="text-digimon-dark-400 text-sm">(5+ = success)</span>
+            </div>
+
+            <button
+              :disabled="hasRolledCounterattack || !counterattackSelectedAttack"
+              @click="(() => { const rolls: number[] = []; for (let i = 0; i < counterattackAccuracyPool; i++) rolls.push(Math.floor(Math.random() * 6) + 1); counterattackRollResult = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: counterattackAccuracyPool }; hasRolledCounterattack = true; })()"
+              :class="[
+                'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+                (hasRolledCounterattack || !counterattackSelectedAttack) ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-yellow-600 hover:bg-yellow-700'
+              ]"
+            >
+              🎲 {{ hasRolledCounterattack ? 'Already Rolled' : 'Roll Accuracy' }}
+            </button>
+          </div>
+
+          <div
+            v-if="counterattackRollResult"
+            class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center"
+          >
+            <div class="text-sm text-digimon-dark-400 mb-2">Accuracy Roll</div>
+            <div class="flex justify-center gap-1 mb-2">
+              <span
+                v-for="(die, idx) in counterattackRollResult.rolls"
+                :key="idx"
+                :class="[
+                  'w-8 h-8 flex items-center justify-center rounded font-bold text-sm',
+                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
+                ]"
+              >{{ die }}</span>
+            </div>
+            <div class="text-3xl font-bold text-yellow-400">
+              {{ counterattackRollResult.successes }} <span class="text-sm text-digimon-dark-400">successes</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <button
+            :disabled="!counterattackRollResult || !counterattackSelectedAttack"
+            @click="submitCounterattack"
+            class="flex-1 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            ⚡ Counterattack!
+          </button>
+          <button
+            @click="declineCounterattack"
+            class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Decline
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>

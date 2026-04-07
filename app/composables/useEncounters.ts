@@ -56,6 +56,7 @@ export interface CombatParticipant {
   }
   clashCooldownUntilRound?: number
   usedFreeClashThisRound?: boolean
+  usedCounterattackThisCombat?: boolean
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
 }
 
