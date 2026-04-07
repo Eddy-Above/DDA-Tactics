@@ -63,6 +63,7 @@ const selectedTamerForRequest = ref('')
 const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
 const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
+const selectedTargetIds = ref<string[]>([])
 const bolsterAttackEnabled = ref(false)
 const bolsterAttackType = ref<'damage-accuracy' | 'bit-cpu'>('damage-accuracy')
 const lifestealComplexEnabled = ref(false)
@@ -719,6 +720,19 @@ function getAttackTargets(attackerId: string, attack?: any): CombatParticipant[]
   return participants.filter(p => p.id !== attackerId && p.type !== 'gm')
 }
 
+const isAreaAttack = computed(() =>
+  selectedAttack.value?.attack?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+)
+
+function toggleAreaTarget(targetId: string) {
+  const idx = selectedTargetIds.value.indexOf(targetId)
+  if (idx === -1) {
+    selectedTargetIds.value.push(targetId)
+  } else {
+    selectedTargetIds.value.splice(idx, 1)
+  }
+}
+
 // Open target selection modal
 function selectAttackAndShowTargets(participant: CombatParticipant, attack: any) {
   selectedAttack.value = { participant, attack }
@@ -853,6 +867,7 @@ async function confirmAttack(target: CombatParticipant) {
       })
       showTargetSelector.value = false
       selectedAttack.value = null
+      selectedTargetIds.value = []
       await fetchEncounter(currentEncounter.value.id)
     } catch (e: any) {
       console.error('Attack failed:', e)
@@ -863,11 +878,97 @@ async function confirmAttack(target: CombatParticipant) {
   }
 }
 
+async function confirmAreaAttack(targets: CombatParticipant[]) {
+  if (!selectedAttack.value || !currentEncounter.value || targets.length === 0) return
+  try {
+    const { participant, attack } = selectedAttack.value
+    const attackStats = getAttackStats(participant, attack)
+    let accuracyPool = attackStats.accuracy
+    if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
+      accuracyPool += 2
+    }
+    const accuracyDiceResults: number[] = []
+    for (let i = 0; i < accuracyPool; i++) {
+      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
+    }
+    const originalDiceResults = [...accuracyDiceResults]
+    if (hugePowerEnabled.value) {
+      const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
+      for (let i = 0; i < accuracyDiceResults.length; i++) {
+        if (accuracyDiceResults[i] <= rerollThreshold) {
+          accuracyDiceResults[i] = Math.floor(Math.random() * 6) + 1
+        }
+      }
+    }
+    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
+
+    const sharedBody = {
+      attackerId: participant.id,
+      accuracySuccesses,
+      accuracyDice: accuracyDiceResults,
+      attackId: attack.id,
+      attackName: attack.name,
+      attackData: { dicePool: accuracyPool, attackStats: getAttackStats(participant, attack) },
+      bolstered: bolsterAttackEnabled.value,
+      bolsterType: bolsterAttackEnabled.value ? bolsterAttackType.value : undefined,
+      lifestealed: lifestealComplexEnabled.value || false,
+      hugePowerUsed: hugePowerEnabled.value,
+      hugePowerAttackRange: hugePowerEnabled.value ? attack.range : undefined,
+      hugePowerRank: hugePowerEnabled.value ? (hugePowerRank2Enabled.value ? 2 : 1) : undefined,
+      hugePowerTrackAll: hugePowerEnabled.value && !!eddySoulRules.value?.hugePowerOncePerTurn,
+      isSignatureMove: !!(houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))),
+      batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
+    }
+
+    let lastResult: any = null
+    for (const target of targets) {
+      try {
+        const result = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
+          method: 'POST',
+          body: { ...sharedBody, targetId: target.id },
+        })
+        if (result) lastResult = result
+      } catch (e: any) {
+        console.error(`Attack on ${target.id} failed:`, e)
+        alert(e?.data?.message || `Failed to attack ${getEntityDetails(target)?.name}`)
+      }
+    }
+    if (lastResult) currentEncounter.value = lastResult as any
+
+    const entity = getEntityDetails(participant)
+    const targetNames = targets.map(t => getEntityDetails(t)?.name || 'Unknown').join(', ')
+    const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
+    const hadRerolls = hugePowerEnabled.value && originalDiceResults.some(d => d <= rerollThreshold)
+    const hpLabel = hugePowerRank2Enabled.value ? 'HP2 reroll' : 'HP reroll'
+    const logResult = hadRerolls
+      ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => ${hpLabel} => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
+      : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
+    await addBattleLogEntry(currentEncounter.value.id, {
+      round: currentEncounter.value.round,
+      actorId: participant.id,
+      actorName: entity?.name || 'Unknown',
+      action: 'Area Attack',
+      target: targetNames,
+      result: logResult,
+      damage: null,
+      effects: ['Attack'],
+    })
+
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
+    await fetchEncounter(currentEncounter.value.id)
+  } catch (error) {
+    console.error('Error performing area attack:', error)
+  }
+}
+
 // Cancel attack selection
 function cancelAttackSelection() {
   showTargetSelector.value = false
   selectedAttack.value = null
   selectedTargetId.value = null
+  selectedTargetIds.value = []
 }
 
 // Cancel all intercede offers for a group (GM can manually cancel)
@@ -2261,6 +2362,7 @@ function openClashTargetSelector(participantId: string) {
   if (!participant) return
   selectedAttack.value = { participant, attack: { id: 'clash-initiate', name: 'Initiate Clash', type: 'clash-initiate' } }
   selectedTargetId.value = null
+  selectedTargetIds.value = []
   showTargetSelector.value = true
 }
 
@@ -3797,7 +3899,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         >
           <div class="bg-digimon-dark-800 rounded-xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto border-2 border-digimon-orange-500">
             <h2 class="text-xl font-display font-semibold text-white mb-4">
-              Select Target for {{ selectedAttack.attack.name }}
+              Select Target{{ isAreaAttack ? 's' : '' }} for {{ selectedAttack.attack.name }}
             </h2>
 
             <!-- Clash target list -->
@@ -3831,19 +3933,22 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
             <!-- Attack target list -->
             <div v-else class="space-y-3 mb-6">
+              <p v-if="isAreaAttack" class="text-xs text-digimon-orange-400 mb-1">
+                Area Attack — select all targets hit ({{ selectedTargetIds.length }} selected)
+              </p>
               <button
                 v-for="target in getAttackTargets(selectedAttack.participant.id, selectedAttack.attack)"
                 :key="target.id"
-                @click="selectedTargetId = target.id"
+                @click="isAreaAttack ? toggleAreaTarget(target.id) : (selectedTargetId = target.id)"
                 class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 rounded-lg p-4 border border-digimon-dark-600 transition-all text-left"
                 :class="{
-                  'bg-digimon-orange-500/20 border-digimon-orange-500': selectedTargetId === target.id
+                  'bg-digimon-orange-500/20 border-digimon-orange-500': isAreaAttack ? selectedTargetIds.includes(target.id) : selectedTargetId === target.id
                 }"
               >
                 <div class="flex items-center gap-3 mb-2">
                   <!-- Checkbox with tick -->
                   <div class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0">
-                    <span v-if="selectedTargetId === target.id" class="text-digimon-orange-400">✓</span>
+                    <span v-if="isAreaAttack ? selectedTargetIds.includes(target.id) : selectedTargetId === target.id" class="text-digimon-orange-400">✓</span>
                   </div>
                   <div class="w-10 h-10 rounded bg-digimon-dark-600 flex items-center justify-center overflow-hidden">
                     <img
@@ -3996,12 +4101,20 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 Initiate Clash
               </button>
               <button
-                v-else
+                v-else-if="!isAreaAttack"
                 @click="confirmAttack(getAttackTargets(selectedAttack.participant.id, selectedAttack.attack).find(t => t.id === selectedTargetId))"
                 :disabled="!selectedTargetId"
                 class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
               >
                 {{ hugePowerEnabled ? (hugePowerRank2Enabled ? 'Huge Power 2 ' : 'Huge Power ') : '' }}{{ bolsterAttackEnabled ? 'Bolster ' : '' }}Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }}
+              </button>
+              <button
+                v-else
+                @click="confirmAreaAttack(getAttackTargets(selectedAttack.participant.id, selectedAttack.attack).filter(t => selectedTargetIds.includes(t.id)))"
+                :disabled="selectedTargetIds.length === 0"
+                class="flex-1 bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:bg-digimon-dark-600 disabled:text-digimon-dark-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
+              >
+                {{ hugePowerEnabled ? (hugePowerRank2Enabled ? 'Huge Power 2 ' : 'Huge Power ') : '' }}{{ bolsterAttackEnabled ? 'Bolster ' : '' }}Area Attack{{ selectedAttack?.attack?.name ? ` with ${selectedAttack.attack.name}` : '' }} ({{ selectedTargetIds.length }} targets)
               </button>
               <button
                 @click="cancelAttackSelection"
