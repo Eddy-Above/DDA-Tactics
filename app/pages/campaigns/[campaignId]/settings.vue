@@ -36,6 +36,8 @@ const form = reactive({
     maxTempWoundsRule: false,
     signatureMoveBattery: false,
     newDayHealsAllWounds: false,
+    allowDuplicateStatValues: false,
+    allowFlexCPSplits: false,
   },
   skillRenames: {} as Record<string, string>,
   eddySoulRules: {
@@ -87,6 +89,8 @@ onMounted(async () => {
       form.houseRules.maxTempWoundsRule = houseRules.maxTempWoundsRule ?? false
       form.houseRules.signatureMoveBattery = houseRules.signatureMoveBattery ?? false
       form.houseRules.newDayHealsAllWounds = houseRules.newDayHealsAllWounds ?? false
+      form.houseRules.allowDuplicateStatValues = houseRules.allowDuplicateStatValues ?? false
+      form.houseRules.allowFlexCPSplits = houseRules.allowFlexCPSplits ?? false
     }
 
     // Load skill renames
@@ -143,12 +147,14 @@ async function handleSave() {
   )
 
   data.rulesSettings = {
-    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds) && {
+    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits) && {
       houseRules: {
         ...(form.houseRules.stunMaxDuration1 && { stunMaxDuration1: true }),
         ...(form.houseRules.maxTempWoundsRule && { maxTempWoundsRule: true }),
         ...(form.houseRules.signatureMoveBattery && { signatureMoveBattery: true }),
         ...(form.houseRules.newDayHealsAllWounds && { newDayHealsAllWounds: true }),
+        ...(form.houseRules.allowDuplicateStatValues && { allowDuplicateStatValues: true }),
+        ...(form.houseRules.allowFlexCPSplits && { allowFlexCPSplits: true }),
       },
     }),
     tormentRequirements: {
@@ -380,6 +386,28 @@ async function handleDelete() {
             <div>
               <span class="text-digimon-dark-300">New Day Heals All Wounds</span>
               <p class="text-xs text-digimon-dark-500">Triggering a New Day also fully heals all tamers and digimon in the campaign.</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.houseRules.allowDuplicateStatValues"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Allow Duplicate Stat Max Values</span>
+              <p class="text-xs text-digimon-dark-500">Tamers can have multiple Attributes or Skills tied at the same highest value during creation and editing.</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.houseRules.allowFlexCPSplits"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Flexible CP Splits</span>
+              <p class="text-xs text-digimon-dark-500">Tamers can distribute all CP freely across Attributes and Skills without enforced pool splits. (Standard: 30 total, Enhanced: 40, Extreme: 50)</p>
             </div>
           </label>
         </div>

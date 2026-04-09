@@ -94,6 +94,8 @@ export interface HouseRules {
   maxTempWoundsRule?: boolean
   signatureMoveBattery?: boolean
   newDayHealsAllWounds?: boolean
+  allowDuplicateStatValues?: boolean
+  allowFlexCPSplits?: boolean
 }
 
 export const STAGE_BATTERY_CAPACITY: Partial<Record<DigimonStage, number>> = {

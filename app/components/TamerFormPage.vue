@@ -17,7 +17,7 @@ const showRefundCosts = isLibrary || isEdit
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
 const { fetchTamer, updateTamer, createTamer, loading, error } = useTamers()
 
 const recordId = computed(() => isLibrary ? route.params.id as string : route.params.tamerId as string)
@@ -415,6 +415,7 @@ async function handleSubmit() {
             <h2 class="font-display text-xl font-semibold text-white">Attributes</h2>
           </div>
           <span
+            v-if="!houseRules?.allowFlexCPSplits"
             :class="[
               'text-sm px-3 py-1 rounded',
               attributePoints.used === attributePoints.max && 'bg-green-900/30 text-green-400',
@@ -440,9 +441,9 @@ async function handleSubmit() {
             </div>
           </div>
           <p class="text-xs text-digimon-dark-500 mt-2">
-            Max per attribute: {{ campaignConfig.startingCap }} (only 1 can be at max)<template v-if="isEdit">. Cost: new rating × 2 XP</template>
+            Max per attribute: {{ campaignConfig.startingCap }}<template v-if="!houseRules?.allowDuplicateStatValues"> (only 1 can be at max)</template><template v-if="isEdit">. Cost: new rating × 2 XP</template>
           </p>
-          <p v-if="cappedAttributes > 1" class="text-xs text-red-400 mt-1">
+          <p v-if="cappedAttributes > 1 && !houseRules?.allowDuplicateStatValues" class="text-xs text-red-400 mt-1">
             Only 1 attribute can be at the highest value. You have {{ cappedAttributes }} tied for highest.
           </p>
         </div>
@@ -468,6 +469,7 @@ async function handleSubmit() {
             <h2 class="font-display text-xl font-semibold text-white">Skills</h2>
           </div>
           <span
+            v-if="!houseRules?.allowFlexCPSplits"
             :class="[
               'text-sm px-3 py-1 rounded',
               skillPoints.used === skillPoints.max && 'bg-green-900/30 text-green-400',
@@ -498,9 +500,9 @@ async function handleSubmit() {
             </div>
           </div>
           <p class="text-xs text-digimon-dark-500 mt-2">
-            Max per skill: {{ campaignConfig.startingCap }} (only 1 can be at max)<template v-if="isEdit">. Cost: new rating XP</template>
+            Max per skill: {{ campaignConfig.startingCap }}<template v-if="!houseRules?.allowDuplicateStatValues"> (only 1 can be at max)</template><template v-if="isEdit">. Cost: new rating XP</template>
           </p>
-          <p v-if="cappedSkillGroups.length > 0" class="text-xs text-red-400 mt-1">
+          <p v-if="cappedSkillGroups.length > 0 && !houseRules?.allowDuplicateStatValues" class="text-xs text-red-400 mt-1">
             Only 1 skill per group can be at the highest value. Violations in: {{ cappedSkillGroups.join(', ') }}
           </p>
           <p v-if="zeroSkills > 0" class="text-xs text-yellow-400 mt-1">

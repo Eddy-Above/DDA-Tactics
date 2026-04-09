@@ -551,7 +551,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 ### Feature Flags
 
 - **EddySoul house rules** (`EddySoulRules` in `types/index.ts`): toggleable rule variants stored in `campaigns.rulesSettings.eddySoulRules` — controls accuracy/damage/armor remapping, charge cost, digivolution limit (5/day), warp evolution, enemy double wounds, etc.
-- **House rules** (`HouseRules`): 4 toggles — stun max duration, max temp wounds, signature move battery, healing rules
+- **House rules** (`HouseRules`): 6 toggles — stun max duration, max temp wounds, signature move battery, healing rules, allow duplicate stat max values (tamer creation), flexible CP splits (tamer creation)
 - **Torment requirements** (`TormentRequirements`): Mode + minimum severity counts
 - **Skill renames** (`SkillRenames`): Per-campaign renaming of tamer skill labels
 - All flags read from `campaign.rulesSettings` passed into composables and server action handlers; no external flag service
