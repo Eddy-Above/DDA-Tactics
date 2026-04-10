@@ -143,7 +143,12 @@ const filteredQualities = computed(() => {
       (q) =>
         q.name.toLowerCase().includes(query) ||
         q.description.toLowerCase().includes(query) ||
-        q.effect.toLowerCase().includes(query)
+        q.effect.toLowerCase().includes(query) ||
+        q.choices?.some(
+          (c) =>
+            c.name.toLowerCase().includes(query) ||
+            c.effect.toLowerCase().includes(query)
+        )
     )
   }
 
