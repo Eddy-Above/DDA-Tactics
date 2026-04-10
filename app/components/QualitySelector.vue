@@ -566,6 +566,22 @@ function isChoiceStageAvailable(choice: NonNullable<QualityTemplate['choices']>[
   return compareStages(props.stage, choice.stageRequirement) >= 0
 }
 
+// Check if a Decreased Derived Stat choice conflicts with an already-chosen Improved Derived Stat
+function isChoiceConflictBlocked(
+  template: QualityTemplate,
+  choice: NonNullable<QualityTemplate['choices']>[0]
+): { blocked: boolean; reason: string } {
+  if (template.id === 'decreased-derived-stat') {
+    const usedByImproved = props.currentQualities
+      .filter((q) => q.id === 'improved-derived-stat')
+      .map((q) => q.choiceId)
+    if (choice.id && usedByImproved.includes(choice.id)) {
+      return { blocked: true, reason: 'Cannot decrease a stat already improved by Improved Derived Stat' }
+    }
+  }
+  return { blocked: false, reason: '' }
+}
+
 // Check if a choice is blocked by EddySoul rules (e.g., Digizoid Armour requires Instinct)
 function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<QualityTemplate['choices']>[0]): { blocked: boolean; reason: string } {
   // EddySoul: Chrome Weapon can be taken without Weapon Rank 1, but all other variants still require it
@@ -867,6 +883,18 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                   <p class="text-sm text-digimon-dark-500 whitespace-pre-line">{{ choice.effect }}</p>
                   <p class="text-xs text-red-400 mt-2">
                     Requires {{ choice.stageRequirement }} stage
+                  </p>
+                </div>
+              </template>
+              <!-- Check if choice is blocked by conflict (e.g., Decreased Derived Stat vs Improved Derived Stat) -->
+              <template v-else-if="pendingQuality && isChoiceConflictBlocked(pendingQuality, choice).blocked">
+                <div class="w-full text-left bg-digimon-dark-800 border border-digimon-dark-700 rounded-lg p-4 opacity-50">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="font-semibold text-digimon-dark-400">{{ choice.name }}</span>
+                  </div>
+                  <p class="text-sm text-digimon-dark-500 whitespace-pre-line">{{ choice.effect }}</p>
+                  <p class="text-xs text-red-400 mt-2">
+                    {{ isChoiceConflictBlocked(pendingQuality, choice).reason }}
                   </p>
                 </div>
               </template>

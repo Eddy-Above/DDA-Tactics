@@ -351,6 +351,23 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: ['Improved Derived Stat'],
     description: 'Lower a Derived Stat.',
     effect: `Per Rank: Lower one Derived Stat by 1. Can only decrease Derived Stats not affected by Improved Derived Stat.`,
+    choices: [
+      {
+        id: 'body',
+        name: 'Body',
+        effect: '-1 Body.',
+      },
+      {
+        id: 'agility',
+        name: 'Agility',
+        effect: '-1 Agility.',
+      },
+      {
+        id: 'brains',
+        name: 'Brains',
+        effect: '-1 Brains.',
+      },
+    ],
   },
 
   // ============================================================================
@@ -1005,6 +1022,23 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: [],
     description: '+1 to a Derived Stat. Makes stat "trained".',
     effect: `+1 to Body, Agility, or Brains. "Trained" stats use ½ Derived Stat for Skill Checks instead of Spec Value.`,
+    choices: [
+      {
+        id: 'body',
+        name: 'Body',
+        effect: '+1 Body. "Trained" — use ½ Body for Body-related Skill Checks instead of Spec Value.',
+      },
+      {
+        id: 'agility',
+        name: 'Agility',
+        effect: '+1 Agility. "Trained" — use ½ Agility for Agility-related Skill Checks instead of Spec Value.',
+      },
+      {
+        id: 'brains',
+        name: 'Brains',
+        effect: '+1 Brains. "Trained" — use ½ Brains for Brains-related Skill Checks instead of Spec Value.',
+      },
+    ],
   },
   {
     id: 'system-boost',
@@ -1017,6 +1051,23 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: [],
     description: '+1 to a Spec Value. Max 3 per stat, cannot exceed 2× base.',
     effect: `+1 to BIT, RAM, or CPU. Max 3 ranks per stat. Cannot exceed 2× Base Spec Value.`,
+    choices: [
+      {
+        id: 'bit',
+        name: 'BIT',
+        effect: '+1 BIT. Max 3 ranks in BIT. Cannot exceed 2× Base BIT.',
+      },
+      {
+        id: 'cpu',
+        name: 'CPU',
+        effect: '+1 CPU. Max 3 ranks in CPU. Cannot exceed 2× Base CPU.',
+      },
+      {
+        id: 'ram',
+        name: 'RAM',
+        effect: '+1 RAM. Max 3 ranks in RAM. Cannot exceed 2× Base RAM.',
+      },
+    ],
   },
   {
     id: 'prodigious-skill',
