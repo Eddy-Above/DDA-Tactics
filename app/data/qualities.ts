@@ -39,6 +39,7 @@ export interface QualityChoice {
   prerequisites?: string[] // For Data Specialization tree validation
   rangeRestriction?: 'melee' | 'ranged' // For Area Attack sub-options
   stageRequirement?: DigimonStage // Per-choice stage requirement (e.g., Digizoid Armor variants)
+  maxRanks?: number // Per-choice rank cap (overrides template maxRanks for this specific choice)
 }
 
 // Stage order for comparisons
@@ -1055,17 +1056,20 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
       {
         id: 'bit',
         name: 'BIT',
-        effect: '+1 BIT. Max 3 ranks in BIT. Cannot exceed 2× Base BIT.',
+        effect: '+1 BIT. Cannot exceed 2× Base BIT.',
+        maxRanks: 3,
       },
       {
         id: 'cpu',
         name: 'CPU',
-        effect: '+1 CPU. Max 3 ranks in CPU. Cannot exceed 2× Base CPU.',
+        effect: '+1 CPU. Cannot exceed 2× Base CPU.',
+        maxRanks: 3,
       },
       {
         id: 'ram',
         name: 'RAM',
-        effect: '+1 RAM. Max 3 ranks in RAM. Cannot exceed 2× Base RAM.',
+        effect: '+1 RAM. Cannot exceed 2× Base RAM.',
+        maxRanks: 3,
       },
     ],
   },

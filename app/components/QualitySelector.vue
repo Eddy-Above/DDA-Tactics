@@ -437,6 +437,11 @@ function getQualityMaxRanks(quality: Quality): number {
   }
   const template = getCurrentQualityTemplate(quality)
   if (!template) return 1
+  // If this quality instance has a specific choice selected, check for a per-choice rank cap
+  if (quality.choiceId && template.choices) {
+    const choiceDef = template.choices.find((c) => c.id === quality.choiceId)
+    if (choiceDef?.maxRanks !== undefined) return choiceDef.maxRanks
+  }
   let maxRanks = getMaxRanksAtStage(template, props.stage)
   // EddySoul: Huge Power Rank 2 requires Ultimate+
   if (props.eddySoulRules?.hugePowerOncePerTurn && quality.id === 'huge-power') {
@@ -655,8 +660,8 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                 <button
                   type="button"
                   class="w-6 h-6 bg-digimon-dark-600 hover:bg-digimon-dark-500 rounded text-white text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="(quality.ranks || 1) >= getQualityMaxRanks(quality) || !canAdd"
-                  :title="!canAdd ? 'No DP remaining' : undefined"
+                  :disabled="(quality.ranks || 1) >= getQualityMaxRanks(quality) || !canAdd || (quality.dpCost > 0 && quality.dpCost > availableDP)"
+                  :title="!canAdd || (quality.dpCost > 0 && quality.dpCost > availableDP) ? 'No DP remaining' : undefined"
                   @click="emit('updateRanks', index, (quality.ranks || 1) + 1)"
                 >
                   +
@@ -966,6 +971,12 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                       class="text-xs px-2 py-0.5 rounded bg-digimon-orange-900/30 text-digimon-orange-400"
                     >
                       +{{ choice.dpCost }} DP
+                    </span>
+                    <span
+                      v-if="choice.maxRanks !== undefined"
+                      class="text-xs px-2 py-0.5 rounded bg-digimon-dark-600 text-digimon-dark-300"
+                    >
+                      {{ choice.maxRanks }} ranks max
                     </span>
                   </div>
                   <p class="text-sm text-digimon-dark-300 whitespace-pre-line">{{ choice.effect }}</p>
