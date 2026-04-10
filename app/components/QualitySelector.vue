@@ -39,6 +39,7 @@ interface Props {
   canAdd?: boolean // Whether adding new qualities is allowed (has DP remaining)
   availableDP?: number // How much DP is available for qualities (to grey out expensive ones)
   speedyMaxRanks?: number // Effective max ranks for Speedy based on base movement modifiers
+  systemBoostMaxRanks?: { bit: number; cpu: number; ram: number } // Dynamic max ranks per System Boost choice
   eddySoulRules?: EddySoulRules
   houseRules?: HouseRules
 }
@@ -430,10 +431,25 @@ function getDisplayCostClass(quality: Quality): string {
   return 'bg-digimon-orange-900/30 text-digimon-orange-400'
 }
 
+function getChoiceEffectiveMaxRanks(template: QualityTemplate, choice: { id?: string; maxRanks?: number }): number | undefined {
+  if (template.id === 'system-boost' && props.systemBoostMaxRanks && choice.id) {
+    const choiceId = choice.id as 'bit' | 'cpu' | 'ram'
+    if (choiceId in props.systemBoostMaxRanks) return props.systemBoostMaxRanks[choiceId]
+  }
+  return choice.maxRanks
+}
+
 function getQualityMaxRanks(quality: Quality): number {
   // Special handling for Speedy - use effective base if provided
   if (quality.id === 'speedy' && props.speedyMaxRanks !== undefined) {
     return props.speedyMaxRanks
+  }
+  // Special handling for System Boost - cap by 2× base derived stat
+  if (quality.id === 'system-boost' && props.systemBoostMaxRanks && quality.choiceId) {
+    const choiceId = quality.choiceId as 'bit' | 'cpu' | 'ram'
+    if (choiceId in props.systemBoostMaxRanks) {
+      return props.systemBoostMaxRanks[choiceId]
+    }
   }
   const template = getCurrentQualityTemplate(quality)
   if (!template) return 1
@@ -973,10 +989,10 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                       +{{ choice.dpCost }} DP
                     </span>
                     <span
-                      v-if="choice.maxRanks !== undefined"
+                      v-if="pendingQuality && getChoiceEffectiveMaxRanks(pendingQuality, choice) !== undefined"
                       class="text-xs px-2 py-0.5 rounded bg-digimon-dark-600 text-digimon-dark-300"
                     >
-                      {{ choice.maxRanks }} ranks max
+                      {{ getChoiceEffectiveMaxRanks(pendingQuality, choice) }} ranks max
                     </span>
                   </div>
                   <p class="text-sm text-digimon-dark-300 whitespace-pre-line">{{ choice.effect }}</p>

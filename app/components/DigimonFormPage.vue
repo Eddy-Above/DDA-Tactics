@@ -109,6 +109,14 @@ watch([() => form.stage, () => eddySoulRules.value?.baseStatRangesEnabled], () =
 
 const totalDP = computed(() => baseDP.value)
 const dpUsed = computed(() => dpUsedOnStats.value + dpUsedOnQualities.value)
+const systemBoostMaxRanks = computed(() => {
+  const { baseBit, baseCpu, baseRam } = derivedStats.value
+  return {
+    bit: Math.min(3, baseBit),
+    cpu: Math.min(3, baseCpu),
+    ram: Math.min(3, baseRam),
+  }
+})
 const bonusDPAllocated = computed(() => bonusStatsTotal.value + (form.bonusDPForQualities || 0))
 const qualitiesFromBaseDP = computed(() => Math.max(0, dpUsedOnQualities.value - (form.bonusDPForQualities || 0)))
 
@@ -1076,6 +1084,7 @@ async function handleCopy() {
           :can-add="canAddQualities"
           :available-d-p="availableDPForQualities"
           :speedy-max-ranks="currentSpeedyMaxRanks"
+          :system-boost-max-ranks="systemBoostMaxRanks"
           :eddy-soul-rules="eddySoulRules"
           :house-rules="houseRules"
           @add="handleAddQuality"

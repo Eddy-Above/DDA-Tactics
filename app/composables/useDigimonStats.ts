@@ -195,6 +195,13 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
     let cpu = Math.floor(body / 10) + stageConfig.stageBonus
     let ram = Math.floor(agility / 10) + stageConfig.stageBonus
     if (dataOpt?.choiceId === 'effect-warrior') { bit += 1; cpu += 1; ram += 1 }
+    const baseBit = bit, baseCpu = cpu, baseRam = ram
+    for (const sb of qualities.filter((q: any) => q.id === 'system-boost')) {
+      const r = sb.ranks || 1
+      if (sb.choiceId === 'bit') bit = Math.min(bit + r, baseBit * 2)
+      else if (sb.choiceId === 'cpu') cpu = Math.min(cpu + r, baseCpu * 2)
+      else if (sb.choiceId === 'ram') ram = Math.min(ram + r, baseRam * 2)
+    }
 
     const stageBaseMovement = stageConfig.movement
 
@@ -244,6 +251,9 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
       bit,
       cpu,
       ram,
+      baseBit,
+      baseCpu,
+      baseRam,
       woundBoxes: health + stageConfig.woundBonus,
       movement,
       baseMovement: effectiveBase,

@@ -366,7 +366,7 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `EffectManager` | `components/EffectManager.vue` | View/remove active combat effects on participant | `participant`, `encounterId`, `onUpdate` |
 | `EvolutionTreeBranch` | `components/EvolutionTreeBranch.vue` | Renders a branch in evolution line tree | `chain`, `branchIndex` |
 | `HazardManager` | `components/HazardManager.vue` | Add/remove environmental hazards | `encounterId`, `hazards`, `onUpdate` |
-| `QualitySelector` | `components/QualitySelector.vue` | DP-aware quality picker with prerequisites | `stage`, `selectedQualities`, `dp`, `onUpdate`, `campaignLevel` |
+| `QualitySelector` | `components/QualitySelector.vue` | DP-aware quality picker with prerequisites; enforces per-choice rank caps (static `maxRanks` and dynamic caps via props) | `stage`, `currentQualities`, `canAdd`, `availableDP`, `speedyMaxRanks`, `systemBoostMaxRanks`, `eddySoulRules`, `houseRules` |
 | `SpritePreview` | `components/SpritePreview.vue` | Display digimon sprite image | `spriteUrl`, `name` |
 | `TamerFormPage` | `components/TamerFormPage.vue` | Full create/edit form for tamers (consolidated) | `tamerId?`, `campaignId`, `mode` |
 | `WoundTracker` | `components/WoundTracker.vue` | Visual wound box tracker | `current`, `max`, `onChange` |
@@ -386,7 +386,7 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 | `useTamerValidation` | `useTamerValidation.ts` | Validate tamer data before save; torment rules, skill limits |
 | `useDigimon` | `useDigimon.ts` | CRUD for digimon; filtering by campaign/partner |
 | `useDigimonForm` | `useDigimonForm.ts` | Reactive form state for digimon create/edit |
-| `useDigimonStats` | `useDigimonStats.ts` | Compute derived stats (brains, body, agility, woundBoxes, etc.) |
+| `useDigimonStats` | `useDigimonStats.ts` | Compute derived stats (brains, body, agility, woundBoxes, BIT/CPU/RAM, baseMovement, baseBit/Cpu/Ram for System Boost cap, currentSpeedyMaxRanks) |
 | `useDigimonDP` | `useDigimonDP.ts` | DP budget tracking; validate DP allocation |
 | `useDigimonAttacks` | `useDigimonAttacks.ts` | Add/edit/remove attacks on digimon form |
 | `useDigimonQualities` | `useDigimonQualities.ts` | Add/remove qualities; DP cost calculation |

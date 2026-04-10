@@ -78,6 +78,13 @@ export async function getDigimonDerivedStats(entityId: string) {
     derived.cpu += 1
     derived.ram += 1
   }
+  const baseBit = derived.bit, baseCpu = derived.cpu, baseRam = derived.ram
+  for (const sb of qualities.filter((q: any) => q.id === 'system-boost')) {
+    const r = sb.ranks || 1
+    if (sb.choiceId === 'bit') derived.bit = Math.min(derived.bit + r, baseBit * 2)
+    else if (sb.choiceId === 'cpu') derived.cpu = Math.min(derived.cpu + r, baseCpu * 2)
+    else if (sb.choiceId === 'ram') derived.ram = Math.min(derived.ram + r, baseRam * 2)
+  }
 
   return derived
 }
