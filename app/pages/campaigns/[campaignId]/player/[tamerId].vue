@@ -70,6 +70,9 @@ const pendingAttacks = ref<Array<{
 // Attack result modal state - queue to handle multiple attacks in one turn
 const showAttackResultModal = ref(false)
 const showPlayerSpecialOrdersModal = ref(false)
+const showIntercedeOptionsModal = ref(false)
+const intercedeOptionsSelections = ref<Set<string>>(new Set())
+const savingIntercedeOptions = ref(false)
 const attackResultQueue = ref<Array<{
   responseId: string
   attackerName: string
@@ -2530,6 +2533,33 @@ async function handleIntercedeOptOut() {
   }
 }
 
+async function handleSaveIntercedeOptions() {
+  if (!activeEncounter.value || !myTamerParticipant.value) return
+  savingIntercedeOptions.value = true
+  try {
+    const participants = [...((activeEncounter.value.participants as any[]) || [])]
+    const idx = participants.findIndex((p: any) => p.id === myTamerParticipant.value!.id)
+    const allIds = participants
+      .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant.value!.id)
+      .map((p: any) => p.id)
+    const optOuts = allIds.filter(id => !intercedeOptionsSelections.value.has(id))
+    if (idx !== -1) {
+      participants[idx] = { ...participants[idx], intercedeOptOuts: optOuts }
+    }
+    await $fetch(`/api/encounters/${activeEncounter.value.id}`, {
+      method: 'PUT',
+      body: { participants },
+    })
+    await loadData()
+    showIntercedeOptionsModal.value = false
+  } catch (e: any) {
+    console.error('Save intercede options failed:', e)
+    alert(e?.data?.message || 'Failed to save intercede options')
+  } finally {
+    savingIntercedeOptions.value = false
+  }
+}
+
 async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
   if (!activeEncounter.value) return
   try {
@@ -3531,7 +3561,20 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
         <!-- Turn Tracker (Redesigned) -->
         <div v-if="activeEncounter && myParticipants.length > 0" class="mb-8">
-          <h3 class="text-lg font-display font-semibold text-white mb-3">Turn Order</h3>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-display font-semibold text-white">Turn Order</h3>
+            <button
+              class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
+              @click="intercedeOptionsSelections = new Set(
+                (activeEncounter!.participants as any[])
+                  .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant?.id)
+                  .map((p: any) => p.id)
+                  .filter((id: string) => !(myTamerParticipant?.intercedeOptOuts || []).includes(id))
+              ); showIntercedeOptionsModal = true"
+            >
+              Intercede Options
+            </button>
+          </div>
 
           <div class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700">
             <!-- Layout when it's NOT player's turn (original) -->
@@ -5683,6 +5726,56 @@ async function handleBreakClash(participantId: string, clashId: string) {
         >
           Close
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Intercede Options Modal -->
+  <Teleport to="body">
+    <div
+      v-if="showIntercedeOptionsModal && activeEncounter && myTamerParticipant"
+      class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+      @click.self="showIntercedeOptionsModal = false"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-1">Intercede Options</h2>
+        <p class="text-sm text-digimon-dark-400 mb-4">
+          Select which participants you want to be asked to intercede for. Unchecked participants will be skipped.
+        </p>
+        <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
+          <button
+            v-for="p in (activeEncounter.participants as any[]).filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant!.id)"
+            :key="p.id"
+            class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
+            @click="intercedeOptionsSelections.has(p.id)
+              ? intercedeOptionsSelections.delete(p.id)
+              : intercedeOptionsSelections.add(p.id);
+              intercedeOptionsSelections = new Set(intercedeOptionsSelections)"
+          >
+            <div
+              class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0"
+              :class="{ 'bg-digimon-orange-500 border-digimon-orange-500': intercedeOptionsSelections.has(p.id) }"
+            >
+              <span v-if="intercedeOptionsSelections.has(p.id)" class="text-white text-xs">✓</span>
+            </div>
+            <span>{{ resolveParticipantName(p.id) }}</span>
+          </button>
+        </div>
+        <div class="flex gap-3">
+          <button
+            :disabled="savingIntercedeOptions"
+            class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            @click="handleSaveIntercedeOptions"
+          >
+            {{ savingIntercedeOptions ? 'Saving...' : 'Save' }}
+          </button>
+          <button
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            @click="showIntercedeOptionsModal = false"
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
