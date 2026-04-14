@@ -1,3 +1,10 @@
+## Changelog
+| Date | Sections Updated | Summary |
+|------|-----------------|---------|
+| 2026-04-14 | Env Variables, Pages, Dependency Graph, Blast Radius | Fixed DATABASE_URL Read By column (added migrate.mjs, run-migrations.mjs); corrected player/[tamerId].vue route path (was wrongly listed as index.vue); added computeAttackDamage.ts to graph and blast radius |
+
+---
+
 # Project Map: DDA Tactics (Digimon Session Helper)
 > Deep analysis of project. Read this file to understand the full project context.
 
@@ -6,6 +13,7 @@
 ---
 
 ## 1. Build & Runtime
+> Last verified: 2026-04-14
 
 **Sources:** `package.json`, `nuxt.config.ts`, `tsconfig.json`, `drizzle.config.ts`
 
@@ -45,18 +53,20 @@ npm run db:studio    # drizzle-kit studio — visual DB browser
 ---
 
 ## 2. Environment Variables
+> Last verified: 2026-04-14
 
-**Sources:** `server/db/index.ts`, `drizzle.config.ts`, `.env.local`
+**Sources:** `server/db/index.ts`, `drizzle.config.ts`, `.env.local`, `migrate.mjs`, `run-migrations.mjs`
 
 | Variable | Read By | Default | Required | Build/Runtime | Purpose |
 |---|---|---|---|---|---|
-| `DATABASE_URL` | `server/db/index.ts`, `drizzle.config.ts` | `''` (drizzle config), throws if missing (db/index.ts) | Yes | Runtime | PostgreSQL connection string (Railway in prod) |
+| `DATABASE_URL` | `server/db/index.ts`, `drizzle.config.ts`, `migrate.mjs`, `run-migrations.mjs` | `''` (drizzle config), throws if missing (db/index.ts) | Yes | Runtime | PostgreSQL connection string (Railway in prod) |
 
 No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` is a leftover from a SQLite era and is not actively used — the real connection is `DATABASE_URL`.
 
 ---
 
 ## 3. API Schema
+> Last verified: 2026-04-14
 
 **Sources:** `server/api/**/*.ts` (all Nitro file-based routes)
 
@@ -153,10 +163,11 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 ---
 
 ## 4. Data Models & Storage
+> Last verified: 2026-04-14
 
 **Sources:** `server/db/schema.ts`, `server/db/index.ts`, `drizzle.config.ts`
 
-**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/`. No caching layer (no Redis). No message queue.
+**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/` (0000–0009; note: 0002 is missing — sequence gap, appears intentional). No caching layer (no Redis). No message queue.
 
 ### Table: `tamers`
 
@@ -272,6 +283,7 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 ---
 
 ## 5. Pages & Components
+> Last verified: 2026-04-14
 
 **Sources:** `app/pages/**/*.vue`, `app/components/*.vue`, `app/composables/*.ts`, `app/layouts/*.vue`, `app/middleware/*.ts`
 
@@ -346,7 +358,7 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | Willpower roll modal | ~4273 | showWillpowerRollModal |
 | `/campaigns/[campaignId]/player` | `.../player/index.vue` | player | campaign-access | Player hub |
 | `/campaigns/[campaignId]/player/new` | `.../player/new.vue` | player | campaign-access | Create player character |
-| `/campaigns/[campaignId]/player/[tamerId]` | `.../player/[tamerId]/index.vue` | player | campaign-access | Tamer detail view; End Turn button shown when it's the player's own turn in active combat |
+| `/campaigns/[campaignId]/player/[tamerId]` | `.../player/[tamerId].vue` | player | campaign-access | Tamer detail view; End Turn button shown when it's the player's own turn in active combat |
 | `/campaigns/[campaignId]/player/[tamerId]/edit` | `.../player/[tamerId]/edit.vue` | player | campaign-access | Edit own tamer |
 | `/campaigns/[campaignId]/player/[tamerId]/digimon/new` | `.../player/[tamerId]/digimon/new.vue` | player | campaign-access | Add partner digimon |
 | `/campaigns/[campaignId]/player/[tamerId]/digimon/[id]` | `.../player/[tamerId]/digimon/[id].vue` | player | campaign-access | Partner digimon detail |
@@ -405,6 +417,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 ---
 
 ## 6. Dependency Graph
+> Last verified: 2026-04-14
+> Graph changes: added `computeAttackDamage.ts` (new server util extracted ~Apr 12, imported by `intercede-claim.post` and `resolveNpcAttack`)
 
 **Sources:** All files traced above.
 
@@ -423,7 +437,7 @@ flowchart TD
     Constants["constants/tamer-skills.ts"]
     Middleware["middleware/\ncampaign-access, dm-access"]
     ServerAPI["server/api/**\n(40+ endpoints)"]
-    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, parsers, id, password, participantName"]
+    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, parsers, id, password, participantName"]
     DB["server/db/\nindex.ts + schema.ts"]
     Postgres[("PostgreSQL")]
 
@@ -464,6 +478,7 @@ flowchart TD
 | `data/attacks.ts` | `AttackSelector`, `useDigimonAttacks`, `useAttackTags`, server actions |
 | `data/attackConstants.ts` | `useEncounters`, `useAttackTags`, `server/utils/applyEffect`, multiple action handlers |
 | `server/utils/applyEffect.ts` | `intercede-offer`, `npc-attack`, `clash-action`, `attack`, `direct`, `special-order` |
+| `server/utils/computeAttackDamage.ts` | `intercede-claim.post`, `resolveNpcAttack` |
 
 ### Leaf Modules (imported by nothing else)
 
@@ -485,6 +500,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+> Last verified: 2026-04-14
+> Rating changes: `computeAttackDamage.ts` (new) → 🟡 MODERATE
 
 **Sources:** Import traces across all source files.
 
@@ -496,6 +513,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 | `data/attackConstants.ts` | `useEncounters`, `useAttackTags`, `applyEffect`, `attack.post`, `intercede-offer.post`, `npc-attack.post`, `clash-action.post` | All encounter pages, all combat UI | `applyEffect.ts`, `attack.post.ts`, `intercede-offer.post.ts`, `npc-attack.post.ts`, `useAttackTags.ts` | 🔴 CRITICAL |
 | `data/qualities.ts` | `QualitySelector`, `useDigimonQualities`, `useDigimonForm`, `digivolve.post`, `special-order.post`, `attack.post` | DigimonFormPage, all library/digimon pages, all encounter pages | `QualitySelector.vue`, `useDigimonQualities.ts`, `attack.post.ts`, `digivolve.post.ts`, `resolveSupportAttack.ts` | 🔴 CRITICAL |
 | `server/utils/applyEffect.ts` | `attack.post`, `intercede-offer.post`, `npc-attack.post`, `clash-action.post`, `direct.post`, `special-order.post` | All encounter pages | `attack.post.ts`, `intercede-offer.post.ts`, `npc-attack.post.ts`, `clash-action.post.ts`, `direct.post.ts` | 🔴 CRITICAL |
+| `server/utils/computeAttackDamage.ts` | `intercede-claim.post`, `resolveNpcAttack` | All encounter pages (via intercede and NPC attack flows) | `intercede-claim.post.ts`, `resolveNpcAttack.ts`, encounter pages | 🟡 MODERATE |
 | `server/utils/resolveNpcAttack.ts` | `intercede-offer.post`, `npc-attack.post`, `clash-action.post`, `triggerCounterattack` | All encounter pages | `intercede-offer.post.ts`, `npc-attack.post.ts`, `clash-action.post.ts`, `triggerCounterattack.ts` | 🔴 CRITICAL |
 | `composables/useEncounters.ts` | `encounters/[id].vue` (combat page), indirectly via sub-composables | All encounter-related UI | `encounters/[id].vue`, `player/[tamerId]/index.vue` | 🔴 CRITICAL |
 | `server/utils/triggerCounterattack.ts` | `attack.post`, `intercede-offer.post` | Encounter pages | `attack.post.ts`, `intercede-offer.post.ts` | 🟡 MODERATE |
@@ -517,6 +535,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 8. Cross-Cutting Concerns
+> Last verified: 2026-04-14
 
 **Sources:** `middleware/campaign-access.ts`, `middleware/dm-access.ts`, `server/utils/password.ts`, `server/api/campaigns/[id]/verify-password.post.ts`, `nuxt.config.ts`
 
@@ -564,6 +583,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 9. Quick Reference
+> Last verified: 2026-04-14
 
 ### How to Run Locally
 
