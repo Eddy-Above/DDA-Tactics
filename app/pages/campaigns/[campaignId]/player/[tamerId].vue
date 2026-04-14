@@ -87,6 +87,7 @@ const attackResultQueue = ref<Array<{
   armorPiercing?: number
   targetArmor?: number
   finalDamage?: number
+  defeated?: boolean
 }>>([])
 
 // Computed property to get the current result (first in queue)
@@ -584,6 +585,10 @@ watch(() => currentInitiativeRequest.value?.id, () => {
 watch(() => currentDodgeRequest.value?.id, () => {
   hasRolledDodge.value = false
   dodgeRollResult.value = null
+})
+
+watch(() => currentIntercedeRequest.value?.id, () => {
+  playerIntercedeAreaChosenTarget.value = null
 })
 
 watch(() => currentClashCheckRequest.value?.id, (newId) => {
@@ -1748,21 +1753,26 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
     const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
     const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
 
-    for (const target of targets) {
-      const result = await performAttack(
-        activeEncounter.value.id,
-        participant.id,
-        attack.id,
-        target.id,
-        { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
-        tamer.value.id,
-        attack.name,
-        bolsterAttackEnabled.value ? { bolstered: true, bolsterType: bolsterAttackType.value } : undefined,
-        hugePowerEnabled.value ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: hugePowerRank2Enabled.value ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
-        lifestealComplexEnabled.value ? { lifestealed: true } : undefined
-      )
+    // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
+    const result = await performAttack(
+      activeEncounter.value.id,
+      participant.id,
+      attack.id,
+      targets[0].id,
+      { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
+      tamer.value.id,
+      attack.name,
+      bolsterAttackEnabled.value ? { bolstered: true, bolsterType: bolsterAttackType.value } : undefined,
+      hugePowerEnabled.value ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: hugePowerRank2Enabled.value ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
+      lifestealComplexEnabled.value ? { lifestealed: true } : undefined,
+      { targetIds: targets.map(t => t.id) }
+    )
 
-      if (result) {
+    if (result) {
+      const returnedBattleLog = (result.battleLog as any[]) || []
+      const newEntries = returnedBattleLog.slice(preBattleLogLength)
+
+      for (const target of targets) {
         if (accuracySuccesses === 0) {
           attackResultQueue.value.push({
             responseId: `miss-${Date.now()}-${target.id}`,
@@ -1782,13 +1792,12 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
             targetArmor: 0,
             finalDamage: 0,
           })
-          showAttackResultModal.value = true
         } else {
-          const returnedBattleLog = (result.battleLog as any[]) || []
-          const newEntries = returnedBattleLog.slice(preBattleLogLength)
-          const resolvedLogEntry = [...newEntries].reverse().find(
+          // Find the NPC auto-resolve Dodge log entry for this specific target
+          const resolvedLogEntry = newEntries.find(
             (entry: any) =>
               (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
+              entry.actorId === target.id &&
               entry.attackerParticipantId === participant.id &&
               entry.hit !== undefined
           )
@@ -1798,6 +1807,7 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
               resolvedLogEntry
             )
           } else {
+            // Player target: goes through intercede flow, track as pending
             pendingAttacks.value.push({
               trackingId: `pending-${Date.now()}-${target.id}`,
               timestamp: Date.now(),
@@ -1812,6 +1822,8 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
           }
         }
       }
+
+      if (accuracySuccesses === 0) showAttackResultModal.value = true
     }
 
     showTargetSelector.value = false
@@ -2001,6 +2013,13 @@ function showAttackResultFromBattleLog(
   pendingAttack: { attackName: string; targetName: string; accuracyDicePool: number; accuracyDiceResults: number[]; accuracySuccesses: number; participantId: string },
   logEntry: any
 ) {
+  // Check if the target was defeated (a Defeated log entry follows with the same actorId)
+  const battleLog = (activeEncounter.value?.battleLog as any[]) || []
+  const logIndex = battleLog.findIndex((e: any) => e.id === logEntry.id)
+  const defeatedEntry = logIndex >= 0
+    ? battleLog.slice(logIndex + 1).find((e: any) => e.actorId === logEntry.actorId && e.effects?.includes('Defeated'))
+    : undefined
+
   // Battle log entries already have all calculated damage values from the server
   attackResultQueue.value.push({
     responseId: `log-${logEntry.id}`,
@@ -2019,6 +2038,7 @@ function showAttackResultFromBattleLog(
     armorPiercing: logEntry.armorPiercing,
     targetArmor: logEntry.targetArmor,
     finalDamage: logEntry.finalDamage,
+    defeated: !!defeatedEntry,
   })
   showAttackResultModal.value = true
 }
@@ -2193,7 +2213,7 @@ async function submitDodgeRoll() {
         dodgeResultData.value = {
           attackName: capturedRequest.data.attackName,
           attackerName: capturedRequest.data.attackerName,
-          targetName: capturedRequest.data.targetName,
+          targetName: resolveParticipantName(capturedRequest.targetParticipantId) || capturedRequest.data.targetName,
           dodgeDicePool: capturedDodgeRoll.dicePool,
           dodgeDiceResults: capturedDodgeRoll.rolls,
           dodgeSuccesses: capturedDodgeRoll.successes,
@@ -2327,13 +2347,54 @@ function closeIntercedeResultModal() {
   intercedeResultData.value = null
 }
 
+// Resolve a participant ID to a display name
+function resolveParticipantName(participantId: string): string {
+  const participants = (activeEncounter.value?.participants as any[]) || []
+  const p = participants.find((pp: any) => pp.id === participantId)
+  if (!p) return participantId
+  if (p.type === 'tamer') {
+    return allTamers.value.find((t: any) => t.id === p.entityId)?.name || participantId
+  } else if (p.type === 'digimon') {
+    return allDigimon.value.find((d: any) => d.id === p.entityId)?.name || participantId
+  }
+  return participantId
+}
+
 // Intercede: Available interceptor options
 const intercedeOptions = computed(() => {
   if (!currentIntercedeRequest.value || !activeEncounter.value) return []
   const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
-  const targetId = currentIntercedeRequest.value.data?.targetId
+  const turnOrder: string[] = (activeEncounter.value as any).turnOrder || []
+  const currentTurnIndex: number = (activeEncounter.value as any).currentTurnIndex || 0
+  const isAreaAttack = !!currentIntercedeRequest.value.data?.isAreaAttack
   const attackerId = currentIntercedeRequest.value.data?.attackerId
+  // For area attacks, all area targets are ineligible interceptors (not just the chosen one)
+  const excludedIds = new Set<string>(isAreaAttack
+    ? (currentIntercedeRequest.value.data?.areaTargetIds || [])
+    : [currentIntercedeRequest.value.data?.targetId]
+  )
+  excludedIds.add(attackerId)
   const options: { id: string; name: string; type: string }[] = []
+
+  // Check whether a participant is eligible to intercede based on action availability
+  function canIntercede(p: any): boolean {
+    if (p.type === 'digimon') {
+      // Partner digimon are not in turnOrder; use hasActed flag
+      if (!p.hasActed) {
+        return (p.actionsRemaining?.simple || 0) >= 1
+      } else {
+        const cap = p.maxPostTurnIntercedes ?? 2
+        return (p.interceptPenalty || 0) < cap
+      }
+    }
+    const turnIdx = turnOrder.indexOf(p.id)
+    const turnHasGone = turnIdx >= 0 && turnIdx < currentTurnIndex
+    if (!turnHasGone) {
+      return (p.actionsRemaining?.simple || 0) >= 1
+    } else {
+      return (p.interceptPenalty || 0) < 2
+    }
+  }
 
   // Find my tamer participant
   const myTamerParticipant = participants.find(
@@ -2346,12 +2407,12 @@ const intercedeOptions = computed(() => {
     return digi?.partnerId === tamer.value?.id
   })
 
-  // Offer tamer as interceptor (if tamer is not the target)
-  if (myTamerParticipant && myTamerParticipant.id !== targetId && myTamerParticipant.id !== attackerId) {
+  // Offer tamer as interceptor (if tamer is not excluded and has actions)
+  if (myTamerParticipant && !excludedIds.has(myTamerParticipant.id) && canIntercede(myTamerParticipant)) {
     options.push({ id: myTamerParticipant.id, name: tamer.value?.name || 'Tamer', type: 'tamer' })
   }
-  // Offer partner digimon as interceptor (if digimon is not the target)
-  if (myDigimonParticipant && myDigimonParticipant.id !== targetId && myDigimonParticipant.id !== attackerId) {
+  // Offer partner digimon as interceptor (if digimon is not excluded and has actions)
+  if (myDigimonParticipant && !excludedIds.has(myDigimonParticipant.id) && canIntercede(myDigimonParticipant)) {
     const digi = allDigimon.value.find((d) => d.id === myDigimonParticipant.entityId)
     options.push({ id: myDigimonParticipant.id, name: digi?.name || 'Digimon', type: 'digimon' })
   }
@@ -2361,6 +2422,8 @@ const intercedeOptions = computed(() => {
 
 // Intercede: Claim (take the hit for another player)
 const intercedeLoading = ref(false)
+const playerIntercedeAreaChosenTarget = ref<string | null>(null)
+
 async function handleIntercedeClaim(interceptorParticipantId: string) {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
 
@@ -2369,12 +2432,16 @@ async function handleIntercedeClaim(interceptorParticipantId: string) {
 
   intercedeLoading.value = true
   try {
+    const body: any = {
+      requestId: capturedRequest.id,
+      interceptorParticipantId,
+    }
+    if (capturedRequest.data?.isAreaAttack) {
+      body.chosenTargetId = playerIntercedeAreaChosenTarget.value
+    }
     const result = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST',
-      body: {
-        requestId: capturedRequest.id,
-        interceptorParticipantId,
-      },
+      body,
     })
 
     // Extract the intercede result from the API response before calling loadData()
@@ -2388,9 +2455,12 @@ async function handleIntercedeClaim(interceptorParticipantId: string) {
       )
 
       if (intercedeEntry && capturedRequest) {
+        // For area attack offers the request data has targetName: null — extract from the battle log action "Interceded for X!"
+        const resolvedTargetName = capturedRequest.data.targetName
+          || intercedeEntry.action.replace(/^Interceded for /, '').replace(/!.*$/, '').trim()
         intercedeResultData.value = {
           attackerName: capturedRequest.data.attackerName,
-          targetName: capturedRequest.data.targetName,
+          targetName: resolvedTargetName,
           interceptorName: intercedeEntry.actorName,
           accuracySuccesses: capturedRequest.data.accuracySuccesses,
           finalDamage: intercedeEntry.finalDamage,
@@ -4705,54 +4775,106 @@ async function handleBreakClash(participantId: string, clashId: string) {
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
-        <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
-          Intercede?
-        </h2>
 
-        <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
-          <p class="text-white text-sm">
-            <span class="font-semibold">{{ currentIntercedeRequest.data?.attackerName }}</span>
-            is attacking
-            <span class="font-semibold">{{ currentIntercedeRequest.data?.targetName }}</span>!
-          </p>
-          <p class="text-yellow-300 text-xs mt-1">
-            {{ currentIntercedeRequest.data?.accuracySuccesses }} accuracy successes
-          </p>
-        </div>
+        <!-- Area attack: choose which target to protect first -->
+        <template v-if="currentIntercedeRequest.data?.isAreaAttack && !playerIntercedeAreaChosenTarget">
+          <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
+            Area Attack — Choose a target to protect
+          </h2>
+          <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+            <p class="text-white text-sm">
+              <span class="font-semibold">{{ currentIntercedeRequest.data?.attackerName }}</span>
+              is attacking multiple allies.
+            </p>
+            <p class="text-yellow-300 text-xs mt-1">
+              {{ currentIntercedeRequest.data?.accuracySuccesses }} accuracy successes
+            </p>
+          </div>
+          <div class="flex flex-col gap-2">
+            <button
+              v-for="tid in currentIntercedeRequest.data?.areaTargetIds || []"
+              :key="tid"
+              :disabled="intercedeLoading"
+              @click="playerIntercedeAreaChosenTarget = tid"
+              class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            >
+              {{ resolveParticipantName(tid) }}
+            </button>
+            <button
+              :disabled="intercedeLoading"
+              @click="handleIntercedeSkip"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            >
+              {{ intercedeLoading ? 'Processing...' : 'Skip All' }}
+            </button>
+          </div>
+        </template>
 
-        <div class="mb-4 p-3 bg-digimon-dark-700 rounded-lg text-sm text-digimon-dark-300">
-          <p class="mb-1">If you intercede:</p>
-          <ul class="list-disc list-inside space-y-1 text-xs">
-            <li>Your chosen participant takes the hit instead (0 dodge)</li>
-            <li>The interceptor loses 1 simple action on their next turn</li>
-          </ul>
-        </div>
+        <!-- Main intercede view -->
+        <template v-else>
+          <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
+            Intercede?
+          </h2>
 
-        <div class="flex flex-col gap-2">
-          <button
-            v-for="option in intercedeOptions"
-            :key="option.id"
-            :disabled="intercedeLoading"
-            @click="handleIntercedeClaim(option.id)"
-            class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-          >
-            {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
-          </button>
-          <button
-            :disabled="intercedeLoading"
-            @click="handleIntercedeSkip"
-            class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-          >
-            {{ intercedeLoading ? 'Processing...' : 'Skip' }}
-          </button>
-          <button
-            :disabled="intercedeLoading"
-            @click="handleIntercedeOptOut"
-            class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
-          >
-            {{ intercedeLoading ? 'Processing...' : `Never intercede for ${currentIntercedeRequest.data?.targetName}` }}
-          </button>
-        </div>
+          <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+            <p class="text-white text-sm">
+              <span class="font-semibold">{{ currentIntercedeRequest.data?.attackerName }}</span>
+              is attacking
+              <span class="font-semibold">
+                <template v-if="currentIntercedeRequest.data?.isAreaAttack">
+                  {{ resolveParticipantName(playerIntercedeAreaChosenTarget as string) }}
+                </template>
+                <template v-else>{{ currentIntercedeRequest.data?.targetName }}</template>
+              </span>!
+            </p>
+            <p class="text-yellow-300 text-xs mt-1">
+              {{ currentIntercedeRequest.data?.accuracySuccesses }} accuracy successes
+            </p>
+          </div>
+
+          <div class="mb-4 p-3 bg-digimon-dark-700 rounded-lg text-sm text-digimon-dark-300">
+            <p class="mb-1">If you intercede:</p>
+            <ul class="list-disc list-inside space-y-1 text-xs">
+              <li>Your chosen participant takes the hit instead (0 dodge)</li>
+              <li>The interceptor loses 1 simple action on their next turn</li>
+            </ul>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <button
+              v-for="option in intercedeOptions"
+              :key="option.id"
+              :disabled="intercedeLoading"
+              @click="handleIntercedeClaim(option.id)"
+              class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            >
+              {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
+            </button>
+            <button
+              :disabled="intercedeLoading"
+              @click="handleIntercedeSkip"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            >
+              {{ intercedeLoading ? 'Processing...' : 'Skip' }}
+            </button>
+            <button
+              v-if="currentIntercedeRequest.data?.isAreaAttack"
+              :disabled="intercedeLoading"
+              @click="playerIntercedeAreaChosenTarget = null"
+              class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+            >
+              Back
+            </button>
+            <button
+              :disabled="intercedeLoading"
+              @click="handleIntercedeOptOut"
+              class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
+            >
+              {{ intercedeLoading ? 'Processing...' : `Never intercede for ${currentIntercedeRequest.data?.isAreaAttack ? resolveParticipantName(playerIntercedeAreaChosenTarget as string) : currentIntercedeRequest.data?.targetName}` }}
+            </button>
+          </div>
+        </template>
+
       </div>
     </div>
   </Teleport>
@@ -5144,6 +5266,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <span class="text-orange-400 font-semibold text-lg">Damage Dealt:</span>
               <span class="text-red-400 font-bold text-3xl">{{ attackResultData.finalDamage }}</span>
             </div>
+          </div>
+
+          <!-- Defeated banner -->
+          <div v-if="attackResultData.defeated" class="mt-4 pt-4 border-t border-digimon-dark-600 text-center">
+            <span class="text-yellow-400 font-bold text-2xl tracking-widest">DEFEATED!</span>
+            <p class="text-digimon-dark-300 text-sm mt-1">{{ attackResultData.targetName }} was removed from the encounter.</p>
           </div>
         </div>
 

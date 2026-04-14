@@ -1,12 +1,10 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '../../data/attackConstants'
-import { calculateDigimonDerivedStats } from '../../types'
-import type { DigimonBaseStats, DigimonStage, DigimonSize } from '../../types'
+import { getEffectStatModifiers } from '../../data/attackConstants'
 import { applyEffectToParticipant } from './applyEffect'
-import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
+import { computeAttackDamage } from './computeAttackDamage'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -68,75 +66,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     return { participants, battleLog, hit: false }
   }
 
-  // --- Attacker damage stats ---
-  let attackBaseDamage = 0
-  let armorPiercing = 0
-  let attackDef: any = null
-
-  if (attacker.type === 'digimon') {
-    const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-    if (attackerDigimon) {
-      const baseStats = typeof attackerDigimon.baseStats === 'string'
-        ? JSON.parse(attackerDigimon.baseStats) : attackerDigimon.baseStats
-      const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-        ? JSON.parse((attackerDigimon as any).bonusStats) : (attackerDigimon as any).bonusStats
-
-      attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
-
-      if (attackerDigimon.attacks) {
-        const attacks = typeof attackerDigimon.attacks === 'string'
-          ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
-        attackDef = attacks?.find((a: any) => a.id === params.attackId)
-
-        if (attackDef?.tags && Array.isArray(attackDef.tags)) {
-          for (const tag of attackDef.tags) {
-            const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
-            if (weaponMatch) {
-              const romanMap: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
-              attackBaseDamage += romanMap[weaponMatch[1].toUpperCase()] || parseInt(weaponMatch[1]) || 1
-            }
-            const apMatch = tag.match(/^Armor Piercing\s+(\d+|I{1,3}|IV|V|VI|VII|VIII|IX|X)$/i)
-            if (apMatch) {
-              const romanMap: Record<string, number> = {
-                'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5,
-                'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10,
-              }
-              armorPiercing = (romanMap[apMatch[1].toUpperCase()] || parseInt(apMatch[1]) || 0) * 2
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // --- Combat Monster for attacker ---
-  let attackerHasCombatMonster = false
-  let attackerHealthStat = 0
-  let attackerCombatMonsterBonus = 0
-  let attackerHasPositiveReinforcement = false
-  let attackerMoodValue = 3
-  if (attacker.type === 'digimon') {
-    const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-    if (attackerDigimon) {
-      const baseStats = typeof attackerDigimon.baseStats === 'string'
-        ? JSON.parse(attackerDigimon.baseStats) : attackerDigimon.baseStats
-      const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-        ? JSON.parse((attackerDigimon as any).bonusStats) : (attackerDigimon as any).bonusStats
-      attackerHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
-
-      const attackerQualities = typeof attackerDigimon.qualities === 'string'
-        ? JSON.parse(attackerDigimon.qualities) : attackerDigimon.qualities
-      attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
-      attackerCombatMonsterBonus = attacker.combatMonsterBonus ?? 0
-      attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
-      attackerMoodValue = attacker.moodValue ?? 3
-    }
-  }
-
-  // --- Target quality vars (hoisted — used in dodge pool section and armor section below) ---
+  // --- Target quality vars (used in dodge pool and participant update below) ---
   let targetHasPositiveReinforcement = false
   let targetHasCombatMonster = false
-  let targetHealthStat = 0
   const targetMoodValue = target.moodValue ?? 3
 
   // --- Target dodge pool ---
@@ -153,7 +85,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         ? JSON.parse(targetDigimon.qualities) : targetDigimon.qualities
       targetHasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')
       targetHasCombatMonster = (targetQualities || []).some((q: any) => q.id === 'combat-monster')
-      targetHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
+      const instinct = (targetQualities || []).find((q: any) => q.id === 'instinct')
+      dodgePool += instinct?.ranks || 0
     }
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
@@ -202,15 +135,34 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   }
   const dodgeSuccesses = dodgeDiceResults.filter((d: number) => d >= 5).length
 
-  // --- Support attack: skip damage, apply N effect only ---
-  if (attackDef?.type === 'support') {
-    const netSuccesses = params.accuracySuccesses - dodgeSuccesses
-    const hit = netSuccesses >= 0
-    let appliedEffectName: string | null = null
+  // Shared damage calculation (handles attacker loading, armor, and effects internally)
+  const damageCalc = await computeAttackDamage({
+    attackerParticipant: attacker,
+    targetParticipant: target,
+    attackId: params.attackId,
+    attackerName: params.attackerName,
+    accuracySuccesses: params.accuracySuccesses,
+    dodgeSuccesses,
+    outsideClashCpuPenalty: params.outsideClashCpuPenalty,
+    houseRules: params.houseRules,
+  })
 
-    // Get derived stats for potency (attacker and target)
-    const attackerDerived = attacker.type === 'digimon' ? await getDigimonDerivedStats(attacker.entityId) : null
-    const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId) : null
+  const attackDef = damageCalc.attackDef
+  const attackBaseDamage = damageCalc.attackBaseDamage
+  const armorPiercing = damageCalc.armorPiercing
+  const attackerHasCombatMonster = damageCalc.attackerHasCombatMonster
+  const attackerCombatMonsterBonus = damageCalc.attackerCombatMonsterBonus
+  const attackerHasPositiveReinforcement = damageCalc.attackerHasPositiveReinforcement
+  const attackerMoodValue = damageCalc.attackerMoodValue
+  const netSuccesses = damageCalc.netSuccesses
+  const hit = damageCalc.hit
+  const targetArmor = damageCalc.targetArmor
+  const damageDealt = damageCalc.damageDealt
+  const effectiveArmor = damageCalc.effectiveArmor
+
+  // --- Support attack: skip damage, apply effect only ---
+  if (attackDef?.type === 'support') {
+    let appliedEffectName: string | null = null
 
     participants = participants.map((p: any) => {
       if (p.id === params.targetParticipantId) {
@@ -220,22 +172,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
         }
 
-        if (hit && attackDef.effect) {
-          const alignment = EFFECT_ALIGNMENT[attackDef.effect]
-          const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
-          const { potency, potencyStat } = calculateEffectPotency(attackDef.effect, attackerDerived, targetDerived)
-
-          const effectData = {
-            name: attackDef.effect,
-            type: effectType as 'buff' | 'debuff' | 'status',
-            duration: Math.max(1, netSuccesses),
-            source: params.attackerName,
-            description: '',
-            potency,
-            potencyStat,
-          }
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
-          appliedEffectName = attackDef.effect
+        if (hit && damageCalc.effectData) {
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules)
+          appliedEffectName = damageCalc.appliedEffectName
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
@@ -273,75 +212,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     return { participants, battleLog, turnOrder: params.turnOrder, hit }
   }
 
-  // --- Damage calculation ---
-  const netSuccesses = params.accuracySuccesses - dodgeSuccesses
-  const hit = netSuccesses >= 0
-
-  // Apply Combat Monster bonus to attacker's damage on hit
-  if (hit && attackerHasCombatMonster && attackerCombatMonsterBonus > 0) {
-    attackBaseDamage += attackerCombatMonsterBonus
-  }
-
-  // Target armor and Combat Monster
-  let targetArmor = 0
-  if (target.type === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    if (targetDigimon) {
-      const baseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
-      const bonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimon as any).bonusStats) : (targetDigimon as any).bonusStats
-      targetArmor = (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0)
-
-      const qualities = typeof targetDigimon.qualities === 'string'
-        ? JSON.parse(targetDigimon.qualities) : targetDigimon.qualities
-      const dataOpt = qualities?.find((q: any) => q.id === 'data-optimization')
-      if (dataOpt?.choiceId === 'guardian') targetArmor += 2
-    }
-  } else if (target.type === 'tamer') {
-    const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-    if (targetTamer) {
-      const attrs = typeof targetTamer.attributes === 'string'
-        ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-      const skills = typeof targetTamer.skills === 'string'
-        ? JSON.parse(targetTamer.skills) : targetTamer.skills
-      targetArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
-    }
-  }
-
-  // Apply active effect modifiers to attacker damage and target armor
-  const attackerEffectMods = getEffectStatModifiers(attacker.activeEffects || [])
-  attackBaseDamage += attackerEffectMods.damage
-  targetArmor += targetEffectMods.armor
-
-  // Apply Positive Reinforcement mood modifiers to damage and armor
-  if (attackerHasPositiveReinforcement && attackerMoodValue >= 5) {
-    attackBaseDamage += attackerMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
-  }
-  if (targetHasPositiveReinforcement && targetMoodValue <= 2) {
-    targetArmor -= (3 - targetMoodValue)  // Mood 2 → –1, Mood 1 → –2
-  }
-
-  let damageDealt = 0
-  if (hit) {
-    const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
-    damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
-    // Outside-clash penalty: outsider attacks deal reduced damage (combined CPU of both clashing participants)
-    if (params.outsideClashCpuPenalty && params.outsideClashCpuPenalty > 0) {
-      damageDealt = Math.max(1, damageDealt - params.outsideClashCpuPenalty)
-    }
-  }
-
-  // --- Pre-calculate effect potency (async, can't be inside .map()) ---
-  let effectPotency = 0
-  let effectPotencyStat = 'bit'
-  if (hit && attackDef?.effect) {
-    const attackerDerived = attacker.type === 'digimon' ? await getDigimonDerivedStats(attacker.entityId) : null
-    const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId) : null
-    const result = calculateEffectPotency(attackDef.effect, attackerDerived, targetDerived)
-    effectPotency = result.potency
-    effectPotencyStat = result.potencyStat
-  }
+  // All damage/effect values computed by computeAttackDamage above.
 
   // --- Apply damage, effects, dodge penalty ---
   let appliedEffectName: string | null = null
@@ -354,8 +225,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         attackerUpdates.combatMonsterBonus = 0
       }
       if (hit && attackDef?.effect === 'Lifesteal' && damageDealt >= 2) {
-        // effectPotency is the attacker's CPU value (from calculateEffectPotency above)
-        lifestealHealAmount = Math.min(damageDealt, effectPotency)
+        // effectData.potency is the attacker's CPU value (from computeAttackDamage)
+        lifestealHealAmount = Math.min(damageDealt, damageCalc.effectData?.potency ?? 0)
         attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
       }
       if (attackerHasPositiveReinforcement) {
@@ -397,32 +268,17 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           )
         }
 
-        if (attackDef?.effect) {
-          const shouldApply = attackDef.type === 'damage' ? damageDealt >= 2 : true
-          if (shouldApply) {
-            const alignment = EFFECT_ALIGNMENT[attackDef.effect]
-            const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
-
-            const effectData = {
-              name: attackDef.effect,
-              type: effectType as 'buff' | 'debuff' | 'status',
-              duration: Math.max(1, netSuccesses),
-              source: params.attackerName,
-              description: '',
-              potency: effectPotency,
-              potencyStat: effectPotencyStat,
-            }
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
-            appliedEffectName = attackDef.effect
-            // Stun: immediately reduce actions if target hasn't taken their turn yet this round
-            if (attackDef.effect === 'Stun' && !targetHasGone) {
-              updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
-              updated.stunActionReducedThisRound = true
-            } else if (attackDef.effect === 'Stun' && targetHasGone) {
-              // Target already went — reduce intercede capacity this round and carry -1 action to next round
-              updated.interceptPenalty = (p.interceptPenalty || 0) + 1
-              updated.stunActionReducedThisRound = true
-            }
+        if (damageCalc.effectData) {
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules)
+          appliedEffectName = damageCalc.appliedEffectName
+          // Stun: immediately reduce actions if target hasn't taken their turn yet this round
+          if (attackDef?.effect === 'Stun' && !targetHasGone) {
+            updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
+            updated.stunActionReducedThisRound = true
+          } else if (attackDef?.effect === 'Stun' && targetHasGone) {
+            // Target already went — reduce intercede capacity this round and carry -1 action to next round
+            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+            updated.stunActionReducedThisRound = true
           }
         }
       }
@@ -520,7 +376,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     netSuccesses,
     targetArmor,
     armorPiercing,
-    effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
+    effectiveArmor: hit ? effectiveArmor : undefined,
     finalDamage: hit ? damageDealt : 0,
     hit,
     dodgeDicePool: dodgePool,

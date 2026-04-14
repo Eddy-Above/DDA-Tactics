@@ -52,6 +52,8 @@ const showSpecialOrdersModal = ref(false)
 const specialOrderTargetId = ref<string | null>(null)
 
 const showAddParticipant = ref(false)
+const showIntercedeOptOuts = ref(false)
+const intercedeOptOutSelections = ref<Set<string>>(new Set())
 const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
 const selectedNpcEvoLineId = ref<string>('')
@@ -85,10 +87,10 @@ const pendingWarpChoice = ref<{ chainIndex: number; species: string } | null>(nu
 const showGmIntercedeModal = ref(false)
 const gmIntercedeRequest = ref<any>(null)
 const gmIntercedeLoading = ref(false)
-const showGmIntercedeResultModal = ref(false)
-const gmIntercedeResultData = ref<any>(null)
-const gmIntercedeView = ref<'main' | 'select-interceptor' | 'select-optout'>('main')
+const gmDodgeRollInProgress = ref(false)
+const gmIntercedeView = ref<'main' | 'select-interceptor' | 'select-optout' | 'select-area-target'>('main')
 const gmOptOutSelections = ref<Set<string>>(new Set())
+const gmIntercedeAreaChosenTarget = ref<string | null>(null)
 
 // Entity lookup maps
 const digimonMap = computed(() => {
@@ -610,12 +612,44 @@ function getParticipantName(participantId: string): string | null {
 
 function getGmIntercedeOptions(request: any): any[] {
   const participants = (currentEncounter.value?.participants as any[]) || []
-  return participants.filter((p: any) =>
-    (p.type === 'tamer' || p.type === 'digimon') &&
-    p.id !== request.data?.attackerId &&
-    p.id !== request.data?.targetId
-  )
+  const turnOrder: string[] = (currentEncounter.value as any)?.turnOrder || []
+  const currentTurnIndex: number = (currentEncounter.value as any)?.currentTurnIndex || 0
+  const areaTargetIds: string[] = request.data?.areaTargetIds || []
+  const excluded = new Set<string>([
+    request.data?.attackerId,
+    request.data?.targetId,
+    ...areaTargetIds,
+  ].filter(Boolean))
+  return participants.filter((p: any) => {
+    if (p.type !== 'tamer' && p.type !== 'digimon') return false
+    if (excluded.has(p.id)) return false
+    // Check action availability (mirrors server-side validation)
+    if (p.type === 'digimon') {
+      // Partner digimon are not in turnOrder; use hasActed flag
+      if (!p.hasActed) {
+        return (p.actionsRemaining?.simple || 0) >= 1
+      } else {
+        const cap = p.maxPostTurnIntercedes ?? 2
+        return (p.interceptPenalty || 0) < cap
+      }
+    }
+    const turnIdx = turnOrder.indexOf(p.id)
+    const turnHasGone = turnIdx >= 0 && turnIdx < currentTurnIndex
+    if (!turnHasGone) {
+      return (p.actionsRemaining?.simple || 0) >= 1
+    } else {
+      return (p.interceptPenalty || 0) < 2
+    }
+  })
 }
+
+// GM intercede opt-outs (targets the GM never wants to be queried about)
+const gmIntercedeOptOuts = computed<string[]>(() => {
+  if (!currentEncounter.value) return []
+  const participants = (currentEncounter.value.participants as any[]) || []
+  const gmP = participants.find((p: any) => p.id === 'gm')
+  return gmP?.intercedeOptOuts || []
+})
 
 // Get GM character opt-outs from participant data
 const gmCharacterOptOuts = computed(() => {
@@ -665,6 +699,9 @@ const gmIntercedeQuickReactionRequest = computed(() => {
 watch(gmIntercedeOffer, (newVal) => {
   if (newVal && !showGmIntercedeModal.value) {
     openGmIntercedeModal(newVal)
+  } else if (newVal && showGmIntercedeModal.value) {
+    // Offer was modified (e.g., a player claimed one target in an area attack) — update stale modal data
+    gmIntercedeRequest.value = newVal
   }
   // Close modal if the offer was claimed by someone else
   if (!newVal && showGmIntercedeModal.value) {
@@ -675,15 +712,12 @@ watch(gmIntercedeOffer, (newVal) => {
 
 function openGmIntercedeModal(request: any) {
   gmIntercedeRequest.value = request
-  gmIntercedeView.value = 'main'
+  gmIntercedeAreaChosenTarget.value = null
+  gmIntercedeView.value = request.data?.isAreaAttack ? 'select-area-target' : 'main'
   gmOptOutSelections.value = new Set()
   showGmIntercedeModal.value = true
 }
 
-function closeGmIntercedeResultModal() {
-  showGmIntercedeResultModal.value = false
-  gmIntercedeResultData.value = null
-}
 
 // Determine if a participant is on the enemy side
 function isEnemyParticipant(participant: CombatParticipant): boolean {
@@ -700,37 +734,16 @@ function getAttackTargets(attackerId: string, attack?: any): CombatParticipant[]
   if (!currentEncounter.value) return []
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
 
-  // Support attacks: filter by effect alignment
-  if (attack?.type === 'support' && attack?.effect) {
-    const alignment = EFFECT_ALIGNMENT[attack.effect]
-    const attackerIsEnemy = isEnemyParticipant(participants.find(p => p.id === attackerId)!)
-
-    if (alignment === 'P') {
-      // Positive: target allies only (same side as attacker)
-      return participants.filter(p => {
-        if (p.type === 'gm') return false
-        if (p.id === attackerId) {
-          // Self-buff: only melee allowed, Shield needs Area Attack
-          if (attack.range !== 'melee') return false
-          if (attack.effect === 'Shield' && !attack.tags?.some((t: string) => t.startsWith('Area Attack'))) return false
-          return true
-        }
-        return true
-      })
+  // Target anyone except GM; self only allowed for area attacks
+  return participants.filter(p => {
+    if (p.type === 'gm') return false
+    if (p.id === attackerId) {
+      const isAreaAttack = attack?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+      const isMeleeSupportSingle = attack?.type === 'support' && attack?.range === 'melee' && !isAreaAttack
+      return isAreaAttack || isMeleeSupportSingle
     }
-
-    if (alignment === 'N' || alignment === 'NA') {
-      // Negative: target opponents only
-      return participants.filter(p => {
-        if (p.type === 'gm') return false
-        if (p.id === attackerId) return false
-        return isEnemyParticipant(p) !== attackerIsEnemy
-      })
-    }
-  }
-
-  // Damage attacks & default: target anyone except self and GM
-  return participants.filter(p => p.id !== attackerId && p.type !== 'gm')
+    return true
+  })
 }
 
 const isAreaAttack = computed(() =>
@@ -877,6 +890,9 @@ async function confirmAttack(target: CombatParticipant) {
         result: logResult,
         damage: null,
         effects: ['Attack'],
+        accuracyDicePool: accuracyPool,
+        accuracyDiceResults,
+        accuracySuccesses,
       })
       showTargetSelector.value = false
       selectedAttack.value = null
@@ -933,20 +949,16 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
       batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
     }
 
-    let lastResult: any = null
-    for (const target of targets) {
-      try {
-        const result = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
-          method: 'POST',
-          body: { ...sharedBody, targetId: target.id },
-        })
-        if (result) lastResult = result
-      } catch (e: any) {
-        console.error(`Attack on ${target.id} failed:`, e)
-        alert(e?.data?.message || `Failed to attack ${getEntityDetails(target)?.name}`)
-      }
+    try {
+      const result = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
+        method: 'POST',
+        body: { ...sharedBody, targetIds: targets.map(t => t.id) },
+      })
+      if (result) currentEncounter.value = result as any
+    } catch (e: any) {
+      console.error('Area attack failed:', e)
+      alert(e?.data?.message || 'Area attack failed')
     }
-    if (lastResult) currentEncounter.value = lastResult as any
 
     const entity = getEntityDetails(participant)
     const targetNames = targets.map(t => getEntityDetails(t)?.name || 'Unknown').join(', ')
@@ -965,6 +977,9 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
       result: logResult,
       damage: null,
       effects: ['Attack'],
+      accuracyDicePool: accuracyPool,
+      accuracyDiceResults,
+      accuracySuccesses,
     })
 
     showTargetSelector.value = false
@@ -995,6 +1010,16 @@ async function cancelIntercedeGroup(intercedeGroupId: string) {
   await fetchEncounter(currentEncounter.value.id)
 }
 
+// Player tamer skips their own intercede-offer (properly routes through intercede-skip to create dodge-rolls)
+async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
+  if (!currentEncounter.value) return
+  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
+    method: 'POST',
+    body: { requestId, optOut },
+  })
+  await fetchEncounter(currentEncounter.value.id)
+}
+
 // GM intercede response functions
 async function handleGmIntercedeClaim(requestId: string, interceptorId: string) {
   if (!currentEncounter.value) return
@@ -1003,38 +1028,14 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string) 
   gmIntercedeLoading.value = true
   try {
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-claim`, {
-      method: 'POST', body: { requestId, interceptorParticipantId: interceptorId }
+      method: 'POST', body: {
+        requestId,
+        interceptorParticipantId: interceptorId,
+        ...(gmIntercedeRequest.value?.data?.isAreaAttack ? { chosenTargetId: gmIntercedeAreaChosenTarget.value } : {}),
+      }
     })
 
     showGmIntercedeModal.value = false
-
-    // Extract intercede result from API response to show result modal
-    if (result && capturedRequest) {
-      const battleLog = (result.battleLog as any[]) || []
-      const intercedeEntry = battleLog.findLast(
-        (entry: any) =>
-          entry.actorId === interceptorId &&
-          typeof entry.action === 'string' &&
-          entry.action.startsWith('Interceded for')
-      )
-
-      if (intercedeEntry) {
-        gmIntercedeResultData.value = {
-          attackerName: capturedRequest.data.attackerName,
-          targetName: capturedRequest.data.targetName,
-          interceptorName: intercedeEntry.actorName,
-          accuracySuccesses: capturedRequest.data.accuracySuccesses,
-          finalDamage: intercedeEntry.finalDamage,
-          baseDamage: intercedeEntry.baseDamage,
-          netSuccesses: intercedeEntry.netSuccesses,
-          targetArmor: intercedeEntry.targetArmor,
-          armorPiercing: intercedeEntry.armorPiercing,
-          effectiveArmor: intercedeEntry.effectiveArmor,
-        }
-        showGmIntercedeResultModal.value = true
-      }
-    }
-
     await fetchEncounter(currentEncounter.value.id)
   } catch (e: any) {
     if (e?.statusCode === 409) {
@@ -1122,6 +1123,25 @@ async function handleGmSaveCharacterOptOuts() {
   } finally {
     gmIntercedeLoading.value = false
   }
+}
+
+// Save GM intercede opt-outs (which targets the GM doesn't want to be queried about)
+async function handleSaveGmIntercedeOptOuts() {
+  if (!currentEncounter.value) return
+  const participants = [...((currentEncounter.value.participants as any[]) || [])]
+  const gmIdx = participants.findIndex((p: any) => p.id === 'gm')
+  const optOuts = Array.from(intercedeOptOutSelections.value)
+  if (gmIdx !== -1) {
+    participants[gmIdx] = { ...participants[gmIdx], intercedeOptOuts: optOuts }
+  } else {
+    participants.push({ id: 'gm', type: 'gm', intercedeOptOuts: optOuts })
+  }
+  await $fetch(`/api/encounters/${currentEncounter.value.id}`, {
+    method: 'PUT',
+    body: { participants },
+  })
+  await fetchEncounter(currentEncounter.value.id)
+  showIntercedeOptOuts.value = false
 }
 
 // Add participant handler - supports adding multiple of the same entity
@@ -2231,6 +2251,8 @@ async function removeEffect(participantId: string, effectId: string) {
 // GM rolls dodge for NPC enemy
 async function handleGmDodgeRoll(request: any) {
   if (!currentEncounter.value) return
+  if (gmDodgeRollInProgress.value) return
+  gmDodgeRollInProgress.value = true
 
   try {
     // Find the target participant
@@ -2279,6 +2301,8 @@ async function handleGmDodgeRoll(request: any) {
     }
   } catch (error) {
     console.error('Error rolling dodge for GM:', error)
+  } finally {
+    gmDodgeRollInProgress.value = false
   }
 }
 
@@ -2293,6 +2317,21 @@ const selectedParticipant = computed(() => {
 })
 
 let refreshInterval: ReturnType<typeof setInterval>
+let fastRefreshInterval: ReturnType<typeof setInterval> | null = null
+
+function startFastRefresh() {
+  if (fastRefreshInterval) return
+  fastRefreshInterval = setInterval(() => {
+    fetchEncounter(route.params.id as string)
+  }, 1000)
+}
+
+function stopFastRefresh() {
+  if (fastRefreshInterval) {
+    clearInterval(fastRefreshInterval)
+    fastRefreshInterval = null
+  }
+}
 
 onMounted(async () => {
   await Promise.all([
@@ -2315,7 +2354,17 @@ onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
+  stopFastRefresh()
 })
+
+// Speed up polling while a GM intercede offer is active (area attack target list must stay current)
+watch(gmIntercedeOffer, (offer) => {
+  if (offer?.data?.isAreaAttack) {
+    startFastRefresh()
+  } else {
+    stopFastRefresh()
+  }
+}, { immediate: true })
 
 // Get set of digimon IDs that are current forms for partners
 const currentPartnerDigimonIds = computed(() => {
@@ -2624,6 +2673,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 @click="showAddParticipant = true"
               >
                 + Add Participant
+              </button>
+              <button
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                @click="intercedeOptOutSelections = new Set(gmIntercedeOptOuts); showIntercedeOptOuts = true"
+              >
+                Intercede Targets
               </button>
             </div>
 
@@ -3433,10 +3488,20 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     vs {{ request.data?.attackerName || 'Unknown' }}'s {{ request.data?.attackName || 'Attack' }}
                   </span>
                   <span v-else-if="request.type === 'intercede-offer' && request.targetTamerId !== 'GM'" class="text-yellow-400 text-sm ml-2">
-                    Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
+                    <template v-if="request.data?.isAreaAttack">
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ (request.data?.areaTargetIds || []).length }} targets)
+                    </template>
+                    <template v-else>
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
+                    </template>
                   </span>
                   <span v-else-if="request.type === 'intercede-offer' && request.targetTamerId === 'GM'" class="text-yellow-400 text-sm ml-2">
-                    Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
+                    <template v-if="request.data?.isAreaAttack">
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ (request.data?.areaTargetIds || []).length }} targets)
+                    </template>
+                    <template v-else>
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
+                    </template>
                   </span>
                   <span v-else-if="request.type === 'clash-check'" class="text-orange-400 text-sm ml-2">
                     Clash Check — {{ request.data?.initiatorName || 'Unknown' }} initiated, awaiting response
@@ -3449,7 +3514,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   <template v-if="request.type === 'dodge-roll'">
                     <button
                       @click="handleGmDodgeRoll(request)"
-                      class="bg-digimon-orange-600 hover:bg-digimon-orange-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
+                      :disabled="gmDodgeRollInProgress"
+                      class="bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
                     >
                       Roll Dodge
                     </button>
@@ -3480,7 +3546,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     <!-- GM intercede modal auto-appears -->
                   </template>
                   <template v-else-if="request.type === 'intercede-offer'">
-                    <!-- Player intercede: Quick Reaction + cancel buttons -->
+                    <!-- Player intercede: area attack shows targets, Quick Reaction + cancel buttons -->
+                    <div v-if="request.data?.isAreaAttack" class="text-yellow-300 text-xs mr-2">
+                      Area attack on:
+                      {{ (request.data?.areaTargetIds || []).map((tid: string) => {
+                        const p = (currentEncounter.participants as any[]).find((pp: any) => pp.id === tid)
+                        return p?.name || tid
+                      }).join(', ') }}
+                    </div>
                     <button
                       v-if="request.data?.canUseQuickReaction"
                       @click="handleQuickReaction(request)"
@@ -3489,16 +3562,17 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       Quick Reaction (+{{ request.data?.quickReactionDiceCount }} Dodge Dice)
                     </button>
                     <button
-                      @click="cancelIntercedeGroup(request.data?.intercedeGroupId)"
+                      @click="handlePlayerIntercedeSkip(request.id)"
                       class="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
                     >
-                      Cancel Intercede
+                      Skip
                     </button>
                     <button
-                      @click="cancelRequest(currentEncounter.id, request.id)"
-                      class="text-red-400 hover:text-red-300 text-sm font-semibold"
+                      v-if="!request.data?.isAreaAttack"
+                      @click="handlePlayerIntercedeSkip(request.id, true)"
+                      class="text-digimon-dark-400 hover:text-white text-xs font-semibold"
                     >
-                      Cancel
+                      Never for this target
                     </button>
                   </template>
                   <template v-else>
@@ -3564,7 +3638,42 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 <div class="text-digimon-dark-400 text-xs mb-1">
                   Round {{ entry.round }} • {{ entry.actorName }}
                 </div>
-                <div class="text-white text-sm">{{ entry.result }}</div>
+                <!-- Accuracy dice (Attack entries) -->
+                <div v-if="entry.accuracyDiceResults && entry.accuracyDiceResults.length > 0" class="mt-1 p-2 bg-digimon-dark-600 rounded">
+                  <div class="text-xs text-digimon-dark-400 mb-1">Accuracy ({{ entry.accuracyDicePool }}d6)</div>
+                  <div class="flex flex-wrap gap-1 mb-1">
+                    <span
+                      v-for="(die, i) in entry.accuracyDiceResults"
+                      :key="i"
+                      :class="[
+                        'px-2 py-1 rounded font-mono text-xs',
+                        die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-700 text-digimon-dark-300'
+                      ]"
+                    >
+                      {{ die }}
+                    </span>
+                  </div>
+                  <div class="text-xs text-green-400">{{ entry.accuracySuccesses }} success{{ entry.accuracySuccesses !== 1 ? 'es' : '' }}</div>
+                </div>
+                <div v-else-if="!(entry.dodgeDiceResults && entry.dodgeDiceResults.length > 0)" class="text-white text-sm">{{ entry.result }}</div>
+
+                <!-- NPC auto-dodge dice (GM only) -->
+                <div v-if="entry.dodgeDiceResults && entry.dodgeDiceResults.length > 0" class="mt-2 p-2 bg-digimon-dark-600 rounded">
+                  <div class="text-xs text-digimon-dark-400 mb-1">Dodge ({{ entry.dodgeDicePool }}d6)</div>
+                  <div class="flex flex-wrap gap-1 mb-1">
+                    <span
+                      v-for="(die, i) in entry.dodgeDiceResults"
+                      :key="i"
+                      :class="[
+                        'px-2 py-1 rounded font-mono text-xs',
+                        die >= 5 ? 'bg-purple-600 text-white' : 'bg-digimon-dark-700 text-digimon-dark-300'
+                      ]"
+                    >
+                      {{ die }}
+                    </span>
+                  </div>
+                  <div class="text-xs text-purple-400">{{ entry.dodgeSuccesses }} dodge success{{ entry.dodgeSuccesses !== 1 ? 'es' : '' }}</div>
+                </div>
 
                 <!-- Damage calculation breakdown (if available) -->
                 <div v-if="entry.hit !== undefined && entry.baseDamage !== undefined" class="mt-2 p-2 bg-digimon-dark-600 rounded border-l-4" :class="[
@@ -3620,6 +3729,47 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
         </div>
       </div>
+
+      <!-- Intercede Targets Modal -->
+      <Teleport to="body">
+        <div
+          v-if="showIntercedeOptOuts"
+          class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+          @click.self="showIntercedeOptOuts = false"
+        >
+          <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
+            <h2 class="font-display text-xl font-semibold text-white mb-1">Intercede Targets</h2>
+            <p class="text-sm text-digimon-dark-400 mb-4">Select which participants you want to be queried to intercede for. Unchecked participants will be skipped.</p>
+            <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
+              <button
+                v-for="p in (currentEncounter.participants as any[]).filter((p: any) => p.type !== 'gm')"
+                :key="p.id"
+                class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
+                @click="intercedeOptOutSelections.has(p.id) ? intercedeOptOutSelections.delete(p.id) : intercedeOptOutSelections.add(p.id); intercedeOptOutSelections = new Set(intercedeOptOutSelections)"
+              >
+                <div class="w-5 h-5 rounded border border-digimon-dark-500 flex items-center justify-center shrink-0" :class="{ 'bg-digimon-orange-500 border-digimon-orange-500': !intercedeOptOutSelections.has(p.id) }">
+                  <span v-if="!intercedeOptOutSelections.has(p.id)" class="text-white text-xs">✓</span>
+                </div>
+                <span>{{ getParticipantName(p.id) || p.id }}</span>
+              </button>
+            </div>
+            <div class="flex gap-3">
+              <button
+                class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                @click="handleSaveGmIntercedeOptOuts"
+              >
+                Save
+              </button>
+              <button
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                @click="showIntercedeOptOuts = false"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
 
       <!-- Add Participant Modal -->
       <Teleport to="body">
@@ -4394,18 +4544,69 @@ async function handleBreakClash(participantId: string, clashId: string) {
       >
         <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
 
-          <!-- Main View -->
-          <template v-if="gmIntercedeView === 'main'">
+          <!-- Area Target Selector View (area attacks only) -->
+          <template v-if="gmIntercedeView === 'select-area-target'">
             <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
-              Intercede?
+              Area Attack — Choose a target to protect
             </h2>
 
             <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
               <p class="text-white text-sm">
                 <span class="font-semibold">{{ gmIntercedeRequest.data?.attackerName }}</span>
-                is attacking
-                <span class="font-semibold">{{ gmIntercedeRequest.data?.targetName }}</span>!
+                is attacking multiple allies.
               </p>
+              <p class="text-yellow-300 text-xs mt-1">
+                {{ gmIntercedeRequest.data?.accuracySuccesses }} accuracy successes
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-2">
+              <button
+                v-for="tid in gmIntercedeRequest.data?.areaTargetIds || []"
+                :key="tid"
+                :disabled="gmIntercedeLoading"
+                @click="() => { gmIntercedeAreaChosenTarget = tid; gmIntercedeView = 'main' }"
+                class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                {{ getParticipantName(tid) || tid }}
+                <span
+                  v-if="gmIntercedeQuickReactionRequest && gmIntercedeQuickReactionRequest.data?.areaTargetIds?.includes(tid)"
+                  class="ml-2 text-blue-200 text-xs"
+                >(QR available)</span>
+              </button>
+              <button
+                :disabled="gmIntercedeLoading"
+                @click="handleGmIntercedeSkip(gmIntercedeRequest.id)"
+                class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                {{ gmIntercedeLoading ? 'Processing...' : 'Skip All' }}
+              </button>
+            </div>
+          </template>
+
+          <!-- Main View -->
+          <template v-else-if="gmIntercedeView === 'main'">
+            <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
+              Intercede?
+            </h2>
+
+            <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+              <template v-if="gmIntercedeRequest.data?.isAreaAttack">
+                <p class="text-white text-sm">
+                  <span class="font-semibold">{{ gmIntercedeRequest.data?.attackerName }}</span>
+                  is attacking
+                  <span class="font-semibold">
+                    {{ getParticipantName(gmIntercedeAreaChosenTarget as string) || gmIntercedeAreaChosenTarget }}
+                  </span>!
+                </p>
+              </template>
+              <template v-else>
+                <p class="text-white text-sm">
+                  <span class="font-semibold">{{ gmIntercedeRequest.data?.attackerName }}</span>
+                  is attacking
+                  <span class="font-semibold">{{ gmIntercedeRequest.data?.targetName }}</span>!
+                </p>
+              </template>
               <p class="text-yellow-300 text-xs mt-1">
                 {{ gmIntercedeRequest.data?.accuracySuccesses }} accuracy successes
               </p>
@@ -4428,7 +4629,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 {{ gmIntercedeOptionsWithNames.length === 0 ? 'No eligible interceptors' : 'Intercede' }}
               </button>
               <button
-                v-if="gmIntercedeQuickReactionRequest"
+                v-if="gmIntercedeQuickReactionRequest && (!gmIntercedeRequest.data?.isAreaAttack || gmIntercedeQuickReactionRequest.data?.areaTargetIds?.includes(gmIntercedeAreaChosenTarget))"
                 :disabled="gmIntercedeLoading"
                 @click="handleGmQuickReaction"
                 class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
@@ -4443,6 +4644,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 {{ gmIntercedeLoading ? 'Processing...' : 'Skip' }}
               </button>
               <button
+                v-if="!gmIntercedeRequest.data?.isAreaAttack"
                 :disabled="gmIntercedeLoading"
                 @click="() => {
                   const targetId = gmIntercedeRequest.data?.targetId
@@ -4453,6 +4655,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
               >
                 Never Intercede
+              </button>
+              <button
+                v-if="gmIntercedeRequest.data?.isAreaAttack"
+                :disabled="gmIntercedeLoading"
+                @click="gmIntercedeView = 'select-area-target'"
+                class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                Back
               </button>
             </div>
           </template>
@@ -4466,7 +4676,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
             <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
               <p class="text-white text-sm">
                 Choose who will intercede for
-                <span class="font-semibold">{{ gmIntercedeRequest.data?.targetName }}</span>
+                <span class="font-semibold">
+                  <template v-if="gmIntercedeRequest.data?.isAreaAttack">
+                    {{ getParticipantName(gmIntercedeAreaChosenTarget as string) || gmIntercedeAreaChosenTarget }}
+                  </template>
+                  <template v-else>{{ gmIntercedeRequest.data?.targetName }}</template>
+                </span>
               </p>
             </div>
 
@@ -4550,65 +4765,5 @@ async function handleBreakClash(participantId: string, clashId: string) {
     </Teleport>
 
 
-    <!-- GM Intercede Result Modal -->
-    <Teleport to="body">
-      <div
-        v-if="showGmIntercedeResultModal && gmIntercedeResultData"
-        class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-      >
-        <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-yellow-500">
-          <h2 class="text-2xl font-bold text-yellow-500 mb-2">
-            Intercede Result
-          </h2>
-          <p class="text-digimon-dark-300 mb-4">
-            <span class="text-white font-semibold">{{ gmIntercedeResultData.interceptorName }}</span>
-            took the hit for
-            <span class="text-white font-semibold">{{ gmIntercedeResultData.targetName }}</span>!
-          </p>
-
-          <div class="mb-4 p-4 bg-digimon-dark-700 rounded-lg">
-            <h3 class="text-lg font-semibold text-orange-400 mb-2">Attack Details</h3>
-            <div class="flex items-center gap-2">
-              <span class="text-digimon-dark-400">Attacker:</span>
-              <span class="text-white">{{ gmIntercedeResultData.attackerName }}</span>
-            </div>
-            <div class="flex items-center gap-2 mt-2">
-              <span class="text-digimon-dark-400">Accuracy Successes:</span>
-              <span class="text-orange-400 font-bold text-xl">{{ gmIntercedeResultData.accuracySuccesses }}</span>
-            </div>
-          </div>
-
-          <div class="mb-6 p-4 bg-digimon-dark-700 rounded-lg border-2 border-red-500">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-lg font-semibold text-red-400">
-                HIT! (Intercede = 0 Dodge)
-              </h3>
-              <div class="text-digimon-dark-400">
-                Net Successes:
-                <span class="text-orange-400 font-bold text-xl ml-2">
-                  {{ gmIntercedeResultData.netSuccesses >= 0 ? '+' : '' }}{{ gmIntercedeResultData.netSuccesses }}
-                </span>
-              </div>
-            </div>
-
-            <div class="mt-4 pt-4 border-t border-digimon-dark-600">
-              <div class="flex items-center justify-between">
-                <span class="text-red-400 font-semibold text-lg">Damage Taken:</span>
-                <span class="text-red-500 font-bold text-3xl">{{ gmIntercedeResultData.finalDamage }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex justify-end">
-            <button
-              @click="closeGmIntercedeResultModal"
-              class="px-6 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>

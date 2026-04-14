@@ -46,6 +46,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const intercedeGroupId = request.data.intercedeGroupId
+  const isAreaAttack = !!request.data.isAreaAttack
 
   // Atomic check: if group already resolved (no remaining group requests), 409
   const groupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
@@ -59,7 +60,38 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Tamer participant not found' })
   }
 
-  const target = participants.find((p: any) => p.id === request.data.targetId)
+  // For area attacks, find the tamer's partner among areaTargetIds
+  let effectiveTargetId: string
+  if (isAreaAttack) {
+    const areaTargetIds: string[] = request.data.areaTargetIds || []
+    // Find which area target is this tamer's partner digimon
+    let partnerTargetId: string | null = null
+    for (const tid of areaTargetIds) {
+      const p = participants.find((pp: any) => pp.id === tid)
+      if (p?.type === 'digimon') {
+        const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
+        if (dig?.partnerId === tamerParticipant.entityId) {
+          partnerTargetId = tid
+          break
+        }
+      }
+    }
+    if (!partnerTargetId) {
+      throw createError({ statusCode: 400, message: 'Quick Reaction requires your partner digimon to be among the area attack targets' })
+    }
+    // Also check if this target is still available (not claimed yet)
+    const stillAvailable = pendingRequests.some(
+      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(partnerTargetId)
+    )
+    if (!stillAvailable) {
+      throw createError({ statusCode: 409, message: 'Your partner digimon target was already claimed by another interceptor' })
+    }
+    effectiveTargetId = partnerTargetId
+  } else {
+    effectiveTargetId = request.data.targetId
+  }
+
+  const target = participants.find((p: any) => p.id === effectiveTargetId)
   if (!target || target.type !== 'digimon') {
     throw createError({ statusCode: 400, message: 'Quick Reaction requires a digimon target' })
   }
@@ -114,51 +146,155 @@ export default defineEventHandler(async (event) => {
     if (p.id === body.tamerParticipantId) {
       return { ...p, interceptPenalty: (p.interceptPenalty || 0) + 1 }
     }
-    if (p.id === request.data.targetId) {
+    if (p.id === effectiveTargetId) {
       return { ...p, quickReactionDiceBonus: diceCount }
     }
     return p
   })
 
-  // Remove all intercede-offer requests for this group
-  pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+  if (isAreaAttack) {
+    // Remove this request
+    pendingRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
-  // Resolve targetTamerId for dodge-roll request
-  let targetTamerId = 'GM'
-  if (targetDig.partnerId) targetTamerId = targetDig.partnerId
+    // Strip QR target from areaTargetIds of all remaining group requests
+    pendingRequests = pendingRequests.map((r: any) => {
+      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
+      const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
+      return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+    })
 
-  // Build dodge-roll pending request
-  const dodgeRequest = {
-    id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    type: 'dodge-roll',
-    targetTamerId,
-    targetParticipantId: request.data.targetId,
-    timestamp: new Date().toISOString(),
-    data: {
-      attackerName: request.data.attackerName,
-      targetName: request.data.targetName,
-      attackName: request.data.attackName || 'Attack',
-      accuracySuccesses: request.data.accuracySuccesses,
-      accuracyDice: request.data.accuracyDice,
-      attackId: request.data.attackId,
-      attackData: request.data.attackData,
-      attackerEntityId: participants.find((p: any) => p.id === request.data.attackerId)?.entityId,
-      attackerParticipantId: request.data.attackerId,
-      targetEntityId: target.entityId,
-      dodgePenalty: target.dodgePenalty ?? 0,
-      bolstered: request.data.bolstered || false,
-      bolsterType: request.data.bolsterType || null,
-      bolsterDamageBonus: request.data.bolsterDamageBonus || 0,
-      bolsterBitCpuBonus: request.data.bolsterBitCpuBonus || 0,
-      isSupportAttack: request.data.isSupportAttack || false,
-      isSignatureMove: request.data.isSignatureMove || false,
-      batteryCount: request.data.batteryCount ?? 0,
-      clashAttack: request.data.clashAttack || false,
-      outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
-    },
+    // Remove requests whose areaTargetIds is now empty
+    pendingRequests = pendingRequests.filter((r: any) => {
+      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
+      return (r.data.areaTargetIds || []).length > 0
+    })
+
+    // Create a dodge-roll (with QR bonus) for the QR target
+    let qrTargetTamerId = 'GM'
+    if (targetDig.partnerId) qrTargetTamerId = targetDig.partnerId
+
+    const qrDodgeRequest = {
+      id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'dodge-roll',
+      targetTamerId: qrTargetTamerId,
+      targetParticipantId: effectiveTargetId,
+      timestamp: new Date().toISOString(),
+      data: {
+        attackerName: request.data.attackerName,
+        targetName: target.name || effectiveTargetId,
+        attackName: request.data.attackName || 'Attack',
+        accuracySuccesses: request.data.accuracySuccesses,
+        accuracyDice: request.data.accuracyDice,
+        attackId: request.data.attackId,
+        attackData: request.data.attackData,
+        attackerEntityId: participants.find((p: any) => p.id === request.data.attackerId)?.entityId,
+        attackerParticipantId: request.data.attackerId,
+        targetEntityId: target.entityId,
+        dodgePenalty: target.dodgePenalty ?? 0,
+        bolstered: request.data.bolstered || false,
+        bolsterType: request.data.bolsterType || null,
+        bolsterDamageBonus: request.data.bolsterDamageBonus || 0,
+        bolsterBitCpuBonus: request.data.bolsterBitCpuBonus || 0,
+        isSupportAttack: request.data.isSupportAttack || false,
+        isSignatureMove: request.data.isSignatureMove || false,
+        batteryCount: request.data.batteryCount ?? 0,
+        clashAttack: request.data.clashAttack || false,
+        outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
+      },
+    }
+    pendingRequests.push(qrDodgeRequest)
+
+    // For remaining area targets (not the QR target), check coverage
+    const originalAreaTargets: string[] = request.data.areaTargetIds || []
+    for (const uncoveredId of originalAreaTargets) {
+      if (uncoveredId === effectiveTargetId) continue
+      const isCovered = pendingRequests.some(
+        (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(uncoveredId)
+      )
+      if (!isCovered) {
+        const uncoveredParticipant = participants.find((p: any) => p.id === uncoveredId)
+        if (uncoveredParticipant) {
+          let targetTamerId = 'GM'
+          if (uncoveredParticipant.type === 'tamer') {
+            targetTamerId = uncoveredParticipant.entityId
+          } else if (uncoveredParticipant.type === 'digimon') {
+            const [dig] = await db.select().from(digimon).where(eq(digimon.id, uncoveredParticipant.entityId))
+            if (dig?.partnerId) targetTamerId = dig.partnerId
+          }
+          const dodgeRequest = {
+            id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'dodge-roll',
+            targetTamerId,
+            targetParticipantId: uncoveredId,
+            timestamp: new Date().toISOString(),
+            data: {
+              attackerName: request.data.attackerName,
+              targetName: uncoveredParticipant.name || uncoveredId,
+              attackName: request.data.attackName || 'Attack',
+              accuracySuccesses: request.data.accuracySuccesses,
+              accuracyDice: request.data.accuracyDice,
+              attackId: request.data.attackId,
+              attackData: request.data.attackData,
+              attackerEntityId: participants.find((p: any) => p.id === request.data.attackerId)?.entityId,
+              attackerParticipantId: request.data.attackerId,
+              targetEntityId: uncoveredParticipant.entityId,
+              dodgePenalty: uncoveredParticipant.dodgePenalty ?? 0,
+              bolstered: request.data.bolstered || false,
+              bolsterType: request.data.bolsterType || null,
+              bolsterDamageBonus: request.data.bolsterDamageBonus || 0,
+              bolsterBitCpuBonus: request.data.bolsterBitCpuBonus || 0,
+              isSupportAttack: request.data.isSupportAttack || false,
+              isSignatureMove: request.data.isSignatureMove || false,
+              batteryCount: request.data.batteryCount ?? 0,
+              clashAttack: request.data.clashAttack || false,
+              outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
+            },
+          }
+          pendingRequests.push(dodgeRequest)
+        }
+      }
+    }
+  } else {
+    // Single-target: remove all intercede-offer requests for this group, create one dodge-roll
+    pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+
+    // Resolve targetTamerId for dodge-roll request
+    let targetTamerId = 'GM'
+    if (targetDig.partnerId) targetTamerId = targetDig.partnerId
+
+    // Build dodge-roll pending request
+    const dodgeRequest = {
+      id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'dodge-roll',
+      targetTamerId,
+      targetParticipantId: effectiveTargetId,
+      timestamp: new Date().toISOString(),
+      data: {
+        attackerName: request.data.attackerName,
+        targetName: request.data.targetName,
+        attackName: request.data.attackName || 'Attack',
+        accuracySuccesses: request.data.accuracySuccesses,
+        accuracyDice: request.data.accuracyDice,
+        attackId: request.data.attackId,
+        attackData: request.data.attackData,
+        attackerEntityId: participants.find((p: any) => p.id === request.data.attackerId)?.entityId,
+        attackerParticipantId: request.data.attackerId,
+        targetEntityId: target.entityId,
+        dodgePenalty: target.dodgePenalty ?? 0,
+        bolstered: request.data.bolstered || false,
+        bolsterType: request.data.bolsterType || null,
+        bolsterDamageBonus: request.data.bolsterDamageBonus || 0,
+        bolsterBitCpuBonus: request.data.bolsterBitCpuBonus || 0,
+        isSupportAttack: request.data.isSupportAttack || false,
+        isSignatureMove: request.data.isSignatureMove || false,
+        batteryCount: request.data.batteryCount ?? 0,
+        clashAttack: request.data.clashAttack || false,
+        outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
+      },
+    }
+
+    pendingRequests = [...pendingRequests, dodgeRequest]
   }
-
-  pendingRequests = [...pendingRequests, dodgeRequest]
 
   // Persist Quick Reaction to tamer's usedPerDayOrders
   await db.update(tamers).set({
@@ -173,8 +309,8 @@ export default defineEventHandler(async (event) => {
     actorId: body.tamerParticipantId,
     actorName: tamerRecord.name || 'Tamer',
     action: 'Quick Reaction',
-    target: request.data.targetName,
-    result: `${tamerRecord.name || 'Tamer'} calls out a warning — ${request.data.targetName} gains +${diceCount} Dodge Dice for the round`,
+    target: target.name || effectiveTargetId,
+    result: `${tamerRecord.name || 'Tamer'} calls out a warning — ${target.name || effectiveTargetId} gains +${diceCount} Dodge Dice for the round`,
     damage: 0,
     effects: ['Quick Reaction'],
     hit: false,

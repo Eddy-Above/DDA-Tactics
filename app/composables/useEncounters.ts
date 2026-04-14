@@ -80,6 +80,16 @@ export interface BattleLogEntry {
   effectiveArmor?: number
   finalDamage?: number
   hit?: boolean
+
+  // Structured accuracy dice (used for styled dice display)
+  accuracyDicePool?: number
+  accuracyDiceResults?: number[]
+  accuracySuccesses?: number
+
+  // Structured dodge dice (used for styled dice display)
+  dodgeDicePool?: number
+  dodgeDiceResults?: number[]
+  dodgeSuccesses?: number
 }
 
 export interface Hazard {
@@ -303,11 +313,6 @@ export function useEncounters() {
         p.hasActed = false
         p.usedAttackIds = []
         p.hasAttemptedDigivolve = false
-        // Apply intercept penalty from previous round
-        if (p.interceptPenalty) {
-          p.actionsRemaining.simple = Math.max(0, 2 - p.interceptPenalty)
-          p.interceptPenalty = 0
-        }
         // Apply Stun action penalty (skip if already reduced mid-round when Stun was applied)
         if (!p.stunActionReducedThisRound) {
           const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
@@ -387,6 +392,20 @@ export function useEncounters() {
       currentParticipant.isActive = false
     }
 
+    // At tamer turn-end: mark partner digimon as having acted and open post-turn intercede window
+    if (digimonMap && currentParticipant && currentParticipant.type === 'tamer') {
+      const partnerDigi = participants.find((p) => {
+        if (p.type !== 'digimon') return false
+        const digi = digimonMap.get(p.entityId)
+        return digi?.partnerId === currentParticipant.entityId
+      })
+      if (partnerDigi) {
+        partnerDigi.hasActed = true
+        const stunEffect = (partnerDigi.activeEffects || []).find((e: any) => e.name === 'Stun')
+        partnerDigi.maxPostTurnIntercedes = stunEffect ? 1 : 2
+      }
+    }
+
     // Mark next participant as active
     const nextParticipantId = turnOrder[nextIndex]
     const nextParticipant = participants.find((p) => p.id === nextParticipantId)
@@ -395,15 +414,22 @@ export function useEncounters() {
       nextParticipant.dodgePenalty = 0
       nextParticipant.hasDirectedThisTurn = false
 
-      // Also reset partner digimon's dodge penalty (partner excluded from turnOrder)
+      // Also reset partner digimon's dodge penalty and apply accumulated intercede penalty
       if (digimonMap && nextParticipant.type === 'tamer') {
         const partner = participants.find((p) => {
           if (p.type !== 'digimon') return false
-          const digimon = digimonMap.get(p.entityId)
-          return digimon?.partnerId === nextParticipant.entityId
+          const digi = digimonMap.get(p.entityId)
+          return digi?.partnerId === nextParticipant.entityId
         })
         if (partner) {
           partner.dodgePenalty = 0
+          // Apply post-turn intercede penalty accumulated since last cycle
+          if (partner.interceptPenalty) {
+            partner.actionsRemaining = partner.actionsRemaining || { simple: 2 }
+            partner.actionsRemaining.simple = Math.max(0, partner.actionsRemaining.simple - partner.interceptPenalty)
+            partner.interceptPenalty = 0
+          }
+          partner.hasActed = false
         }
       }
     }
@@ -642,6 +668,9 @@ export function useEncounters() {
     },
     lifestealData?: {
       lifestealed: boolean
+    },
+    areaData?: {
+      targetIds: string[]
     }
   ): Promise<Encounter | null> {
     loading.value = true
@@ -652,7 +681,8 @@ export function useEncounters() {
         body: {
           participantId,
           attackId,
-          targetId,
+          targetId: areaData ? undefined : targetId,
+          targetIds: areaData?.targetIds,
           accuracyDicePool: accuracyData.dicePool,
           accuracySuccesses: accuracyData.successes,
           accuracyDiceResults: accuracyData.diceResults,

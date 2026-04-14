@@ -6,7 +6,8 @@ import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 interface AttackActionBody {
   participantId: string
   attackId: string
-  targetId: string
+  targetId?: string
+  targetIds?: string[]  // Area attack: multiple targets (deducts action once)
   accuracyDicePool: number
   accuracySuccesses: number
   accuracyDiceResults: number[]
@@ -30,12 +31,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (!body.participantId || !body.attackId || !body.targetId || !body.tamerId ||
+  const hasTarget = !!body.targetId || (body.targetIds && body.targetIds.length > 0)
+  if (!body.participantId || !body.attackId || !hasTarget || !body.tamerId ||
       body.accuracyDicePool === undefined || body.accuracySuccesses === undefined ||
       !body.accuracyDiceResults) {
     throw createError({
       statusCode: 400,
-      message: 'participantId, attackId, targetId, accuracyDicePool, accuracySuccesses, accuracyDiceResults, and tamerId are required',
+      message: 'participantId, attackId, targetId (or targetIds), accuracyDicePool, accuracySuccesses, accuracyDiceResults, and tamerId are required',
     })
   }
 
@@ -114,9 +116,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, message: 'Cannot use regular attacks while in a clash' })
   }
 
-  // Validate target exists
-  const target = participants.find((p: any) => p.id === body.targetId)
-  if (!target) {
+  // Validate target exists (single-target only; area attack validates targets in intercede-offer)
+  const target = body.targetId ? participants.find((p: any) => p.id === body.targetId) : null
+  if (body.targetId && !target) {
     throw createError({
       statusCode: 404,
       message: 'Target not found',
@@ -272,15 +274,17 @@ export default defineEventHandler(async (event) => {
     actorName = resolveParticipantName(actor, participants, baseName, actorDigimon?.isEnemy || false)
   }
 
-  // Resolve target name
+  // Resolve target name (single-target only)
   let targetName = 'Unknown'
-  if (target.type === 'tamer') {
-    const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-    targetName = tamerEntity?.name || `Tamer ${target.entityId}`
-  } else if (target.type === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    const baseName = targetDigimon?.name || `Digimon ${target.entityId}`
-    targetName = resolveParticipantName(target, participants, baseName, targetDigimon?.isEnemy || false)
+  if (target) {
+    if (target.type === 'tamer') {
+      const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
+      targetName = tamerEntity?.name || `Tamer ${target.entityId}`
+    } else if (target.type === 'digimon') {
+      const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+      const baseName = targetDigimon?.name || `Digimon ${target.entityId}`
+      targetName = resolveParticipantName(target, participants, baseName, targetDigimon?.isEnemy || false)
+    }
   }
 
   // Add battle log entry for the attack
@@ -291,13 +295,82 @@ export default defineEventHandler(async (event) => {
     actorId: actor.id,
     actorName: actorName,
     action: 'Attack',
-    target: targetName,
+    target: body.targetIds ? 'Multiple targets' : targetName,
     result: `${body.accuracyDicePool}d6 => [${body.accuracyDiceResults.join(',')}] = ${body.accuracySuccesses} successes`,
     damage: null,
     effects: ['Attack', 'Accuracy Roll'],
+    accuracyDicePool: body.accuracyDicePool,
+    accuracyDiceResults: body.accuracyDiceResults,
+    accuracySuccesses: body.accuracySuccesses,
   }
 
   const updatedBattleLog = [...battleLog, attackLogEntry]
+
+  // Area attack path: deduct action once, delegate all target resolution to intercede-offer
+  if (body.targetIds && body.targetIds.length > 0) {
+    if (body.accuracySuccesses === 0) {
+      // Auto-miss all targets: save action deduction + log, return without intercede flow
+      const missLogEntry = {
+        id: `log-${Date.now()}-miss`,
+        timestamp: new Date().toISOString(),
+        round: encounter.round,
+        actorId: actor.id,
+        actorName: actorName,
+        action: 'Attack Result',
+        target: 'Multiple targets',
+        result: 'AUTO MISS - 0 accuracy successes',
+        damage: 0,
+        effects: ['Miss'],
+        hit: false,
+      }
+      updatedBattleLog.push(missLogEntry)
+      await db.update(encounters).set({
+        participants: JSON.stringify(updatedParticipants),
+        battleLog: JSON.stringify(updatedBattleLog),
+        updatedAt: new Date(),
+      }).where(eq(encounters.id, encounterId))
+      const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+      return {
+        ...updated,
+        participants: parseJsonField(updated.participants),
+        turnOrder: parseJsonField(updated.turnOrder),
+        battleLog: parseJsonField(updated.battleLog),
+        hazards: parseJsonField(updated.hazards),
+        pendingRequests: parseJsonField(updated.pendingRequests),
+        requestResponses: parseJsonField(updated.requestResponses),
+      }
+    }
+
+    // Save action deduction and attack log, then delegate to intercede-offer with all targetIds
+    await db.update(encounters).set({
+      participants: JSON.stringify(updatedParticipants),
+      battleLog: JSON.stringify(updatedBattleLog),
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
+      method: 'POST',
+      body: {
+        attackerId: body.participantId,
+        targetIds: body.targetIds,
+        accuracySuccesses: body.accuracySuccesses,
+        accuracyDice: body.accuracyDiceResults,
+        attackId: body.attackId,
+        attackName: body.attackName,
+        attackData: { dicePool: body.accuracyDicePool },
+        bolstered: body.bolstered || false,
+        bolsterType: body.bolsterType,
+        lifestealed: body.lifestealed || false,
+        hugePowerUsed: body.hugePowerUsed || false,
+        hugePowerAttackRange: body.hugePowerAttackRange,
+        isSignatureMove,
+        batteryCount,
+        skipActionDeduction: true,
+        outsideClashCpuPenalty: 0,
+      },
+    })
+    return result
+  }
 
   // Auto-miss: 0 accuracy successes = automatic miss, no dodge request needed
   if (body.accuracySuccesses === 0) {
@@ -326,7 +399,7 @@ export default defineEventHandler(async (event) => {
     await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
 
     // Check for Counterattack quality on the target (the one who was missed)
-    if (target.type === 'digimon' && !target.usedCounterattackThisCombat) {
+    if (target && target.type === 'digimon' && !target.usedCounterattackThisCombat) {
       const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
       const tgtQualities = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
       if ((tgtQualities as any[]).some((q: any) => q.id === 'counterattack')) {

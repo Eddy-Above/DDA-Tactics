@@ -134,12 +134,12 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 
 | Endpoint | Handler | Key Inputs | Effect |
 |---|---|---|---|
-| `attack` | `attack.post.ts` | `attackerId`, `targetId`, `attackId`, `bolster?`, `isClashAttack?` | Rolls accuracy vs target dodge, applies damage, deducts actions; handles Bolster (accuracy or BIT/CPU), Lifesteal, Huge Power, Signature Move battery; triggers counterattack on miss; creates dodge/intercede request for player targets |
+| `attack` | `attack.post.ts` | `attackerId`, `targetId` OR `targetIds[]` (area), `attackId`, `bolster?`, `isClashAttack?` | Rolls accuracy vs target dodge, applies damage, deducts actions once; when `targetIds` provided (area attack), delegates to `intercede-offer` with all targetIds after single action deduction; handles Bolster, Lifesteal, Huge Power, Signature Move battery; triggers counterattack on miss; creates dodge/intercede request for player targets |
 | `npc-attack` | `npc-attack.post.ts` | `attackerId`, `targetId`, `attackId`, `combatMonsterBonus?` | Full server-side attack resolution for NPC→player; rolls dice, calculates net successes, applies wounds; auto-devolves on KO; removes defeated NPCs |
-| `intercede-offer` | `intercede-offer.post.ts` | `attackId`, `targetId`, `damage`, various roll data | Creates dodge/intercede pending request for player; NPCs auto-dodge; handles Stun action reduction; triggers counterattack on miss |
-| `intercede-claim` | `intercede-claim.post.ts` | `requestId`, `intercedeParticipantId` | Player steps in to take hit for ally; updates request data |
-| `intercede-skip` | `intercede-skip.post.ts` | `requestId`, `participantId` | Player declines intercede; marks opt-out |
-| `quick-reaction` | `quick-reaction.post.ts` | `requestId`, `tamerParticipantId` | Tamer with Quick Reaction order uses it as an Intercede: grants partner digimon Stage Bonus+2 Dodge Dice for the round (diminishing); defers -1 action to tamer next round; marks order used today; creates dodge-roll request for target |
+| `intercede-offer` | `intercede-offer.post.ts` | `attackId`, `targetId` (single) or `targetIds[]` (area), roll data | Single-target: creates one intercede-offer per eligible tamer + GM. Support attacks go through intercede same as damage attacks — only exception is single-target melee self-buff (attacker===target), which resolves immediately. Area attack: deducts actions once, NPC targets auto-resolved via support or damage resolvers, creates ONE request per eligible tamer with `data.areaTargetIds` + `isAreaAttack: true`; excludes tamers/partners who are themselves targets |
+| `intercede-claim` | `intercede-claim.post.ts` | `requestId`, `interceptorParticipantId`, `chosenTargetId?` (area only) | Player steps in to take hit for ally; area attacks: 409 if target already claimed, strips chosen target from other group requests, creates dodge-rolls for any uncovered remaining targets |
+| `intercede-skip` | `intercede-skip.post.ts` | `requestId`, `optOut?` | Player declines intercede; area attacks: creates dodge-rolls for all targets not covered by remaining requests; opt-out adds all areaTargetIds to intercedeOptOuts; NPC fallback uses support resolver (resolvePositiveAuto/resolvePositiveHealth/resolveNegativeSupportNpc) when `isSupportAttack` is true |
+| `quick-reaction` | `quick-reaction.post.ts` | `requestId`, `tamerParticipantId` | Tamer with Quick Reaction order grants partner +Stage Bonus+2 Dodge Dice; area attacks: server resolves partner from areaTargetIds, strips QR target from other requests, creates dodge-rolls for uncovered remaining targets |
 | `digivolve` | `digivolve.post.ts` | `participantId`, `targetStageIndex`, `evolutionLineId?`, `isWarp?` | Evolves/devolves digimon in combat; full heal on evolve; restores prior wounds on devolve; validates unlock status, warp DC (vs campaign level), 5/day EddySoul limit; costs 1 simple action |
 | `digivolve-fail` | `digivolve-fail.post.ts` | `participantId` | Marks failed warp evolution attempt; sets `hasAttemptedDigivolve` |
 | `clash-initiate` | `clash-initiate.post.ts` | `initiatorId`, `targetId`, `bolster?` | Rolls Body + size bonus vs target Agility; sets `clash` state on both; creates pending request for player targets; Wrestlemania: free once/round; Multi-Grappler support |
@@ -423,7 +423,7 @@ flowchart TD
     Constants["constants/tamer-skills.ts"]
     Middleware["middleware/\ncampaign-access, dm-access"]
     ServerAPI["server/api/**\n(40+ endpoints)"]
-    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, parsers, id, password, participantName"]
+    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, parsers, id, password, participantName"]
     DB["server/db/\nindex.ts + schema.ts"]
     Postgres[("PostgreSQL")]
 

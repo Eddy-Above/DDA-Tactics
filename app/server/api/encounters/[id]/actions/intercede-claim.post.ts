@@ -1,12 +1,13 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '~/data/attackConstants'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
-import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
+import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
+import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
 
 interface IntercedeClaimBody {
   requestId: string
   interceptorParticipantId: string
+  chosenTargetId?: string // Required for area attacks
 }
 
 export default defineEventHandler(async (event) => {
@@ -49,7 +50,7 @@ export default defineEventHandler(async (event) => {
 
   let participants = parseJsonField(encounter.participants)
   let pendingRequests = parseJsonField(encounter.pendingRequests)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let battleLog = parseJsonField(encounter.battleLog)
 
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -58,12 +59,45 @@ export default defineEventHandler(async (event) => {
   }
 
   const intercedeGroupId = request.data.intercedeGroupId
+  const isAreaAttack = !!request.data.isAreaAttack
 
-  // Atomic check: if any intercede-offer in this group is already resolved, 409
-  const groupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
-  // If there are no group requests left, someone already claimed
-  if (groupRequests.length === 0) {
-    throw createError({ statusCode: 409, message: 'Another player already interceded' })
+  // Determine effective target — area attacks use chosenTargetId
+  let effectiveTargetId: string
+  let effectiveTargetName: string
+
+  if (isAreaAttack) {
+    if (!body.chosenTargetId) {
+      throw createError({ statusCode: 400, message: 'chosenTargetId is required for area attacks' })
+    }
+    if (!request.data.areaTargetIds?.includes(body.chosenTargetId)) {
+      throw createError({ statusCode: 400, message: 'chosenTargetId is not a valid target for this request' })
+    }
+    // 409 check: is chosen target still available (not already claimed by another interceptor)?
+    const stillAvailable = pendingRequests.some(
+      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(body.chosenTargetId)
+    )
+    if (!stillAvailable) {
+      throw createError({ statusCode: 409, message: 'Target already claimed by another interceptor' })
+    }
+    effectiveTargetId = body.chosenTargetId
+    const chosenParticipant = participants.find((p: any) => p.id === body.chosenTargetId)
+    if (chosenParticipant?.type === 'digimon') {
+      const [dig] = await db.select().from(digimon).where(eq(digimon.id, chosenParticipant.entityId))
+      effectiveTargetName = dig?.name || body.chosenTargetId
+    } else if (chosenParticipant?.type === 'tamer') {
+      const [tam] = await db.select().from(tamers).where(eq(tamers.id, chosenParticipant.entityId))
+      effectiveTargetName = tam?.name || body.chosenTargetId
+    } else {
+      effectiveTargetName = body.chosenTargetId
+    }
+  } else {
+    // Single-target 409 check: if no group requests left, someone already claimed
+    const groupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
+    if (groupRequests.length === 0) {
+      throw createError({ statusCode: 409, message: 'Another player already interceded' })
+    }
+    effectiveTargetId = request.data.targetId
+    effectiveTargetName = request.data.targetName || 'Unknown'
   }
 
   // Find interceptor
@@ -73,7 +107,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Interceptor cannot be the same as the target
-  if (body.interceptorParticipantId === request.data.targetId) {
+  if (body.interceptorParticipantId === effectiveTargetId) {
     throw createError({ statusCode: 400, message: 'Interceptor cannot be the same as the target' })
   }
 
@@ -83,7 +117,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Determine if interceptor's turn has already happened this round
-  const turnOrder = parseJsonField(encounter.turnOrder)
+  let turnOrder = parseJsonField(encounter.turnOrder)
   const currentTurnIndex = encounter.currentTurnIndex || 0
   let turnHasGone = false
 
@@ -91,16 +125,11 @@ export default defineEventHandler(async (event) => {
     const idx = turnOrder.indexOf(interceptor.id)
     turnHasGone = idx >= 0 && idx < currentTurnIndex
   } else if (interceptor.type === 'digimon') {
-    // Partner digimon "turn" = their tamer's turn position
+    // Partner digimon use the hasActed flag set at tamer turn-end
     const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, interceptor.entityId))
     if (digimonEntity?.partnerId) {
-      const tamerOfInterceptor = participants.find(
-        (p: any) => p.type === 'tamer' && p.entityId === digimonEntity.partnerId
-      )
-      if (tamerOfInterceptor) {
-        const idx = turnOrder.indexOf(tamerOfInterceptor.id)
-        turnHasGone = idx >= 0 && idx < currentTurnIndex
-      }
+      // Player digimon: use hasActed flag (set when partner tamer's turn ends)
+      turnHasGone = !!interceptor.hasActed
     } else {
       // NPC digimon — check own turn position directly
       const idx = turnOrder.indexOf(interceptor.id)
@@ -115,8 +144,11 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, message: 'Not enough actions to intercede' })
     }
   } else {
-    // Already acted — check deferred intercede cap (max 2 actions deferred)
-    if ((interceptor.interceptPenalty || 0) >= 2) {
+    // Already acted — check deferred intercede cap (maxPostTurnIntercedes, default 2)
+    const postTurnCap = interceptor.type === 'digimon'
+      ? (interceptor.maxPostTurnIntercedes ?? 2)
+      : 2
+    if ((interceptor.interceptPenalty || 0) >= postTurnCap) {
       throw createError({ statusCode: 400, message: 'No more intercede actions available for next round' })
     }
   }
@@ -128,143 +160,162 @@ export default defineEventHandler(async (event) => {
     interceptorName = dig?.name || 'Digimon'
   }
 
-  // Resolve damage against interceptor with 0 dodge successes
-  const { accuracySuccesses, attackerId, attackData, targetName } = request.data
-
-  // Get attacker's base damage
+  const { accuracySuccesses, attackerId, attackData } = request.data
   const attacker = participants.find((p: any) => p.id === attackerId)
-  let attackBaseDamage = 0
-  let armorPiercing = 0
-  let npcAttackDef: any = null
-
-  if (attacker?.type === 'digimon') {
-    const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-    if (attackerDigimon) {
-      const baseStats = typeof attackerDigimon.baseStats === 'string' ? JSON.parse(attackerDigimon.baseStats) : attackerDigimon.baseStats
-      const bonusStats = typeof attackerDigimon.bonusStats === 'string' ? JSON.parse(attackerDigimon.bonusStats) : attackerDigimon.bonusStats
-      attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
-
-      // Get attack def for tags and effects
-      const attacks = typeof attackerDigimon.attacks === 'string' ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
-      npcAttackDef = attacks?.find((a: any) => a.id === request.data.attackId)
-
-      if (npcAttackDef?.tags) {
-        for (const tag of npcAttackDef.tags) {
-          const weaponMatch = tag.match(/Weapon\s+(\w+)/i)
-          if (weaponMatch) {
-            const romanValues: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
-            attackBaseDamage += romanValues[weaponMatch[1]] || 0
-          }
-          const apMatch = tag.match(/Armor Piercing\s+(\w+)/i)
-          if (apMatch) {
-            const romanValues: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
-            armorPiercing = romanValues[apMatch[1]] || 0
-          }
-        }
-      }
-    }
-  }
-
-  // Apply Signature Move Battery damage bonus
-  if (request.data.isSignatureMove && request.data.batteryCount) {
-    attackBaseDamage += request.data.batteryCount
-  }
-
-  // With 0 dodge, net successes = accuracy successes
-  const netSuccesses = accuracySuccesses
-  const hit = true // 0 dodge = always hit
   const isSupportAttack = request.data.isSupportAttack || false
+
+  // Compute damage using shared canonical function (dodge successes = 0 for intercede)
+  const damageCalc = await computeAttackDamage({
+    attackerParticipant: attacker,
+    targetParticipant: interceptor,
+    attackId: request.data.attackId,
+    attackerName: request.data.attackerName,
+    accuracySuccesses,
+    dodgeSuccesses: 0,
+    isSignatureMove: request.data.isSignatureMove,
+    batteryCount: request.data.batteryCount,
+    houseRules,
+  })
+
+  const npcAttackDef = damageCalc.attackDef
+  const attackBaseDamage = damageCalc.attackBaseDamage
+  const armorPiercing = damageCalc.armorPiercing
+  const interceptorArmor = damageCalc.targetArmor
+  const effectiveArmor = damageCalc.effectiveArmor
+  const damageDealt = damageCalc.damageDealt
+  const netSuccesses = damageCalc.netSuccesses
+  // hit is always true for intercede (dodgeSuccesses = 0, so netSuccesses >= 0)
 
   // --- Support attack: no damage, apply N effect only ---
   if (isSupportAttack) {
     let appliedEffectName: string | null = null
 
-    // Pre-calculate potency (async, can't be inside .map())
-    let supportPotency = 0
-    let supportPotencyStat = 'bit'
-    if (npcAttackDef?.effect) {
-      const attackerDerived = attacker?.type === 'digimon' ? await getDigimonDerivedStats(attacker.entityId) : null
-      const interceptorDerived = interceptor.type === 'digimon' ? await getDigimonDerivedStats(interceptor.entityId) : null
-      const result = calculateEffectPotency(npcAttackDef.effect, attackerDerived, interceptorDerived)
-      supportPotency = result.potency
-      supportPotencyStat = result.potencyStat
-      // Apply Signature Move Battery SPEC bonus
-      if (request.data.isSignatureMove && request.data.batteryCount) {
-        supportPotency += request.data.batteryCount
-      }
-    }
+    const supportPotency = damageCalc.effectData?.potency ?? 0
+    const supportPotencyStat = damageCalc.effectData?.potencyStat ?? 'bit'
+
+    let stunActionReducedThisRound = false
 
     participants = participants.map((p: any) => {
       if (p.id === body.interceptorParticipantId) {
         const updated = {
           ...p,
-          // Deduct/defer action (same as damage path)
+          // Deduct/defer action at claim time (prevents double-spending before resolution)
           ...(!turnHasGone
             ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) } }
             : { interceptPenalty: (p.interceptPenalty || 0) + 1 }
           ),
         }
 
-        if (npcAttackDef?.effect) {
-          const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
-          const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+        // Stun extra action deduction: apply at claim time for all attacks
+        if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
+          updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
+          updated.stunActionReducedThisRound = true
+          stunActionReducedThisRound = true
+        } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
+          updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+          updated.stunActionReducedThisRound = true
+          stunActionReducedThisRound = true
+        }
 
-          const effectData = {
-            name: npcAttackDef.effect,
-            type: effectType as 'buff' | 'debuff' | 'status',
-            duration: Math.max(1, netSuccesses),
-            source: request.data.attackerName || 'Attack',
-            description: '',
-            potency: supportPotency,
-            potencyStat: supportPotencyStat,
-          }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData, houseRules)
-          appliedEffectName = npcAttackDef.effect
-          // Stun: immediately reduce actions if interceptor hasn't taken their turn yet this round
-          if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
-            updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
-            updated.stunActionReducedThisRound = true
-          } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
-            // Interceptor already went — reduce intercede capacity this round and carry -1 action to next round
-            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
-            updated.stunActionReducedThisRound = true
-          }
+        // Effects on activeEffects: only apply immediately for single-target intercede
+        if (!isAreaAttack && damageCalc.effectData) {
+          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
+          appliedEffectName = damageCalc.attackDef?.effect ?? null
         }
 
         return updated
       }
-      // Original target still gets the dodge penalty
-      if (p.id === request.data.targetId) {
+      // Dodge penalty on target: deferred for area attacks (resolveAreaIntercedeGroup handles it)
+      if (!isAreaAttack && p.id === effectiveTargetId) {
         return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
       }
       return p
     })
 
-    pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+    if (isAreaAttack) {
+      const newClaim: AreaAttackClaim = {
+        interceptorParticipantId: body.interceptorParticipantId,
+        targetId: effectiveTargetId,
+        interceptorName,
+        targetName: effectiveTargetName,
+        damageDealt: 0,
+        appliedEffectName: damageCalc.appliedEffectName,
+        effectData: damageCalc.effectData ?? null,
+        stunActionReducedThisRound,
+        interceptorArmor: 0,
+        armorPiercing: 0,
+        effectiveArmor: 0,
+        attackBaseDamage: 0,
+        netSuccesses,
+        isSupportAttack: true,
+      }
 
-    const intercedeLog = {
-      id: `log-${Date.now()}-intercede`,
-      timestamp: new Date().toISOString(),
-      round: encounter.round || 0,
-      actorId: body.interceptorParticipantId,
-      actorName: interceptorName,
-      action: `Interceded for ${targetName}! (Support)`,
-      target: null,
-      result: appliedEffectName
-        ? `Takes debuff with 0 dodge - ${appliedEffectName} applied for ${Math.max(1, netSuccesses)} rounds`
-        : 'Interceded (no effect)',
-      damage: 0,
-      effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
-      hit: true,
-      dodgeDicePool: 0,
-      dodgeDiceResults: [],
-      dodgeSuccesses: 0,
+      // Strip claimed target from ALL group offers (this offer included); remove empty ones
+      pendingRequests = pendingRequests.map((r: any) => {
+        if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
+        const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
+        return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+      })
+      pendingRequests = pendingRequests.filter((r: any) => {
+        if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
+        return (r.data.areaTargetIds || []).length > 0
+      })
+
+      // Record claim in intercede-group-state
+      const groupState = pendingRequests.find(
+        (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
+      )
+      if (groupState) {
+        groupState.data.claims = [...(groupState.data.claims || []), newClaim]
+      }
+
+      // Resolve when all targets have a decision
+      if (groupState && allAreaTargetsDecided(groupState, pendingRequests, intercedeGroupId)) {
+        const resolved = await resolveAreaIntercedeGroup({
+          groupState,
+          participants,
+          battleLog,
+          pendingRequests,
+          turnOrder,
+          round: encounter.round || 0,
+          currentTurnIndex: encounter.currentTurnIndex || 0,
+          houseRules,
+          encounterId: encounterId!,
+        })
+        participants = resolved.participants
+        battleLog = resolved.battleLog
+        pendingRequests = resolved.pendingRequests
+        turnOrder = resolved.turnOrder
+      }
+    } else {
+      pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+
+      const intercedeLog = {
+        id: `log-${Date.now()}-intercede`,
+        timestamp: new Date().toISOString(),
+        round: encounter.round || 0,
+        actorId: body.interceptorParticipantId,
+        actorName: interceptorName,
+        action: `Interceded for ${effectiveTargetName}! (Support)`,
+        target: null,
+        result: appliedEffectName
+          ? `Takes debuff with 0 dodge - ${appliedEffectName} applied for ${Math.max(1, netSuccesses)} rounds`
+          : 'Interceded (no effect)',
+        damage: 0,
+        effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
+        hit: true,
+        dodgeDicePool: 0,
+        dodgeDiceResults: [],
+        dodgeSuccesses: 0,
+      }
+      battleLog = [...battleLog, intercedeLog]
     }
 
     await db.update(encounters).set({
       participants: JSON.stringify(participants),
       pendingRequests: JSON.stringify(pendingRequests),
-      battleLog: JSON.stringify([...battleLog, intercedeLog]),
+      battleLog: JSON.stringify(battleLog),
+      turnOrder: JSON.stringify(turnOrder),
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -283,130 +334,145 @@ export default defineEventHandler(async (event) => {
   }
 
   // --- Damage attack: existing flow ---
-  // Get interceptor's armor
-  let interceptorArmor = 0
-  if (interceptor.type === 'digimon') {
-    const [interceptorDigimon] = await db.select().from(digimon).where(eq(digimon.id, interceptor.entityId))
-    if (interceptorDigimon) {
-      const baseStats = typeof interceptorDigimon.baseStats === 'string' ? JSON.parse(interceptorDigimon.baseStats) : interceptorDigimon.baseStats
-      const bonusStats = typeof interceptorDigimon.bonusStats === 'string' ? JSON.parse(interceptorDigimon.bonusStats) : interceptorDigimon.bonusStats
-      interceptorArmor = (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0)
-    }
-  } else if (interceptor.type === 'tamer') {
-    const [interceptorTamer] = await db.select().from(tamers).where(eq(tamers.id, interceptor.entityId))
-    if (interceptorTamer) {
-      const attrs = typeof interceptorTamer.attributes === 'string' ? JSON.parse(interceptorTamer.attributes) : interceptorTamer.attributes
-      const skills = typeof interceptorTamer.skills === 'string' ? JSON.parse(interceptorTamer.skills) : interceptorTamer.skills
-      interceptorArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
-    }
-  }
+  // All damage values (interceptorArmor, effectiveArmor, damageDealt, etc.) already
+  // computed by computeAttackDamage above.
 
-  // Apply active effect modifiers to attacker damage and interceptor armor
-  const attackerEffectMods = getEffectStatModifiers(attacker?.activeEffects || [])
-  attackBaseDamage += attackerEffectMods.damage
-  const interceptorEffectMods = getEffectStatModifiers(interceptor.activeEffects || [])
-  interceptorArmor += interceptorEffectMods.armor
-
-  const effectiveArmor = Math.max(0, interceptorArmor - armorPiercing)
-  const damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
-
-  // Pre-calculate effect potency for damage attack (async, can't be inside .map())
-  let dmgPotency = 0
-  let dmgPotencyStat = 'bit'
-  if (npcAttackDef?.effect) {
-    const atkDerived = attacker?.type === 'digimon' ? await getDigimonDerivedStats(attacker.entityId) : null
-    const intDerived = interceptor.type === 'digimon' ? await getDigimonDerivedStats(interceptor.entityId) : null
-    const result = calculateEffectPotency(npcAttackDef.effect, atkDerived, intDerived)
-    dmgPotency = result.potency
-    dmgPotencyStat = result.potencyStat
-  }
-
-  // Apply damage to interceptor, deduct/defer actions, and apply effects
+  // Apply damage/effects to interceptor, deduct/defer actions
   let appliedEffectName: string | null = null
+  let stunActionReducedThisRound = false
+
   participants = participants.map((p: any) => {
     if (p.id === body.interceptorParticipantId) {
-      const updated = {
+      const updated: any = {
         ...p,
-        currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damageDealt),
-        // Immediate deduction if turn not gone; deferred penalty if already gone
+        // Action deduction at claim time (prevents double-spending before resolution)
         ...(!turnHasGone
           ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) } }
           : { interceptPenalty: (p.interceptPenalty || 0) + 1 }
         ),
       }
 
-      // Auto-apply effect (damage attack: requires damage >= 2)
-      if (npcAttackDef?.effect) {
-        const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
-        if (shouldApply) {
-          const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
-          const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+      // Wounds: only apply immediately for single-target intercede
+      if (!isAreaAttack) {
+        updated.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + damageDealt)
+      }
 
-          const effectData = {
-            name: npcAttackDef.effect,
-            type: effectType as 'buff' | 'debuff' | 'status',
-            duration: Math.max(1, netSuccesses),
-            source: request.data.attackerName || 'Attack',
-            description: '',
-            potency: dmgPotency,
-            potencyStat: dmgPotencyStat,
-          }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], effectData, houseRules)
-          appliedEffectName = npcAttackDef.effect
-          // Stun: immediately reduce actions if interceptor hasn't taken their turn yet this round
-          if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
-            updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
-            updated.stunActionReducedThisRound = true
-          } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
-            // Interceptor already went — reduce intercede capacity this round and carry -1 action to next round
-            updated.interceptPenalty = (p.interceptPenalty || 0) + 1
-            updated.stunActionReducedThisRound = true
-          }
-        }
+      // Stun extra action deduction: apply at claim time for all attacks
+      if (npcAttackDef?.effect === 'Stun' && !turnHasGone) {
+        updated.actionsRemaining = { simple: Math.max(0, (updated.actionsRemaining?.simple || p.actionsRemaining?.simple || 0) - 1) }
+        updated.stunActionReducedThisRound = true
+        stunActionReducedThisRound = true
+      } else if (npcAttackDef?.effect === 'Stun' && turnHasGone) {
+        updated.interceptPenalty = (p.interceptPenalty || 0) + 1
+        updated.stunActionReducedThisRound = true
+        stunActionReducedThisRound = true
+      }
+
+      // Effects on activeEffects: only apply immediately for single-target intercede
+      if (!isAreaAttack && damageCalc.effectData) {
+        updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
+        appliedEffectName = damageCalc.attackDef?.effect ?? null
       }
 
       return updated
     }
-    // Original target still gets the dodge penalty even though they didn't take the hit
-    if (p.id === request.data.targetId) {
+    // Dodge penalty on target: deferred for area attacks (resolveAreaIntercedeGroup handles it)
+    if (!isAreaAttack && p.id === effectiveTargetId) {
       return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
     }
     return p
   })
 
-  // Remove all intercede-offer requests for this group
-  pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+  if (isAreaAttack) {
+    const newClaim: AreaAttackClaim = {
+      interceptorParticipantId: body.interceptorParticipantId,
+      targetId: effectiveTargetId,
+      interceptorName,
+      targetName: effectiveTargetName,
+      damageDealt,
+      appliedEffectName: damageCalc.appliedEffectName,
+      effectData: damageCalc.effectData ?? null,
+      stunActionReducedThisRound,
+      interceptorArmor,
+      armorPiercing,
+      effectiveArmor,
+      attackBaseDamage,
+      netSuccesses,
+      isSupportAttack: false,
+    }
 
-  // Add battle log entries
-  const intercedeLog = {
-    id: `log-${Date.now()}-intercede`,
-    timestamp: new Date().toISOString(),
-    round: encounter.round || 0,
-    actorId: body.interceptorParticipantId,
-    actorName: interceptorName,
-    action: `Interceded for ${targetName}!`,
-    target: null,
-    result: `Takes hit with 0 dodge - ${damageDealt} damage dealt`,
-    damage: damageDealt,
-    effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
-    attackerParticipantId: request.data.attackerId,
-    baseDamage: attackBaseDamage,
-    netSuccesses,
-    targetArmor: interceptorArmor,
-    armorPiercing,
-    effectiveArmor,
-    finalDamage: damageDealt,
-    hit: true,
-    dodgeDicePool: 0,
-    dodgeDiceResults: [],
-    dodgeSuccesses: 0,
+    // Strip claimed target from ALL group offers (this offer included); remove empty ones
+    pendingRequests = pendingRequests.map((r: any) => {
+      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
+      const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
+      return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+    })
+    pendingRequests = pendingRequests.filter((r: any) => {
+      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
+      return (r.data.areaTargetIds || []).length > 0
+    })
+
+    // Record claim in intercede-group-state
+    const groupState = pendingRequests.find(
+      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
+    )
+    if (groupState) {
+      groupState.data.claims = [...(groupState.data.claims || []), newClaim]
+    }
+
+    // Resolve when all targets have a decision
+    if (groupState && allAreaTargetsDecided(groupState, pendingRequests, intercedeGroupId)) {
+      const resolved = await resolveAreaIntercedeGroup({
+        groupState,
+        participants,
+        battleLog,
+        pendingRequests,
+        turnOrder,
+        round: encounter.round || 0,
+        currentTurnIndex: encounter.currentTurnIndex || 0,
+        houseRules,
+        encounterId: encounterId!,
+      })
+      participants = resolved.participants
+      battleLog = resolved.battleLog
+      pendingRequests = resolved.pendingRequests
+      turnOrder = resolved.turnOrder
+    }
+  } else {
+    // Remove all intercede-offer requests for this group
+    pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
+
+    const intercedeLog = {
+      id: `log-${Date.now()}-intercede`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round || 0,
+      actorId: body.interceptorParticipantId,
+      actorName: interceptorName,
+      action: `Interceded for ${effectiveTargetName}!`,
+      target: null,
+      result: 'Takes hit with 0 dodge',
+      damage: damageDealt,
+      effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
+      attackerParticipantId: request.data.attackerId,
+      baseDamage: attackBaseDamage,
+      netSuccesses,
+      targetArmor: interceptorArmor,
+      armorPiercing,
+      effectiveArmor,
+      finalDamage: damageDealt,
+      hit: true,
+      dodgeDicePool: 0,
+      dodgeDiceResults: [],
+      dodgeSuccesses: 0,
+    }
+    battleLog = [...battleLog, intercedeLog]
   }
 
-  // Update encounter
   await db.update(encounters).set({
     participants: JSON.stringify(participants),
     pendingRequests: JSON.stringify(pendingRequests),
-    battleLog: JSON.stringify([...battleLog, intercedeLog]),
+    battleLog: JSON.stringify(battleLog),
+    turnOrder: JSON.stringify(turnOrder),
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
