@@ -1008,7 +1008,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: ['Combat Monster', 'Braveheart'],
     stageRequirement: 'ultimate',
     description: 'Combat Monster shares with allies.',
-    effect: `Combat Monster cap = Wound Box count. [Intercede] in [Brave Stance] triggers [Guts]: +1 Combat Monster per ally in Melee Burst. Allies in radius get same Combat Monster bonus for next attack.`,
+    effect: `Combat Monster cap = total health (no stage wound bonus). [Intercede] in [Brave Stance] triggers [Guts]: +1 Combat Monster per ally in Melee Burst. Allies in radius get same Combat Monster bonus for next attack.`,
   },
 
   // === BOOSTING QUALITIES (Section 3.06) ===

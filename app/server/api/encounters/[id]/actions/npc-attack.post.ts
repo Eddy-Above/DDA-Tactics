@@ -411,7 +411,7 @@ export default defineEventHandler(async (event) => {
       // Accumulate Combat Monster bonus for target
       if (targetDigimon?._hasCombatMonster) {
         updated.combatMonsterBonus = Math.min(
-          p.maxWounds,
+          p.totalHealth ?? p.maxWounds,
           (p.combatMonsterBonus ?? 0) + damageDealt
         )
       }
@@ -474,7 +474,7 @@ export default defineEventHandler(async (event) => {
         ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
       const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
       damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
-        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.maxWounds)
+        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
         : 0
 
       const baseOldDigimonName = oldDigimon?.name || 'Digimon'

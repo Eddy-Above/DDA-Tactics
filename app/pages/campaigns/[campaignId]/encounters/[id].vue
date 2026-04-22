@@ -4,7 +4,7 @@ import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/us
 import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
-import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
+import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
@@ -1182,6 +1182,7 @@ async function handleAddParticipant() {
     let initiative = 0
     let initiativeRoll = 0
     let maxWounds = 5
+    let digimonTotalHealth: number | undefined
 
     if (selectedEntityType.value === 'digimon' || selectedEntityType.value === 'enemy') {
       const digimon = digimonMap.value.get(selectedEntityId.value)
@@ -1191,6 +1192,7 @@ async function handleAddParticipant() {
         initiativeRoll = result.roll
         const derived = calcDigimonStats(digimon)
         maxWounds = derived.woundBoxes
+        digimonTotalHealth = derived.woundBoxes - (STAGE_CONFIG[digimon.stage]?.woundBonus ?? 0)
         if (digimon.isEnemy && eddySoulRules.value?.enemyDoubleWounds) {
           maxWounds = maxWounds * 2
         }
@@ -1221,7 +1223,8 @@ async function handleAddParticipant() {
       maxWounds,
       evoLineId,
       selectedEntityType.value === 'enemy' ? true : undefined,
-      initialWoundsForDigimon
+      initialWoundsForDigimon,
+      digimonTotalHealth
     )
 
     // Initialize npcStageIndex for NPC participants with evolution line
@@ -2176,7 +2179,7 @@ async function updateCombatMonsterBonus(participantId: string, newValue: number)
   const participants = currentEncounter.value.participants as CombatParticipant[]
   const participant = participants.find((p) => p.id === participantId)
   if (!participant) return
-  participant.combatMonsterBonus = Math.max(0, Math.min(newValue, participant.maxWounds))
+  participant.combatMonsterBonus = Math.max(0, Math.min(newValue, participant.totalHealth ?? participant.maxWounds))
   await updateEncounter(currentEncounter.value.id, { participants })
 }
 

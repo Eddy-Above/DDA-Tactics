@@ -41,6 +41,7 @@ export interface CombatParticipant {
   battery?: number
   usedSignatureMoveThisTurn?: boolean
   combatMonsterBonus?: number
+  totalHealth?: number
   hasAttemptedDigivolve?: boolean
   npcStageIndex?: number
   clash?: {
@@ -208,7 +209,8 @@ export function useEncounters() {
     maxWounds: number = 5,
     evolutionLineId?: string,
     isEnemy?: boolean,
-    initialWounds: number = 0
+    initialWounds: number = 0,
+    totalHealth?: number
   ): CombatParticipant {
     return {
       id: `${type}-${entityId}-${Date.now()}`,
@@ -225,6 +227,7 @@ export function useEncounters() {
       maxWounds,
       ...(evolutionLineId ? { evolutionLineId } : {}),
       ...(isEnemy ? { isEnemy } : {}),
+      ...(totalHealth !== undefined ? { totalHealth } : {}),
     }
   }
 
