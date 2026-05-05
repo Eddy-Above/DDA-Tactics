@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { getReachableCells, detectCapabilitiesFromQualities } from '~/server/utils/mapMovement'
@@ -78,8 +78,26 @@ export default defineEventHandler(async (event) => {
 
   let participants = parseJsonField(encounter.participants)
   let turnOrder = parseJsonField(encounter.turnOrder)
-  const pendingRequests = parseJsonField(encounter.pendingRequests)
+  let pendingRequests = parseJsonField(encounter.pendingRequests)
   let battleLog = parseJsonField(encounter.battleLog)
+
+  // Batch-fetch all digimon and tamer records for encounter participants (eliminates N+1 per-participant queries)
+  const participantDigimonIds = participants
+    .filter((p: any) => p.type === 'digimon')
+    .map((p: any) => p.entityId as string)
+  const participantTamerIds = participants
+    .filter((p: any) => p.type === 'tamer')
+    .map((p: any) => p.entityId as string)
+  const [allParticipantDigimon, allParticipantTamers] = await Promise.all([
+    participantDigimonIds.length > 0
+      ? db.select().from(digimon).where(inArray(digimon.id, participantDigimonIds))
+      : Promise.resolve([]),
+    participantTamerIds.length > 0
+      ? db.select().from(tamers).where(inArray(tamers.id, participantTamerIds))
+      : Promise.resolve([]),
+  ])
+  const digimonById = new Map(allParticipantDigimon.map((d: any) => [d.id, d]))
+  const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
 
   // Spatial map state (for intercede reach check)
   const participantPositions: Record<string, { x: number; y: number; z: number }> = (() => {
@@ -106,12 +124,12 @@ export default defineEventHandler(async (event) => {
   }
 
   // Returns true if the interceptor (digimon participant) can reach targetPos on the map
-  async function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): Promise<boolean> {
+  function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): boolean {
     if (!mapRecord || !participantPositions[interceptorParticipantId]) return true  // no map = always eligible
     const interceptorPos = participantPositions[interceptorParticipantId]
     const interceptorP = participants.find((p: any) => p.id === interceptorParticipantId)
     if (!interceptorP || interceptorP.type !== 'digimon') return true
-    const [digRecord] = await db.select().from(digimon).where(eq(digimon.id, interceptorP.entityId))
+    const digRecord = digimonById.get(interceptorP.entityId)
     if (!digRecord) return true
     const qualities = typeof digRecord.qualities === 'string' ? JSON.parse(digRecord.qualities) : (digRecord.qualities ?? [])
     const derived = calculateDigimonDerivedStats(
@@ -189,18 +207,13 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    // Get attacker name
+    // Get attacker name and attack definition (single map lookup)
     let attackerName = 'Unknown'
-    if (attacker.type === 'digimon') {
-      const [d] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-      attackerName = resolveParticipantName(attacker, participants, d?.name || 'Digimon', d?.isEnemy || false)
-    }
-
-    // Determine isSupportAttack for this attack
     let isSupportAttack = false
     let areaAttackDef: any = null
     if (attacker.type === 'digimon') {
-      const [attackerDig] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
+      const attackerDig = digimonById.get(attacker.entityId)
+      attackerName = resolveParticipantName(attacker, participants, attackerDig?.name || 'Digimon', attackerDig?.isEnemy || false)
       if (attackerDig?.attacks) {
         const attacks = typeof attackerDig.attacks === 'string' ? JSON.parse(attackerDig.attacks) : attackerDig.attacks
         areaAttackDef = attacks?.find((a: any) => a.id === body.attackId)
@@ -222,11 +235,11 @@ export default defineEventHandler(async (event) => {
       let partnerId: string | undefined
 
       if (target.type === 'tamer') {
-        const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
+        const t = tamerById.get(target.entityId)
         targetName = t?.name || 'Tamer'
         isPlayerTarget = true
       } else if (target.type === 'digimon') {
-        const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+        const dig = digimonById.get(target.entityId)
         if (dig) {
           targetName = resolveParticipantName(target, participants, dig.name || 'Digimon', dig.isEnemy || false)
           if (dig.partnerId) {
@@ -261,7 +274,7 @@ export default defineEventHandler(async (event) => {
       let partnerParticipantId: string | null = null
       for (const pp of participants) {
         if (pp.type !== 'digimon') continue
-        const [dig] = await db.select().from(digimon).where(eq(digimon.id, pp.entityId))
+        const dig = digimonById.get(pp.entityId)
         if (dig?.partnerId === p.entityId) { hasPartnerInEncounter = true; partnerParticipantId = pp.id; break }
       }
       if (!hasPartnerInEncounter) continue
@@ -275,8 +288,7 @@ export default defineEventHandler(async (event) => {
       if (digimonParticipant && partnerParticipantId && mapRecord) {
         const targetPositions = allTargetIds.map(tid => participantPositions[tid]).filter(Boolean)
         if (targetPositions.length > 0) {
-          const reaches = await Promise.all(targetPositions.map(tp => canReachTarget(partnerParticipantId!, tp)))
-          digimonSpatiallyEligible = reaches.some(Boolean)
+          digimonSpatiallyEligible = targetPositions.some(tp => canReachTarget(partnerParticipantId!, tp))
         }
       }
       const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && hasEligibleInterceptor(digimonParticipant) && digimonSpatiallyEligible)
@@ -293,7 +305,7 @@ export default defineEventHandler(async (event) => {
       for (const tid of tamerAreaTargetIds) {
         const info = playerTargetInfo[tid]
         if (info?.partnerId === p.entityId) {
-          const [tamerRecord] = await db.select().from(tamers).where(eq(tamers.id, p.entityId))
+          const tamerRecord = tamerById.get(p.entityId)
           if (tamerRecord) {
             const tamerAttrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
             const tamerXp = typeof tamerRecord.xpBonuses === 'string' ? JSON.parse(tamerRecord.xpBonuses) : (tamerRecord.xpBonuses || {})
@@ -304,7 +316,7 @@ export default defineEventHandler(async (event) => {
                 canUseQR = true
                 const targetPart = participants.find((pp: any) => pp.id === tid)
                 if (targetPart) {
-                  const [tDig] = await db.select().from(digimon).where(eq(digimon.id, targetPart.entityId))
+                  const tDig = digimonById.get(targetPart.entityId)
                   if (tDig) qrDiceCount = ((STAGE_CONFIG as any)[tDig.stage]?.stageBonus ?? 0) + 2
                 }
               }
@@ -611,20 +623,18 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Get attacker and target names
+  // Get attacker and target names (map lookups, no extra DB queries)
   let attackerName = 'Unknown'
   let targetName = 'Unknown'
   if (attacker.type === 'digimon') {
-    const [d] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
-    const baseDigimonName = d?.name || 'Digimon'
-    attackerName = resolveParticipantName(attacker, participants, baseDigimonName, d?.isEnemy || false)
+    const d = digimonById.get(attacker.entityId)
+    attackerName = resolveParticipantName(attacker, participants, d?.name || 'Digimon', d?.isEnemy || false)
   }
   if (target.type === 'digimon') {
-    const [d] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    const baseDigimonName = d?.name || 'Digimon'
-    targetName = resolveParticipantName(target, participants, baseDigimonName, d?.isEnemy || false)
+    const d = digimonById.get(target.entityId)
+    targetName = resolveParticipantName(target, participants, d?.name || 'Digimon', d?.isEnemy || false)
   } else if (target.type === 'tamer') {
-    const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
+    const t = tamerById.get(target.entityId)
     targetName = t?.name || 'Tamer'
   }
 
@@ -671,10 +681,10 @@ export default defineEventHandler(async (event) => {
   }
 
   // === SUPPORT ATTACK ROUTING ===
-  // Look up attack definition to determine if this is a support attack
+  // Look up attack definition to determine if this is a support attack (map lookup, no DB query)
   let attackDef: any = null
   if (attacker.type === 'digimon') {
-    const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
+    const attackerDigimon = digimonById.get(attacker.entityId)
     if (attackerDigimon?.attacks) {
       const attacks = typeof attackerDigimon.attacks === 'string'
         ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
@@ -762,7 +772,7 @@ export default defineEventHandler(async (event) => {
     let partnerParticipant: any = null
     for (const pp of participants) {
       if (pp.type !== 'digimon') continue
-      const [dig] = await db.select().from(digimon).where(eq(digimon.id, pp.entityId))
+      const dig = digimonById.get(pp.entityId)
       if (dig?.partnerId === p.entityId) {
         partnerParticipant = pp
         break
@@ -784,7 +794,7 @@ export default defineEventHandler(async (event) => {
   // Per-tamer Quick Reaction eligibility: only if target is their partner and order not used today
   const tamerQuickReactionMap: Record<string, { canUse: boolean; diceCount: number }> = {}
   if (target.type === 'digimon') {
-    const [targetDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+    const targetDig = digimonById.get(target.entityId)
     if (targetDig) {
       const stageBonus = (STAGE_CONFIG as any)[targetDig.stage]?.stageBonus ?? 0
       const diceCount = stageBonus + 2
@@ -793,7 +803,7 @@ export default defineEventHandler(async (event) => {
           tamerQuickReactionMap[tamerId] = { canUse: false, diceCount: 0 }
           continue
         }
-        const [tamerRecord] = await db.select().from(tamers).where(eq(tamers.id, tamerId))
+        const tamerRecord = tamerById.get(tamerId)
         if (!tamerRecord) { tamerQuickReactionMap[tamerId] = { canUse: false, diceCount: 0 }; continue }
         const tamerAttrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
         const tamerXp = typeof tamerRecord.xpBonuses === 'string' ? JSON.parse(tamerRecord.xpBonuses) : (tamerRecord.xpBonuses || {})
@@ -831,7 +841,7 @@ export default defineEventHandler(async (event) => {
     if (target.type === 'tamer') {
       isPlayerTarget = true
     } else if (target.type === 'digimon') {
-      const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+      const dig = digimonById.get(target.entityId)
       isPlayerTarget = !!dig?.partnerId
     }
 
@@ -841,7 +851,7 @@ export default defineEventHandler(async (event) => {
       if (target.type === 'tamer') {
         dodgeTargetTamerId = target.entityId
       } else if (target.type === 'digimon') {
-        const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+        const dig = digimonById.get(target.entityId)
         if (dig?.partnerId) dodgeTargetTamerId = dig.partnerId
       }
 
@@ -971,7 +981,7 @@ export default defineEventHandler(async (event) => {
 
         // Check for Counterattack quality on the target (the one who was missed)
         if (!result.hit && target?.type === 'digimon' && !target?.usedCounterattackThisCombat) {
-          const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+          const tgtDig = digimonById.get(target.entityId)
           const tgtQualities = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
           if ((tgtQualities as any[]).some((q: any) => q.id === 'counterattack')) {
             const freshEnc = await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0])

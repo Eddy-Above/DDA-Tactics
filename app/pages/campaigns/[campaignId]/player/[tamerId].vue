@@ -548,6 +548,31 @@ const hasInitiativeRequest = computed(() => myRequests.value.some((r) => r.type 
 const hasDodgeRequest = computed(() => myRequests.value.some((r) => r.type === 'dodge-roll'))
 const hasHealthRequest = computed(() => myRequests.value.some((r) => r.type === 'health-roll'))
 const hasIntercedeRequest = computed(() => myRequests.value.some((r) => r.type === 'intercede-offer'))
+
+function playIntercedeChime() {
+  try {
+    const ctx = new AudioContext()
+    const playNote = (freq: number, startTime: number) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, startTime)
+      gain.gain.setValueAtTime(0.25, startTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + 1.2)
+      osc.start(startTime)
+      osc.stop(startTime + 1.2)
+    }
+    playNote(880, ctx.currentTime)
+    playNote(1047, ctx.currentTime + 0.12)
+  } catch {}
+}
+
+watch(hasIntercedeRequest, (isNow, wasBefore) => {
+  if (isNow && !wasBefore) playIntercedeChime()
+})
+
 const hasClashCheckRequest = computed(() => myRequests.value.some((r) => r.type === 'clash-check'))
 const currentClashCheckRequest = computed(() => myRequests.value.find((r) => r.type === 'clash-check'))
 const clashCheckNeededParticipant = computed(() =>

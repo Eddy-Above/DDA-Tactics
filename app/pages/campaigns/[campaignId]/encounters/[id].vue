@@ -734,19 +734,26 @@ function openGmIntercedeModal(request: any) {
   showGmIntercedeModal.value = true
 }
 
-// Auto-end NPC turn when all actions are spent and no blocking requests remain
-watch(currentEncounter, (enc) => {
-  if (!enc || enc.phase !== 'combat') return
+// Targeted signal for NPC auto-end-turn: only re-evaluates when relevant fields change
+const npcAutoEndTurnSignal = computed(() => {
+  const enc = currentEncounter.value
+  if (!enc || enc.phase !== 'combat') return null
   const active = activeParticipant.value
-  if (!active || !(active as any).isEnemy) return
-  if ((active.actionsRemaining?.simple ?? 0) > 0) return
-  if (autoEndingNpcTurn.value) return
+  if (!active || !(active as any).isEnemy) return null
   const blockingTypes = ['intercede-offer', 'intercede-group-state', 'dodge-roll', 'clash-check', 'health-roll']
-  const pending = (enc.pendingRequests as any[]) || []
-  if (pending.some((r: any) => blockingTypes.includes(r.type))) return
+  const blockingCount = ((enc.pendingRequests as any[]) || [])
+    .filter((r: any) => blockingTypes.includes(r.type)).length
+  return { simple: active.actionsRemaining?.simple ?? 0, blockingCount }
+})
+
+// Auto-end NPC turn when all actions are spent and no blocking requests remain
+watch(npcAutoEndTurnSignal, (val) => {
+  if (!val) return
+  if (val.simple > 0 || val.blockingCount > 0) return
+  if (autoEndingNpcTurn.value) return
   autoEndingNpcTurn.value = true
   handleNextTurn().finally(() => { autoEndingNpcTurn.value = false })
-}, { deep: true })
+})
 
 // Determine if a participant is on the enemy side
 function isEnemyParticipant(participant: CombatParticipant): boolean {
@@ -928,7 +935,6 @@ async function confirmAttack(target: CombatParticipant) {
       showTargetSelector.value = false
       selectedAttack.value = null
       selectedTargetIds.value = []
-      await fetchEncounter(currentEncounter.value.id)
     } catch (e: any) {
       console.error('Attack failed:', e)
       alert(e?.data?.message || 'Failed to execute attack')
@@ -1016,7 +1022,6 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
     showTargetSelector.value = false
     selectedAttack.value = null
     selectedTargetIds.value = []
-    await fetchEncounter(currentEncounter.value.id)
   } catch (error) {
     console.error('Error performing area attack:', error)
   }
@@ -1038,17 +1043,16 @@ async function cancelIntercedeGroup(intercedeGroupId: string) {
   for (const req of groupRequests) {
     await cancelRequest(currentEncounter.value.id, req.id)
   }
-  await fetchEncounter(currentEncounter.value.id)
 }
 
 // Player tamer skips their own intercede-offer (properly routes through intercede-skip to create dodge-rolls)
 async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
   if (!currentEncounter.value) return
-  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
+  const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
     method: 'POST',
     body: { requestId, optOut },
   })
-  await fetchEncounter(currentEncounter.value.id)
+  if (result) currentEncounter.value = result as any
 }
 
 // GM intercede response functions
@@ -1066,8 +1070,8 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string) 
       }
     })
 
+    if (result) currentEncounter.value = result as any
     showGmIntercedeModal.value = false
-    await fetchEncounter(currentEncounter.value.id)
   } catch (e: any) {
     if (e?.statusCode === 409) {
       alert('Another player already interceded for this attack!')
@@ -1084,12 +1088,12 @@ async function handleGmIntercedeSkip(requestId: string, optOut = false) {
   if (!currentEncounter.value) return
   gmIntercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
+    const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST', body: { requestId, optOut }
     })
+    if (result) currentEncounter.value = result as any
     showGmIntercedeModal.value = false
     gmIntercedeRequest.value = null
-    await fetchEncounter(currentEncounter.value.id)
   } finally {
     gmIntercedeLoading.value = false
   }
@@ -2542,8 +2546,6 @@ onMounted(async () => {
   // Auto-refresh encounter every 5 seconds to see player responses
   refreshInterval = setInterval(() => {
     fetchEncounter(route.params.id as string)
-    fetchEvolutionLines()
-    fetchTamers(campaignId.value)
   }, 5000)
 })
 
