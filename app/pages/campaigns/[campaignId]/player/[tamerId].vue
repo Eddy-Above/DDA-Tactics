@@ -2598,6 +2598,25 @@ async function handleSaveIntercedeOptions() {
       body: { participants },
     })
     await loadData()
+
+    // Auto-skip pending intercede offers for targets the player just opted out of
+    const pendingIntercedes = myRequests.value.filter((r: any) => r.type === 'intercede-offer')
+    let skippedAny = false
+    for (const request of pendingIntercedes) {
+      const targetIds: string[] = request.data?.isAreaAttack
+        ? (request.data?.areaTargetIds || [])
+        : [request.data?.targetId].filter(Boolean)
+      const allOptedOut = targetIds.length > 0 && targetIds.every((id: string) => optOuts.includes(id))
+      if (allOptedOut) {
+        await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+          method: 'POST',
+          body: { requestId: request.id },
+        })
+        skippedAny = true
+      }
+    }
+    if (skippedAny) await loadData()
+
     showIntercedeOptionsModal.value = false
   } catch (e: any) {
     console.error('Save intercede options failed:', e)
