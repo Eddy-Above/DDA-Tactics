@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers } from '../../../../db'
+import { db, encounters, digimon, tamers, maps } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getClashSizeBonus, determineClashController } from '../../../../../data/attackConstants'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
+import { chebyshev } from '../../../../utils/gridDistance'
 
 interface ClashInitiateBody {
   participantId: string
@@ -59,6 +60,26 @@ export default defineEventHandler(async (event) => {
 
   const target = participants.find((p: any) => p.id === body.targetId)
   if (!target) throw createError({ statusCode: 404, message: 'Target not found' })
+
+  // Spatial range check for clash initiation
+  if ((encounter as any).mapId && actor.type === 'digimon') {
+    const positions: Record<string, any> = (() => {
+      const raw = (encounter as any).participantPositions
+      try { return typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {}) } catch { return {} }
+    })()
+    const attackerPos = positions[actor.id]
+    const targetPos = positions[target.id]
+    if (attackerPos && targetPos) {
+      const [actDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+      const qs = typeof actDig?.qualities === 'string' ? JSON.parse(actDig?.qualities ?? '[]') : (actDig?.qualities ?? [])
+      const reachRanks = (qs as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
+      const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
+      const dist = chebyshev(attackerPos, targetPos)
+      if (dist > meleeRange) {
+        throw createError({ statusCode: 400, message: `Target out of clash range (distance: ${dist}, melee range: ${meleeRange})` })
+      }
+    }
+  }
 
   // Validate neither is already clashing
   if (actor.clash) throw createError({ statusCode: 400, message: 'You are already in a clash' })

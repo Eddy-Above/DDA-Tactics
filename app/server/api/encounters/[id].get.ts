@@ -35,6 +35,13 @@ export default defineEventHandler(async (event) => {
     return []
   }
 
+  const parseJsonObj = (field: any) => {
+    if (!field) return {}
+    if (typeof field === 'object' && !Array.isArray(field)) return field
+    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return {} } }
+    return {}
+  }
+
   return {
     ...encounter,
     participants: parseJsonField(encounter.participants).map((p: any) => ({
@@ -49,5 +56,7 @@ export default defineEventHandler(async (event) => {
     hazards: parseJsonField(encounter.hazards),
     pendingRequests: parseJsonField(encounter.pendingRequests),
     requestResponses: parseJsonField(encounter.requestResponses),
+    participantPositions: parseJsonObj((encounter as any).participantPositions),
+    destructibleStates: parseJsonField((encounter as any).destructibleStates),
   }
 })

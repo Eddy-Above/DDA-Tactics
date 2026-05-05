@@ -79,6 +79,15 @@ export default defineEventHandler(async (event) => {
   if (body.requestResponses) {
     updateData.requestResponses = JSON.stringify(body.requestResponses)
   }
+  if ((body as any).mapId !== undefined) {
+    updateData.mapId = (body as any).mapId
+  }
+  if ((body as any).participantPositions !== undefined) {
+    updateData.participantPositions = JSON.stringify((body as any).participantPositions)
+  }
+  if ((body as any).destructibleStates !== undefined) {
+    updateData.destructibleStates = JSON.stringify((body as any).destructibleStates)
+  }
 
   await db.update(encounters).set(updateData).where(eq(encounters.id, id))
 
@@ -100,6 +109,13 @@ export default defineEventHandler(async (event) => {
     return []
   }
 
+  const parseJsonObj = (field: any) => {
+    if (!field) return {}
+    if (typeof field === 'object' && !Array.isArray(field)) return field
+    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return {} } }
+    return {}
+  }
+
   return {
     ...updated,
     participants: parseJsonField(updated.participants),
@@ -108,5 +124,7 @@ export default defineEventHandler(async (event) => {
     hazards: parseJsonField(updated.hazards),
     pendingRequests: parseJsonField(updated.pendingRequests),
     requestResponses: parseJsonField(updated.requestResponses),
+    participantPositions: parseJsonObj((updated as any).participantPositions),
+    destructibleStates: parseJsonField((updated as any).destructibleStates),
   }
 })

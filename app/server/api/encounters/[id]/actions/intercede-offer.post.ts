@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
+import { getReachableCells, detectCapabilitiesFromQualities } from '~/server/utils/mapMovement'
+import { calculateDigimonDerivedStats } from '~/types'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
@@ -78,6 +80,50 @@ export default defineEventHandler(async (event) => {
   let turnOrder = parseJsonField(encounter.turnOrder)
   const pendingRequests = parseJsonField(encounter.pendingRequests)
   let battleLog = parseJsonField(encounter.battleLog)
+
+  // Spatial map state (for intercede reach check)
+  const participantPositions: Record<string, { x: number; y: number; z: number }> = (() => {
+    const raw = (encounter as any).participantPositions
+    if (!raw) return {}
+    try { return typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return {} }
+  })()
+
+  let mapRecord: any = null
+  if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {
+    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
+    if (m) {
+      mapRecord = {
+        ...m,
+        groundTiles: typeof m.groundTiles === 'string' ? JSON.parse(m.groundTiles) : (m.groundTiles ?? []),
+        spaceTiles: typeof m.spaceTiles === 'string' ? JSON.parse(m.spaceTiles) : (m.spaceTiles ?? []),
+        walls: typeof m.walls === 'string' ? JSON.parse(m.walls) : (m.walls ?? []),
+        ceilings: typeof m.ceilings === 'string' ? JSON.parse(m.ceilings) : (m.ceilings ?? []),
+        stairs: typeof m.stairs === 'string' ? JSON.parse(m.stairs) : (m.stairs ?? []),
+        windows: typeof m.windows === 'string' ? JSON.parse(m.windows) : (m.windows ?? []),
+        doors: typeof m.doors === 'string' ? JSON.parse(m.doors) : (m.doors ?? []),
+      }
+    }
+  }
+
+  // Returns true if the interceptor (digimon participant) can reach targetPos on the map
+  async function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): Promise<boolean> {
+    if (!mapRecord || !participantPositions[interceptorParticipantId]) return true  // no map = always eligible
+    const interceptorPos = participantPositions[interceptorParticipantId]
+    const interceptorP = participants.find((p: any) => p.id === interceptorParticipantId)
+    if (!interceptorP || interceptorP.type !== 'digimon') return true
+    const [digRecord] = await db.select().from(digimon).where(eq(digimon.id, interceptorP.entityId))
+    if (!digRecord) return true
+    const qualities = typeof digRecord.qualities === 'string' ? JSON.parse(digRecord.qualities) : (digRecord.qualities ?? [])
+    const derived = calculateDigimonDerivedStats(
+      typeof digRecord.baseStats === 'string' ? JSON.parse(digRecord.baseStats) : digRecord.baseStats,
+      digRecord.stage as any,
+      digRecord.size as any,
+    )
+    const caps = detectCapabilitiesFromQualities(qualities, derived.movement, derived.ram, derived.cpu)
+    const budget = derived.movement
+    const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
+    return reachable.has(`${targetPos.x},${targetPos.y},${targetPos.z}`)
+  }
 
   // Helper: check if a participant has eligible intercede actions
   const hasEligibleInterceptor = (participant: any): boolean => {
@@ -224,7 +270,16 @@ export default defineEventHandler(async (event) => {
       // (also covers the case where both are targeted — neither would be eligible)
       const digimonParticipant = partnerParticipantId ? participants.find((pp: any) => pp.id === partnerParticipantId) : null
       const tamerEligible = !allTargetIdSet.has(p.id) && hasEligibleInterceptor(p)
-      const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && hasEligibleInterceptor(digimonParticipant))
+      // Spatial check: can the digimon reach at least one target?
+      let digimonSpatiallyEligible = true
+      if (digimonParticipant && partnerParticipantId && mapRecord) {
+        const targetPositions = allTargetIds.map(tid => participantPositions[tid]).filter(Boolean)
+        if (targetPositions.length > 0) {
+          const reaches = await Promise.all(targetPositions.map(tp => canReachTarget(partnerParticipantId!, tp)))
+          digimonSpatiallyEligible = reaches.some(Boolean)
+        }
+      }
+      const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && hasEligibleInterceptor(digimonParticipant) && digimonSpatiallyEligible)
       if (!tamerEligible && !digimonEligible) continue
 
       // Filter areaTargetIds by this tamer's opt-outs

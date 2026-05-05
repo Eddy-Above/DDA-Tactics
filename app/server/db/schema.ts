@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
 // =====================================
@@ -175,6 +175,12 @@ export const digimon = pgTable('digimon', {
   isDarkEvolution: boolean('is_dark_evolution').notNull().default(false),
   campaignId: text('campaign_id').references(() => campaigns.id),
 
+  giganticDimensions: text('gigantic_dimensions', { mode: 'json' }).$type<{
+    width: number
+    height: number
+    depth: number
+  } | null>(),
+
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),
 
@@ -272,6 +278,11 @@ export const encounters = pgTable('encounters', {
   }>>(),
 
   campaignId: text('campaign_id').references(() => campaigns.id),
+  mapId: text('map_id'),  // FK to maps.id (added via migration; FK constraint omitted to avoid circular ref at schema load time)
+
+  // Map state: participant positions and breakable structure states
+  participantPositions: text('participant_positions', { mode: 'json' }).notNull().default('{}').$type<Record<string, { x: number; y: number; z: number }>>(),
+  destructibleStates: text('destructible_states', { mode: 'json' }).notNull().default('[]').$type<Array<{ structureId: string; currentWounds: number }>>(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -329,14 +340,81 @@ export const evolutionLines = pgTable('evolution_lines', {
 })
 
 // =====================================
+// Maps Table
+// =====================================
+
+export const maps = pgTable('maps', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  campaignId: text('campaign_id').references(() => campaigns.id),
+
+  dimensions: text('dimensions', { mode: 'json' }).notNull().$type<{
+    width: number
+    depth: number
+    height: number
+  }>(),
+
+  groundTiles: text('ground_tiles', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    x: number; y: number; z: number
+    element: string
+    terrain: string
+  }>>(),
+
+  spaceTiles: text('space_tiles', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    x: number; y: number; z: number
+    spaceType: string
+  }>>(),
+
+  walls: text('walls', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    id: string; x: number; y: number; z: number
+    face: string
+    woundBoxes?: number
+  }>>(),
+
+  windows: text('windows', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    id: string
+    wallId: string
+    woundBoxes?: number
+  }>>(),
+
+  doors: text('doors', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    id: string
+    wallId: string
+    isOpen: boolean
+  }>>(),
+
+  ceilings: text('ceilings', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    id: string; x: number; y: number; z: number
+    woundBoxes?: number
+  }>>(),
+
+  stairs: text('stairs', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    id: string; x: number; y: number; z: number
+    face: string
+  }>>(),
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+// =====================================
 // Relations
 // =====================================
+
+export const mapsRelations = relations(maps, ({ one }) => ({
+  campaign: one(campaigns, {
+    fields: [maps.campaignId],
+    references: [campaigns.id],
+  }),
+}))
 
 export const campaignsRelations = relations(campaigns, ({ many }) => ({
   tamers: many(tamers),
   digimon: many(digimon),
   encounters: many(encounters),
   evolutionLines: many(evolutionLines),
+  maps: many(maps),
 }))
 
 export const tamersRelations = relations(tamers, ({ one, many }) => ({
@@ -395,3 +473,6 @@ export type NewCampaign = typeof campaigns.$inferInsert
 
 export type EvolutionLine = typeof evolutionLines.$inferSelect
 export type NewEvolutionLine = typeof evolutionLines.$inferInsert
+
+export type Map = typeof maps.$inferSelect
+export type NewMap = typeof maps.$inferInsert

@@ -1,7 +1,9 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
+import { chebyshev, hasLineOfSight } from '../../../../utils/gridDistance'
+import { calculateDigimonDerivedStats } from '~/types'
 
 interface AttackActionBody {
   participantId: string
@@ -123,6 +125,53 @@ export default defineEventHandler(async (event) => {
       statusCode: 404,
       message: 'Target not found',
     })
+  }
+
+  // === Spatial range validation (skipped if no map attached) ===
+  if ((encounter as any).mapId && body.targetId && target && actor.type === 'digimon') {
+    const positions: Record<string, { x: number; y: number; z: number }> = (() => {
+      const raw = (encounter as any).participantPositions
+      try { return typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {}) } catch { return {} }
+    })()
+    const attackerPos = positions[actor.id]
+    const targetPos = positions[target.id]
+    if (attackerPos && targetPos) {
+      const [attackerDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+      if (attackerDig) {
+        const baseStats = typeof attackerDig.baseStats === 'string' ? JSON.parse(attackerDig.baseStats) : attackerDig.baseStats
+        const derived = calculateDigimonDerivedStats(baseStats, attackerDig.stage as any, attackerDig.size as any)
+        const qualities = typeof attackerDig.qualities === 'string' ? JSON.parse(attackerDig.qualities) : (attackerDig.qualities ?? [])
+        const reachRanks = (qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
+        const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
+
+        const [mapRecord] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
+        const mapData = mapRecord ? {
+          walls: typeof mapRecord.walls === 'string' ? JSON.parse(mapRecord.walls) : (mapRecord.walls ?? []),
+          ceilings: typeof mapRecord.ceilings === 'string' ? JSON.parse(mapRecord.ceilings) : (mapRecord.ceilings ?? []),
+          doors: typeof mapRecord.doors === 'string' ? JSON.parse(mapRecord.doors) : (mapRecord.doors ?? []),
+        } : null
+
+        const dist = chebyshev(attackerPos, targetPos)
+
+        // Fetch attack definition to get tags
+        const attacks = typeof attackerDig.attacks === 'string' ? JSON.parse(attackerDig.attacks) : (attackerDig.attacks ?? [])
+        const attackDef = (attacks as any[]).find((a: any) => a.id === body.attackId)
+        const isMelee = attackDef?.range === 'melee'
+        const isRanged = attackDef?.range === 'ranged'
+
+        if (isMelee && dist > meleeRange) {
+          throw createError({ statusCode: 400, message: `Target out of melee range (distance: ${dist}, reach: ${meleeRange})` })
+        }
+        if (isRanged) {
+          if (dist > derived.effectiveLimit) {
+            throw createError({ statusCode: 400, message: `Target out of effective range (distance: ${dist}, limit: ${derived.effectiveLimit})` })
+          }
+          if (mapData && !hasLineOfSight(attackerPos, targetPos, mapData as any)) {
+            throw createError({ statusCode: 400, message: 'No line of sight to target' })
+          }
+        }
+      }
+    }
   }
 
   // Bolster validation (digimon only)

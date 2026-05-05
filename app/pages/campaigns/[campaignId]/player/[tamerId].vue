@@ -206,25 +206,17 @@ async function loadData() {
       partnerDigimon.value = digimonList.value.filter((d: Digimon) => d.partnerId === fetchedTamer.id)
 
       // Find an active encounter that this tamer is relevant to.
-      // Only show encounter UI if:
-      // - The encounter is in 'combat' phase (combat has started), OR
-      // - There are pending requests targeting this tamer (e.g. digimon-selection, initiative-roll)
-      // Tamers queued in 'setup' phase (initiative=-1) should NOT see the encounter until Engage Combat is pressed.
       const active = encounters.value.find((e) => {
         if (e.phase !== 'combat' && e.phase !== 'setup' && e.phase !== 'initiative') return false
+        const pts = (e.participants as CombatParticipant[]) || []
+        const isParticipant = pts.some(
+          (p) =>
+            (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
+            (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
+        )
         const reqs = (e.pendingRequests as any[]) || []
         const hasPendingRequests = reqs.some((r) => r.targetTamerId === fetchedTamer.id)
-        if (e.phase === 'combat') {
-          // In combat: show if participating
-          const pts = (e.participants as CombatParticipant[]) || []
-          return pts.some(
-            (p) =>
-              (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
-              (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
-          ) || hasPendingRequests
-        }
-        // Pre-combat (setup/initiative): only show if there's a pending request
-        return hasPendingRequests
+        return isParticipant || hasPendingRequests
       })
       if (active) {
         // Fetch all digimon in the encounter (partner and enemy)
@@ -241,9 +233,11 @@ async function loadData() {
           }
         }
 
-        activeEncounter.value = active
+        // Fetch full encounter to ensure all JSON fields (e.g. mapId) are present
+        const fullEncounter = await fetchEncounter(active.id)
+        activeEncounter.value = (fullEncounter ?? active) as any
         // Extract my pending requests
-        myRequests.value = getMyPendingRequests(active, fetchedTamer.id)
+        myRequests.value = getMyPendingRequests(activeEncounter.value!, fetchedTamer.id)
 
         // Reconstruct attack results from persisted responses (handles page refresh)
         const responses = (active.requestResponses as any[]) || []
@@ -311,9 +305,10 @@ async function loadData() {
   }
 }
 
-onMounted(() => {
-  loadData()
-  // Auto-refresh
+onMounted(async () => {
+  await loadData()
+  autoOpenMap()
+  // Auto-refresh — must NOT call autoOpenMap (player may have closed the map)
   refreshInterval = setInterval(loadData, 5000)
 })
 
@@ -3118,6 +3113,63 @@ async function handleEndTurn() {
   }
 }
 
+// ── Map integration ────────────────────────────────────────────────────────
+const showMapView = ref(false)
+
+const playerPlacementMode = computed(() =>
+  ['setup', 'initiative'].includes(activeEncounter.value?.phase ?? '') &&
+  !!(activeEncounter.value as any)?.mapId
+)
+
+function autoOpenMap() {
+  if (showMapView.value) return
+  const phase = activeEncounter.value?.phase
+  const mapId = (activeEncounter.value as any)?.mapId
+  if (mapId && phase === 'combat') showMapView.value = true
+}
+
+// Open map when phase transitions to initiative/combat while already on the page
+watch(() => activeEncounter.value?.phase, () => autoOpenMap())
+// Open map when encounter is first detected (e.g. after initiative processed)
+watch(() => activeEncounter.value, (enc) => { if (enc) autoOpenMap() })
+
+const tamerMapForMap = computed(() => {
+  const out: Record<string, any> = {}
+  allTamers.value.forEach(t => {
+    const derived = calcTamerStats(t)
+    out[t.id] = { name: t.name, spriteUrl: (t as any).spriteUrl ?? null, currentWounds: t.currentWounds, woundBoxes: derived.woundBoxes }
+  })
+  return out
+})
+
+const digimonMapForMap = computed(() => {
+  const out: Record<string, any> = {}
+  allDigimon.value.forEach(d => {
+    out[d.id] = {
+      name: (d as any).nickname || d.name,
+      spriteUrl: (d as any).spriteUrl ?? null,
+      currentWounds: d.currentWounds,
+      woundBoxes: (d as any).woundBoxes ?? 0,
+      size: d.size,
+      stage: d.stage,
+      baseStats: d.baseStats,
+      qualities: typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? []),
+      giganticDimensions: (d as any).giganticDimensions ?? null,
+    }
+  })
+  return out
+})
+
+const myParticipantIds = computed(() => myParticipants.value.map(p => p.id))
+
+function onPositionsUpdated(positions: Record<string, any>) {
+  if (!activeEncounter.value) return
+  const id = (activeEncounter.value as any).id
+  // Update locally so sprites appear immediately without waiting for the next poll
+  activeEncounter.value = { ...activeEncounter.value, participantPositions: positions } as any
+  updateEncounter(id, { participantPositions: positions } as any)
+}
+
 async function handleBreakClash(participantId: string, clashId: string) {
   if (!activeEncounter.value || !tamer.value) return
   try {
@@ -3211,6 +3263,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <p class="text-digimon-dark-300 text-sm">
                 {{ activeEncounter.name }} • Round {{ activeEncounter.round }}
               </p>
+              <button
+                v-if="(activeEncounter as any).mapId"
+                class="mt-1 text-sm px-3 py-1 rounded border font-semibold transition-colors"
+                :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
+                @click="showMapView = !showMapView"
+              >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
             </div>
             <div v-if="isMyTurn && activeEncounter?.phase === 'combat'">
               <button
@@ -3228,6 +3286,31 @@ async function handleBreakClash(participantId: string, clashId: string) {
               </div>
             </div>
           </div>
+
+          <!-- Map overlay -->
+          <ClientOnly>
+            <div v-if="showMapView" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
+              <EncounterMap
+                :encounter="activeEncounter as any"
+                :is-dm="false"
+                :my-tamer-id="tamerId"
+                :tamer-map="tamerMapForMap"
+                :digimon-map="digimonMapForMap"
+                :selected-attack="null"
+                :player-placement-mode="playerPlacementMode"
+                :my-participant-ids="myParticipantIds"
+                @positions-updated="onPositionsUpdated"
+                @encounter-updated="() => {}"
+              >
+                <template #combat-controls>
+                  <button
+                    class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                    @click="showMapView = false"
+                  >✕ Close Map</button>
+                </template>
+              </EncounterMap>
+            </div>
+          </ClientOnly>
 
           <!-- My participants in combat -->
           <div v-if="myParticipants.length > 0" class="mt-4 grid gap-3">

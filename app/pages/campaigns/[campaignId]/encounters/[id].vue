@@ -64,6 +64,7 @@ const selectedTamerForRequest = ref('')
 // Attack execution state
 const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
 const showTargetSelector = ref(false)
+const npcStanceParticipantId = ref<string | null>(null)
 const selectedTargetId = ref<string | null>(null)
 const selectedTargetIds = ref<string[]>([])
 const bolsterAttackEnabled = ref(false)
@@ -1564,6 +1565,7 @@ async function handleStartCombat() {
 
   await updateEncounter(currentEncounter.value.id, { participants })
   await startCombat(currentEncounter.value.id)
+  if ((currentEncounter.value as any).mapId) showMapView.value = true
 
   const entity = first ? getEntityDetails(first) : null
   if (entity) {
@@ -1988,6 +1990,20 @@ async function useAction(type: 'simple' | 'complex', description: string) {
       damage: null,
       effects: [],
     })
+  }
+}
+
+// Handle NPC radial menu actions from the map
+function onNpcAction(participantId: string, action: 'stance' | 'attack') {
+  if (!currentEncounter.value) return
+  const p = (currentEncounter.value.participants as CombatParticipant[]).find(x => x.id === participantId)
+  if (!p) return
+  if (action === 'attack') {
+    const attacks = (p as any).attacks ?? []
+    if (attacks.length) selectAttackAndShowTargets(p, attacks[0])
+    else showTargetSelector.value = true
+  } else {
+    npcStanceParticipantId.value = npcStanceParticipantId.value === participantId ? null : participantId
   }
 }
 
@@ -2479,6 +2495,11 @@ onMounted(async () => {
     fetchEvolutionLines(),
   ])
 
+  // Auto-open map view when refreshing during active combat
+  if ((currentEncounter.value as any)?.mapId && currentEncounter.value?.phase === 'combat') {
+    showMapView.value = true
+  }
+
   // Auto-refresh encounter every 5 seconds to see player responses
   refreshInterval = setInterval(() => {
     fetchEncounter(route.params.id as string)
@@ -2713,6 +2734,86 @@ async function handleBreakClash(participantId: string, clashId: string) {
     alert(e?.data?.message || 'Failed to break clash')
   }
 }
+
+// === Map integration ===
+
+const isDm = computed(() => {
+  const cookie = useCookie(`campaign-dm-${campaignId.value}`)
+  return !!cookie.value
+})
+
+// The tamer the current player controls (non-GM session)
+const myTamerId = computed<string | null>(() => {
+  if (isDm.value) return null
+  const accessCookie = useCookie(`campaign-tamer-${campaignId.value}`)
+  if (accessCookie.value) return accessCookie.value as string
+  // Fallback: any tamer whose id is in the access context
+  return null
+})
+
+const showMapView = ref(false)
+const showMapPicker = ref(false)
+const { maps: availableMaps, fetchMaps } = useMap()
+
+const playerPlacementMode = computed(() =>
+  !isDm.value &&
+  ['setup', 'initiative'].includes(currentEncounter.value?.phase ?? '') &&
+  !!(currentEncounter.value as any)?.mapId
+)
+
+
+
+async function openMapPicker() {
+  await fetchMaps(campaignId.value)
+  showMapPicker.value = true
+}
+
+async function attachMap(mapId: string | null) {
+  if (!currentEncounter.value) return
+  await updateEncounter(currentEncounter.value.id, { mapId } as any)
+  showMapPicker.value = false
+}
+
+// Flat maps keyed by entityId for EncounterMap
+const tamerMapForMap = computed(() => {
+  const out: Record<string, any> = {}
+  tamers.value.forEach(t => {
+    const derived = calcTamerStats(t)
+    out[t.id] = {
+      name: t.name,
+      spriteUrl: t.spriteUrl ?? null,
+      currentWounds: t.currentWounds,
+      woundBoxes: derived.woundBoxes,
+    }
+  })
+  return out
+})
+
+const digimonMapForMap = computed(() => {
+  const out: Record<string, any> = {}
+  digimonList.value.forEach(d => {
+    const derived = calcDigimonStats(d)
+    const parsedQualities = typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? [])
+    out[d.id] = {
+      name: d.nickname || d.name,
+      spriteUrl: d.spriteUrl ?? null,
+      currentWounds: d.currentWounds,
+      woundBoxes: derived.woundBoxes,
+      size: d.size,
+      stage: d.stage,
+      baseStats: d.baseStats,
+      qualities: parsedQualities,
+      movement: derived.movement ?? 4,
+      giganticDimensions: (d as any).giganticDimensions ?? null,
+    }
+  })
+  return out
+})
+
+function onPositionsUpdated(positions: Record<string, any>) {
+  if (!currentEncounter.value) return
+  updateEncounter(currentEncounter.value.id, { participantPositions: positions } as any)
+}
 </script>
 
 <template>
@@ -2759,10 +2860,88 @@ async function handleBreakClash(participantId: string, clashId: string) {
           <span v-if="currentEncounter.phase === 'combat'" class="text-white font-semibold">
             Round {{ currentEncounter.round }}
           </span>
+          <!-- Map view toggle -->
+          <button
+            v-if="(currentEncounter as any).mapId"
+            class="text-sm px-3 py-1 rounded border font-semibold transition-colors"
+            :class="showMapView
+              ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white'
+              : 'bg-digimon-dark-800 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
+            @click="showMapView = !showMapView"
+          >
+            {{ showMapView ? '📋 Card View' : '🗺 Map View' }}
+          </button>
+          <!-- Map attachment controls -->
+          <button
+            v-if="!(currentEncounter as any).mapId"
+            class="text-sm px-3 py-1 rounded border border-digimon-orange-600 bg-digimon-orange-900/30 text-digimon-orange-300 hover:bg-digimon-orange-600 hover:text-white transition-colors font-semibold"
+            @click="openMapPicker"
+          >📎 Attach Map</button>
+          <template v-else>
+            <span class="text-xs text-digimon-dark-400">{{ availableMaps.find(m => m.id === (currentEncounter as any).mapId)?.name ?? 'Map' }}</span>
+            <button class="text-xs text-digimon-dark-500 hover:text-white transition-colors" @click="openMapPicker">Change</button>
+            <button class="text-xs text-red-500 hover:text-red-300 transition-colors" @click="attachMap(null)">Detach</button>
+          </template>
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- 3D Map View (full screen overlay when active) -->
+      <div v-if="showMapView" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
+        <EncounterMap
+          :encounter="currentEncounter as any"
+          :is-dm="true"
+          :my-tamer-id="myTamerId"
+          :tamer-map="tamerMapForMap"
+          :digimon-map="digimonMapForMap"
+          :selected-attack="null"
+          :player-placement-mode="false"
+          @positions-updated="onPositionsUpdated"
+          @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
+          @npc-action="onNpcAction"
+        >
+          <template #turn-order>
+            <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">
+              <div class="text-xs font-semibold text-digimon-dark-400 mb-2">TURN ORDER</div>
+              <div v-for="p in sortedParticipants" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
+                :class="activeParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
+                {{ digimonMap.get(p.entityId)?.name || tamerMap.get(p.entityId)?.name || '?' }}
+              </div>
+            </div>
+          </template>
+          <template #combat-controls>
+            <div class="flex gap-2 flex-wrap">
+              <button
+                v-if="currentEncounter.phase === 'combat'"
+                class="bg-digimon-orange-600 hover:bg-digimon-orange-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"
+                @click="handleNextTurn"
+              >Next Turn</button>
+              <button
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                @click="showMapView = false"
+              >✕ Close Map</button>
+            </div>
+          </template>
+        </EncounterMap>
+        <!-- Floating NPC stance picker (shown when GM clicks Stance from map radial) -->
+        <div
+          v-if="npcStanceParticipantId"
+          class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+          style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px;"
+        >
+          <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select NPC Stance (1 Simple Action)</div>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              v-for="stance in ['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const"
+              :key="stance"
+              class="px-2 py-2 rounded text-xs capitalize bg-digimon-dark-700 text-digimon-dark-300 hover:bg-digimon-dark-600"
+              @click="changeStance(stance, npcStanceParticipantId!); npcStanceParticipantId = null"
+            >{{ stance }}</button>
+          </div>
+          <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="npcStanceParticipantId = null">Cancel</button>
+        </div>
+      </div>
+
+      <div v-show="!showMapView" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Turn Order / Participants -->
         <div class="lg:col-span-2 space-y-4">
           <!-- Combat Controls -->
@@ -4942,6 +5121,36 @@ async function handleBreakClash(participantId: string, clashId: string) {
           >
             Cancel
           </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Map picker modal -->
+    <Teleport to="body">
+      <div v-if="showMapPicker" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-600">
+          <h3 class="text-white font-semibold mb-4">Select a Map</h3>
+          <div v-if="availableMaps.length === 0" class="text-digimon-dark-400 text-sm py-4 text-center">
+            No maps found. Create one in the library first.
+          </div>
+          <div v-else class="space-y-2 max-h-72 overflow-y-auto">
+            <button
+              v-for="map in availableMaps"
+              :key="map.id"
+              class="w-full text-left px-4 py-3 rounded-lg border transition-colors"
+              :class="(currentEncounter as any).mapId === map.id
+                ? 'border-digimon-orange-500 bg-digimon-orange-900/20 text-white'
+                : 'border-digimon-dark-600 bg-digimon-dark-700 text-digimon-dark-200 hover:border-digimon-dark-400'"
+              @click="attachMap(map.id)"
+            >
+              <div class="font-medium">{{ map.name }}</div>
+              <div class="text-xs text-digimon-dark-400 mt-0.5">{{ map.dimensions.width }}×{{ map.dimensions.depth }}</div>
+            </button>
+          </div>
+          <button
+            class="mt-4 text-sm text-digimon-dark-400 hover:text-white transition-colors"
+            @click="showMapPicker = false"
+          >Cancel</button>
         </div>
       </div>
     </Teleport>

@@ -97,6 +97,30 @@ const { statMin, statMax, isRangeActive } = useBaseStatRanges(
   () => eddySoulRules.value
 )
 
+// Gigantic dimensions
+const giganticDims = reactive({ width: 4, height: 4, depth: 4 })
+const giganticCapWarning = ref<string | null>(null)
+const giganticMaxSize = computed(() => houseRules.value?.giganticMaxSize ?? null)
+
+function clampGiganticDim(dim: 'width' | 'height' | 'depth') {
+  const axisMap = { width: 'x', height: 'y', depth: 'z' } as const
+  const axis = axisMap[dim]
+  const max = (giganticMaxSize.value as any)?.[axis] ?? null
+  if (max && giganticDims[dim] > max) {
+    const prev = giganticDims[dim]
+    giganticDims[dim] = max
+    giganticCapWarning.value = `${dim} capped to ${max} — ${prev} exceeds the campaign maximum.`
+    setTimeout(() => { giganticCapWarning.value = null }, 4000)
+  }
+}
+
+watch([() => form.size], () => {
+  if (form.size === 'gigantic') {
+    // Reset to defaults if switching to gigantic
+    giganticDims.width = 4; giganticDims.height = 4; giganticDims.depth = 4
+  }
+})
+
 watch([() => form.stage, () => eddySoulRules.value?.baseStatRangesEnabled], () => {
   if (!eddySoulRules.value?.baseStatRangesEnabled) return
   const range = BASE_STAT_RANGES[form.stage]
@@ -292,6 +316,7 @@ async function handleSubmit() {
       evolvesFromId: form.evolvesFromId || undefined,
       evolutionPathIds: form.evolutionPathIds,
       syncBonusDP: form.syncBonusDP,
+      giganticDimensions: form.size === 'gigantic' ? { ...giganticDims } : null,
     }
     await updateDigimon(loadedDigimon.value.id, data)
     router.push(backLink.value)
@@ -314,6 +339,7 @@ async function handleSubmit() {
       isDarkEvolution: form.isDarkEvolution,
       notes: form.notes,
       spriteUrl: form.spriteUrl || undefined,
+      giganticDimensions: form.size === 'gigantic' ? { ...giganticDims } : null,
     }
     if (form.bonusDP > 0) {
       data.bonusStats = form.bonusStats
@@ -440,6 +466,30 @@ async function handleCopy() {
               <div v-if="currentSizeConfig.bodyBonus !== 0 || currentSizeConfig.agilityBonus !== 0" class="text-xs text-digimon-dark-500 mt-1">
                 Body {{ currentSizeConfig.bodyBonus >= 0 ? '+' : '' }}{{ currentSizeConfig.bodyBonus }},
                 Agility {{ currentSizeConfig.agilityBonus >= 0 ? '+' : '' }}{{ currentSizeConfig.agilityBonus }}
+              </div>
+
+              <!-- Gigantic custom dimensions -->
+              <div v-if="form.size === 'gigantic'" class="mt-3 p-3 bg-digimon-dark-700 rounded-lg">
+                <div class="text-xs text-digimon-dark-400 mb-2 font-semibold">Custom Dimensions (spaces)</div>
+                <div class="grid grid-cols-3 gap-2">
+                  <div v-for="dim in ['width', 'height', 'depth']" :key="dim">
+                    <label class="block text-xs text-digimon-dark-500 mb-1 capitalize">{{ dim }}</label>
+                    <input
+                      v-model.number="giganticDims[dim as 'width' | 'height' | 'depth']"
+                      type="number"
+                      min="4"
+                      :max="giganticMaxSize || 999"
+                      class="w-full bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1 text-white text-sm"
+                      @change="clampGiganticDim(dim as 'width' | 'height' | 'depth')"
+                    />
+                  </div>
+                </div>
+                <div v-if="giganticCapWarning" class="text-xs text-yellow-400 mt-2">
+                  {{ giganticCapWarning }}
+                </div>
+                <div v-if="giganticMaxSize" class="text-xs text-digimon-dark-500 mt-1">
+                  Campaign max — X: {{ (giganticMaxSize as any).x ?? '—' }}, Y: {{ (giganticMaxSize as any).y ?? '—' }}, Z: {{ (giganticMaxSize as any).z ?? '—' }}
+                </div>
               </div>
             </div>
             <div>

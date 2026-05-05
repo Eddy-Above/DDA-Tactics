@@ -33,6 +33,118 @@ export type AttackRange = 'melee' | 'ranged'
 export type AttackType = 'damage' | 'support'
 export type AttackArea = 'single' | 'blast' | 'burst' | 'line' | 'cone'
 
+// === Map Types ===
+
+export type ElementType = 'fire' | 'water' | 'wind' | 'ice' | 'thunder' | 'wood' | 'earth' | 'darkness' | 'steel' | 'light' | 'void'
+export type TerrainType = 'normal' | 'water' | 'earth' | 'climbable'
+export type SpaceType = 'air' | 'water' | 'earth'
+export type WallFace = 'north' | 'south' | 'east' | 'west'
+export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
+export type AreaTag = 'blast' | 'burst' | 'close-blast' | 'cone' | 'line' | 'pass'
+
+export interface Vec3 {
+  x: number
+  y: number
+  z: number
+}
+
+export interface MapGroundTile {
+  x: number
+  y: number
+  z: number
+  element: ElementType
+  terrain: TerrainType
+  isSpawnPoint?: boolean
+}
+
+export interface MapSpaceTile {
+  x: number
+  y: number
+  z: number
+  spaceType: SpaceType
+}
+
+export interface MapWall {
+  id: string
+  x: number
+  y: number
+  z: number
+  face: WallFace
+  woundBoxes?: number  // undefined = unbreakable
+}
+
+export interface MapWindow {
+  id: string
+  wallId: string       // must be placed on a wall
+  woundBoxes?: number  // undefined = unbreakable
+}
+
+export interface MapDoor {
+  id: string
+  wallId: string       // must be placed on a wall
+  isOpen: boolean
+}
+
+export interface MapCeiling {
+  id: string
+  x: number
+  y: number
+  z: number
+  woundBoxes?: number  // undefined = unbreakable
+}
+
+export interface MapStair {
+  id: string
+  x: number
+  y: number
+  z: number
+  face: WallFace  // direction the stair ascends
+}
+
+export interface GameMap {
+  id: string
+  name: string
+  description: string
+  campaignId: string
+  dimensions: { width: number; depth: number; height?: number }
+  groundTiles: MapGroundTile[]
+  spaceTiles: MapSpaceTile[]
+  walls: MapWall[]
+  windows: MapWindow[]
+  doors: MapDoor[]
+  ceilings: MapCeiling[]
+  stairs: MapStair[]
+  createdAt: string
+  updatedAt: string
+}
+
+export const ELEMENT_COLORS: Record<ElementType, number> = {
+  fire:      0xff4422,
+  water:     0x2288ff,
+  wind:      0x88ddaa,
+  ice:       0xaaddff,
+  thunder:   0xffdd00,
+  wood:      0x44aa44,
+  earth:     0x886644,
+  darkness:  0x442266,
+  steel:     0x99aabb,
+  light:     0xffffcc,
+  void:      0x555566,
+}
+
+export interface DestructibleState {
+  structureId: string
+  currentWounds: number
+}
+
+export type WebSocketMapMessage =
+  | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[] }
+  | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
+  | { type: 'door-toggled';     encounterId: string; doorId: string; isOpen: boolean }
+  | { type: 'element-painted';  encounterId: string; x: number; y: number; z: number; element: ElementType }
+  | { type: 'structure-damaged'; encounterId: string; structureId: string; woundsRemaining: number }
+  | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[] }
+
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 
 export type DigimonSize = 'tiny' | 'small' | 'medium' | 'large' | 'huge' | 'gigantic'
@@ -96,6 +208,7 @@ export interface HouseRules {
   newDayHealsAllWounds?: boolean
   allowDuplicateStatValues?: boolean
   allowFlexCPSplits?: boolean
+  giganticMaxSize?: { x: number; y: number; z: number } | null
 }
 
 export const STAGE_BATTERY_CAPACITY: Partial<Record<DigimonStage, number>> = {
@@ -314,6 +427,7 @@ export interface Digimon {
   partnerId: string | null    // Tamer ID if partnered
   isEnemy: boolean
   isDarkEvolution: boolean
+  giganticDimensions?: { width: number; height: number; depth: number } | null
   notes: string
   spriteUrl: string | null
   createdAt: Date
@@ -360,6 +474,7 @@ export interface CombatParticipant {
   stunActionReducedThisRound?: boolean  // Stun already reduced actions this round (prevents double-reduction at rollover)
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
+  mapPosition?: Vec3  // 3D grid position on the encounter map
 }
 
 export interface ActiveEffect {
@@ -385,6 +500,9 @@ export interface Encounter {
   currentTurnIndex: number
   battleLog: BattleLogEntry[]
   hazards: EnvironmentHazard[]
+  mapId?: string | null
+  participantPositions: Record<string, Vec3>   // participantId → Vec3
+  destructibleStates: DestructibleState[]
   createdAt: Date
   updatedAt: Date
 }

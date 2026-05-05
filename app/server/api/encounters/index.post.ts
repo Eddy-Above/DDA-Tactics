@@ -5,6 +5,7 @@ interface CreateEncounterBody {
   name: string
   description?: string
   campaignId?: string
+  mapId?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -25,6 +26,7 @@ export default defineEventHandler(async (event) => {
     name: body.name,
     description: body.description || '',
     campaignId: body.campaignId || null,
+    mapId: body.mapId || null,
     round: 0,
     phase: 'setup',
     participants: [],
@@ -32,6 +34,8 @@ export default defineEventHandler(async (event) => {
     currentTurnIndex: 0,
     battleLog: [],
     hazards: [],
+    participantPositions: JSON.stringify({}),
+    destructibleStates: JSON.stringify([]),
     createdAt: now,
     updatedAt: now,
   }

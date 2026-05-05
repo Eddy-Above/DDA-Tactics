@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-04-23 | All sections | 3D isometric map system added: maps table, WebSocket sync, Three.js MapCanvas, map library pages, attack range validation, area attack shapes, spatial intercede eligibility, gigantic digimon dimensions |
 | 2026-04-14 | API Schema | Effect duration timing changed: durations now decrement at end of affected target's own turn (not start of round); Poison damage likewise fires at end of each poisoned participant's turn. useEncounters.ts nextTurn() updated. |
 | 2026-04-14 | API Schema | Haste effect wired up: attack.post.ts enforces Complex Action cost and blocks bolster/lifesteal; useEncounters.ts grants +1 simple action at round start; canBolsterAttack() blocks bolster for Haste attacks |
 | 2026-04-14 | Env Variables, Pages, Dependency Graph, Blast Radius | Fixed DATABASE_URL Read By column (added migrate.mjs, run-migrations.mjs); corrected player/[tamerId].vue route path (was wrongly listed as index.vue); added computeAttackDamage.ts to graph and blast radius |
@@ -126,10 +127,21 @@ All routes return JSON. No auth middleware on API routes — access is enforced 
 | Method | Path | Handler File | Notes |
 |---|---|---|---|
 | GET | `/api/encounters` | `encounters/index.get.ts` | query: `campaignId?` |
-| POST | `/api/encounters` | `encounters/index.post.ts` | Creates encounter with participants |
-| GET | `/api/encounters/[id]` | `encounters/[id].get.ts` | Full encounter with participants, log, etc. |
-| PUT | `/api/encounters/[id]` | `encounters/[id].put.ts` | Update encounter state |
+| POST | `/api/encounters` | `encounters/index.post.ts` | Creates encounter with participants; accepts `mapId?` |
+| GET | `/api/encounters/[id]` | `encounters/[id].get.ts` | Full encounter with participants, log, `participantPositions`, `destructibleStates` |
+| PUT | `/api/encounters/[id]` | `encounters/[id].put.ts` | Update encounter state; accepts `mapId`, `participantPositions`, `destructibleStates` |
 | DELETE | `/api/encounters/[id]` | `encounters/[id].delete.ts` | — |
+| WS | `/api/encounters/[id]/ws` | `encounters/[id]/ws.ts` | WebSocket: real-time map sync; messages: `unit-moved`, `map-edited`, `door-toggled`, `element-painted`, `structure-damaged`, `full-state` |
+
+### Maps — `server/api/maps/`
+
+| Method | Path | Handler File | Notes |
+|---|---|---|---|
+| GET | `/api/maps?campaignId=` | `maps/index.get.ts` | List maps by campaign |
+| POST | `/api/maps` | `maps/index.post.ts` | Create map; body: `{name, description, campaignId, dimensions}` |
+| GET | `/api/maps/[mapId]` | `maps/[mapId].get.ts` | Fetch full map |
+| PUT | `/api/maps/[mapId]` | `maps/[mapId].put.ts` | Update map tiles/structures |
+| DELETE | `/api/maps/[mapId]` | `maps/[mapId].delete.ts` | Delete map |
 
 **Request/Response management (player action coordination):**
 
@@ -277,8 +289,32 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `createdAt` | timestamp | — |
 | `updatedAt` | timestamp | — |
 
+### Table: `maps`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | — |
+| `name` | text | — |
+| `description` | text | — |
+| `campaignId` | text FK → campaigns | — |
+| `dimensions` | jsonb | `{width, depth, height}` |
+| `groundTiles` | jsonb | `MapGroundTile[]` — `{x,y,z,element,terrain}` |
+| `spaceTiles` | jsonb | `MapSpaceTile[]` — `{x,y,z,spaceType}` |
+| `walls` | jsonb | `MapWall[]` — `{id,x,y,z,face,woundBoxes?}` |
+| `windows` | jsonb | `MapWindow[]` — `{id,wallId,woundBoxes?}` |
+| `doors` | jsonb | `MapDoor[]` — `{id,wallId,isOpen}` |
+| `ceilings` | jsonb | `MapCeiling[]` — `{id,x,y,z,woundBoxes?}` |
+| `stairs` | jsonb | `MapStair[]` — `{id,x,y,z,face}` |
+| `createdAt` / `updatedAt` | timestamp | — |
+
+**New columns on existing tables:**
+- `encounters.mapId` — text nullable FK → maps
+- `encounters.participantPositions` — jsonb `Record<participantId, Vec3>`
+- `encounters.destructibleStates` — jsonb `Array<{structureId,currentWounds}>`
+- `digimon.giganticDimensions` — jsonb nullable `{width,height,depth}`
+
 **Relations:**
-- `campaigns` → `tamers`, `digimon`, `encounters`, `evolutionLines` (one-to-many via `campaignId`)
+- `campaigns` → `tamers`, `digimon`, `encounters`, `evolutionLines`, `maps` (one-to-many via `campaignId`)
 - `tamers` → `digimon` (one-to-many via `partnerId`)
 - `tamers` → `evolutionLines` (one-to-many via `partnerId`)
 
@@ -308,7 +344,10 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `/campaigns/[campaignId]/library/tamers/new` | `.../library/tamers/new.vue` | default | dm-access | Create tamer; uses `TamerFormPage` |
 | `/campaigns/[campaignId]/library/tamers/[id]` | `.../library/tamers/[id].vue` | default | dm-access | Edit tamer; uses `TamerFormPage` |
 | `/campaigns/[campaignId]/encounters` | `.../encounters/index.vue` | default | campaign-access | Encounter list |
-| `/campaigns/[campaignId]/encounters/[id]` | `.../encounters/[id].vue` | default | campaign-access | Full combat view; uses most combat components |
+| `/campaigns/[campaignId]/encounters/[id]` | `.../encounters/[id].vue` | default | campaign-access | Full combat view; map toggle shows 3D map when `mapId` set |
+| `/campaigns/[campaignId]/library/maps` | `.../library/maps/index.vue` | default | dm-access | Map library list |
+| `/campaigns/[campaignId]/library/maps/new` | `.../library/maps/new.vue` | default | dm-access | Create map form |
+| `/campaigns/[campaignId]/library/maps/[mapId]` | `.../library/maps/[mapId].vue` | none (layout:false) | dm-access | Full-screen map editor |
 
 #### `app/pages/campaigns/[campaignId]/encounters/[id].vue` — Line Index (4611 lines)
 
@@ -387,6 +426,12 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `HazardManager` | `components/HazardManager.vue` | Add/remove environmental hazards | `encounterId`, `hazards`, `onUpdate` |
 | `QualitySelector` | `components/QualitySelector.vue` | DP-aware quality picker with prerequisites; enforces per-choice rank caps (static `maxRanks` and dynamic caps via props) | `stage`, `currentQualities`, `canAdd`, `availableDP`, `speedyMaxRanks`, `systemBoostMaxRanks`, `eddySoulRules`, `houseRules` |
 | `SpritePreview` | `components/SpritePreview.vue` | Display digimon sprite image | `spriteUrl`, `name` |
+| `MapCanvas` | `components/MapCanvas.vue` | Three.js 3D isometric renderer; handles billboards, tiles, walls, movement highlights, health overlays, reticules | Many props (see component) |
+| `MapToolbar` | `components/MapToolbar.vue` | GM toolbar for map editing (add ground/space, paint, wall/window/door/ceiling/stairs, undo/redo) | `activeTool`, `drawMode`, `elementBrush`, `currentEditY` |
+| `MapPropertyPanel` | `components/MapPropertyPanel.vue` | Edit selected structure wound boxes and properties | `selected` |
+| `EncounterMap` | `components/EncounterMap.vue` | Container: loads map, connects WebSocket, renders MapCanvas + overlays; uses slots for turn-order and combat-controls | `encounter`, `isDm`, `myTamerId`, etc. |
+| `MapBattleLog` | `components/MapBattleLog.vue` | Right-side battle log overlay; GM sees full entries, players see NPC stats redacted | `battleLog`, `isDm`, `npcEntityIds` |
+| `MapPlayerHUD` | `components/MapPlayerHUD.vue` | Bottom-left tamer + digimon HUD with health bars; minimizable | `participants`, `tamerMap`, `isDm`, `myTamerId` |
 | `TamerFormPage` | `components/TamerFormPage.vue` | Full create/edit form for tamers (consolidated) | `tamerId?`, `campaignId`, `mode` |
 | `WoundTracker` | `components/WoundTracker.vue` | Visual wound box tracker | `current`, `max`, `onChange` |
 
@@ -412,6 +457,11 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 | `useDigimonValidation` | `useDigimonValidation.ts` | Validate digimon data; stat range enforcement |
 | `useEvolution` | `useEvolution.ts` | Evolution line CRUD; advance/devolve stage |
 | `useEncounters` | `useEncounters.ts` | Encounter CRUD; all combat action API calls |
+| `useMap` | `useMap.ts` | Map CRUD; `fetchMaps`, `fetchMap`, `createMap`, `updateMap`, `deleteMap` |
+| `useMapWebSocket` | `useMapWebSocket.ts` | WebSocket client with auto-reconnect (5 retries exp backoff); `send()` + `onMessage()` |
+| `useMapMovement` | `useMapMovement.ts` | BFS reachable cells + A* pathfinding; `computeReachable`, `computePath`, `detectCapabilities` |
+| `useMapEditor` | `useMapEditor.ts` | Map editing tool state; apply tools, undo/redo stack |
+| `useMapRotation` | `useMapRotation.ts` | Per-encounter Y-rotation stored in localStorage |
 | `useAttackTags` | `useAttackTags.ts` | Parse attack tag strings; resolve tag effects |
 | `useBaseStatRanges` | `useBaseStatRanges.ts` | Min/max base stat lookup per stage |
 | `useLibraryImportExport` | `useLibraryImportExport.ts` | Export/import full campaign library as JSON |
@@ -439,7 +489,7 @@ flowchart TD
     Constants["constants/tamer-skills.ts"]
     Middleware["middleware/\ncampaign-access, dm-access"]
     ServerAPI["server/api/**\n(40+ endpoints)"]
-    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, parsers, id, password, participantName"]
+    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, parsers, id, password, participantName, mapMovement, gridDistance, areaShapes"]
     DB["server/db/\nindex.ts + schema.ts"]
     Postgres[("PostgreSQL")]
 

@@ -28,6 +28,13 @@ const libraryItems = computed(() => [
     icon: '⬆️',
     color: 'text-digimon-stage-ultimate',
   },
+  {
+    name: 'Maps',
+    description: 'Design and manage 3D encounter maps',
+    path: `/campaigns/${campaignId.value}/library/maps`,
+    icon: '🗺',
+    color: 'text-blue-400',
+  },
 ])
 </script>
 

@@ -38,6 +38,7 @@ const form = reactive({
     newDayHealsAllWounds: false,
     allowDuplicateStatValues: false,
     allowFlexCPSplits: false,
+    giganticMaxSize: { x: null as number | null, y: null as number | null, z: null as number | null },
   },
   skillRenames: {} as Record<string, string>,
   eddySoulRules: {
@@ -91,6 +92,8 @@ onMounted(async () => {
       form.houseRules.newDayHealsAllWounds = houseRules.newDayHealsAllWounds ?? false
       form.houseRules.allowDuplicateStatValues = houseRules.allowDuplicateStatValues ?? false
       form.houseRules.allowFlexCPSplits = houseRules.allowFlexCPSplits ?? false
+      const gms = houseRules.giganticMaxSize as any
+      form.houseRules.giganticMaxSize = { x: gms?.x ?? null, y: gms?.y ?? null, z: gms?.z ?? null }
     }
 
     // Load skill renames
@@ -147,7 +150,7 @@ async function handleSave() {
   )
 
   data.rulesSettings = {
-    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits) && {
+    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits || form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z) && {
       houseRules: {
         ...(form.houseRules.stunMaxDuration1 && { stunMaxDuration1: true }),
         ...(form.houseRules.maxTempWoundsRule && { maxTempWoundsRule: true }),
@@ -155,6 +158,13 @@ async function handleSave() {
         ...(form.houseRules.newDayHealsAllWounds && { newDayHealsAllWounds: true }),
         ...(form.houseRules.allowDuplicateStatValues && { allowDuplicateStatValues: true }),
         ...(form.houseRules.allowFlexCPSplits && { allowFlexCPSplits: true }),
+        ...((form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z) && {
+          giganticMaxSize: {
+            x: form.houseRules.giganticMaxSize.x ?? undefined,
+            y: form.houseRules.giganticMaxSize.y ?? undefined,
+            z: form.houseRules.giganticMaxSize.z ?? undefined,
+          },
+        }),
       },
     }),
     tormentRequirements: {
@@ -410,6 +420,26 @@ async function handleDelete() {
               <p class="text-xs text-digimon-dark-500">Tamers can distribute all CP freely across Attributes and Skills without enforced pool splits. (Standard: 30 total, Enhanced: 40, Extreme: 50)</p>
             </div>
           </label>
+          <!-- Gigantic Max Size -->
+          <div class="flex items-center gap-3 pt-2 border-t border-digimon-dark-700 mt-2">
+            <div class="flex-1">
+              <span class="text-digimon-dark-300 text-sm">Gigantic Max Dimensions</span>
+              <p class="text-xs text-digimon-dark-500">Per-axis cap on Gigantic Digimon size (spaces). Leave an axis empty for no limit on that axis.</p>
+            </div>
+            <div class="flex gap-2">
+              <div v-for="axis in (['x', 'y', 'z'] as const)" :key="axis" class="flex flex-col items-center gap-1">
+                <label class="text-xs text-digimon-dark-500 uppercase font-semibold">{{ axis }}</label>
+                <input
+                  v-model.number="form.houseRules.giganticMaxSize[axis]"
+                  type="number"
+                  min="4"
+                  max="50"
+                  placeholder="—"
+                  class="w-16 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-white text-sm text-center"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
