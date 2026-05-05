@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-05-05 | Pages & Components | Mid-combat initiative: DM can send initiative-roll request to tamer participants during combat phase; processResponse branch 2 also updates partner digimon initiative; inline initiative edit added to participant cards (DM only, pencil icon, updates partner digimon + re-sorts turn order) |
 | 2026-04-23 | All sections | 3D isometric map system added: maps table, WebSocket sync, Three.js MapCanvas, map library pages, attack range validation, area attack shapes, spatial intercede eligibility, gigantic digimon dimensions |
 | 2026-04-14 | API Schema | Effect duration timing changed: durations now decrement at end of affected target's own turn (not start of round); Poison damage likewise fires at end of each poisoned participant's turn. useEncounters.ts nextTurn() updated. |
 | 2026-04-14 | API Schema | Haste effect wired up: attack.post.ts enforces Complex Action cost and blocks bolster/lifesteal; useEncounters.ts grants +1 simple action at round start; canBolsterAttack() blocks bolster for Haste attacks |

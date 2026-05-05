@@ -87,6 +87,10 @@ const pendingWarpChoice = ref<{ chainIndex: number; species: string } | null>(nu
 // End Combat modal state
 const showEndCombatModal = ref(false)
 
+// Inline initiative editing state
+const editingInitiativeId = ref<string | null>(null)
+const editingInitiativeValue = ref<number>(0)
+
 // GM Intercede modal state
 const showGmIntercedeModal = ref(false)
 const gmIntercedeRequest = ref<any>(null)
@@ -1290,6 +1294,35 @@ async function requestInitiativeRoll(tamerId: string) {
   )
 }
 
+async function handleSaveInitiative(participantId: string) {
+  if (!currentEncounter.value) return
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  const participant = participants.find(p => p.id === participantId)
+  if (!participant) return
+
+  const newInitiative = editingInitiativeValue.value
+  const updated = participants.map(p => {
+    if (p.id === participantId) return { ...p, initiative: newInitiative }
+    if (participant.type === 'tamer' && p.type === 'digimon') {
+      const digimon = digimonMap.value.get(p.entityId)
+      if (digimon?.partnerId === participant.entityId) return { ...p, initiative: newInitiative }
+    }
+    return p
+  })
+
+  const newTurnOrder = [...updated]
+    .sort((a, b) => b.initiative - a.initiative)
+    .filter(p => {
+      if (p.type === 'tamer') return true
+      const d = digimonMap.value.get(p.entityId)
+      return !d?.partnerId
+    })
+    .map(p => p.id)
+
+  await updateEncounter(currentEncounter.value.id, { participants: updated, turnOrder: newTurnOrder })
+  editingInitiativeId.value = null
+}
+
 // Request dodge roll from a participant's tamer
 async function requestDodgeRoll(participantId: string) {
   if (!currentEncounter.value) return
@@ -1502,6 +1535,12 @@ async function processResponse(response: any) {
                   ...p,
                   initiative: response.response.initiative,
                   initiativeRoll: response.response.initiativeRoll,
+                }
+              }
+              if (p.type === 'digimon') {
+                const digimon = digimonMap.value.get(p.entityId)
+                if (digimon?.partnerId === tamer.id) {
+                  return { ...p, initiative: response.response.initiative }
                 }
               }
               return p
@@ -3153,8 +3192,27 @@ function onPositionsUpdated(positions: Record<string, any>) {
                     >
                       {{ index + 1 }}
                     </div>
-                    <div class="text-xs text-digimon-dark-400 mt-1">
-                      {{ item.participant.initiative }}
+                    <div class="text-xs text-digimon-dark-400 mt-1 flex items-center gap-0.5">
+                      <template v-if="isDm && editingInitiativeId === item.participant.id">
+                        <input
+                          v-model.number="editingInitiativeValue"
+                          type="number"
+                          class="w-10 bg-digimon-dark-600 text-white text-xs rounded px-1 py-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          @keyup.enter="handleSaveInitiative(item.participant.id)"
+                          @keyup.escape="editingInitiativeId = null"
+                        />
+                        <button class="text-green-400 hover:text-green-300 leading-none" @click="handleSaveInitiative(item.participant.id)">✓</button>
+                        <button class="text-red-400 hover:text-red-300 leading-none" @click="editingInitiativeId = null">✗</button>
+                      </template>
+                      <template v-else>
+                        {{ item.participant.initiative }}
+                        <button
+                          v-if="isDm"
+                          class="text-digimon-dark-600 hover:text-digimon-dark-400 leading-none ml-0.5"
+                          title="Edit initiative"
+                          @click="editingInitiativeId = item.participant.id; editingInitiativeValue = item.participant.initiative"
+                        >✎</button>
+                      </template>
                     </div>
                   </div>
 
@@ -3340,6 +3398,19 @@ function onPositionsUpdated(positions: Record<string, any>) {
                     >
                       Remove
                     </button>
+                  </div>
+                  <div
+                    v-else-if="isDm && currentEncounter.phase === 'combat' && item.participant.type === 'tamer'"
+                    class="flex flex-col gap-2"
+                  >
+                    <button
+                      v-if="!pendingRequests.some((r: any) => r.type === 'initiative-roll' && r.targetTamerId === item.participant.entityId)"
+                      class="text-xs bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-2 py-1 rounded whitespace-nowrap"
+                      @click="requestInitiativeRoll(item.participant.entityId)"
+                    >
+                      🎲 Init
+                    </button>
+                    <span v-else class="text-xs text-digimon-dark-400 whitespace-nowrap">Init pending…</span>
                   </div>
                 </div>
               </div>
