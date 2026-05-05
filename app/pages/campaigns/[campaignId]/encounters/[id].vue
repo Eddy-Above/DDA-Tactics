@@ -91,6 +91,7 @@ const showGmIntercedeModal = ref(false)
 const gmIntercedeRequest = ref<any>(null)
 const gmIntercedeLoading = ref(false)
 const gmDodgeRollInProgress = ref(false)
+const autoEndingNpcTurn = ref(false)
 const gmIntercedeView = ref<'main' | 'select-interceptor' | 'select-optout' | 'select-area-target'>('main')
 const gmOptOutSelections = ref<Set<string>>(new Set())
 const gmIntercedeAreaChosenTarget = ref<string | null>(null)
@@ -728,6 +729,19 @@ function openGmIntercedeModal(request: any) {
   showGmIntercedeModal.value = true
 }
 
+// Auto-end NPC turn when all actions are spent and no blocking requests remain
+watch(currentEncounter, (enc) => {
+  if (!enc || enc.phase !== 'combat') return
+  const active = activeParticipant.value
+  if (!active || !(active as any).isEnemy) return
+  if ((active.actionsRemaining?.simple ?? 0) > 0) return
+  if (autoEndingNpcTurn.value) return
+  const blockingTypes = ['intercede-offer', 'intercede-group-state', 'dodge-roll', 'clash-check', 'health-roll']
+  const pending = (enc.pendingRequests as any[]) || []
+  if (pending.some((r: any) => blockingTypes.includes(r.type))) return
+  autoEndingNpcTurn.value = true
+  handleNextTurn().finally(() => { autoEndingNpcTurn.value = false })
+}, { deep: true })
 
 // Determine if a participant is on the enemy side
 function isEnemyParticipant(participant: CombatParticipant): boolean {
