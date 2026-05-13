@@ -149,6 +149,7 @@ export default defineEventHandler(async (event) => {
           walls: typeof mapRecord.walls === 'string' ? JSON.parse(mapRecord.walls) : (mapRecord.walls ?? []),
           ceilings: typeof mapRecord.ceilings === 'string' ? JSON.parse(mapRecord.ceilings) : (mapRecord.ceilings ?? []),
           doors: typeof mapRecord.doors === 'string' ? JSON.parse(mapRecord.doors) : (mapRecord.doors ?? []),
+          voxels: typeof (mapRecord as any).voxels === 'string' ? JSON.parse((mapRecord as any).voxels) : ((mapRecord as any).voxels ?? []),
         } : null
 
         const dist = chebyshev(attackerPos, targetPos)

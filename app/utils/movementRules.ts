@@ -1,4 +1,5 @@
 import type { GameMap, Vec3, DigimonSize } from '~/types'
+import { mapVoxelAt, mapVoxelBlocksMovement, voxelBlocksMovement } from '~/utils/mapVoxels'
 
 export interface MovementCapabilities {
   canFly: boolean
@@ -72,6 +73,26 @@ function getSpaceTile(map: GameMap, pos: Vec3) {
   return map.spaceTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z) ?? null
 }
 
+function hasSolidVoxelSupport(map: GameMap, pos: Vec3): boolean {
+  if (pos.y <= 0) return false
+  const below = mapVoxelAt(map, { x: pos.x, y: pos.y - 1, z: pos.z })
+  return Boolean(below && voxelBlocksMovement(below))
+}
+
+function canMoveOntoSupportedVoxelTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap): boolean {
+  if (!hasSolidVoxelSupport(map, to)) return false
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const dz = to.z - from.z
+  if (dy > 0) {
+    if (caps.canFly) return true
+    if (caps.canJump && dy <= caps.jumpHeight) return true
+    if (dy === 1 && (dx !== 0 || dz !== 0)) return true
+    return false
+  }
+  return true
+}
+
 // Returns whether a unit with the given capabilities can move from `from` to `to`
 export function canPassThrough(
   from: Vec3,
@@ -83,6 +104,10 @@ export function canPassThrough(
   const dx = to.x - from.x
   const dy = to.y - from.y
   const dz = to.z - from.z
+
+  // Solid voxels occupy their grid cell. Diggers may tunnel through them;
+  // everyone else must move to an empty cell or stand on top of the voxel below.
+  if (mapVoxelBlocksMovement(map, to)) return caps.canDig
 
   // Stair entities block lateral movement through them — they are Y-transition tiles only.
   // You can enter from below (dy>0 step-up) or descend through (dy<0), but not walk through sideways.
@@ -173,7 +198,8 @@ export function canPassThrough(
     return false
   }
 
-  // No tile at destination — solid/empty space
+  // No tile at destination: allow standing/moving on top of solid voxels.
+  if (canMoveOntoSupportedVoxelTop(from, to, caps, map)) return true
   if (caps.canDig) return true  // diggers can go through solid cells too
   return false
 }
@@ -186,6 +212,7 @@ export function canLandOn(
   occupiedPositions: Set<string>,  // positions already occupied by units that block
 ): boolean {
   if (occupiedPositions.has(key(pos))) return false
+  if (mapVoxelBlocksMovement(map, pos)) return false
 
   // Stair entities are transition points — units pass through them but can't stop on them
   if (map.stairs.some(s => s.x === pos.x && s.y === pos.y && s.z === pos.z)) return false
@@ -204,6 +231,9 @@ export function canLandOn(
     // Air tile — can land if flying or hovering
     return caps.canFly
   }
+
+  // Empty cell directly above a solid voxel is a valid landing surface.
+  if (hasSolidVoxelSupport(map, pos)) return true
 
   return false
 }

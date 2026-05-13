@@ -1,4 +1,5 @@
 import type { Vec3, GameMap } from '~/types'
+import { getMapVoxels, voxelBlocksSight } from '~/utils/mapVoxels'
 
 export function vec3Key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 export function parseVec3Key(k: string): Vec3 { const [x, y, z] = k.split(',').map(Number); return { x, y, z } }
@@ -90,6 +91,15 @@ export function hasLineOfSight(
     const boxMax = { x: ceiling.x + 1, y: ceiling.y + 1 + 0.1, z: ceiling.z + 1 }
     const t = rayBoxIntersect({ x: from.x + 0.5, y: from.y + 1, z: from.z + 0.5 }, dir, boxMin, boxMax)
     if (t !== null && t < dist) return false
+  }
+
+  // Check sight-blocking voxels.
+  for (const voxel of getMapVoxels(map)) {
+    if (!voxelBlocksSight(voxel)) continue
+    const boxMin = { x: voxel.x, y: voxel.y, z: voxel.z }
+    const boxMax = { x: voxel.x + 1, y: voxel.y + 1, z: voxel.z + 1 }
+    const t = rayBoxIntersect({ x: from.x + 0.5, y: from.y + 1, z: from.z + 0.5 }, dir, boxMin, boxMax)
+    if (t !== null && t > 0.01 && t < dist) return false
   }
 
   return true

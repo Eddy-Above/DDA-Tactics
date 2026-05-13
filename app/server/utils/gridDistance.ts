@@ -1,4 +1,5 @@
 import type { Vec3, GameMap } from '../../types'
+import { getMapVoxels, voxelBlocksSight } from '../../utils/mapVoxels'
 
 // Chebyshev distance — "king's move" in 3D grid
 export function chebyshev(a: Vec3, b: Vec3): number {
@@ -40,6 +41,12 @@ export function hasLineOfSight(from: Vec3, to: Vec3, map: GameMap): boolean {
   for (const ceiling of map.ceilings) {
     const t = rayAABB(ox, oy, oz, ndx, ndy, ndz, ceiling.x, ceiling.x + 1, ceiling.y + 0.9, ceiling.y + 1.1, ceiling.z, ceiling.z + 1)
     if (t !== null && t < dist) return false
+  }
+
+  for (const voxel of getMapVoxels(map)) {
+    if (!voxelBlocksSight(voxel)) continue
+    const t = rayAABB(ox, oy, oz, ndx, ndy, ndz, voxel.x, voxel.x + 1, voxel.y, voxel.y + 1, voxel.z, voxel.z + 1)
+    if (t !== null && t > 0.01 && t < dist) return false
   }
 
   return true

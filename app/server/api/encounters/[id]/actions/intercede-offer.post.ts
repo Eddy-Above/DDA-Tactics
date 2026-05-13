@@ -114,6 +114,7 @@ export default defineEventHandler(async (event) => {
         ...m,
         groundTiles: typeof m.groundTiles === 'string' ? JSON.parse(m.groundTiles) : (m.groundTiles ?? []),
         spaceTiles: typeof m.spaceTiles === 'string' ? JSON.parse(m.spaceTiles) : (m.spaceTiles ?? []),
+        voxels: typeof (m as any).voxels === 'string' ? JSON.parse((m as any).voxels) : ((m as any).voxels ?? []),
         walls: typeof m.walls === 'string' ? JSON.parse(m.walls) : (m.walls ?? []),
         ceilings: typeof m.ceilings === 'string' ? JSON.parse(m.ceilings) : (m.ceilings ?? []),
         stairs: typeof m.stairs === 'string' ? JSON.parse(m.stairs) : (m.stairs ?? []),
