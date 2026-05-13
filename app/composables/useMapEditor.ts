@@ -1,8 +1,8 @@
-import type { GameMap, MapTool, ElementType, Vec3, MapWall, MapCeiling, MapStair, WallFace, MapGroundTile, MapSpaceTile } from '~/types'
+import type { GameMap, MapTool, ElementType, Vec3, MapWall, MapCeiling, MapStair, WallFace, MapGroundTile, MapSpaceTile, MapVoxel } from '~/types'
 
 type DrawMode = 'line' | 'square' | 'cube'
 
-type MapSnapshot = Pick<GameMap, 'groundTiles' | 'spaceTiles' | 'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs'>
+type MapSnapshot = Pick<GameMap, 'groundTiles' | 'spaceTiles' | 'voxels' | 'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs'>
 
 const MAX_UNDO = 50
 
@@ -22,7 +22,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   function takeSnapshot(): MapSnapshot {
     const m = currentMap.value!
     return JSON.parse(JSON.stringify({
-      groundTiles: m.groundTiles, spaceTiles: m.spaceTiles,
+      groundTiles: m.groundTiles, spaceTiles: m.spaceTiles, voxels: m.voxels ?? [],
       walls: m.walls, windows: m.windows, doors: m.doors,
       ceilings: m.ceilings, stairs: m.stairs,
     }))
@@ -39,6 +39,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     const m = currentMap.value!
     m.groundTiles = snap.groundTiles
     m.spaceTiles = snap.spaceTiles
+    m.voxels = snap.voxels ?? []
     m.walls = snap.walls
     m.windows = snap.windows
     m.doors = snap.doors
@@ -111,6 +112,31 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     for (const cell of cells) {
       const tile = currentMap.value.groundTiles.find(t => t.x === cell.x && t.y === cell.y && t.z === cell.z)
       if (tile) tile.element = elementBrush.value
+      const voxel = (currentMap.value.voxels ?? []).find(v => v.x === cell.x && v.y === cell.y && v.z === cell.z)
+      if (voxel) {
+        voxel.materialId = elementBrush.value
+        voxel.element = elementBrush.value
+        voxel.color = undefined
+      }
+    }
+  }
+
+  function applyVoxelDraw(start: Vec3, end: Vec3) {
+    if (!currentMap.value) return
+    pushUndo()
+    const cells = cellsForDraw(start, end, drawMode.value)
+    const map = currentMap.value
+    if (!map.voxels) map.voxels = []
+    for (const cell of cells) {
+      const existing = map.voxels.find(v => v.x === cell.x && v.y === cell.y && v.z === cell.z)
+      if (existing) {
+        existing.materialId = elementBrush.value
+        existing.element = elementBrush.value
+        existing.color = undefined
+      } else {
+        const voxel: MapVoxel = { x: cell.x, y: cell.y, z: cell.z, materialId: elementBrush.value, element: elementBrush.value }
+        map.voxels.push(voxel)
+      }
     }
   }
 
@@ -147,6 +173,14 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     currentMap.value.doors.push({ id: generateId(), wallId, isOpen: false })
   }
 
+  function applyVoxelWindow(cell: Vec3) {
+    if (!currentMap.value) return
+    const voxel = (currentMap.value.voxels ?? []).find(v => v.x === cell.x && v.y === cell.y && v.z === cell.z)
+    if (!voxel) return
+    pushUndo()
+    voxel.feature = voxel.feature === 'window' ? undefined : 'window'
+  }
+
   function applyCeilingDraw(start: Vec3, end: Vec3, woundBoxes?: number) {
     if (!currentMap.value) return
     pushUndo()
@@ -176,6 +210,13 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     pushUndo()
     const cells = cellsForDraw(start, end, drawMode.value)
     for (const cell of cells) {
+      const voxel = (currentMap.value.voxels ?? []).find(
+        v => v.x === cell.x && v.y === cell.y && v.z === cell.z
+      )
+      if (voxel) {
+        voxel.isSpawnPoint = !voxel.isSpawnPoint
+        continue
+      }
       const tile = currentMap.value.groundTiles.find(
         t => t.x === cell.x && t.y === cell.y && t.z === cell.z
       )
@@ -191,6 +232,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     for (const cell of cells) {
       map.groundTiles = map.groundTiles.filter(t => !(t.x === cell.x && t.y === cell.y && t.z === cell.z))
       map.spaceTiles  = map.spaceTiles.filter( t => !(t.x === cell.x && t.y === cell.y && t.z === cell.z))
+      map.voxels      = (map.voxels ?? []).filter(v => !(v.x === cell.x && v.y === cell.y && v.z === cell.z))
       map.ceilings    = map.ceilings.filter(   c => !(c.x === cell.x && c.y === cell.y && c.z === cell.z))
     }
   }
@@ -240,8 +282,8 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     canUndo: computed(() => undoStack.value.length > 0),
     canRedo: computed(() => redoStack.value.length > 0),
     selectTool, undo, redo,
-    applyGroundDraw, applySpaceDraw, applyPaintElement, applySpawnToggle,
-    applyWallDraw, applyWindow, applyDoor, applyCeilingDraw, applyStair,
+    applyGroundDraw, applySpaceDraw, applyPaintElement, applyVoxelDraw, applySpawnToggle,
+    applyWallDraw, applyWindow, applyDoor, applyVoxelWindow, applyCeilingDraw, applyStair,
     deleteAt, deleteWallAt, deleteWallFillAt,
   }
 }

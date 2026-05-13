@@ -13,7 +13,7 @@
         </button>
         <div v-if="tool.hint" class="tool-tooltip">
           <strong>{{ tool.label }}</strong>
-          <span v-for="line in tool.hint" :key="line"><kbd>{{ line.key }}</kbd> {{ line.desc }}</span>
+          <span v-for="line in tool.hint" :key="line.key"><kbd>{{ line.key }}</kbd> {{ line.desc }}</span>
         </div>
       </div>
     </div>
@@ -37,8 +37,8 @@
       <button class="mode-btn" @click="$emit('change-y', 1)">▲</button>
     </div>
 
-    <!-- Element picker (paint tool) -->
-    <div v-if="activeTool === 'paint-element'" class="toolbar-section element-picker">
+    <!-- Element/material picker (paint + voxel tools) -->
+    <div v-if="activeTool === 'paint-element' || activeTool === 'voxel'" class="toolbar-section element-picker">
       <button
         v-for="el in elements"
         :key="el.id"
@@ -63,7 +63,7 @@
 <script setup lang="ts">
 import type { MapTool, ElementType } from '~/types'
 
-defineProps<{
+const props = defineProps<{
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   elementBrush: ElementType
@@ -86,6 +86,7 @@ const tools: Array<{ id: MapTool; icon: string; label: string; hint?: { key: str
   { id: 'add-ground',    icon: '⬛',  label: 'Add Ground' },
   { id: 'add-space',     icon: '🔲',  label: 'Add Space' },
   { id: 'paint-element', icon: '🎨',  label: 'Paint Element' },
+  { id: 'voxel',         icon: '🧊',  label: 'Voxel Block' },
   { id: 'wall',          icon: '🧱',  label: 'Wall' },
   { id: 'window',        icon: '🪟',  label: 'Window' },
   { id: 'door',          icon: '🚪',  label: 'Door' },
@@ -98,15 +99,14 @@ const tools: Array<{ id: MapTool; icon: string; label: string; hint?: { key: str
   ]},
 ]
 
-const drawModes = [
+const drawModes: Array<{ id: 'line' | 'square' | 'cube'; label: string }> = [
   { id: 'line',   label: 'Line' },
   { id: 'square', label: 'Square' },
   { id: 'cube',   label: 'Cube' },
 ]
 
 const showDrawMode = computed(() => {
-  // These tools support draw mode selection
-  return false // drawMode only shown for area tools — toolbar always shows it
+  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'spawn', 'delete'].includes(props.activeTool)
 })
 
 const elements: Array<{ id: ElementType; label: string; short: string; color: string }> = [

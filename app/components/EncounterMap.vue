@@ -47,6 +47,7 @@
           @wall-edit="onWallEdit"
           @wall-edit-at-edge="onWallEditAtEdge"
           @wall-place="onWallPlace"
+          @voxel-edit="onVoxelEdit"
           @target-selected="$emit('target-selected', $event)"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
@@ -384,6 +385,7 @@ async function persistMap(tool: string) {
   await mapStore.updateMap(props.encounter.mapId, {
     groundTiles: map.value.groundTiles,
     spaceTiles: map.value.spaceTiles,
+    voxels: map.value.voxels ?? [],
     walls: map.value.walls,
     windows: map.value.windows,
     doors: map.value.doors,
@@ -399,6 +401,8 @@ async function onCellDraw(start: Vec3, end: Vec3) {
   if (tool === 'add-ground')    editor.applyGroundDraw(start, end)
   else if (tool === 'add-space')     editor.applySpaceDraw(start, end)
   else if (tool === 'paint-element') editor.applyPaintElement(start, end)
+  else if (tool === 'voxel')         editor.applyVoxelDraw(start, end)
+  else if (tool === 'ceiling')       editor.applyCeilingDraw(start, end)
   else if (tool === 'spawn')         editor.applySpawnToggle(start, end)
   else if (tool === 'delete')        editor.deleteAt(start, end)
   else return
@@ -412,6 +416,15 @@ async function onWallEdit(wallId: string) {
   else if (tool === 'door') editor.applyDoor(wallId)
   else return
   await persistMap(tool)
+}
+
+async function onVoxelEdit(cell: Vec3, mode?: 'window' | 'spawn') {
+  if (!map.value || !props.encounter.mapId) return
+  const tool = mode ?? editor.activeTool.value
+  if (tool === 'window') editor.applyVoxelWindow(cell)
+  else if (tool === 'spawn') editor.applySpawnToggle(cell, cell)
+  else return
+  await persistMap(`voxel-${tool}`)
 }
 
 async function onWallEditAtEdge(tile: Vec3, face: WallFace, mode?: string) {

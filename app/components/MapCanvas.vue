@@ -74,6 +74,7 @@ import type {
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key } from '~/utils/mapGeometry'
+import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -107,6 +108,7 @@ const emit = defineEmits<{
   (e: 'wall-edit', wallId: string): void
   (e: 'wall-edit-at-edge', tile: Vec3, face: WallFace, mode?: string): void
   (e: 'wall-place', startTile: Vec3, endTile: Vec3, face: WallFace): void
+  (e: 'voxel-edit', cell: Vec3, mode?: 'window' | 'spawn'): void
   (e: 'target-selected', participantId: string): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
@@ -143,6 +145,7 @@ let spriteGroups: Map<string, THREE.Group>  // participantId → group
 let tileMeshes: THREE.Mesh[] = []
 let buildMeshes: THREE.Object3D[] = []
 let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
+let voxelMeshes: THREE.Mesh[] = []
 let reticuleGroup: THREE.Group
 let aoeGroup: THREE.Group
 let movementHighlightGroup: THREE.Group
@@ -152,6 +155,7 @@ type EditHit =
   | { type: 'cell'; cell: Vec3 }
   | { type: 'wall'; wallId: string; cell: Vec3 }
   | { type: 'wall-edge'; tile: Vec3; face: WallFace }
+  | { type: 'voxel'; cell: Vec3 }
 let dragStartHit: EditHit | null = null
 let isSnapping = false
 let rightDragActive = false
@@ -410,6 +414,46 @@ function buildMap() {
     buildMeshes.push(mesh)
   }
 
+  // Voxels (full 1×1×1 terrain/cover blocks)
+  for (const voxel of map.voxels ?? []) {
+    const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+    const opacity = getVoxelOpacity(voxel)
+    const def = getVoxelMaterialDefinition(voxel)
+    const mat = new THREE.MeshLambertMaterial({
+      color: getVoxelColor(voxel),
+      transparent: opacity < 1 || Boolean(def.transparent),
+      opacity,
+      depthWrite: opacity >= 1,
+    })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + 0.5, voxel.z + 0.5)
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    mesh.userData = { type: 'voxel', voxel, floorY: voxel.y }
+    scene.add(mesh)
+    buildMeshes.push(mesh)
+    voxelMeshes.push(mesh)
+
+    const edgesGeo = new THREE.EdgesGeometry(geo)
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+    const edges = new THREE.LineSegments(edgesGeo, edgeMat)
+    edges.position.copy(mesh.position)
+    edges.userData = { floorY: voxel.y }
+    scene.add(edges)
+    buildMeshes.push(edges)
+
+    if (voxel.isSpawnPoint) {
+      const spawnGeo = new THREE.PlaneGeometry(TILE_SIZE * 0.72, TILE_SIZE * 0.72)
+      const spawnMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.48, depthWrite: false })
+      const spawnMesh = new THREE.Mesh(spawnGeo, spawnMat)
+      spawnMesh.rotation.x = -Math.PI / 2
+      spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + TILE_SIZE + 0.004, voxel.z + 0.5)
+      spawnMesh.userData = { floorY: voxel.y, type: 'voxel-spawn', voxel }
+      scene.add(spawnMesh)
+      buildMeshes.push(spawnMesh)
+    }
+  }
+
   // Walls — frame-only when a window or door is present
   const walledWindowIds = new Set(map.windows.map(w => w.wallId))
   const walledDoorIds   = new Set(map.doors.map(d => d.wallId))
@@ -638,9 +682,10 @@ function updateCharacterOverlays() {
       const dir        = center.clone().sub(camera.position).normalize()
       const distToChar = camera.position.distanceTo(center)
       const occRay     = new THREE.Raycaster(camera.position, dir, 0, distToChar - 0.1)
-      const hits       = occRay.intersectObjects(wallMeshes.map(w => w.mesh), false)
+      const hits       = occRay.intersectObjects([...wallMeshes.map(w => w.mesh), ...voxelMeshes], false)
       const windowWallIds = new Set((props.map?.windows ?? []).map(w => w.wallId))
       const isOccluded = hits.some(hit => {
+        if (voxelMeshes.includes(hit.object as THREE.Mesh)) return true
         const entry = wallMeshes.find(w => w.mesh === hit.object)
         if (!entry) return true
         if (!windowWallIds.has(entry.wallId)) return true
@@ -880,12 +925,30 @@ function wallEdgeFromEvent(event: MouseEvent): { tile: Vec3; face: WallFace } | 
   return { tile: { x: tx, y: props.currentEditY, z: tz }, face: nearest.face }
 }
 
+function voxelCellFromEvent(event: MouseEvent): Vec3 | null {
+  const hits = getIntersection(event)
+  const hit = hits.find(h => h.object.userData.type === 'voxel' || h.object.userData.type === 'voxel-spawn')
+  const voxel = hit?.object.userData.voxel as { x: number; y: number; z: number } | undefined
+  return voxel ? { x: voxel.x, y: voxel.y, z: voxel.z } : null
+}
+
 function getHoveredHit(event: MouseEvent): EditHit | null {
   const tool = props.activeTool
-  if (tool === 'wall' || tool === 'stairs' || tool === 'window' || tool === 'door') {
+  if (tool === 'window') {
+    const voxel = voxelCellFromEvent(event)
+    if (voxel) return { type: 'voxel', cell: voxel }
     const we = wallEdgeFromEvent(event)
     if (!we) return null
     return { type: 'wall-edge', tile: we.tile, face: we.face }
+  }
+  if (tool === 'wall' || tool === 'stairs' || tool === 'door') {
+    const we = wallEdgeFromEvent(event)
+    if (!we) return null
+    return { type: 'wall-edge', tile: we.tile, face: we.face }
+  }
+  if (tool === 'spawn') {
+    const voxel = voxelCellFromEvent(event)
+    if (voxel) return { type: 'voxel', cell: voxel }
   }
   if (tool === 'delete') {
     if (event.shiftKey || event.ctrlKey) {
@@ -893,6 +956,8 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
       if (!we) return null
       return { type: 'wall-edge', tile: we.tile, face: we.face }
     }
+    const voxel = voxelCellFromEvent(event)
+    if (voxel) return { type: 'cell', cell: voxel }
     const cell = planeCell(event)
     if (!cell) return null
     return { type: 'cell', cell }
@@ -940,15 +1005,30 @@ function makeTileGhostMesh(cell: Vec3, color: number): THREE.Mesh {
   return mesh
 }
 
+function makeVoxelGhostMesh(cell: Vec3, color: number): THREE.Mesh {
+  const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45 })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.set(cell.x + 0.5, cell.y * TILE_SIZE + 0.5, cell.z + 0.5)
+  return mesh
+}
+
 function updateHoverGhost(event: MouseEvent) {
   hoverGhostGroup.clear()
   if (props.activeTool === 'select' || !props.isDm) return
   const tool = props.activeTool
 
   if (tool === 'wall' || tool === 'stairs' || tool === 'window' || tool === 'door') {
+    const color = tool === 'window' ? 0x88ccff : tool === 'door' ? 0x886644 : 0x00aaff
+    if (tool === 'window') {
+      const voxel = voxelCellFromEvent(event)
+      if (voxel) {
+        hoverGhostGroup.add(makeVoxelGhostMesh(voxel, color))
+        return
+      }
+    }
     const we = wallEdgeFromEvent(event)
     if (!we) return
-    const color = tool === 'window' ? 0x88ccff : tool === 'door' ? 0x886644 : 0x00aaff
     if (dragStartHit?.type === 'wall-edge' && tool === 'wall') {
       for (const tile of tilesBetween(dragStartHit.tile, we.tile))
         hoverGhostGroup.add(makeWallGhostMesh(tile, dragStartHit.face, color))
@@ -956,6 +1036,11 @@ function updateHoverGhost(event: MouseEvent) {
       hoverGhostGroup.add(makeWallGhostMesh(we.tile, we.face, color))
     }
   } else if (tool === 'spawn') {
+    const voxel = voxelCellFromEvent(event)
+    if (voxel) {
+      hoverGhostGroup.add(makeVoxelGhostMesh(voxel, 0x00ff88))
+      return
+    }
     const cell = planeCell(event)
     if (!cell) return
     if (dragStartHit?.type === 'cell') {
@@ -969,6 +1054,11 @@ function updateHoverGhost(event: MouseEvent) {
       const we = wallEdgeFromEvent(event)
       if (we) hoverGhostGroup.add(makeWallGhostMesh(we.tile, we.face, 0xff3333))
     } else {
+      const voxel = voxelCellFromEvent(event)
+      if (voxel) {
+        hoverGhostGroup.add(makeVoxelGhostMesh(voxel, 0xff3333))
+        return
+      }
       const cell = planeCell(event)
       if (!cell) return
       if (dragStartHit?.type === 'cell') {
@@ -981,12 +1071,13 @@ function updateHoverGhost(event: MouseEvent) {
   } else {
     const cell = planeCell(event)
     if (!cell) return
-    const color = 0x00aaff
-    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element')) {
+    const color = tool === 'voxel' ? 0x88ccff : 0x00aaff
+    const makeGhost = tool === 'voxel' ? makeVoxelGhostMesh : makeTileGhostMesh
+    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel')) {
       for (const tile of tilesBetween(dragStartHit.cell, cell))
-        hoverGhostGroup.add(makeTileGhostMesh(tile, color))
+        hoverGhostGroup.add(makeGhost(tile, color))
     } else {
-      hoverGhostGroup.add(makeTileGhostMesh(cell, color))
+      hoverGhostGroup.add(makeGhost(cell, color))
     }
   }
 }
@@ -1064,7 +1155,13 @@ function onMouseUp(event: MouseEvent) {
   if (!props.isDm || props.activeTool === 'select' || !dragStartHit) return
   const endHit = getHoveredHit(event)
   const tool = props.activeTool
-  if (dragStartHit.type === 'wall-edge') {
+  if (dragStartHit.type === 'voxel') {
+    if (tool === 'window' || tool === 'spawn') {
+      emit('voxel-edit', dragStartHit.cell, tool)
+    } else if (tool === 'delete') {
+      emit('cell-draw', dragStartHit.cell, dragStartHit.cell)
+    }
+  } else if (dragStartHit.type === 'wall-edge') {
     if (tool === 'window' || tool === 'door') {
       emit('wall-edit-at-edge', dragStartHit.tile, dragStartHit.face)
     } else if (tool === 'delete') {
@@ -1117,18 +1214,31 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  const tileHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space')
+  const placementSurfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
 
-  // Placement: a character is selected in the panel — clicking a tile places them
-  if (props.placingParticipantId && tileHit) {
-    const tile = tileHit.object.userData.tile as { y: number; isSpawnPoint?: boolean }
-    if (!props.isDm && !tile.isSpawnPoint) return
-    const cell: Vec3 = { x: Math.floor(tileHit.point.x), y: tile.y ?? 0, z: Math.floor(tileHit.point.z) }
+  // Placement: a character is selected in the panel — clicking a tile/voxel places them
+  if (props.placingParticipantId && placementSurfaceHit) {
+    const hitType = placementSurfaceHit.object.userData.type
+    const tile = placementSurfaceHit.object.userData.tile as { y: number; isSpawnPoint?: boolean } | undefined
+    const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number; isSpawnPoint?: boolean } | undefined
+    if (!props.isDm) {
+      if (hitType === 'voxel') {
+        if (!voxel?.isSpawnPoint) return
+      } else if (!tile?.isSpawnPoint) return
+    }
+    const cell: Vec3 = hitType === 'voxel' && voxel
+      ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
+      : { x: Math.floor(placementSurfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(placementSurfaceHit.point.z) }
     // Reject if any other placed participant occupies the same tile footprint
     const placing = props.participants.find(pp => pp.id === props.placingParticipantId)
     const placingSize: DigimonSize = placing?.type === 'digimon' ? (props.digimonMap[placing.entityId]?.size ?? 'medium') : 'medium'
     const placingGig = placing?.type === 'digimon' ? props.digimonMap[placing.entityId]?.giganticDimensions : null
     const { tileCount: pCount } = getSizeParams(placingSize, placingGig)
+    for (let dx = 0; dx < pCount; dx++) {
+      for (let dz = 0; dz < pCount; dz++) {
+        if (props.map && mapVoxelBlocksMovement(props.map, { x: cell.x + dx, y: cell.y, z: cell.z + dz })) return
+      }
+    }
     const occupied = props.participants.some(p => {
       if (p.id === props.placingParticipantId) return false
       const oPos = props.participantPositions[p.id]
@@ -1228,7 +1338,7 @@ function onResize() {
 watch(() => props.map, () => {
   if (!scene) return
   buildMeshes.forEach(m => scene.remove(m))
-  buildMeshes = []; tileMeshes = []; wallMeshes = []
+  buildMeshes = []; tileMeshes = []; wallMeshes = []; voxelMeshes = []
   blendTextureCache = new Map()
   buildMap()
 }, { deep: true })
