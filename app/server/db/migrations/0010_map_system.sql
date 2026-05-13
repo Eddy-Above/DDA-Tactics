@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS maps (
   dimensions TEXT NOT NULL DEFAULT '{"width":20,"depth":20,"height":10}',
   ground_tiles TEXT NOT NULL DEFAULT '[]',
   space_tiles TEXT NOT NULL DEFAULT '[]',
+  voxels TEXT NOT NULL DEFAULT '[]',
   walls TEXT NOT NULL DEFAULT '[]',
   windows TEXT NOT NULL DEFAULT '[]',
   doors TEXT NOT NULL DEFAULT '[]',

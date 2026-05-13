@@ -20,6 +20,7 @@ export default defineEventHandler(async (event) => {
     dimensions: parseJson(map.dimensions, { width: 20, depth: 20, height: 10 }),
     groundTiles: parseJson(map.groundTiles, []),
     spaceTiles: parseJson(map.spaceTiles, []),
+    voxels: parseJson((map as any).voxels, []),
     walls: parseJson(map.walls, []),
     windows: parseJson(map.windows, []),
     doors: parseJson(map.doors, []),

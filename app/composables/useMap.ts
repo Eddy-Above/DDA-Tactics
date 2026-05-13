@@ -34,7 +34,7 @@ export function useMap() {
     }
   }
 
-  async function createMap(body: { name: string; description?: string; campaignId: string; dimensions: { width: number; depth: number; height: number } }) {
+  async function createMap(body: { name: string; description?: string; campaignId: string; dimensions: { width: number; depth: number; height?: number } }) {
     const data = await $fetch<GameMap>('/api/maps', { method: 'POST', body })
     maps.value.push(data)
     return data

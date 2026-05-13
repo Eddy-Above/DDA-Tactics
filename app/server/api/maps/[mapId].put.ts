@@ -9,6 +9,7 @@ export default defineEventHandler(async (event) => {
     dimensions: { width: number; depth: number; height: number }
     groundTiles: unknown[]
     spaceTiles: unknown[]
+    voxels: unknown[]
     walls: unknown[]
     windows: unknown[]
     doors: unknown[]
@@ -25,6 +26,7 @@ export default defineEventHandler(async (event) => {
   if (body.dimensions !== undefined)  updates.dimensions = JSON.stringify(body.dimensions)
   if (body.groundTiles !== undefined) updates.groundTiles = JSON.stringify(body.groundTiles)
   if (body.spaceTiles !== undefined)  updates.spaceTiles = JSON.stringify(body.spaceTiles)
+  if (body.voxels !== undefined)      updates.voxels = JSON.stringify(body.voxels)
   if (body.walls !== undefined)       updates.walls = JSON.stringify(body.walls)
   if (body.windows !== undefined)     updates.windows = JSON.stringify(body.windows)
   if (body.doors !== undefined)       updates.doors = JSON.stringify(body.doors)
@@ -44,6 +46,7 @@ export default defineEventHandler(async (event) => {
     dimensions: p(updated.dimensions, {}),
     groundTiles: p(updated.groundTiles, []),
     spaceTiles: p(updated.spaceTiles, []),
+    voxels: p((updated as any).voxels, []),
     walls: p(updated.walls, []),
     windows: p(updated.windows, []),
     doors: p(updated.doors, []),

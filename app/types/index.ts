@@ -39,7 +39,7 @@ export type ElementType = 'fire' | 'water' | 'wind' | 'ice' | 'thunder' | 'wood'
 export type TerrainType = 'normal' | 'water' | 'earth' | 'climbable'
 export type SpaceType = 'air' | 'water' | 'earth'
 export type WallFace = 'north' | 'south' | 'east' | 'west'
-export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
+export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
 export type AreaTag = 'blast' | 'burst' | 'close-blast' | 'cone' | 'line' | 'pass'
 
 export interface Vec3 {
@@ -62,6 +62,29 @@ export interface MapSpaceTile {
   y: number
   z: number
   spaceType: SpaceType
+}
+
+export interface MapVoxel {
+  x: number
+  y: number
+  z: number
+  /** Material id. Existing element ids are valid material ids. */
+  materialId: string
+  /** Optional elemental affinity for DDA rules/UI. */
+  element?: ElementType
+  /** Optional custom #rrggbb color override. */
+  color?: string
+  /** Overrides material movement blocking; defaults to material behavior. */
+  blocksMovement?: boolean
+  /** Overrides material line-of-sight blocking; defaults to material behavior. */
+  blocksSight?: boolean
+  /** Optional opacity override for transparent terrain such as water/glass. */
+  opacity?: number
+  /** Gameplay feature carved into this voxel. */
+  feature?: 'window'
+  /** Units may be placed on top of this voxel during player placement. */
+  isSpawnPoint?: boolean
+  tags?: string[]
 }
 
 export interface MapWall {
@@ -109,6 +132,7 @@ export interface GameMap {
   dimensions: { width: number; depth: number; height?: number }
   groundTiles: MapGroundTile[]
   spaceTiles: MapSpaceTile[]
+  voxels: MapVoxel[]
   walls: MapWall[]
   windows: MapWindow[]
   doors: MapDoor[]
@@ -139,7 +163,7 @@ export interface DestructibleState {
 
 export type WebSocketMapMessage =
   | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[] }
-  | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
+  | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
   | { type: 'door-toggled';     encounterId: string; doorId: string; isOpen: boolean }
   | { type: 'element-painted';  encounterId: string; x: number; y: number; z: number; element: ElementType }
   | { type: 'structure-damaged'; encounterId: string; structureId: string; woundsRemaining: number }

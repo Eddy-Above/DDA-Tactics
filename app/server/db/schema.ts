@@ -366,6 +366,19 @@ export const maps = pgTable('maps', {
     spaceType: string
   }>>(),
 
+  voxels: text('voxels', { mode: 'json' }).notNull().default('[]').$type<Array<{
+    x: number; y: number; z: number
+    materialId: string
+    element?: string
+    color?: string
+    blocksMovement?: boolean
+    blocksSight?: boolean
+    opacity?: number
+    feature?: 'window'
+    isSpawnPoint?: boolean
+    tags?: string[]
+  }>>(),
+
   walls: text('walls', { mode: 'json' }).notNull().default('[]').$type<Array<{
     id: string; x: number; y: number; z: number
     face: string
