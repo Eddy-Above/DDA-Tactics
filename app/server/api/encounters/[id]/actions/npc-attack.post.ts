@@ -510,14 +510,60 @@ export default defineEventHandler(async (event) => {
   let npcDefeatedLog: any = null
   let updatedTurnOrder = turnOrder
   let finalParticipantsAfterDefeat = finalParticipants
+  let npcDefeatNextTurnIndex: number | undefined
+  let npcDefeatNextRound: number | undefined
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.isEnemy &&
       !autoDevolveLog) {
+    const currentTurnIndex = encounter.currentTurnIndex ?? 0
+    const defeatedIndexInTurnOrder = turnOrder.indexOf(body.targetId)
+    const defeatedWasCurrentTurn = defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder === currentTurnIndex
+
     // Filter out defeated NPC from participants
     finalParticipantsAfterDefeat = finalParticipants.filter((p: any) => p.id !== body.targetId)
     // Filter out defeated NPC from turn order
     updatedTurnOrder = turnOrder.filter((id: string) => id !== body.targetId)
+
+    // If defeated NPC was the active turn participant, auto-advance to the next
+    if (defeatedWasCurrentTurn && updatedTurnOrder.length > 0) {
+      const isRoundWrap = currentTurnIndex >= updatedTurnOrder.length
+      npcDefeatNextTurnIndex = isRoundWrap ? 0 : currentTurnIndex
+      npcDefeatNextRound = isRoundWrap ? (encounter.round ?? 0) + 1 : undefined
+
+      if (isRoundWrap) {
+        finalParticipantsAfterDefeat.forEach((p: any) => {
+          const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
+          const hasteGrantsNextRound = !!(hasteEffect && hasteEffect.potency === 1
+            && (p.actionsRemaining?.simple ?? 0) > 0)
+          p.actionsRemaining = { simple: 2 }
+          p.hasActed = false
+          p.usedAttackIds = []
+          p.hasAttemptedDigivolve = false
+          if (!p.stunActionReducedThisRound) {
+            const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
+            if (stunEffect) p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
+          }
+          p.stunActionReducedThisRound = false
+          if (hasteGrantsNextRound) p.actionsRemaining.simple += 1
+          if (p.clash) {
+            const opponent = finalParticipantsAfterDefeat.find((o: any) => o.id === p.clash?.opponentParticipantId)
+            const eitherPinned = p.clash.isPinned || opponent?.clash?.isPinned
+            p.clash.clashCheckNeeded = !eitherPinned
+            p.clash.isPinned = false
+          }
+          p.usedFreeClashThisRound = false
+        })
+      }
+
+      const nextParticipantId = updatedTurnOrder[npcDefeatNextTurnIndex]
+      const nextParticipant = finalParticipantsAfterDefeat.find((p: any) => p.id === nextParticipantId)
+      if (nextParticipant) {
+        nextParticipant.isActive = true
+        nextParticipant.dodgePenalty = 0
+        nextParticipant.hasDirectedThisTurn = false
+      }
+    }
 
     const targetNameForLog = target.type === 'digimon'
       ? resolveParticipantName(target, participants, targetDigimon?.name || 'Digimon', targetDigimon?.isEnemy || false)
@@ -602,6 +648,8 @@ export default defineEventHandler(async (event) => {
     participants: JSON.stringify(finalParticipantsAfterDefeat),
     battleLog: JSON.stringify(updatedBattleLog),
     ...(npcDefeatedLog ? { turnOrder: JSON.stringify(updatedTurnOrder) } : {}),
+    ...(npcDefeatNextTurnIndex !== undefined ? { currentTurnIndex: npcDefeatNextTurnIndex } : {}),
+    ...(npcDefeatNextRound !== undefined ? { round: npcDefeatNextRound } : {}),
     updatedAt: new Date(),
   }
 

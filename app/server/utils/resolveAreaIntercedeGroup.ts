@@ -83,6 +83,8 @@ export async function resolveAreaIntercedeGroup({
   battleLog: any[]
   pendingRequests: any[]
   turnOrder: any[]
+  nextTurnIndex?: number
+  nextRound?: number
 }> {
   const groupData = groupState.data
   const claims: AreaAttackClaim[] = groupData.claims || []
@@ -94,6 +96,8 @@ export async function resolveAreaIntercedeGroup({
   let updatedBattleLog = [...battleLog]
   let updatedPendingRequests = [...pendingRequests]
   let updatedTurnOrder = [...turnOrder]
+  let groupNextTurnIndex: number | undefined
+  let groupNextRound: number | undefined
 
   const claimedTargetIds = new Set(claims.map(c => c.targetId))
   const now = Date.now()
@@ -336,6 +340,8 @@ export async function resolveAreaIntercedeGroup({
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog
       if (result.turnOrder) updatedTurnOrder = result.turnOrder
+      if (result.nextTurnIndex !== undefined) groupNextTurnIndex = result.nextTurnIndex
+      if (result.nextRound !== undefined) groupNextRound = result.nextRound
     }
   }
 
@@ -347,5 +353,7 @@ export async function resolveAreaIntercedeGroup({
     battleLog: updatedBattleLog,
     pendingRequests: updatedPendingRequests,
     turnOrder: updatedTurnOrder,
+    nextTurnIndex: groupNextTurnIndex,
+    nextRound: groupNextRound,
   }
 }

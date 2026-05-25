@@ -35,6 +35,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   battleLog: any[]
   turnOrder?: string[]
   hit: boolean
+  nextTurnIndex?: number
+  nextRound?: number
 }> {
   let { participants, battleLog } = params
 
@@ -333,14 +335,68 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   // --- Remove defeated NPC from encounter ---
   let defeatedLog: any = null
+  let nextTurnIndex: number | undefined
+  let nextRound: number | undefined
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.isEnemy &&
       !autoDevolveLog) {
+    const defeatedIndexInTurnOrder = params.turnOrder ? params.turnOrder.indexOf(params.targetParticipantId) : -1
+    const defeatedWasCurrentTurn = defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder === currentTurnIndex
+
     participants = participants.filter((p: any) => p.id !== params.targetParticipantId)
     if (params.turnOrder) {
       params.turnOrder = params.turnOrder.filter((id: string) => id !== params.targetParticipantId)
     }
+
+    // If the defeated NPC was the active turn participant, auto-advance to the next
+    if (defeatedWasCurrentTurn && params.turnOrder) {
+      const newTurnOrderLength = params.turnOrder.length
+      if (newTurnOrderLength > 0) {
+        // After removal, currentTurnIndex either points to the next participant (shifted left)
+        // or it was the last element and we need to wrap to 0 (round reset)
+        const isRoundWrap = currentTurnIndex >= newTurnOrderLength
+        nextTurnIndex = isRoundWrap ? 0 : currentTurnIndex
+        nextRound = isRoundWrap ? params.round + 1 : undefined
+
+        if (isRoundWrap) {
+          // Round reset: restore all participants' actions
+          const PERMANENT_EFFECTS = new Set(['Clash', 'Burn', 'Poison', 'Haste', 'Stun', 'Regen'])
+          participants.forEach((p: any) => {
+            const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
+            const hasteGrantsNextRound = !!(hasteEffect && hasteEffect.potency === 1
+              && (p.actionsRemaining?.simple ?? 0) > 0)
+            p.actionsRemaining = { simple: 2 }
+            p.hasActed = false
+            p.usedAttackIds = []
+            p.hasAttemptedDigivolve = false
+            if (!p.stunActionReducedThisRound) {
+              const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
+              if (stunEffect) p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
+            }
+            p.stunActionReducedThisRound = false
+            if (hasteGrantsNextRound) p.actionsRemaining.simple += 1
+            if (p.clash) {
+              const opponent = participants.find((o: any) => o.id === p.clash?.opponentParticipantId)
+              const eitherPinned = p.clash.isPinned || opponent?.clash?.isPinned
+              p.clash.clashCheckNeeded = !eitherPinned
+              p.clash.isPinned = false
+            }
+            p.usedFreeClashThisRound = false
+          })
+        }
+
+        // Activate the next participant
+        const nextParticipantId = params.turnOrder[nextTurnIndex]
+        const nextParticipant = participants.find((p: any) => p.id === nextParticipantId)
+        if (nextParticipant) {
+          nextParticipant.isActive = true
+          nextParticipant.dodgePenalty = 0
+          nextParticipant.hasDirectedThisTurn = false
+        }
+      }
+    }
+
     defeatedLog = {
       id: `log-${Date.now()}-defeated`,
       timestamp: new Date().toISOString(),
@@ -386,5 +442,5 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : [])]
 
-  return { participants, battleLog, turnOrder: params.turnOrder, hit }
+  return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound }
 }

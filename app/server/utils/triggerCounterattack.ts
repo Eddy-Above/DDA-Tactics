@@ -19,6 +19,8 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   participants: any[]
   battleLog: any[]
   pendingRequests: any[]
+  nextTurnIndex?: number
+  nextRound?: number
 }> {
   let { participants, battleLog, pendingRequests } = params
 
@@ -248,6 +250,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
     })
     participants = result.participants
     battleLog = result.battleLog
+    return { participants, battleLog, pendingRequests, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
   }
 
   return { participants, battleLog, pendingRequests }

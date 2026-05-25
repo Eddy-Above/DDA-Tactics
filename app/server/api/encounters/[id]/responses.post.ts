@@ -444,12 +444,16 @@ export default defineEventHandler(async (event) => {
               counterattackerParticipantId: request.targetParticipantId,
               originalAttackerParticipantId: request.data.attackerParticipantId,
               houseRules,
+              turnOrder: parseJsonField(encounter.turnOrder),
+              currentTurnIndex: encounter.currentTurnIndex ?? 0,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
             updateData.participants = JSON.stringify(participants)
             updateData.battleLog = JSON.stringify(battleLog)
             updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+            if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
+            if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
         }
       }
@@ -844,12 +848,16 @@ export default defineEventHandler(async (event) => {
               counterattackerParticipantId: request.targetParticipantId,
               originalAttackerParticipantId: request.data.attackerParticipantId,
               houseRules,
+              turnOrder: parseJsonField(encounter.turnOrder),
+              currentTurnIndex: encounter.currentTurnIndex ?? 0,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
             updateData.participants = JSON.stringify(participants)
             updateData.battleLog = JSON.stringify(battleLog)
             updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+            if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
+            if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
         }
       }
@@ -1149,6 +1157,8 @@ export default defineEventHandler(async (event) => {
         battleLog: JSON.stringify(result.battleLog),
         pendingRequests: JSON.stringify(filteredRequests),
         ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
+        ...(result.nextTurnIndex !== undefined ? { currentTurnIndex: result.nextTurnIndex } : {}),
+        ...(result.nextRound !== undefined ? { round: result.nextRound } : {}),
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
     }

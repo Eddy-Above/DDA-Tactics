@@ -232,6 +232,9 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
+    let claimNextTurnIndex: number | undefined
+    let claimNextRound: number | undefined
+
     if (isAreaAttack) {
       const newClaim: AreaAttackClaim = {
         interceptorParticipantId: body.interceptorParticipantId,
@@ -286,6 +289,8 @@ export default defineEventHandler(async (event) => {
         battleLog = resolved.battleLog
         pendingRequests = resolved.pendingRequests
         turnOrder = resolved.turnOrder
+        if (resolved.nextTurnIndex !== undefined) claimNextTurnIndex = resolved.nextTurnIndex
+        if (resolved.nextRound !== undefined) claimNextRound = resolved.nextRound
       }
     } else {
       pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
@@ -316,6 +321,8 @@ export default defineEventHandler(async (event) => {
       pendingRequests: JSON.stringify(pendingRequests),
       battleLog: JSON.stringify(battleLog),
       turnOrder: JSON.stringify(turnOrder),
+      ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
+      ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -389,6 +396,9 @@ export default defineEventHandler(async (event) => {
     return p
   })
 
+  let claimNextTurnIndex: number | undefined
+  let claimNextRound: number | undefined
+
   if (isAreaAttack) {
     const newClaim: AreaAttackClaim = {
       interceptorParticipantId: body.interceptorParticipantId,
@@ -445,6 +455,8 @@ export default defineEventHandler(async (event) => {
       battleLog = resolved.battleLog
       pendingRequests = resolved.pendingRequests
       turnOrder = resolved.turnOrder
+      if (resolved.nextTurnIndex !== undefined) claimNextTurnIndex = resolved.nextTurnIndex
+      if (resolved.nextRound !== undefined) claimNextRound = resolved.nextRound
     }
   } else {
     // Remove all intercede-offer requests for this group
@@ -526,6 +538,8 @@ export default defineEventHandler(async (event) => {
     pendingRequests: JSON.stringify(pendingRequests),
     battleLog: JSON.stringify(battleLog),
     turnOrder: JSON.stringify(turnOrder),
+    ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
+    ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 

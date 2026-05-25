@@ -307,8 +307,6 @@ async function loadData() {
 
 onMounted(async () => {
   await loadData()
-  autoOpenMap()
-  // Auto-refresh — must NOT call autoOpenMap (player may have closed the map)
   refreshInterval = setInterval(loadData, 5000)
 })
 
@@ -3165,17 +3163,6 @@ const playerPlacementMode = computed(() =>
   !!(activeEncounter.value as any)?.mapId
 )
 
-function autoOpenMap() {
-  if (showMapView.value) return
-  const phase = activeEncounter.value?.phase
-  const mapId = (activeEncounter.value as any)?.mapId
-  if (mapId && phase === 'combat') showMapView.value = true
-}
-
-// Open map when phase transitions to initiative/combat while already on the page
-watch(() => activeEncounter.value?.phase, () => autoOpenMap())
-// Open map when encounter is first detected (e.g. after initiative processed)
-watch(() => activeEncounter.value, (enc) => { if (enc) autoOpenMap() })
 
 const tamerMapForMap = computed(() => {
   const out: Record<string, any> = {}
@@ -3293,7 +3280,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
       <template v-else>
         <!-- Active Combat Alert -->
-        <div v-if="activeEncounter" :class="[
+        <div v-if="activeEncounter && activeEncounter.phase === 'combat'" :class="[
           'mb-6 rounded-xl p-4 border-2',
           isMyTurn
             ? 'bg-digimon-orange-500/20 border-digimon-orange-500 animate-pulse'

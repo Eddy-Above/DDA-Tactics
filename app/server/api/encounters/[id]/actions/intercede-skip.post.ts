@@ -153,6 +153,8 @@ export default defineEventHandler(async (event) => {
       battleLog = resolved.battleLog
       pendingRequests = resolved.pendingRequests
       turnOrder = resolved.turnOrder
+      if (resolved.nextTurnIndex !== undefined) updateData.currentTurnIndex = resolved.nextTurnIndex
+      if (resolved.nextRound !== undefined) updateData.round = resolved.nextRound
     }
 
     updateData.pendingRequests = JSON.stringify(pendingRequests)
@@ -275,6 +277,8 @@ export default defineEventHandler(async (event) => {
             if (result.turnOrder) {
               updateData.turnOrder = JSON.stringify(result.turnOrder)
             }
+            if (result.nextTurnIndex !== undefined) updateData.currentTurnIndex = result.nextTurnIndex
+            if (result.nextRound !== undefined) updateData.round = result.nextRound
           }
         }
       }

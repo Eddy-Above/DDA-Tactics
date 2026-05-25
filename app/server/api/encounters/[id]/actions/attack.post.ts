@@ -488,11 +488,15 @@ export default defineEventHandler(async (event) => {
           counterattackerParticipantId: target.id,
           originalAttackerParticipantId: actor.id,
           houseRules,
+          turnOrder: parseJsonField(freshEnc.turnOrder),
+          currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
         })
         await db.update(encounters).set({
           participants: JSON.stringify(caResult.participants),
           battleLog: JSON.stringify(caResult.battleLog),
           pendingRequests: JSON.stringify(caResult.pendingRequests),
+          ...(caResult.nextTurnIndex !== undefined ? { currentTurnIndex: caResult.nextTurnIndex } : {}),
+          ...(caResult.nextRound !== undefined ? { round: caResult.nextRound } : {}),
           updatedAt: new Date(),
         }).where(eq(encounters.id, encounterId))
       }

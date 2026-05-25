@@ -409,6 +409,8 @@ export default defineEventHandler(async (event) => {
     // If no intercede offers possible, create dodge-rolls for player targets and auto-resolve NPC targets
     // (intercede-group-state is pushed below only when intercede offers exist)
     if (newRequests.length === 0) {
+      let areaAutoAdvanceTurnIndex: number | undefined
+      let areaAutoAdvanceRound: number | undefined
       // Auto-resolve NPC targets immediately (no intercede window)
       for (const tid of npcTargetIds) {
         const target = participants.find((p: any) => p.id === tid)
@@ -460,6 +462,8 @@ export default defineEventHandler(async (event) => {
           participants = result.participants
           battleLog = result.battleLog
           if (result.turnOrder) turnOrder = result.turnOrder
+          if (result.nextTurnIndex !== undefined) areaAutoAdvanceTurnIndex = result.nextTurnIndex
+          if (result.nextRound !== undefined) areaAutoAdvanceRound = result.nextRound
         }
       }
 
@@ -505,6 +509,8 @@ export default defineEventHandler(async (event) => {
         battleLog: JSON.stringify(battleLog),
         pendingRequests: JSON.stringify([...pendingRequests, ...dodgeRequests]),
         turnOrder: JSON.stringify(turnOrder),
+        ...(areaAutoAdvanceTurnIndex !== undefined ? { currentTurnIndex: areaAutoAdvanceTurnIndex } : {}),
+        ...(areaAutoAdvanceRound !== undefined ? { round: areaAutoAdvanceRound } : {}),
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
@@ -977,6 +983,8 @@ export default defineEventHandler(async (event) => {
           participants: JSON.stringify(result.participants),
           battleLog: JSON.stringify(result.battleLog),
           ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
+          ...(result.nextTurnIndex !== undefined ? { currentTurnIndex: result.nextTurnIndex } : {}),
+          ...(result.nextRound !== undefined ? { round: result.nextRound } : {}),
           updatedAt: new Date(),
         }).where(eq(encounters.id, encounterId))
 
@@ -994,11 +1002,15 @@ export default defineEventHandler(async (event) => {
               counterattackerParticipantId: body.targetId!,
               originalAttackerParticipantId: body.attackerId,
               houseRules,
+              turnOrder: parseJsonField(freshEnc.turnOrder),
+              currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
             })
             await db.update(encounters).set({
               participants: JSON.stringify(caResult.participants),
               battleLog: JSON.stringify(caResult.battleLog),
               pendingRequests: JSON.stringify(caResult.pendingRequests),
+              ...(caResult.nextTurnIndex !== undefined ? { currentTurnIndex: caResult.nextTurnIndex } : {}),
+              ...(caResult.nextRound !== undefined ? { round: caResult.nextRound } : {}),
               updatedAt: new Date(),
             }).where(eq(encounters.id, encounterId))
           }
