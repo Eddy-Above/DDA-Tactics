@@ -65,6 +65,7 @@ const selectedTamerForRequest = ref('')
 const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
 const showTargetSelector = ref(false)
 const npcStanceParticipantId = ref<string | null>(null)
+const npcAttackParticipantId = ref<string | null>(null)
 const selectedTargetId = ref<string | null>(null)
 const selectedTargetIds = ref<string[]>([])
 const bolsterAttackEnabled = ref(false)
@@ -2042,9 +2043,7 @@ function onNpcAction(participantId: string, action: 'stance' | 'attack') {
   const p = (currentEncounter.value.participants as CombatParticipant[]).find(x => x.id === participantId)
   if (!p) return
   if (action === 'attack') {
-    const attacks = (p as any).attacks ?? []
-    if (attacks.length) selectAttackAndShowTargets(p, attacks[0])
-    else showTargetSelector.value = true
+    npcAttackParticipantId.value = npcAttackParticipantId.value === participantId ? null : participantId
   } else {
     npcStanceParticipantId.value = npcStanceParticipantId.value === participantId ? null : participantId
   }
@@ -2979,6 +2978,26 @@ function onPositionsUpdated(positions: Record<string, any>) {
             >{{ stance }}</button>
           </div>
           <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="npcStanceParticipantId = null">Cancel</button>
+        </div>
+        <!-- Floating NPC attack picker (shown when GM clicks Attack from map radial) -->
+        <div
+          v-if="npcAttackParticipantId"
+          class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+          style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+        >
+          <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Attack</div>
+          <div class="flex flex-col gap-2">
+            <button
+              v-for="attack in getParticipantAttacks((currentEncounter?.participants as CombatParticipant[])?.find(x => x.id === npcAttackParticipantId)!)"
+              :key="attack.id"
+              class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+              @click="selectAttackAndShowTargets((currentEncounter?.participants as CombatParticipant[])?.find(x => x.id === npcAttackParticipantId)!, attack); npcAttackParticipantId = null"
+            >
+              <span class="font-semibold">{{ attack.name }}</span>
+              <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
+            </button>
+          </div>
+          <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="npcAttackParticipantId = null">Cancel</button>
         </div>
       </div>
 

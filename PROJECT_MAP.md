@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-05-26 | Pages & Components | Map view attack picker: MapCanvas emits `player-action` via player radial menu (Move/Attack for own active digimon); EncounterMap passes `player-action` through; GM NPC attack now shows floating attack picker overlay (`npcAttackParticipantId`) instead of auto-picking first attack; player map attack shows floating attack picker overlay (`playerAttackParticipantId`) |
 | 2026-05-25 | Pages & Components | Player view: initiative tracker hidden during `initiative` phase, shown in `setup` and `combat`; map view button moved to Turn Tracker header; map overlay hoisted outside combat-only banner so it works in any phase; `tamerMapForMap` and `digimonMapForMap` now read `currentWounds`/`maxWounds` from encounter participant instead of DB records |
 | 2026-05-25 | Pages & Components, Dependency Graph | Map import/export: `useLibraryImportExport` gains `exportMap`, `exportMaps`, `importMaps`; maps library page adds Import, Export All, and per-card Export buttons |
 | 2026-05-25 | API Schema, Dependency Graph | NPC defeat auto-advance: when a defeated NPC is removed from turnOrder during its own turn, the server now automatically advances currentTurnIndex to the next participant (wrapping to round 0 if last). `resolveNpcAttack` returns `nextTurnIndex?` and `nextRound?`; propagated through `triggerCounterattack`, `resolveAreaIntercedeGroup`, and all call sites in `npc-attack.post`, `intercede-offer.post`, `intercede-skip.post`, `intercede-claim.post`, `attack.post`, `responses.post`. `triggerCounterattack` now accepts `turnOrder?` and `currentTurnIndex?` params. |
@@ -431,10 +432,10 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `HazardManager` | `components/HazardManager.vue` | Add/remove environmental hazards | `encounterId`, `hazards`, `onUpdate` |
 | `QualitySelector` | `components/QualitySelector.vue` | DP-aware quality picker with prerequisites; enforces per-choice rank caps (static `maxRanks` and dynamic caps via props) | `stage`, `currentQualities`, `canAdd`, `availableDP`, `speedyMaxRanks`, `systemBoostMaxRanks`, `eddySoulRules`, `houseRules` |
 | `SpritePreview` | `components/SpritePreview.vue` | Display digimon sprite image | `spriteUrl`, `name` |
-| `MapCanvas` | `components/MapCanvas.vue` | Three.js 3D isometric renderer; handles billboards, tiles, walls, movement highlights, health overlays, reticules | Many props (see component) |
+| `MapCanvas` | `components/MapCanvas.vue` | Three.js 3D isometric renderer; handles billboards, tiles, walls, movement highlights, health overlays, reticules; emits `npc-action` (GM NPC radial: Move/Stance/Attack) and `player-action` (player radial: Move/Attack) | Many props (see component) |
 | `MapToolbar` | `components/MapToolbar.vue` | GM toolbar for map editing (add ground/space, paint, wall/window/door/ceiling/stairs, undo/redo) | `activeTool`, `drawMode`, `elementBrush`, `currentEditY` |
 | `MapPropertyPanel` | `components/MapPropertyPanel.vue` | Edit selected structure wound boxes and properties | `selected` |
-| `EncounterMap` | `components/EncounterMap.vue` | Container: loads map, connects WebSocket, renders MapCanvas + overlays; uses slots for turn-order and combat-controls | `encounter`, `isDm`, `myTamerId`, etc. |
+| `EncounterMap` | `components/EncounterMap.vue` | Container: loads map, connects WebSocket, renders MapCanvas + overlays; uses slots for turn-order and combat-controls; handles `npc-action` move internally, passes through stance/attack; passes through `player-action` | `encounter`, `isDm`, `myTamerId`, etc. |
 | `MapBattleLog` | `components/MapBattleLog.vue` | Right-side battle log overlay; GM sees full entries, players see NPC stats redacted | `battleLog`, `isDm`, `npcEntityIds` |
 | `MapPlayerHUD` | `components/MapPlayerHUD.vue` | Bottom-left tamer + digimon HUD with health bars; minimizable | `participants`, `tamerMap`, `isDm`, `myTamerId` |
 | `TamerFormPage` | `components/TamerFormPage.vue` | Full create/edit form for tamers (consolidated) | `tamerId?`, `campaignId`, `mode` |

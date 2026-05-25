@@ -62,6 +62,15 @@
       <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
       <button class="npc-radial-btn attack" @click="npcAction('attack')">Attack</button>
     </div>
+    <!-- Player radial action menu (own digimon on their turn) -->
+    <div
+      v-if="playerRadialScreen && playerRadialId"
+      class="npc-radial-menu"
+      :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
+    >
+      <button class="npc-radial-btn player move"  @click="playerRadialMove()">Move</button>
+      <button class="npc-radial-btn player attack" @click="playerRadialAction('attack')">Attack</button>
+    </div>
   </div>
 </template>
 
@@ -111,6 +120,7 @@ const emit = defineEmits<{
   (e: 'voxel-edit', cell: Vec3, mode?: 'window' | 'spawn'): void
   (e: 'target-selected', participantId: string): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
+  (e: 'player-action', participantId: string, action: 'attack'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -127,6 +137,8 @@ const pendingMovePath = ref<Vec3[]>([])
 const movingParticipantId = ref<string | null>(null)
 const npcRadialId = ref<string | null>(null)
 const npcRadialScreen = ref<{ x: number; y: number } | null>(null)
+const playerRadialId = ref<string | null>(null)
+const playerRadialScreen = ref<{ x: number; y: number } | null>(null)
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
@@ -728,6 +740,31 @@ function updateNpcRadial() {
   }
 }
 
+// Keep player radial menu pinned as camera moves
+function updatePlayerRadial() {
+  if (!playerRadialId.value) return
+  const p = props.participants.find(x => x.id === playerRadialId.value)
+  const pos = p && props.participantPositions[p.id]
+  if (pos) {
+    const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
+    playerRadialScreen.value = worldToScreen2D(v) ?? playerRadialScreen.value
+  }
+}
+
+function playerRadialMove() {
+  if (!playerRadialId.value) return
+  movingParticipantId.value = playerRadialId.value
+  playerRadialId.value = null
+  playerRadialScreen.value = null
+}
+
+function playerRadialAction(action: 'attack') {
+  if (!playerRadialId.value) return
+  emit('player-action', playerRadialId.value, action)
+  playerRadialId.value = null
+  playerRadialScreen.value = null
+}
+
 // ── Animation loop ─────────────────────────────────────────────────────────
 function applyKeyMovement() {
   if (!keysHeld.size) return
@@ -776,9 +813,10 @@ function animate() {
     movePendingScreen.value = worldToScreen2D(v) ?? movePendingScreen.value
   }
 
-  // HTML token overlays + NPC radial pin
+  // HTML token overlays + NPC/player radial pin
   updateCharacterOverlays()
   updateNpcRadial()
+  updatePlayerRadial()
 
   // Sync movement highlight with reactive data
   updateMovementHighlights()
@@ -1281,17 +1319,29 @@ function onCanvasClick(event: MouseEvent) {
       }
     }
 
-    // If it's the active player's unit and it's their turn — enter movement mode
+    // If it's the active player's unit and it's their turn — show action radial
     if (props.myParticipantIds.includes(participantId) && participantId === props.activeParticipantId) {
-      movingParticipantId.value = participantId
+      if (playerRadialId.value === participantId) {
+        playerRadialId.value = null
+        playerRadialScreen.value = null
+      } else {
+        playerRadialId.value = participantId
+        const pos = props.participantPositions[participantId]
+        if (pos) {
+          const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
+          playerRadialScreen.value = worldToScreen2D(v) ?? null
+        }
+      }
     }
     return
   }
 
-  // Click empty space — close health bar, NPC radial, exit move mode
+  // Click empty space — close health bar, NPC radial, player radial, exit move mode
   clickedHealthBar.value = null
   npcRadialId.value = null
   npcRadialScreen.value = null
+  playerRadialId.value = null
+  playerRadialScreen.value = null
   if (!pendingMovePos.value) movingParticipantId.value = null
 }
 
@@ -1581,4 +1631,8 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.stance { top: -68px; left: 0; }
 .npc-radial-btn.attack { top: -38px; left: 55px; }
 .npc-radial-btn:hover  { background: #2a3480; }
+.npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
+.npc-radial-btn.player.move   { top: -38px; left: -45px; }
+.npc-radial-btn.player.attack { top: -38px; left: 45px; }
+.npc-radial-btn.player:hover  { background: #1a4a30; }
 </style>

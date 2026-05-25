@@ -51,6 +51,7 @@
           @target-selected="$emit('target-selected', $event)"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
+          @player-action="(id, action) => emit('player-action', id, action)"
           @cell-hovered="onCellHovered"
           @movement-cancelled="() => { npcMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
@@ -162,6 +163,7 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
+  (e: 'player-action', participantId: string, action: 'attack'): void
   // Note: 'move' is handled internally in EncounterMap
 }>()
 
