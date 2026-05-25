@@ -3166,21 +3166,30 @@ const playerPlacementMode = computed(() =>
 
 const tamerMapForMap = computed(() => {
   const out: Record<string, any> = {}
+  const participants: any[] = (activeEncounter.value?.participants as any[]) ?? []
   allTamers.value.forEach(t => {
     const derived = calcTamerStats(t)
-    out[t.id] = { name: t.name, spriteUrl: (t as any).spriteUrl ?? null, currentWounds: t.currentWounds, woundBoxes: derived.woundBoxes }
+    const participant = participants.find((p: any) => p.type === 'tamer' && p.entityId === t.id)
+    out[t.id] = {
+      name: t.name,
+      spriteUrl: (t as any).spriteUrl ?? null,
+      currentWounds: participant ? participant.currentWounds : t.currentWounds,
+      woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
+    }
   })
   return out
 })
 
 const digimonMapForMap = computed(() => {
   const out: Record<string, any> = {}
+  const participants: any[] = (activeEncounter.value?.participants as any[]) ?? []
   allDigimon.value.forEach(d => {
+    const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {
       name: (d as any).nickname || d.name,
       spriteUrl: (d as any).spriteUrl ?? null,
-      currentWounds: d.currentWounds,
-      woundBoxes: (d as any).woundBoxes ?? 0,
+      currentWounds: participant ? participant.currentWounds : d.currentWounds,
+      woundBoxes: participant?.maxWounds ?? (d as any).woundBoxes ?? 0,
       size: d.size,
       stage: d.stage,
       baseStats: d.baseStats,
@@ -3279,6 +3288,31 @@ async function handleBreakClash(participantId: string, clashId: string) {
       </div>
 
       <template v-else>
+        <!-- Map overlay (available in any phase) -->
+        <ClientOnly>
+          <div v-if="showMapView && activeEncounter" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
+            <EncounterMap
+              :encounter="activeEncounter as any"
+              :is-dm="false"
+              :my-tamer-id="tamerId"
+              :tamer-map="tamerMapForMap"
+              :digimon-map="digimonMapForMap"
+              :selected-attack="null"
+              :player-placement-mode="playerPlacementMode"
+              :my-participant-ids="myParticipantIds"
+              @positions-updated="onPositionsUpdated"
+              @encounter-updated="() => {}"
+            >
+              <template #combat-controls>
+                <button
+                  class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                  @click="showMapView = false"
+                >✕ Close Map</button>
+              </template>
+            </EncounterMap>
+          </div>
+        </ClientOnly>
+
         <!-- Active Combat Alert -->
         <div v-if="activeEncounter && activeEncounter.phase === 'combat'" :class="[
           'mb-6 rounded-xl p-4 border-2',
@@ -3294,12 +3328,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <p class="text-digimon-dark-300 text-sm">
                 {{ activeEncounter.name }} • Round {{ activeEncounter.round }}
               </p>
-              <button
-                v-if="(activeEncounter as any).mapId"
-                class="mt-1 text-sm px-3 py-1 rounded border font-semibold transition-colors"
-                :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
-                @click="showMapView = !showMapView"
-              >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
             </div>
             <div v-if="isMyTurn && activeEncounter?.phase === 'combat'">
               <button
@@ -3317,31 +3345,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
               </div>
             </div>
           </div>
-
-          <!-- Map overlay -->
-          <ClientOnly>
-            <div v-if="showMapView" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
-              <EncounterMap
-                :encounter="activeEncounter as any"
-                :is-dm="false"
-                :my-tamer-id="tamerId"
-                :tamer-map="tamerMapForMap"
-                :digimon-map="digimonMapForMap"
-                :selected-attack="null"
-                :player-placement-mode="playerPlacementMode"
-                :my-participant-ids="myParticipantIds"
-                @positions-updated="onPositionsUpdated"
-                @encounter-updated="() => {}"
-              >
-                <template #combat-controls>
-                  <button
-                    class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                    @click="showMapView = false"
-                  >✕ Close Map</button>
-                </template>
-              </EncounterMap>
-            </div>
-          </ClientOnly>
 
           <!-- My participants in combat -->
           <div v-if="myParticipants.length > 0" class="mt-4 grid gap-3">
@@ -3726,20 +3729,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </div>
 
         <!-- Turn Tracker (Redesigned) -->
-        <div v-if="activeEncounter && myParticipants.length > 0" class="mb-8">
+        <div v-if="activeEncounter && myParticipants.length > 0 && (activeEncounter.phase === 'combat' || activeEncounter.phase === 'setup')" class="mb-8">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-lg font-display font-semibold text-white">Turn Order</h3>
-            <button
-              class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
-              @click="intercedeOptionsSelections = new Set(
-                (activeEncounter!.participants as any[])
-                  .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant?.id)
-                  .map((p: any) => p.id)
-                  .filter((id: string) => !(myTamerParticipant?.intercedeOptOuts || []).includes(id))
-              ); showIntercedeOptionsModal = true"
-            >
-              Intercede Options
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="(activeEncounter as any).mapId"
+                class="text-xs px-3 py-1 rounded border font-semibold transition-colors"
+                :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
+                @click="showMapView = !showMapView"
+              >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
+              <button
+                class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
+                @click="intercedeOptionsSelections = new Set(
+                  (activeEncounter!.participants as any[])
+                    .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant?.id)
+                    .map((p: any) => p.id)
+                    .filter((id: string) => !(myTamerParticipant?.intercedeOptOuts || []).includes(id))
+                ); showIntercedeOptionsModal = true"
+              >
+                Intercede Options
+              </button>
+            </div>
           </div>
 
           <div class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700">

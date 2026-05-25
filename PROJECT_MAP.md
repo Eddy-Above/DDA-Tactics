@@ -1,6 +1,8 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-05-25 | Pages & Components | Player view: initiative tracker hidden during `initiative` phase, shown in `setup` and `combat`; map view button moved to Turn Tracker header; map overlay hoisted outside combat-only banner so it works in any phase; `tamerMapForMap` and `digimonMapForMap` now read `currentWounds`/`maxWounds` from encounter participant instead of DB records |
+| 2026-05-25 | Pages & Components, Dependency Graph | Map import/export: `useLibraryImportExport` gains `exportMap`, `exportMaps`, `importMaps`; maps library page adds Import, Export All, and per-card Export buttons |
 | 2026-05-25 | API Schema, Dependency Graph | NPC defeat auto-advance: when a defeated NPC is removed from turnOrder during its own turn, the server now automatically advances currentTurnIndex to the next participant (wrapping to round 0 if last). `resolveNpcAttack` returns `nextTurnIndex?` and `nextRound?`; propagated through `triggerCounterattack`, `resolveAreaIntercedeGroup`, and all call sites in `npc-attack.post`, `intercede-offer.post`, `intercede-skip.post`, `intercede-claim.post`, `attack.post`, `responses.post`. `triggerCounterattack` now accepts `turnOrder?` and `currentTurnIndex?` params. |
 | 2026-05-05 | Pages & Components, API Schema | Performance: removed redundant fetchEncounter after attacks/intercede handlers; intercede action handlers now use returned API state directly; polling loop stripped to encounter-only (tamers/evolutions loaded once on mount); deep watcher on currentEncounter replaced with targeted computed; intercede-offer.post.ts now batch-fetches all participant digimon/tamer records upfront (inArray) instead of N sequential per-participant queries; canReachTarget made synchronous using pre-fetched map |
 | 2026-05-05 | Pages & Components | Mid-combat initiative: DM can send initiative-roll request to tamer participants during combat phase; processResponse branch 2 also updates partner digimon initiative; inline initiative edit added to participant cards (DM only, pencil icon, updates partner digimon + re-sorts turn order) |
@@ -467,7 +469,7 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 | `useMapRotation` | `useMapRotation.ts` | Per-encounter Y-rotation stored in localStorage |
 | `useAttackTags` | `useAttackTags.ts` | Parse attack tag strings; resolve tag effects |
 | `useBaseStatRanges` | `useBaseStatRanges.ts` | Min/max base stat lookup per stage |
-| `useLibraryImportExport` | `useLibraryImportExport.ts` | Export/import full campaign library as JSON |
+| `useLibraryImportExport` | `useLibraryImportExport.ts` | Export/import campaign library (tamers, digimon, maps) as JSON |
 
 ---
 

@@ -1,4 +1,5 @@
 import type { Tamer, Digimon } from '../server/db/schema'
+import type { GameMap } from '../types'
 
 interface ImportResult {
   successful: number
@@ -51,6 +52,16 @@ function validateTamerEntry(data: unknown): string | null {
   return null
 }
 
+function validateMapEntry(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return 'Not an object'
+  const d = data as Record<string, unknown>
+  if (!d.name || typeof d.name !== 'string') return 'Missing or invalid "name"'
+  if (!d.dimensions || typeof d.dimensions !== 'object') return 'Missing "dimensions"'
+  const dims = d.dimensions as Record<string, unknown>
+  if (typeof dims.width !== 'number' || typeof dims.depth !== 'number') return 'dimensions must have numeric width and depth'
+  return null
+}
+
 function validateDigimonEntry(data: unknown): string | null {
   if (!data || typeof data !== 'object') return 'Not an object'
   const d = data as Record<string, unknown>
@@ -70,6 +81,7 @@ function validateDigimonEntry(data: unknown): string | null {
 export function useLibraryImportExport() {
   const { createTamer } = useTamers()
   const { createDigimon } = useDigimon()
+  const { createMap, updateMap } = useMap()
 
   function exportTamers(tamers: Tamer[]) {
     const data = tamers.map((t) => ({
@@ -245,5 +257,95 @@ export function useLibraryImportExport() {
     return result
   }
 
-  return { exportTamers, exportDigimon, importTamers, importDigimon }
+  function exportMap(map: GameMap) {
+    const data = {
+      name: map.name,
+      description: map.description,
+      dimensions: map.dimensions,
+      groundTiles: map.groundTiles,
+      spaceTiles: map.spaceTiles,
+      voxels: map.voxels,
+      walls: map.walls,
+      windows: map.windows,
+      doors: map.doors,
+      ceilings: map.ceilings,
+      stairs: map.stairs,
+    }
+    downloadJson(data, `${map.name.replace(/[^a-z0-9]/gi, '_')}.map.json`)
+  }
+
+  function exportMaps(maps: GameMap[]) {
+    const data = maps.map(map => ({
+      name: map.name,
+      description: map.description,
+      dimensions: map.dimensions,
+      groundTiles: map.groundTiles,
+      spaceTiles: map.spaceTiles,
+      voxels: map.voxels,
+      walls: map.walls,
+      windows: map.windows,
+      doors: map.doors,
+      ceilings: map.ceilings,
+      stairs: map.stairs,
+    }))
+    downloadJson(data, 'maps.json')
+  }
+
+  async function importMaps(file: File, campaignId: string): Promise<ImportResult> {
+    let entries: unknown[]
+    try {
+      entries = await parseJsonFile(file)
+    }
+    catch (e) {
+      return {
+        successful: 0,
+        failed: 1,
+        errors: [{ index: -1, name: '', error: e instanceof Error ? e.message : 'Unknown error' }],
+      }
+    }
+
+    const result: ImportResult = { successful: 0, failed: 0, errors: [] }
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i] as Record<string, unknown>
+      const validationError = validateMapEntry(entry)
+      if (validationError) {
+        result.failed++
+        result.errors.push({ index: i, name: (entry?.name as string) || '', error: validationError })
+        continue
+      }
+
+      try {
+        const created = await createMap({
+          name: entry.name as string,
+          description: (entry.description as string | undefined) ?? '',
+          campaignId,
+          dimensions: entry.dimensions as GameMap['dimensions'],
+        })
+        await updateMap(created.id, {
+          groundTiles: (entry.groundTiles as GameMap['groundTiles']) ?? [],
+          spaceTiles: (entry.spaceTiles as GameMap['spaceTiles']) ?? [],
+          voxels: (entry.voxels as GameMap['voxels']) ?? [],
+          walls: (entry.walls as GameMap['walls']) ?? [],
+          windows: (entry.windows as GameMap['windows']) ?? [],
+          doors: (entry.doors as GameMap['doors']) ?? [],
+          ceilings: (entry.ceilings as GameMap['ceilings']) ?? [],
+          stairs: (entry.stairs as GameMap['stairs']) ?? [],
+        })
+        result.successful++
+      }
+      catch (e) {
+        result.failed++
+        result.errors.push({
+          index: i,
+          name: (entry.name as string) || '',
+          error: e instanceof Error ? e.message : 'Unknown error',
+        })
+      }
+    }
+
+    return result
+  }
+
+  return { exportTamers, exportDigimon, importTamers, importDigimon, exportMap, exportMaps, importMaps }
 }
