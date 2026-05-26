@@ -31,7 +31,6 @@ function isBlockedByCeiling(map: GameMap, from: Vec3, to: Vec3): boolean {
 }
 
 function hasSolidVoxelSupport(map: GameMap, pos: Vec3): boolean {
-  if (pos.y <= 0) return false
   const below = mapVoxelAt(map, { x: pos.x, y: pos.y - 1, z: pos.z })
   return Boolean(below && voxelBlocksMovement(below))
 }
@@ -50,8 +49,31 @@ function canMoveOntoSupportedVoxelTop(from: Vec3, to: Vec3, caps: MovementCapabi
   return true
 }
 
+function hasStairAt(map: GameMap, pos: Vec3): boolean {
+  return map.stairs.some(s => s.x === pos.x && s.y === pos.y && s.z === pos.z)
+}
+
+function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
+  return map.stairs.some(s => s.x === pos.x && s.y === pos.y - 1 && s.z === pos.z)
+}
+
+function canMoveOntoSupportedStairTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap): boolean {
+  if (!hasSolidStairSupport(map, to)) return false
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const dz = to.z - from.z
+  if (dy > 0) {
+    if (caps.canFly) return true
+    if (caps.canJump && dy <= caps.jumpHeight) return true
+    if (dy === 1 && (dx !== 0 || dz !== 0)) return true
+    return false
+  }
+  return true
+}
+
 function canPassThrough(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap): boolean {
   if (mapVoxelBlocksMovement(map, to)) return caps.canDig
+  if (hasStairAt(map, to)) return caps.canDig
   if (isBlockedByCeiling(map, from, to)) return false
   if (isSolidWall(map, from, to)) return false
 
@@ -68,8 +90,6 @@ function canPassThrough(from: Vec3, to: Vec3, caps: MovementCapabilities, map: G
     if (spaceTile.spaceType === 'earth') return caps.canDig
     if (to.y > from.y) {
       if (caps.canFly) return true
-      const hasStair = map.stairs.some(s => s.x === from.x && s.y === from.y && s.z === from.z)
-      if (hasStair) return true
       if (caps.canJump && to.y - from.y <= caps.jumpHeight) return true
       return false
     }
@@ -77,6 +97,7 @@ function canPassThrough(from: Vec3, to: Vec3, caps: MovementCapabilities, map: G
   }
 
   if (canMoveOntoSupportedVoxelTop(from, to, caps, map)) return true
+  if (canMoveOntoSupportedStairTop(from, to, caps, map)) return true
   return caps.canDig
 }
 

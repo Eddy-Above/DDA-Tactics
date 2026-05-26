@@ -220,7 +220,7 @@ onMounted(() => {
     if (movingParticipantId.value) {
       e.preventDefault()
       e.stopPropagation()
-      npcMoveY.value = Math.max(0, npcMoveY.value + (e.deltaY > 0 ? -1 : 1))
+      npcMoveY.value = npcMoveY.value + (e.deltaY > 0 ? -1 : 1)
     }
   }, { passive: false, capture: true })
 })
@@ -1503,7 +1503,7 @@ function onCanvasClick(event: MouseEvent) {
 
 function onWheel(event: WheelEvent) {
   if (movingParticipantId.value) {
-    npcMoveY.value = Math.max(0, npcMoveY.value + (event.deltaY > 0 ? -1 : 1))
+    npcMoveY.value = npcMoveY.value + (event.deltaY > 0 ? -1 : 1)
   }
 }
 
