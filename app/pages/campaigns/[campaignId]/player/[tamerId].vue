@@ -3247,6 +3247,10 @@ function onMapAreaAttackConfirmed(targetIds: string[]) {
   confirmAreaAttack(targets)
 }
 
+function onMapAttackCancelled() {
+  selectedAttack.value = null
+}
+
 async function handleBreakClash(participantId: string, clashId: string) {
   if (!activeEncounter.value || !tamer.value) return
   try {
@@ -3342,6 +3346,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @player-action="(id, action) => { if (action === 'attack') playerAttackParticipantId = playerAttackParticipantId === id ? null : id }"
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"
+              @attack-cancelled="onMapAttackCancelled"
             >
               <template #combat-controls>
                 <button

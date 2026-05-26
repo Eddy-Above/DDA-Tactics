@@ -2894,6 +2894,10 @@ function onMapAreaAttackConfirmed(targetIds: string[]) {
   const targets = participants.filter(p => targetIds.includes(p.id))
   confirmAreaAttack(targets)
 }
+
+function onMapAttackCancelled() {
+  selectedAttack.value = null
+}
 </script>
 
 <template>
@@ -2980,6 +2984,7 @@ function onMapAreaAttackConfirmed(targetIds: string[]) {
           @npc-action="onNpcAction"
           @target-selected="onMapTargetSelected"
           @area-attack-confirmed="onMapAreaAttackConfirmed"
+          @attack-cancelled="onMapAttackCancelled"
         >
           <template #turn-order>
             <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">

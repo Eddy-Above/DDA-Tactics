@@ -50,6 +50,7 @@
           @voxel-edit="onVoxelEdit"
           @target-selected="$emit('target-selected', $event)"
           @area-attack-confirmed="$emit('area-attack-confirmed', $event)"
+          @attack-cancelled="$emit('attack-cancelled')"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
           @player-action="(id, action) => emit('player-action', id, action)"
@@ -166,6 +167,7 @@ const emit = defineEmits<{
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
   (e: 'player-action', participantId: string, action: 'attack'): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
+  (e: 'attack-cancelled'): void
   // Note: 'move' is handled internally in EncounterMap
 }>()
 

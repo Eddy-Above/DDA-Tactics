@@ -121,6 +121,7 @@ const emit = defineEmits<{
   (e: 'voxel-edit', cell: Vec3, mode?: 'window' | 'spawn'): void
   (e: 'target-selected', participantId: string): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
+  (e: 'attack-cancelled'): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
   (e: 'player-action', participantId: string, action: 'attack'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
@@ -792,7 +793,7 @@ function applyKeyMovement() {
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
-    if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); return }
+    if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); emit('attack-cancelled'); return }
   }
   if (e.key === 'q' || e.key === 'Q') { snapAzimuth(-Math.PI / 4); return }
   if (e.key === 'e' || e.key === 'E') { snapAzimuth(+Math.PI / 4); return }
@@ -1301,6 +1302,7 @@ function onMouseDown(event: MouseEvent) {
     }
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) {
       clearAoeState()
+      emit('attack-cancelled')
       return
     }
     rightDragActive = true
