@@ -1444,10 +1444,22 @@ function onCanvasClick(event: MouseEvent) {
     const p = props.participants.find(p => p.id === participantId)
     if (!p) return
 
-    // GM clicking an NPC — toggle radial action menu (any enemy, not just active turn)
+    // In single-target targeting mode, clicking a sprite that has a reticule selects them as target
+    if (props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) {
+      const hasReticule = reticuleGroup.children.some(r => r.userData.participantId === participantId)
+      if (hasReticule) {
+        emit('target-selected', participantId)
+        return
+      }
+    }
+
+    // GM clicking an NPC — only show radial action menu when it's that NPC's active turn
     if (props.isDm && (p as any).isEnemy) {
-      npcRadialId.value = npcRadialId.value === p.id ? null : p.id
-      return
+      if (p.id === props.activeParticipantId) {
+        npcRadialId.value = npcRadialId.value === p.id ? null : p.id
+        return
+      }
+      // Non-active-turn enemy: fall through to show health bar overlay
     }
 
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
