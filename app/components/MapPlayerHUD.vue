@@ -75,7 +75,14 @@ interface HudEntry { id: string; name: string; spriteUrl?: string | null; curren
 function makeEntry(p: CombatParticipant): HudEntry | null {
   const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
   if (!info) return null
-  return { id: p.id, name: info.name, spriteUrl: info.spriteUrl, currentWounds: info.currentWounds, woundBoxes: info.woundBoxes }
+  const anyP = p as any
+  return {
+    id: p.id,
+    name: info.name,
+    spriteUrl: info.spriteUrl,
+    currentWounds: anyP.currentWounds ?? info.currentWounds,
+    woundBoxes: anyP.maxWounds ?? info.woundBoxes,
+  }
 }
 
 const myEntries = computed<HudEntry[]>(() => {
