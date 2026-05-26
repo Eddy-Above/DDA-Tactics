@@ -2863,10 +2863,12 @@ function onPositionsUpdated(positions: Record<string, any>) {
 const mapSelectedAttackProp = computed(() => {
   if (!selectedAttack.value || !showMapView.value) return null
   const p = selectedAttack.value.participant
-  const digimon = p.digimon
+  const digimon = digimonMap.value.get(p.entityId)
+  if (!digimon) return null
   const stats = calcDigimonStats(digimon)
   const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
   const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
+  const reachRanks = (digimon.qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
   return {
     tags: selectedAttack.value.attack.tags ?? [],
     range: selectedAttack.value.attack.range ?? 'melee',
@@ -2874,6 +2876,8 @@ const mapSelectedAttackProp = computed(() => {
     movement: stats.movement,
     ram: stats.ram,
     sizeAboveLarge,
+    effectiveLimit: stats.effectiveLimit,
+    meleeRange: reachRanks > 0 ? reachRanks * 2 : 1,
   }
 })
 

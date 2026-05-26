@@ -100,7 +100,7 @@ const props = defineProps<{
   isDm: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number } | null
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2

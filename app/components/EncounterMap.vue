@@ -153,7 +153,7 @@ const props = defineProps<{
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     giganticDimensions?: { width: number; height: number; depth: number } | null
   }>
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number } | null
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean
@@ -240,6 +240,14 @@ const npcEntityIds = computed(() => {
 
 // ── Attacker stats (for targeting UI) ──────────────────────────────────────
 const attackerStats = computed(() => {
+  // When a selected attack carries explicit limits from the attacking participant, use them directly
+  if (props.selectedAttack?.effectiveLimit !== undefined) {
+    return {
+      range: props.selectedAttack.range === 'ranged' ? 1 : 0,
+      effectiveLimit: props.selectedAttack.effectiveLimit,
+      meleeRange: props.selectedAttack.meleeRange ?? 1,
+    }
+  }
   const participant = props.encounter.participants.find(p => p.id === activeParticipantId.value)
   if (!participant || participant.type !== 'digimon') return { range: 0, effectiveLimit: 0, meleeRange: 1 }
   const d = props.digimonMap[participant.entityId]
