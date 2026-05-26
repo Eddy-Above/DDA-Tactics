@@ -2818,13 +2818,15 @@ async function attachMap(mapId: string | null) {
 // Flat maps keyed by entityId for EncounterMap
 const tamerMapForMap = computed(() => {
   const out: Record<string, any> = {}
+  const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
   tamers.value.forEach(t => {
     const derived = calcTamerStats(t)
+    const participant = participants.find((p: any) => p.type === 'tamer' && p.entityId === t.id)
     out[t.id] = {
       name: t.name,
       spriteUrl: t.spriteUrl ?? null,
-      currentWounds: t.currentWounds,
-      woundBoxes: derived.woundBoxes,
+      currentWounds: participant ? participant.currentWounds : t.currentWounds,
+      woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
     }
   })
   return out
@@ -2832,14 +2834,16 @@ const tamerMapForMap = computed(() => {
 
 const digimonMapForMap = computed(() => {
   const out: Record<string, any> = {}
+  const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
   digimonList.value.forEach(d => {
     const derived = calcDigimonStats(d)
     const parsedQualities = typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? [])
+    const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {
       name: d.nickname || d.name,
       spriteUrl: d.spriteUrl ?? null,
-      currentWounds: d.currentWounds,
-      woundBoxes: derived.woundBoxes,
+      currentWounds: participant ? participant.currentWounds : d.currentWounds,
+      woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
       size: d.size,
       stage: d.stage,
       baseStats: d.baseStats,
