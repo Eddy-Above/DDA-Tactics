@@ -2529,6 +2529,23 @@ function stopFastRefresh() {
   }
 }
 
+async function syncEncounterDigimon() {
+  const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
+  const knownIds = new Set(digimonList.value.map(d => d.id))
+  const missingIds = participants
+    .filter(p => p.type === 'digimon' && p.entityId && !knownIds.has(p.entityId))
+    .map(p => p.entityId)
+  if (missingIds.length === 0) return
+  try {
+    const fetched = await $fetch<any[]>(`/api/digimon?ids=${missingIds.join(',')}`)
+    if (fetched.length > 0) {
+      digimonList.value = [...digimonList.value, ...fetched]
+    }
+  } catch (e) {
+    console.error('Failed to sync encounter digimon:', e)
+  }
+}
+
 onMounted(async () => {
   await Promise.all([
     loadCampaign(),
@@ -2543,9 +2560,12 @@ onMounted(async () => {
     showMapView.value = true
   }
 
+  await syncEncounterDigimon()
+
   // Auto-refresh encounter every 5 seconds to see player responses
-  refreshInterval = setInterval(() => {
-    fetchEncounter(route.params.id as string)
+  refreshInterval = setInterval(async () => {
+    await fetchEncounter(route.params.id as string)
+    await syncEncounterDigimon()
   }, 5000)
 })
 

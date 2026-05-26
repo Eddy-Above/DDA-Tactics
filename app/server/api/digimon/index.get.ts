@@ -12,8 +12,16 @@ export default defineEventHandler(async (event) => {
   const isEnemy = query.isEnemy === 'true'
   const stage = query.stage as DigimonStage | undefined
   const campaignId = query.campaignId as string | undefined
+  const ids = query.ids as string | undefined
 
   const conditions = []
+
+  if (ids) {
+    const idList = ids.split(',').filter(Boolean)
+    if (idList.length > 0) {
+      conditions.push(inArray(digimon.id, idList))
+    }
+  }
 
   if (campaignId) {
     const campaignTamerIds = db.select({ id: tamers.id }).from(tamers).where(eq(tamers.campaignId, campaignId))

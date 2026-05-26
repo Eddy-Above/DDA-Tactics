@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-05-26 | API Schema, Pages & Components | GM page map wound sync: `GET /api/digimon` now accepts `ids` (comma-separated) query param to fetch digimon by specific IDs. GM encounter page adds `syncEncounterDigimon()` — called on mount and every poll tick — which identifies encounter participant digimon missing from `digimonList` (e.g. legacy enemies with `campaignId=null`) and fetches+merges them so `digimonMapForMap` and `MapPlayerHUD` allEntries can render their wound bars. |
 | 2026-05-26 | Pages & Components, Dependency Graph | Map-based attack targeting: `app/utils/areaShapes.ts` (new) — client-side area shape computation (blast/burst/close-blast/cone/line/pass). MapCanvas gains AOE highlight rendering (amber tiles via `aoeGroup`), mouse-tracked area preview, `area-attack-confirmed` emit, and map-click target confirmation; AOE filtering on reticules. EncounterMap forwards `area-attack-confirmed`. Both GM (`encounters/[id].vue`) and player (`player/[tamerId].vue`) pages wire `mapSelectedAttackProp` computed + `onMapTargetSelected` + `onMapAreaAttackConfirmed` handlers; `selectAttackAndShowTargets` skips target modal when in map view. `mapSelectedAttackProp` now includes `effectiveLimit` and `meleeRange` derived from the attacking participant (not active-turn participant); `attackerStats` in EncounterMap uses these values when present to fix reticule range when attacker ≠ active-turn participant. |
 | 2026-05-26 | API Schema | Map-aware intercede: single-target intercede-offer now spatially gates digimon eligibility (same pattern as area-attack path) — digimon must be able to reach intercedee's tile within movement budget when a map is attached. intercede-claim now swaps positions on claim: interceptor moves to intercedee's tile; intercedee moves one step further from attacker (dir = sign(target - attacker)); both single-target DB saves (support-attack and damage-attack paths) persist `participantPositions`. |
 | 2026-05-26 | Pages & Components | Map view attack picker: MapCanvas emits `player-action` via player radial menu (Move/Attack for own active digimon); EncounterMap passes `player-action` through; GM NPC attack now shows floating attack picker overlay (`npcAttackParticipantId`) instead of auto-picking first attack; player map attack shows floating attack picker overlay (`playerAttackParticipantId`) |
@@ -101,7 +102,7 @@ All routes return JSON. No auth middleware on API routes — access is enforced 
 
 | Method | Path | Handler File | Request Body | Response |
 |---|---|---|---|---|
-| GET | `/api/digimon` | `digimon/index.get.ts` | query: `campaignId?`, `partnerId?` | `Digimon[]` |
+| GET | `/api/digimon` | `digimon/index.get.ts` | query: `campaignId?`, `partnerId?`, `isEnemy?`, `stage?`, `ids?` (comma-separated) | `Digimon[]` |
 | POST | `/api/digimon` | `digimon/index.post.ts` | Full `Digimon` shape (name, stage, attribute, baseStats, attacks, qualities, etc.) | `Digimon` |
 | GET | `/api/digimon/[id]` | `digimon/[id].get.ts` | path: `id` | `Digimon` |
 | PUT | `/api/digimon/[id]` | `digimon/[id].put.ts` | Partial `Digimon` fields | `Digimon` |
