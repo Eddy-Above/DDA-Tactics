@@ -792,7 +792,11 @@ export default defineEventHandler(async (event) => {
     const tamerIsTarget = p.id === body.targetId
     const digimonIsTarget = partnerParticipant.id === body.targetId
     const tamerEligible = !tamerIsTarget && hasEligibleInterceptor(p)
-    const digimonEligible = !digimonIsTarget && hasEligibleInterceptor(partnerParticipant)
+    let digimonSpatiallyEligible = true
+    if (!digimonIsTarget && mapRecord && participantPositions[body.targetId!]) {
+      digimonSpatiallyEligible = canReachTarget(partnerParticipant.id, participantPositions[body.targetId!])
+    }
+    const digimonEligible = !digimonIsTarget && hasEligibleInterceptor(partnerParticipant) && digimonSpatiallyEligible
     if (!tamerEligible && !digimonEligible) continue
 
     eligibleTamerIds.push(p.entityId)

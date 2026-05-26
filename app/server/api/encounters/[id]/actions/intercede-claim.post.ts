@@ -52,6 +52,12 @@ export default defineEventHandler(async (event) => {
   let pendingRequests = parseJsonField(encounter.pendingRequests)
   let battleLog = parseJsonField(encounter.battleLog)
 
+  let participantPositions: Record<string, { x: number; y: number; z: number }> = (() => {
+    const raw = (encounter as any).participantPositions
+    if (!raw) return {}
+    try { return typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return {} }
+  })()
+
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
   if (!request || request.type !== 'intercede-offer') {
@@ -163,6 +169,32 @@ export default defineEventHandler(async (event) => {
   const { accuracySuccesses, attackerId, attackData } = request.data
   const attacker = participants.find((p: any) => p.id === attackerId)
   const isSupportAttack = request.data.isSupportAttack || false
+
+  // Single-target position swap: interceptor steps into intercedee's tile;
+  // intercedee moves one step further from the attacker.
+  let updatedParticipantPositions: Record<string, { x: number; y: number; z: number }> | null = null
+  if (!isAreaAttack && (encounter as any).mapId) {
+    const interceptorPos = participantPositions[body.interceptorParticipantId]
+    const targetPos = participantPositions[effectiveTargetId]
+    const attackerPos = participantPositions[attackerId]
+    if (interceptorPos && targetPos && attackerPos) {
+      const dir = {
+        x: Math.sign(targetPos.x - attackerPos.x),
+        y: Math.sign(targetPos.y - attackerPos.y),
+        z: Math.sign(targetPos.z - attackerPos.z),
+      }
+      updatedParticipantPositions = { ...participantPositions }
+      updatedParticipantPositions[body.interceptorParticipantId] = { ...targetPos }
+      const hasDirection = dir.x !== 0 || dir.y !== 0 || dir.z !== 0
+      if (hasDirection) {
+        updatedParticipantPositions[effectiveTargetId] = {
+          x: targetPos.x + dir.x,
+          y: targetPos.y + dir.y,
+          z: targetPos.z + dir.z,
+        }
+      }
+    }
+  }
 
   // Compute damage using shared canonical function (dodge successes = 0 for intercede)
   const damageCalc = await computeAttackDamage({
@@ -323,6 +355,7 @@ export default defineEventHandler(async (event) => {
       turnOrder: JSON.stringify(turnOrder),
       ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
       ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
+      ...(updatedParticipantPositions ? { participantPositions: JSON.stringify(updatedParticipantPositions) } : {}),
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -540,6 +573,7 @@ export default defineEventHandler(async (event) => {
     turnOrder: JSON.stringify(turnOrder),
     ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
     ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
+    ...(updatedParticipantPositions ? { participantPositions: JSON.stringify(updatedParticipantPositions) } : {}),
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
