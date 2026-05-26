@@ -23,7 +23,7 @@
           :style="{ width: (clickedHealthBar.pct * 100) + '%' }"
         />
       </div>
-      <div class="health-bar-label">{{ clickedHealthBar.current }} / {{ clickedHealthBar.max }} wounds</div>
+      <div class="health-bar-label">{{ Math.round(clickedHealthBar.pct * 100) }}%</div>
     </div>
     <!-- Radial movement confirmation -->
     <div
