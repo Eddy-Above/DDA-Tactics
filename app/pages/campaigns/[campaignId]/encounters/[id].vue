@@ -804,6 +804,7 @@ function selectAttackAndShowTargets(participant: CombatParticipant, attack: any)
   lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
+  if (showMapView.value) return
   showTargetSelector.value = true
 }
 
@@ -2854,6 +2855,37 @@ function onPositionsUpdated(positions: Record<string, any>) {
   if (!currentEncounter.value) return
   updateEncounter(currentEncounter.value.id, { participantPositions: positions } as any)
 }
+
+const mapSelectedAttackProp = computed(() => {
+  if (!selectedAttack.value || !showMapView.value) return null
+  const p = selectedAttack.value.participant
+  const digimon = p.digimon
+  const stats = calcDigimonStats(digimon)
+  const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
+  const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
+  return {
+    tags: selectedAttack.value.attack.tags ?? [],
+    range: selectedAttack.value.attack.range ?? 'melee',
+    bit: stats.bit,
+    movement: stats.movement,
+    ram: stats.ram,
+    sizeAboveLarge,
+  }
+})
+
+function onMapTargetSelected(targetId: string) {
+  const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
+  const target = participants.find(p => p.id === targetId)
+  if (!target || !selectedAttack.value) return
+  confirmAttack(target)
+}
+
+function onMapAreaAttackConfirmed(targetIds: string[]) {
+  if (!selectedAttack.value) return
+  const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
+  const targets = participants.filter(p => targetIds.includes(p.id))
+  confirmAreaAttack(targets)
+}
 </script>
 
 <template>
@@ -2933,11 +2965,13 @@ function onPositionsUpdated(positions: Record<string, any>) {
           :my-tamer-id="myTamerId"
           :tamer-map="tamerMapForMap"
           :digimon-map="digimonMapForMap"
-          :selected-attack="null"
+          :selected-attack="mapSelectedAttackProp"
           :player-placement-mode="false"
           @positions-updated="onPositionsUpdated"
           @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
           @npc-action="onNpcAction"
+          @target-selected="onMapTargetSelected"
+          @area-attack-confirmed="onMapAreaAttackConfirmed"
         >
           <template #turn-order>
             <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">

@@ -49,6 +49,7 @@
           @wall-place="onWallPlace"
           @voxel-edit="onVoxelEdit"
           @target-selected="$emit('target-selected', $event)"
+          @area-attack-confirmed="$emit('area-attack-confirmed', $event)"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
           @player-action="(id, action) => emit('player-action', id, action)"
@@ -152,7 +153,7 @@ const props = defineProps<{
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     giganticDimensions?: { width: number; height: number; depth: number } | null
   }>
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number } | null
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean
@@ -164,6 +165,7 @@ const emit = defineEmits<{
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
   (e: 'player-action', participantId: string, action: 'attack'): void
+  (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   // Note: 'move' is handled internally in EncounterMap
 }>()
 

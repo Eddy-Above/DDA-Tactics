@@ -84,6 +84,7 @@ import type {
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
+import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -99,7 +100,7 @@ const props = defineProps<{
   isDm: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number } | null
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2
@@ -119,6 +120,7 @@ const emit = defineEmits<{
   (e: 'wall-place', startTile: Vec3, endTile: Vec3, face: WallFace): void
   (e: 'voxel-edit', cell: Vec3, mode?: 'window' | 'spawn'): void
   (e: 'target-selected', participantId: string): void
+  (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
   (e: 'player-action', participantId: string, action: 'attack'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
@@ -143,6 +145,8 @@ const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
 const npcMoveY = ref<number>(0)
+const areaHighlightCells = ref<Array<{ x: number; y: number; z: number }>>([])
+let lastAoeKey = ''
 
 
 // ── Three.js internals ─────────────────────────────────────────────────────
@@ -787,6 +791,9 @@ function applyKeyMovement() {
 }
 
 function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); return }
+  }
   if (e.key === 'q' || e.key === 'Q') { snapAzimuth(-Math.PI / 4); return }
   if (e.key === 'e' || e.key === 'E') { snapAzimuth(+Math.PI / 4); return }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault()
@@ -874,7 +881,8 @@ function updatePathHighlights() {
 
 let lastAttackKey = ''
 function updateReticules() {
-  const key = props.selectedAttack ? JSON.stringify(props.selectedAttack) : ''
+  const aoeActive = areaHighlightCells.value.length > 0
+  const key = (props.selectedAttack ? JSON.stringify(props.selectedAttack) : '') + '|aoe:' + (aoeActive ? lastAoeKey : '')
   if (key === lastAttackKey) return
   lastAttackKey = key
 
@@ -887,12 +895,24 @@ function updateReticules() {
   const isMelee = props.selectedAttack.range === 'melee'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
 
+  // When AOE is active, only show reticules on participants inside the highlighted area
+  const aoeCellSet = aoeActive
+    ? new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
+    : null
+
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
     if (!pos) continue
-    const dx = Math.max(Math.abs(pos.x - attackerPos.x), Math.abs(pos.y - attackerPos.y), Math.abs(pos.z - attackerPos.z))
-    if (dx > maxDist) continue
     if (p.id === props.activeParticipantId) continue
+
+    if (aoeCellSet) {
+      // Only show reticule if this participant's cell is in the AOE
+      if (!aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)) continue
+    } else {
+      // Single-target: range check
+      const dx = Math.max(Math.abs(pos.x - attackerPos.x), Math.abs(pos.y - attackerPos.y), Math.abs(pos.z - attackerPos.z))
+      if (dx > maxDist) continue
+    }
 
     const ring = new THREE.RingGeometry(0.45, 0.55, 24)
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2222, side: THREE.DoubleSide })
@@ -903,8 +923,8 @@ function updateReticules() {
     reticuleGroup.add(mesh)
   }
 
-  // Range rings on ground (ranged attacks)
-  if (!isMelee) {
+  // Range rings on ground (ranged single-target attacks only)
+  if (!isMelee && !aoeCellSet) {
     const addRing = (radius: number, color: number) => {
       const geo = new THREE.RingGeometry(radius - 0.05, radius + 0.05, 64)
       const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.5 })
@@ -916,6 +936,91 @@ function updateReticules() {
     addRing(props.attackerRange, 0x00ff00)
     addRing(props.attackerEffectiveLimit, 0xffaa00)
   }
+}
+
+// ── AOE highlight ──────────────────────────────────────────────────────────
+function clearAoeState() {
+  areaHighlightCells.value = []
+  lastAoeKey = ''
+  if (aoeGroup) aoeGroup.clear()
+  lastAttackKey = ''  // force reticule rebuild next frame
+}
+
+function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>) {
+  const key = cells.map(c => `${c.x},${c.y},${c.z}`).sort().join('|')
+  if (key === lastAoeKey) return
+  lastAoeKey = key
+  areaHighlightCells.value = cells
+  aoeGroup.clear()
+
+  for (const c of cells) {
+    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.7 })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
+    aoeGroup.add(mesh)
+  }
+
+  lastAttackKey = ''  // force reticule rebuild
+}
+
+function getMouseWorldXZ(event: MouseEvent): { x: number; z: number } | null {
+  setMouseFromEvent(event)
+  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const planeY = attackerPos ? attackerPos.y * TILE_SIZE + TILE_H : TILE_H
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
+  const target = new THREE.Vector3()
+  if (!raycaster.ray.intersectPlane(plane, target)) return null
+  return { x: target.x, z: target.z }
+}
+
+function computeAndRenderAoe(event: MouseEvent) {
+  const attack = props.selectedAttack
+  if (!attack) return
+  const shape = getAreaShape(attack.tags)
+  if (!shape) return
+
+  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  if (!attackerPos) return
+
+  // Build candidate positions: all ground tile positions + participant positions
+  const mapTiles: Array<{ x: number; y: number; z: number }> = props.map?.groundTiles
+    ? props.map.groundTiles.map(t => ({ x: t.x, y: t.y, z: t.z }))
+    : []
+  const participantPositionsList = props.participants
+    .map(p => props.participantPositions[p.id])
+    .filter((p): p is { x: number; y: number; z: number } => !!p)
+  // Merge unique positions
+  const posSet = new Set(mapTiles.map(t => `${t.x},${t.y},${t.z}`))
+  const allPositions = [...mapTiles]
+  for (const p of participantPositionsList) {
+    const k = `${p.x},${p.y},${p.z}`
+    if (!posSet.has(k)) { posSet.add(k); allPositions.push(p) }
+  }
+
+  let dirVec = { x: 1, z: 0 }
+  if (shape !== 'burst') {
+    const mouseXZ = getMouseWorldXZ(event)
+    if (!mouseXZ) return
+    const dx = mouseXZ.x - (attackerPos.x + 0.5)
+    const dz = mouseXZ.z - (attackerPos.z + 0.5)
+    const len = Math.sqrt(dx * dx + dz * dz)
+    if (len > 0.01) dirVec = { x: dx / len, z: dz / len }
+  }
+
+  const cells = computeAreaCells(
+    shape,
+    attack.range,
+    attackerPos,
+    dirVec,
+    attack.bit,
+    attack.ram ?? 0,
+    attack.movement ?? 0,
+    attack.sizeAboveLarge ?? 0,
+    TILE_SIZE,
+    allPositions,
+  )
+  updateAoeHighlight(cells)
 }
 
 // ── Mouse interaction ──────────────────────────────────────────────────────
@@ -1164,6 +1269,12 @@ function onMouseMove(event: MouseEvent) {
     return
   }
 
+  // AOE aiming: update area highlight when an area attack is active (non-burst)
+  if (props.selectedAttack) {
+    const shape = getAreaShape(props.selectedAttack.tags)
+    if (shape && shape !== 'burst') computeAndRenderAoe(event)
+  }
+
   if (props.isDm && props.activeTool !== 'select') {
     updateHoverGhost(event)
   }
@@ -1171,12 +1282,16 @@ function onMouseMove(event: MouseEvent) {
 
 function onMouseDown(event: MouseEvent) {
   if (event.button === 2) {
-    // Right click cancels movement mode
+    // Right click cancels movement mode or AOE targeting
     if (movingParticipantId.value) {
       movingParticipantId.value = null
       hoverGhostGroup.clear()
       hoveredMoveScreen.value = null
       emit('cell-hovered', null)
+      return
+    }
+    if (areaHighlightCells.value.length > 0 || props.selectedAttack) {
+      clearAoeState()
       return
     }
     rightDragActive = true
@@ -1240,12 +1355,30 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
+  // AOE confirmation click (left click when area attack is active)
+  if (props.selectedAttack && areaHighlightCells.value.length > 0) {
+    const shape = getAreaShape(props.selectedAttack.tags)
+    if (shape) {
+      const aoeCellSet = new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
+      const targetIds = props.participants
+        .filter(p => {
+          if (p.id === props.activeParticipantId) return false
+          const pos = props.participantPositions[p.id]
+          return pos && aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)
+        })
+        .map(p => p.id)
+      clearAoeState()
+      emit('area-attack-confirmed', targetIds)
+      return
+    }
+  }
+
   if (!hits.length) {
     clickedHealthBar.value = null
     return
   }
 
-  // Check reticule click (attack targeting)
+  // Check reticule click (single-target attack targeting)
   const reticuleHit = hits.find(h => h.object.userData.type === 'reticule')
   if (reticuleHit) {
     emit('target-selected', reticuleHit.object.userData.participantId)
@@ -1433,6 +1566,34 @@ watch(movingParticipantId, id => {
     emit('movement-cancelled')
   }
 })
+
+watch(() => props.selectedAttack, (attack) => {
+  if (!attack) { clearAoeState(); return }
+  const shape = getAreaShape(attack.tags)
+  if (shape === 'burst') {
+    // Burst has no direction — render immediately centered on attacker
+    const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+    if (!attackerPos) return
+    const mapTiles: Array<{ x: number; y: number; z: number }> = props.map?.groundTiles
+      ? props.map.groundTiles.map(t => ({ x: t.x, y: t.y, z: t.z }))
+      : []
+    const participantPositionsList = props.participants
+      .map(p => props.participantPositions[p.id])
+      .filter((p): p is { x: number; y: number; z: number } => !!p)
+    const posSet = new Set(mapTiles.map(t => `${t.x},${t.y},${t.z}`))
+    const allPositions = [...mapTiles]
+    for (const p of participantPositionsList) {
+      const k = `${p.x},${p.y},${p.z}`
+      if (!posSet.has(k)) { posSet.add(k); allPositions.push(p) }
+    }
+    const cells = computeAreaCells(
+      'burst', attack.range, attackerPos, { x: 1, z: 0 },
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
+      TILE_SIZE, allPositions,
+    )
+    updateAoeHighlight(cells)
+  }
+}, { immediate: false })
 
 watch(clipY, (y) => {
   for (const obj of buildMeshes) {

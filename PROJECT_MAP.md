@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-05-26 | Pages & Components, Dependency Graph | Map-based attack targeting: `app/utils/areaShapes.ts` (new) — client-side area shape computation (blast/burst/close-blast/cone/line/pass). MapCanvas gains AOE highlight rendering (amber tiles via `aoeGroup`), mouse-tracked area preview, `area-attack-confirmed` emit, and map-click target confirmation; AOE filtering on reticules. EncounterMap forwards `area-attack-confirmed`. Both GM (`encounters/[id].vue`) and player (`player/[tamerId].vue`) pages wire `mapSelectedAttackProp` computed + `onMapTargetSelected` + `onMapAreaAttackConfirmed` handlers; `selectAttackAndShowTargets` skips target modal when in map view. |
 | 2026-05-26 | API Schema | Map-aware intercede: single-target intercede-offer now spatially gates digimon eligibility (same pattern as area-attack path) — digimon must be able to reach intercedee's tile within movement budget when a map is attached. intercede-claim now swaps positions on claim: interceptor moves to intercedee's tile; intercedee moves one step further from attacker (dir = sign(target - attacker)); both single-target DB saves (support-attack and damage-attack paths) persist `participantPositions`. |
 | 2026-05-26 | Pages & Components | Map view attack picker: MapCanvas emits `player-action` via player radial menu (Move/Attack for own active digimon); EncounterMap passes `player-action` through; GM NPC attack now shows floating attack picker overlay (`npcAttackParticipantId`) instead of auto-picking first attack; player map attack shows floating attack picker overlay (`playerAttackParticipantId`) |
 | 2026-05-25 | Pages & Components | Player view: initiative tracker hidden during `initiative` phase, shown in `setup` and `combat`; map view button moved to Turn Tracker header; map overlay hoisted outside combat-only banner so it works in any phase; `tamerMapForMap` and `digimonMapForMap` now read `currentWounds`/`maxWounds` from encounter participant instead of DB records |
@@ -433,10 +434,10 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `HazardManager` | `components/HazardManager.vue` | Add/remove environmental hazards | `encounterId`, `hazards`, `onUpdate` |
 | `QualitySelector` | `components/QualitySelector.vue` | DP-aware quality picker with prerequisites; enforces per-choice rank caps (static `maxRanks` and dynamic caps via props) | `stage`, `currentQualities`, `canAdd`, `availableDP`, `speedyMaxRanks`, `systemBoostMaxRanks`, `eddySoulRules`, `houseRules` |
 | `SpritePreview` | `components/SpritePreview.vue` | Display digimon sprite image | `spriteUrl`, `name` |
-| `MapCanvas` | `components/MapCanvas.vue` | Three.js 3D isometric renderer; handles billboards, tiles, walls, movement highlights, health overlays, reticules; emits `npc-action` (GM NPC radial: Move/Stance/Attack) and `player-action` (player radial: Move/Attack) | Many props (see component) |
+| `MapCanvas` | `components/MapCanvas.vue` | Three.js 3D isometric renderer; handles billboards, tiles, walls, movement highlights, health overlays, reticules, AOE area highlights (amber tiles in `aoeGroup`); emits `npc-action` (GM NPC radial: Move/Stance/Attack), `player-action` (player radial: Move/Attack), `target-selected` (single-target click), `area-attack-confirmed` (AOE click with covered participant IDs). When `selectedAttack` prop set: shows reticules on valid enemies, renders dynamic AOE preview on mouse move (burst shown immediately), confirms on click | Many props including `selectedAttack: {tags, range, bit, movement?, ram?, sizeAboveLarge?}` |
 | `MapToolbar` | `components/MapToolbar.vue` | GM toolbar for map editing (add ground/space, paint, wall/window/door/ceiling/stairs, undo/redo) | `activeTool`, `drawMode`, `elementBrush`, `currentEditY` |
 | `MapPropertyPanel` | `components/MapPropertyPanel.vue` | Edit selected structure wound boxes and properties | `selected` |
-| `EncounterMap` | `components/EncounterMap.vue` | Container: loads map, connects WebSocket, renders MapCanvas + overlays; uses slots for turn-order and combat-controls; handles `npc-action` move internally, passes through stance/attack; passes through `player-action` | `encounter`, `isDm`, `myTamerId`, etc. |
+| `EncounterMap` | `components/EncounterMap.vue` | Container: loads map, connects WebSocket, renders MapCanvas + overlays; uses slots for turn-order and combat-controls; handles `npc-action` move internally, passes through stance/attack; passes through `player-action`, `target-selected`, `area-attack-confirmed` | `encounter`, `isDm`, `myTamerId`, `selectedAttack?`, etc. |
 | `MapBattleLog` | `components/MapBattleLog.vue` | Right-side battle log overlay; GM sees full entries, players see NPC stats redacted | `battleLog`, `isDm`, `npcEntityIds` |
 | `MapPlayerHUD` | `components/MapPlayerHUD.vue` | Bottom-left tamer + digimon HUD with health bars; minimizable | `participants`, `tamerMap`, `isDm`, `myTamerId` |
 | `TamerFormPage` | `components/TamerFormPage.vue` | Full create/edit form for tamers (consolidated) | `tamerId?`, `campaignId`, `mode` |
@@ -492,7 +493,7 @@ flowchart TD
     Composables["composables/\n(17 shared)"]
     Types["types/index.ts\n(all types + constants)"]
     Data["data/\nqualities, attacks, hazards, special-orders"]
-    Utils["utils/\ndisplayHelpers, formDefaults, stanceModifiers, specialOrders, torment-validation"]
+    Utils["utils/\ndisplayHelpers, formDefaults, stanceModifiers, specialOrders, torment-validation, areaShapes"]
     Constants["constants/tamer-skills.ts"]
     Middleware["middleware/\ncampaign-access, dm-access"]
     ServerAPI["server/api/**\n(40+ endpoints)"]

@@ -1634,6 +1634,7 @@ async function selectAttackAndShowTargets(participant: CombatParticipant, attack
   lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
+  if (showMapView.value) return
   showTargetSelector.value = true
 }
 
@@ -3211,6 +3212,38 @@ function onPositionsUpdated(positions: Record<string, any>) {
   updateEncounter(id, { participantPositions: positions } as any)
 }
 
+const mapSelectedAttackProp = computed(() => {
+  if (!selectedAttack.value || !showMapView.value) return null
+  const p = selectedAttack.value.participant
+  const digimon = digimonMap.value.get(p.entityId)
+  if (!digimon) return null
+  const stats = calcDigimonStats(digimon)
+  const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
+  const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
+  return {
+    tags: selectedAttack.value.attack.tags ?? [],
+    range: selectedAttack.value.attack.range ?? 'melee',
+    bit: stats.bit,
+    movement: stats.movement,
+    ram: stats.ram,
+    sizeAboveLarge,
+  }
+})
+
+function onMapTargetSelected(targetId: string) {
+  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
+  const target = participants.find(p => p.id === targetId)
+  if (!target || !selectedAttack.value) return
+  confirmAttack(target)
+}
+
+function onMapAreaAttackConfirmed(targetIds: string[]) {
+  if (!selectedAttack.value) return
+  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
+  const targets = participants.filter(p => targetIds.includes(p.id))
+  confirmAreaAttack(targets)
+}
+
 async function handleBreakClash(participantId: string, clashId: string) {
   if (!activeEncounter.value || !tamer.value) return
   try {
@@ -3298,12 +3331,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :my-tamer-id="tamerId"
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"
-              :selected-attack="null"
+              :selected-attack="mapSelectedAttackProp"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               @positions-updated="onPositionsUpdated"
               @encounter-updated="() => {}"
               @player-action="(id, action) => { if (action === 'attack') playerAttackParticipantId = playerAttackParticipantId === id ? null : id }"
+              @target-selected="onMapTargetSelected"
+              @area-attack-confirmed="onMapAreaAttackConfirmed"
             >
               <template #combat-controls>
                 <button
