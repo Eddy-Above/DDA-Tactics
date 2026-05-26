@@ -882,14 +882,20 @@ function updatePathHighlights() {
 let lastAttackKey = ''
 function updateReticules() {
   const aoeActive = areaHighlightCells.value.length > 0
-  const key = (props.selectedAttack ? JSON.stringify(props.selectedAttack) : '') + '|aoe:' + (aoeActive ? lastAoeKey : '')
+  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPosKey = attackerPos ? `${attackerPos.x},${attackerPos.y},${attackerPos.z}` : 'none'
+  const key = [
+    props.selectedAttack ? JSON.stringify(props.selectedAttack) : '',
+    props.activeParticipantId ?? '',
+    attackerPosKey,
+    props.attackerEffectiveLimit,
+    'aoe:' + (aoeActive ? lastAoeKey : ''),
+  ].join('|')
   if (key === lastAttackKey) return
   lastAttackKey = key
 
   reticuleGroup.clear()
   if (!props.selectedAttack) return
-
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
   if (!attackerPos) return
 
   const isMelee = props.selectedAttack.range === 'melee'
@@ -909,9 +915,12 @@ function updateReticules() {
       // Only show reticule if this participant's cell is in the AOE
       if (!aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)) continue
     } else {
-      // Single-target: range check
-      const dx = Math.max(Math.abs(pos.x - attackerPos.x), Math.abs(pos.y - attackerPos.y), Math.abs(pos.z - attackerPos.z))
-      if (dx > maxDist) continue
+      // Single-target: 3D Euclidean distance so cross-floor targets are evaluated correctly
+      const dx = pos.x - attackerPos.x
+      const dy = pos.y - attackerPos.y
+      const dz = pos.z - attackerPos.z
+      const dist3d = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      if (dist3d > maxDist) continue
     }
 
     const ring = new THREE.RingGeometry(0.45, 0.55, 24)
