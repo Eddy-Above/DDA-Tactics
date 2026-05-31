@@ -640,6 +640,17 @@ async function handleCopy() {
           </p>
           <div class="grid grid-cols-5 gap-4">
             <div class="text-center">
+              <label class="block text-sm text-digimon-dark-400 mb-2">Health</label>
+              <input
+                v-model.number="form.baseStats.health"
+                type="number"
+                :min="statMin"
+                :max="statMax"
+                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
+                       text-white text-center focus:border-digimon-orange-500 focus:outline-none"
+              />
+            </div>
+            <div class="text-center">
               <label class="block text-sm text-digimon-dark-400 mb-2">Accuracy</label>
               <input
                 v-model.number="form.baseStats.accuracy"
@@ -676,17 +687,6 @@ async function handleCopy() {
               <label class="block text-sm text-digimon-dark-400 mb-2">Armor</label>
               <input
                 v-model.number="form.baseStats.armor"
-                type="number"
-                :min="statMin"
-                :max="statMax"
-                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
-                       text-white text-center focus:border-digimon-orange-500 focus:outline-none"
-              />
-            </div>
-            <div class="text-center">
-              <label class="block text-sm text-digimon-dark-400 mb-2">Health</label>
-              <input
-                v-model.number="form.baseStats.health"
                 type="number"
                 :min="statMin"
                 :max="statMax"
@@ -857,6 +857,16 @@ async function handleCopy() {
             </div>
             <div class="grid grid-cols-5 gap-3">
               <div class="text-center">
+                <label class="block text-xs text-digimon-dark-400 mb-1">Health</label>
+                <input
+                  v-model.number="form.bonusStats.health"
+                  type="number"
+                  :min="minBonusDPPerCategory"
+                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
+                         text-white text-center focus:border-digimon-orange-500 focus:outline-none"
+                />
+              </div>
+              <div class="text-center">
                 <label class="block text-xs text-digimon-dark-400 mb-1">Accuracy</label>
                 <input
                   v-model.number="form.bonusStats.accuracy"
@@ -890,16 +900,6 @@ async function handleCopy() {
                 <label class="block text-xs text-digimon-dark-400 mb-1">Armor</label>
                 <input
                   v-model.number="form.bonusStats.armor"
-                  type="number"
-                  :min="minBonusDPPerCategory"
-                  class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
-                         text-white text-center focus:border-digimon-orange-500 focus:outline-none"
-                />
-              </div>
-              <div class="text-center">
-                <label class="block text-xs text-digimon-dark-400 mb-1">Health</label>
-                <input
-                  v-model.number="form.bonusStats.health"
                   type="number"
                   :min="minBonusDPPerCategory"
                   class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-2 py-2
