@@ -130,6 +130,35 @@ const emit = defineEmits<{
   (e: 'map-changed'): void
 }>()
 
+// ── Participant display names (seq-stable for same-entityId groups) ─────────
+const participantDisplayNames = computed(() => {
+  const entityIdCount: Record<string, number> = {}
+  const nameCount: Record<string, number> = {}
+  for (const p of props.participants) {
+    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+    if (!info) continue
+    entityIdCount[p.entityId] = (entityIdCount[p.entityId] ?? 0) + 1
+    nameCount[info.name] = (nameCount[info.name] ?? 0) + 1
+  }
+  const nameSeq: Record<string, number> = {}
+  const result: Record<string, string> = {}
+  for (const p of props.participants) {
+    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+    if (!info) continue
+    const baseName = info.name
+    const seq = (p as any).seq as number | undefined
+    if (entityIdCount[p.entityId] > 1 && seq !== undefined) {
+      result[p.id] = `${baseName} ${seq}`
+    } else if (nameCount[baseName] > 1) {
+      nameSeq[baseName] = (nameSeq[baseName] ?? 0) + 1
+      result[p.id] = `${baseName} ${nameSeq[baseName]}`
+    } else {
+      result[p.id] = baseName
+    }
+  }
+  return result
+})
+
 // ── Refs ───────────────────────────────────────────────────────────────────
 const containerRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -1465,11 +1494,14 @@ function onCanvasClick(event: MouseEvent) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (info) {
       const screen = worldToScreen2D(spriteHit.point)
+      const anyP = p as any
+      const currentWounds = anyP.currentWounds ?? info.currentWounds
+      const maxWounds = anyP.maxWounds ?? info.woundBoxes
       clickedHealthBar.value = {
-        name: info.name,
-        pct: info.woundBoxes > 0 ? Math.max(0, 1 - info.currentWounds / info.woundBoxes) : 1,
-        current: info.currentWounds,
-        max: info.woundBoxes,
+        name: participantDisplayNames.value[p.id] ?? info.name,
+        pct: maxWounds > 0 ? Math.max(0, 1 - currentWounds / maxWounds) : 1,
+        current: currentWounds,
+        max: maxWounds,
         screenX: screen?.x ?? event.clientX,
         screenY: (screen?.y ?? event.clientY) - 80,
       }
