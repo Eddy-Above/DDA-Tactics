@@ -147,6 +147,13 @@ export function isValidLandingPosition(
   return false
 }
 
+export function isPositionInAir(pos: Vec3, map: GameMap): boolean {
+  if (map.groundTiles.some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return false
+  if (hasSolidVoxelSupport(map, pos)) return false
+  if (hasSolidStairSupport(map, pos)) return false
+  return true
+}
+
 export function getSizeFootprintDimension(
   size: DigimonSize,
   giganticDimensions?: { width: number; height: number; depth: number } | null,

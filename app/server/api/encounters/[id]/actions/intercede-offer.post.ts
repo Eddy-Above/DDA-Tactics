@@ -5,11 +5,11 @@ import {
   getReachableCells,
   detectCapabilitiesFromQualities,
   isValidLandingPosition,
+  isPositionInAir,
   getSizeFootprintDimension,
   isFootprintValid,
   findClosestValidDisplacementPosition,
   findRangedIntercedPosition,
-  classifyReachability,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 import { resolveParticipantName } from '~/server/utils/participantName'
@@ -903,23 +903,19 @@ export default defineEventHandler(async (event) => {
           if (!foundPos) {
             digimonSpatiallyEligible = false
           } else {
-            const reach = classifyReachability(interceptorPos, foundPos, budget, caps, mapRecord)
-            const requiresJump = !reach.canWalk && !reach.canFly && reach.canJump
-            const requiresFly = !reach.canWalk && reach.canFly
-            if (!reach.canWalk && !reach.canJump && !reach.canFly) {
-              digimonSpatiallyEligible = false
-            } else {
-              let fallHeight = 0
-              if (requiresJump) {
-                for (let scanY = foundPos.y - 1; scanY >= -10; scanY--) {
-                  if (isValidLandingPosition({ x: foundPos.x, y: scanY, z: foundPos.z }, mapRecord, new Set())) {
-                    fallHeight = foundPos.y - scanY
-                    break
-                  }
+            const inAir = isPositionInAir(foundPos, mapRecord)
+            const requiresFly = inAir && caps.canFly
+            const requiresJump = inAir && !caps.canFly
+            let fallHeight = 0
+            if (inAir) {
+              for (let scanY = foundPos.y - 1; scanY >= -10; scanY--) {
+                if (isValidLandingPosition({ x: foundPos.x, y: scanY, z: foundPos.z }, mapRecord, new Set())) {
+                  fallHeight = foundPos.y - scanY
+                  break
                 }
               }
-              spatialEntry = { interceptePos: foundPos, isRangedIntercede, requiresJump, requiresFly, fallHeight }
             }
+            spatialEntry = { interceptePos: foundPos, isRangedIntercede, requiresJump, requiresFly, fallHeight }
           }
         }
         // If !digRec: no spatial data — remain eligible (permissive fallback)
