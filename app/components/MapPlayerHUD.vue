@@ -72,13 +72,42 @@ const minimized = ref(false)
 
 interface HudEntry { id: string; name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }
 
+// Compute stable display names: use seq for same-entityId groups; array-order fallback for same-name different-entity
+const participantDisplayNames = computed(() => {
+  const entityIdCount: Record<string, number> = {}
+  const nameCount: Record<string, number> = {}
+  for (const p of props.participants) {
+    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+    if (!info) continue
+    entityIdCount[p.entityId] = (entityIdCount[p.entityId] ?? 0) + 1
+    nameCount[info.name] = (nameCount[info.name] ?? 0) + 1
+  }
+  const nameSeq: Record<string, number> = {}
+  const result: Record<string, string> = {}
+  for (const p of props.participants) {
+    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+    if (!info) continue
+    const baseName = info.name
+    const seq = (p as any).seq as number | undefined
+    if (entityIdCount[p.entityId] > 1 && seq !== undefined) {
+      result[p.id] = `${baseName} ${seq}`
+    } else if (nameCount[baseName] > 1) {
+      nameSeq[baseName] = (nameSeq[baseName] ?? 0) + 1
+      result[p.id] = `${baseName} ${nameSeq[baseName]}`
+    } else {
+      result[p.id] = baseName
+    }
+  }
+  return result
+})
+
 function makeEntry(p: CombatParticipant): HudEntry | null {
   const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
   if (!info) return null
   const anyP = p as any
   return {
     id: p.id,
-    name: info.name,
+    name: participantDisplayNames.value[p.id] ?? info.name,
     spriteUrl: info.spriteUrl,
     currentWounds: anyP.currentWounds ?? info.currentWounds,
     woundBoxes: anyP.maxWounds ?? info.woundBoxes,

@@ -239,7 +239,14 @@ export function useEncounters() {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
 
-    const participants = [...((encounter.participants as CombatParticipant[]) || []), participant]
+    // Assign a stable seq number: highest existing seq for this entityId + 1
+    const existing = (encounter.participants as any[]) || []
+    const maxSeq = existing
+      .filter((p: any) => p.entityId === participant.entityId)
+      .reduce((max: number, p: any) => Math.max(max, p.seq ?? 0), 0)
+    const participantWithSeq = { ...participant, seq: maxSeq + 1 }
+
+    const participants = [...existing, participantWithSeq]
 
     // Sort by initiative (highest first)
     let sortedParticipants = participants.sort((a, b) => b.initiative - a.initiative)
