@@ -2860,7 +2860,7 @@ const digimonMapForMap = computed(() => {
     const parsedQualities = typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? [])
     const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {
-      name: d.name,
+      name: d.nickname || d.name,
       spriteUrl: d.spriteUrl ?? null,
       currentWounds: participant ? participant.currentWounds : d.currentWounds,
       woundBoxes: participant?.maxWounds ?? derived.woundBoxes,

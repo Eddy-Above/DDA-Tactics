@@ -3159,6 +3159,8 @@ async function handleEndTurn() {
 // ── Map integration ────────────────────────────────────────────────────────
 const showMapView = ref(false)
 const playerAttackParticipantId = ref<string | null>(null)
+const mapStanceDigimonParticipantId = ref<string | null>(null)
+const mapDigivolveDigimonParticipantId = ref<string | null>(null)
 
 const playerPlacementMode = computed(() =>
   ['setup', 'initiative'].includes(activeEncounter.value?.phase ?? '') &&
@@ -3188,7 +3190,7 @@ const digimonMapForMap = computed(() => {
   allDigimon.value.forEach(d => {
     const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {
-      name: d.name,
+      name: (d as any).nickname || d.name,
       spriteUrl: (d as any).spriteUrl ?? null,
       currentWounds: participant ? participant.currentWounds : d.currentWounds,
       woundBoxes: participant?.maxWounds ?? (d as any).woundBoxes ?? 0,
@@ -3203,6 +3205,18 @@ const digimonMapForMap = computed(() => {
 })
 
 const myParticipantIds = computed(() => myParticipants.value.map(p => p.id))
+
+const mapStanceParticipant = computed(() =>
+  mapStanceDigimonParticipantId.value
+    ? (activeEncounter.value?.participants as CombatParticipant[])?.find(x => x.id === mapStanceDigimonParticipantId.value) ?? null
+    : null
+)
+
+const mapDigivolveParticipant = computed(() =>
+  mapDigivolveDigimonParticipantId.value
+    ? (activeEncounter.value?.participants as CombatParticipant[])?.find(x => x.id === mapDigivolveDigimonParticipantId.value) ?? null
+    : null
+)
 
 function onPositionsUpdated(positions: Record<string, any>) {
   if (!activeEncounter.value) return
@@ -3343,7 +3357,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :my-participant-ids="myParticipantIds"
               @positions-updated="onPositionsUpdated"
               @encounter-updated="() => {}"
-              @player-action="(id, action) => { if (action === 'attack') playerAttackParticipantId = playerAttackParticipantId === id ? null : id }"
+              @player-action="(id, action) => {
+                if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id
+                else if (action === 'direct')    openPlayerDirectTargetSelector(false)
+                else if (action === 'special-order') { showPlayerSpecialOrdersModal = true }
+                else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
+                else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
+              }"
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"
               @attack-cancelled="onMapAttackCancelled"
@@ -3374,6 +3394,49 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 </button>
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="playerAttackParticipantId = null">Cancel</button>
+            </div>
+            <!-- Floating stance picker (shown when player clicks Stance from map radial) -->
+            <div
+              v-if="mapStanceParticipant"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Stance (1 Simple)</div>
+              <div class="flex flex-wrap gap-2 justify-center">
+                <button
+                  v-for="stance in (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const)"
+                  :key="stance"
+                  class="px-3 py-2 rounded text-sm capitalize bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+                  @click="changePlayerStance(mapStanceParticipant!, stance); mapStanceDigimonParticipantId = null"
+                >{{ stance }}</button>
+              </div>
+              <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="mapStanceDigimonParticipantId = null">Cancel</button>
+            </div>
+            <!-- Floating digivolve picker (shown when player clicks Digivolve from map radial) -->
+            <div
+              v-if="mapDigivolveParticipant"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Digivolve / Devolve</div>
+              <div class="flex flex-col gap-2">
+                <button
+                  v-for="target in getParticipantEvolutionOptions(mapDigivolveParticipant!).evolveTargets"
+                  :key="target.chainIndex"
+                  class="px-3 py-2 rounded text-sm text-left bg-green-900/50 text-green-300 hover:bg-green-900/70"
+                  @click="handleDigivolve(mapDigivolveParticipant!, target.chainIndex); mapDigivolveDigimonParticipantId = null"
+                >Digivolve → {{ target.species }}</button>
+                <button
+                  v-if="getParticipantEvolutionOptions(mapDigivolveParticipant!).canDevolve"
+                  class="px-3 py-2 rounded text-sm text-left bg-amber-900/50 text-amber-300 hover:bg-amber-900/70"
+                  @click="handleDigivolve(mapDigivolveParticipant!, getParticipantEvolutionOptions(mapDigivolveParticipant!).devolveTarget.chainIndex); mapDigivolveDigimonParticipantId = null"
+                >Devolve → {{ getParticipantEvolutionOptions(mapDigivolveParticipant!).devolveTarget?.species }}</button>
+                <div
+                  v-if="!getParticipantEvolutionOptions(mapDigivolveParticipant!).evolveTargets.length && !getParticipantEvolutionOptions(mapDigivolveParticipant!).canDevolve"
+                  class="text-center text-digimon-dark-400 text-sm py-2"
+                >No evolution options available.</div>
+              </div>
+              <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="mapDigivolveDigimonParticipantId = null">Cancel</button>
             </div>
           </div>
         </ClientOnly>
