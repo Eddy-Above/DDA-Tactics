@@ -1,8 +1,15 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns, evolutionLines } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, evolutionLines, maps } from '../../../../db'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
+import {
+  detectCapabilitiesFromQualities,
+  getSizeFootprintDimension,
+  isValidLandingPosition,
+  findClosestValidDisplacementPosition,
+} from '~/server/utils/mapMovement'
+import { calculateDigimonDerivedStats } from '~/types'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -66,6 +73,25 @@ export default defineEventHandler(async (event) => {
 
   const intercedeGroupId = request.data.intercedeGroupId
   const isAreaAttack = !!request.data.isAreaAttack
+
+  // Load map for spatial position validation (single-target only)
+  let claimMapRecord: any = null
+  if (!isAreaAttack && (encounter as any).mapId) {
+    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
+    if (m) {
+      claimMapRecord = {
+        ...m,
+        groundTiles: typeof m.groundTiles === 'string' ? JSON.parse(m.groundTiles) : (m.groundTiles ?? []),
+        spaceTiles: typeof m.spaceTiles === 'string' ? JSON.parse(m.spaceTiles) : (m.spaceTiles ?? []),
+        voxels: typeof (m as any).voxels === 'string' ? JSON.parse((m as any).voxels) : ((m as any).voxels ?? []),
+        walls: typeof m.walls === 'string' ? JSON.parse(m.walls) : (m.walls ?? []),
+        ceilings: typeof m.ceilings === 'string' ? JSON.parse(m.ceilings) : (m.ceilings ?? []),
+        stairs: typeof m.stairs === 'string' ? JSON.parse(m.stairs) : (m.stairs ?? []),
+        windows: typeof m.windows === 'string' ? JSON.parse(m.windows) : (m.windows ?? []),
+        doors: typeof m.doors === 'string' ? JSON.parse(m.doors) : (m.doors ?? []),
+      }
+    }
+  }
 
   // Determine effective target — area attacks use chosenTargetId
   let effectiveTargetId: string
@@ -159,40 +185,121 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // Get interceptor name
+  // Get interceptor name + full DB record (needed for size/caps in position logic)
   let interceptorName = 'Unknown'
+  let interceptorDigRec: any = null
   if (interceptor.type === 'digimon') {
     const [dig] = await db.select().from(digimon).where(eq(digimon.id, interceptor.entityId))
+    interceptorDigRec = dig ?? null
     interceptorName = dig?.name || 'Digimon'
+  }
+
+  // Load target's digimon record for size/caps (used in displacement logic)
+  let targetDigRecForPos: any = null
+  const targetParticipantForPos = participants.find((p: any) => p.id === effectiveTargetId)
+  if (targetParticipantForPos?.type === 'digimon') {
+    const [tDig] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForPos.entityId))
+    targetDigRecForPos = tDig ?? null
   }
 
   const { accuracySuccesses, attackerId, attackData } = request.data
   const attacker = participants.find((p: any) => p.id === attackerId)
   const isSupportAttack = request.data.isSupportAttack || false
 
-  // Single-target position swap: interceptor steps into intercedee's tile;
-  // intercedee moves one step further from the attacker.
+  // Single-target position swap with spatial validation.
+  // For melee: interceptor moves to target's tile; target is displaced to nearest valid spot.
+  // For ranged: interceptor moves to a line-of-fire cell stored in the offer; target stays put.
   let updatedParticipantPositions: Record<string, { x: number; y: number; z: number }> | null = null
-  if (!isAreaAttack && (encounter as any).mapId) {
+  let fallDamageToApply = 0  // wounds applied to interceptor if they jumped to intercede
+
+  if (!isAreaAttack && claimMapRecord) {
     const interceptorPos = participantPositions[body.interceptorParticipantId]
     const targetPos = participantPositions[effectiveTargetId]
     const attackerPos = participantPositions[attackerId]
-    if (interceptorPos && targetPos && attackerPos) {
-      const dir = {
-        x: Math.sign(targetPos.x - attackerPos.x),
-        y: Math.sign(targetPos.y - attackerPos.y),
-        z: Math.sign(targetPos.z - attackerPos.z),
-      }
+
+    if (interceptorPos && targetPos) {
       updatedParticipantPositions = { ...participantPositions }
-      updatedParticipantPositions[body.interceptorParticipantId] = { ...targetPos }
-      const hasDirection = dir.x !== 0 || dir.y !== 0 || dir.z !== 0
-      if (hasDirection) {
-        updatedParticipantPositions[effectiveTargetId] = {
-          x: targetPos.x + dir.x,
-          y: targetPos.y + dir.y,
-          z: targetPos.z + dir.z,
+
+      const isRangedIntercede: boolean = request.data.isRangedIntercede ?? false
+      const intercDePos: { x: number; y: number; z: number } = request.data.interceptePos ?? targetPos
+
+      // Move interceptor to their intercede position
+      updatedParticipantPositions[body.interceptorParticipantId] = { ...intercDePos }
+
+      // Jump fall damage: interceptor jumped to reach the intercede tile and now falls
+      if ((request.data.requiresJump ?? false) && !(request.data.requiresFly ?? false)) {
+        const fallHeight: number = request.data.fallHeight || 0
+        fallDamageToApply = Math.max(0, fallHeight - 1)
+        if (fallHeight > 0) {
+          const groundY = intercDePos.y - fallHeight
+          updatedParticipantPositions[body.interceptorParticipantId] = { x: intercDePos.x, y: groundY, z: intercDePos.z }
         }
       }
+
+      if (!isRangedIntercede) {
+        // Melee: displace the target away from the interceptor's new position
+        const interceptorDim = interceptorDigRec
+          ? getSizeFootprintDimension(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
+          : 1
+        const targetDim = targetDigRecForPos
+          ? getSizeFootprintDimension(targetDigRecForPos.size as any, (targetDigRecForPos as any).giganticDimensions)
+          : 1
+
+        const defaultCaps = { canFly: false, canJump: false, jumpRange: 0, jumpHeight: 0, canClimb: false, canSwim: false, canDig: false }
+        const targetCaps = targetDigRecForPos ? (() => {
+          const tq = typeof targetDigRecForPos.qualities === 'string'
+            ? JSON.parse(targetDigRecForPos.qualities)
+            : (targetDigRecForPos.qualities ?? [])
+          const td = calculateDigimonDerivedStats(
+            typeof targetDigRecForPos.baseStats === 'string'
+              ? JSON.parse(targetDigRecForPos.baseStats)
+              : targetDigRecForPos.baseStats,
+            targetDigRecForPos.stage as any,
+            targetDigRecForPos.size as any,
+          )
+          return detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
+        })() : defaultCaps
+
+        // Occupied set: exclude interceptor (at target's tile) and target (leaving)
+        const claimOccupied = new Set(
+          Object.entries(updatedParticipantPositions)
+            .filter(([pid]) => pid !== body.interceptorParticipantId && pid !== effectiveTargetId)
+            .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+        )
+
+        // Preferred displacement: interceptorDim tiles in the direction away from attacker
+        let displacedPos: { x: number; y: number; z: number } | null = null
+        if (attackerPos) {
+          const dir = {
+            x: Math.sign(targetPos.x - attackerPos.x),
+            y: Math.sign(targetPos.y - attackerPos.y),
+            z: Math.sign(targetPos.z - attackerPos.z),
+          }
+          if (dir.x !== 0 || dir.y !== 0 || dir.z !== 0) {
+            const preferred = {
+              x: targetPos.x + dir.x * interceptorDim,
+              y: targetPos.y + dir.y * interceptorDim,
+              z: targetPos.z + dir.z * interceptorDim,
+            }
+            if (isValidLandingPosition(preferred, claimMapRecord, claimOccupied)) {
+              displacedPos = preferred
+            }
+          }
+        }
+
+        // BFS fallback if preferred direction is blocked
+        if (!displacedPos) {
+          displacedPos = findClosestValidDisplacementPosition(
+            targetPos, claimMapRecord, targetCaps, claimOccupied, targetDim,
+          )
+        }
+
+        if (displacedPos) {
+          updatedParticipantPositions[effectiveTargetId] = displacedPos
+        }
+        // else: target cannot be displaced (edge case — offer.post should have blocked this)
+      }
+      // Ranged intercede: target stays in place, only interceptor moves
     }
   }
 
@@ -253,6 +360,11 @@ export default defineEventHandler(async (event) => {
         if (!isAreaAttack && damageCalc.effectData) {
           updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
           appliedEffectName = damageCalc.attackDef?.effect ?? null
+        }
+
+        // Fall damage from jumping to intercede position
+        if (!isAreaAttack && fallDamageToApply > 0) {
+          (updated as any).currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + fallDamageToApply)
         }
 
         return updated
@@ -327,6 +439,7 @@ export default defineEventHandler(async (event) => {
     } else {
       pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
 
+      const fallEffects = !isAreaAttack && fallDamageToApply > 0 ? [`Fell ${request.data.fallHeight} tiles (${fallDamageToApply} wound${fallDamageToApply !== 1 ? 's' : ''})`] : []
       const intercedeLog = {
         id: `log-${Date.now()}-intercede`,
         timestamp: new Date().toISOString(),
@@ -338,8 +451,8 @@ export default defineEventHandler(async (event) => {
         result: appliedEffectName
           ? `Takes debuff with 0 dodge - ${appliedEffectName} applied for ${Math.max(1, netSuccesses)} rounds`
           : 'Interceded (no effect)',
-        damage: 0,
-        effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
+        damage: fallDamageToApply || 0,
+        effects: [...(appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede']), ...fallEffects],
         hit: true,
         dodgeDicePool: 0,
         dodgeDiceResults: [],
@@ -400,6 +513,10 @@ export default defineEventHandler(async (event) => {
             p.totalHealth ?? damageCalc.targetHealthStat ?? p.maxWounds,
             (p.combatMonsterBonus ?? 0) + damageDealt
           )
+        }
+        // Fall damage from jumping to intercede position (applied on top of attack damage)
+        if (fallDamageToApply > 0) {
+          updated.currentWounds = Math.min(p.maxWounds, (updated.currentWounds || 0) + fallDamageToApply)
         }
       }
 
@@ -540,6 +657,9 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    const fallEffectsDmg = fallDamageToApply > 0
+      ? [`Fell ${request.data.fallHeight} tiles (${fallDamageToApply} wound${fallDamageToApply !== 1 ? 's' : ''})`]
+      : []
     const intercedeLog = {
       id: `log-${Date.now()}-intercede`,
       timestamp: new Date().toISOString(),
@@ -549,15 +669,15 @@ export default defineEventHandler(async (event) => {
       action: `Interceded for ${effectiveTargetName}!`,
       target: null,
       result: 'Takes hit with 0 dodge',
-      damage: damageDealt,
-      effects: appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede'],
+      damage: damageDealt + fallDamageToApply,
+      effects: [...(appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede']), ...fallEffectsDmg],
       attackerParticipantId: request.data.attackerId,
       baseDamage: attackBaseDamage,
       netSuccesses,
       targetArmor: interceptorArmor,
       armorPiercing,
       effectiveArmor,
-      finalDamage: damageDealt,
+      finalDamage: damageDealt + fallDamageToApply,
       hit: true,
       dodgeDicePool: 0,
       dodgeDiceResults: [],

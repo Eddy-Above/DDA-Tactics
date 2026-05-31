@@ -1,7 +1,16 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
-import { getReachableCells, detectCapabilitiesFromQualities } from '~/server/utils/mapMovement'
+import {
+  getReachableCells,
+  detectCapabilitiesFromQualities,
+  isValidLandingPosition,
+  getSizeFootprintDimension,
+  isFootprintValid,
+  findClosestValidDisplacementPosition,
+  findRangedIntercedPosition,
+  classifyReachability,
+} from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT } from '~/data/attackConstants'
@@ -126,7 +135,8 @@ export default defineEventHandler(async (event) => {
 
   // Returns true if the interceptor (digimon participant) can reach targetPos on the map
   function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): boolean {
-    if (!mapRecord || !participantPositions[interceptorParticipantId]) return true  // no map = always eligible
+    if (!mapRecord) return true  // no map = always eligible
+    if (!participantPositions[interceptorParticipantId]) return false  // unplaced on map = ineligible
     const interceptorPos = participantPositions[interceptorParticipantId]
     const interceptorP = participants.find((p: any) => p.id === interceptorParticipantId)
     if (!interceptorP || interceptorP.type !== 'digimon') return true
@@ -767,6 +777,52 @@ export default defineEventHandler(async (event) => {
   // Flag for downstream: is this a support attack?
   const isSupportAttack = attackDef?.type === 'support'
 
+  // --- Spatial intercede routing ---
+  const isRangedAttack = attackDef?.range === 'ranged'
+  const targetPos_map = mapRecord ? (participantPositions[body.targetId!] ?? null) : null
+  const attackerPos_map = mapRecord ? (participantPositions[body.attackerId] ?? null) : null
+  const isRangedWithGap = isRangedAttack && !!targetPos_map && !!attackerPos_map && (
+    Math.max(
+      Math.abs(targetPos_map.x - attackerPos_map.x),
+      Math.abs(targetPos_map.y - attackerPos_map.y),
+      Math.abs(targetPos_map.z - attackerPos_map.z),
+    ) > 1
+  )
+
+  // For melee with map: verify the target can be displaced before creating any offers.
+  // If there is no valid non-occupied landing spot for the target, intercede is impossible.
+  let targetCanBeDisplaced = true
+  if (!isRangedWithGap && mapRecord && targetPos_map && target.type === 'digimon') {
+    const targetDigRec = digimonById.get(target.entityId)
+    if (targetDigRec) {
+      const tq = typeof targetDigRec.qualities === 'string' ? JSON.parse(targetDigRec.qualities) : (targetDigRec.qualities ?? [])
+      const td = calculateDigimonDerivedStats(
+        typeof targetDigRec.baseStats === 'string' ? JSON.parse(targetDigRec.baseStats) : targetDigRec.baseStats,
+        targetDigRec.stage as any,
+        targetDigRec.size as any,
+      )
+      const targetCaps = detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
+      const targetDim = getSizeFootprintDimension(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
+      // Occupied set excludes target (interceptor will take their tile)
+      const preOccupied = new Set(
+        Object.entries(participantPositions)
+          .filter(([pid]) => pid !== body.targetId)
+          .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+      )
+      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCaps, preOccupied, targetDim) !== null
+    }
+  }
+
+  // Per-tamer spatial data: intercede position, jump/fly flags
+  type TamerSpatialEntry = {
+    interceptePos: { x: number; y: number; z: number }
+    isRangedIntercede: boolean
+    requiresJump: boolean
+    requiresFly: boolean
+    fallHeight: number
+  }
+  const tamerSpatialData: Record<string, TamerSpatialEntry> = {}
+
   // Find eligible tamers (those with partner digimon in encounter, not opted out)
   const eligibleTamerIds: string[] = []
   for (const p of participants) {
@@ -792,14 +848,90 @@ export default defineEventHandler(async (event) => {
     const tamerIsTarget = p.id === body.targetId
     const digimonIsTarget = partnerParticipant.id === body.targetId
     const tamerEligible = !tamerIsTarget && hasEligibleInterceptor(p)
+
     let digimonSpatiallyEligible = true
-    if (!digimonIsTarget && mapRecord && participantPositions[body.targetId!]) {
-      digimonSpatiallyEligible = canReachTarget(partnerParticipant.id, participantPositions[body.targetId!])
+    let spatialEntry: TamerSpatialEntry | null = null
+
+    if (!digimonIsTarget && mapRecord) {
+      const interceptorPos = participantPositions[partnerParticipant.id]
+      if (!interceptorPos) {
+        // Unplaced on map = ineligible
+        digimonSpatiallyEligible = false
+      } else if (targetPos_map) {
+        const digRec = digimonById.get(partnerParticipant.entityId)
+        if (digRec) {
+          const quals = typeof digRec.qualities === 'string' ? JSON.parse(digRec.qualities) : (digRec.qualities ?? [])
+          const deriv = calculateDigimonDerivedStats(
+            typeof digRec.baseStats === 'string' ? JSON.parse(digRec.baseStats) : digRec.baseStats,
+            digRec.stage as any,
+            digRec.size as any,
+          )
+          const caps = detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu)
+          const budget = deriv.movement
+          const interceptorDim = getSizeFootprintDimension(digRec.size as any, (digRec as any).giganticDimensions)
+
+          let foundPos: { x: number; y: number; z: number } | null = null
+          let isRangedIntercede = false
+
+          if (isRangedWithGap && attackerPos_map) {
+            // Ranged: find line-of-fire cell between attacker and target
+            const rangedOccupied = new Set(
+              Object.entries(participantPositions)
+                .filter(([pid]) => pid !== partnerParticipant.id)
+                .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+            )
+            foundPos = findRangedIntercedPosition(
+              attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDim, mapRecord, rangedOccupied,
+            )
+            isRangedIntercede = true
+          } else {
+            // Melee: interceptor must reach target's tile and fit their footprint there
+            const meleeOccupied = new Set(
+              Object.entries(participantPositions)
+                .filter(([pid]) => pid !== partnerParticipant.id && pid !== body.targetId)
+                .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+            )
+            const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
+            if (
+              reachable.has(`${targetPos_map.x},${targetPos_map.y},${targetPos_map.z}`) &&
+              isFootprintValid(targetPos_map, interceptorDim, mapRecord, meleeOccupied)
+            ) {
+              foundPos = targetPos_map
+            }
+          }
+
+          if (!foundPos) {
+            digimonSpatiallyEligible = false
+          } else {
+            const reach = classifyReachability(interceptorPos, foundPos, budget, caps, mapRecord)
+            const requiresJump = !reach.canWalk && !reach.canFly && reach.canJump
+            const requiresFly = !reach.canWalk && reach.canFly
+            if (!reach.canWalk && !reach.canJump && !reach.canFly) {
+              digimonSpatiallyEligible = false
+            } else {
+              let fallHeight = 0
+              if (requiresJump) {
+                for (let scanY = foundPos.y - 1; scanY >= -10; scanY--) {
+                  if (isValidLandingPosition({ x: foundPos.x, y: scanY, z: foundPos.z }, mapRecord, new Set())) {
+                    fallHeight = foundPos.y - scanY
+                    break
+                  }
+                }
+              }
+              spatialEntry = { interceptePos: foundPos, isRangedIntercede, requiresJump, requiresFly, fallHeight }
+            }
+          }
+        }
+        // If !digRec: no spatial data — remain eligible (permissive fallback)
+      }
+      // If !targetPos_map: remain eligible (no map position for target)
     }
+
     const digimonEligible = !digimonIsTarget && hasEligibleInterceptor(partnerParticipant) && digimonSpatiallyEligible
     if (!tamerEligible && !digimonEligible) continue
 
     eligibleTamerIds.push(p.entityId)
+    if (spatialEntry) tamerSpatialData[p.entityId] = spatialEntry
   }
 
   // Per-tamer Quick Reaction eligibility: only if target is their partner and order not used today
@@ -844,6 +976,12 @@ export default defineEventHandler(async (event) => {
     if (possibleInterceptors.length > 0 && possibleInterceptors.every((p: any) => optedOutForTarget.includes(p.id))) {
       gmEligible = false
     }
+  }
+
+  // Melee only: if the target has no valid displacement position, suppress all offers.
+  if (!isRangedWithGap && !targetCanBeDisplaced) {
+    eligibleTamerIds.splice(0)
+    gmEligible = false
   }
 
   if (eligibleTamerIds.length === 0 && !gmEligible) {
@@ -1101,6 +1239,7 @@ export default defineEventHandler(async (event) => {
   const newRequests: any[] = []
   for (const tamerId of eligibleTamerIds) {
     const qr = tamerQuickReactionMap[tamerId] || { canUse: false, diceCount: 0 }
+    const spatial = tamerSpatialData[tamerId] ?? null
     newRequests.push({
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'intercede-offer',
@@ -1131,6 +1270,12 @@ export default defineEventHandler(async (event) => {
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         canUseQuickReaction: qr.canUse,
         quickReactionDiceCount: qr.diceCount,
+        // Spatial intercede data (null when no map)
+        interceptePos: spatial?.interceptePos ?? null,
+        isRangedIntercede: spatial?.isRangedIntercede ?? false,
+        requiresJump: spatial?.requiresJump ?? false,
+        requiresFly: spatial?.requiresFly ?? false,
+        fallHeight: spatial?.fallHeight ?? 0,
       },
     })
   }
