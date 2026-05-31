@@ -3188,7 +3188,7 @@ const digimonMapForMap = computed(() => {
   allDigimon.value.forEach(d => {
     const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {
-      name: (d as any).nickname || d.name,
+      name: d.name,
       spriteUrl: (d as any).spriteUrl ?? null,
       currentWounds: participant ? participant.currentWounds : d.currentWounds,
       woundBoxes: participant?.maxWounds ?? (d as any).woundBoxes ?? 0,

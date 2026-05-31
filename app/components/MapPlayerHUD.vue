@@ -72,31 +72,23 @@ const minimized = ref(false)
 
 interface HudEntry { id: string; name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }
 
-// Compute stable display names: use seq for same-entityId groups; array-order fallback for same-name different-entity
+// Compute display names matching the encounter page's getDisplayName logic:
+// group by name, sort each group by participant ID, number if duplicates exist
 const participantDisplayNames = computed(() => {
-  const entityIdCount: Record<string, number> = {}
-  const nameCount: Record<string, number> = {}
+  const nameGroups: Record<string, string[]> = {}
   for (const p of props.participants) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (!info) continue
-    entityIdCount[p.entityId] = (entityIdCount[p.entityId] ?? 0) + 1
-    nameCount[info.name] = (nameCount[info.name] ?? 0) + 1
+    if (!nameGroups[info.name]) nameGroups[info.name] = []
+    nameGroups[info.name].push(p.id)
   }
-  const nameSeq: Record<string, number> = {}
+  for (const name in nameGroups) nameGroups[name].sort((a, b) => a.localeCompare(b))
   const result: Record<string, string> = {}
   for (const p of props.participants) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (!info) continue
-    const baseName = info.name
-    const seq = (p as any).seq as number | undefined
-    if (entityIdCount[p.entityId] > 1 && seq !== undefined) {
-      result[p.id] = `${baseName} ${seq}`
-    } else if (nameCount[baseName] > 1) {
-      nameSeq[baseName] = (nameSeq[baseName] ?? 0) + 1
-      result[p.id] = `${baseName} ${nameSeq[baseName]}`
-    } else {
-      result[p.id] = baseName
-    }
+    const group = nameGroups[info.name]
+    result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
   }
   return result
 })
@@ -138,10 +130,10 @@ function woundPct(current: number, max: number) {
 }
 
 function woundClass(current: number, max: number) {
-  const pct = max > 0 ? 1 - current / max : 1
-  if (pct <= 0.25) return 'red'
-  if (pct <= 0.5) return 'yellow'
-  return 'green'
+  if (current === 0) return 'green'
+  if (current < max / 2) return 'yellow'
+  if (current < max) return 'orange'
+  return 'red'
 }
 </script>
 
@@ -194,7 +186,8 @@ function woundClass(current: number, max: number) {
 .hud-bar-track.thin { height: 5px; }
 .hud-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
 .hud-bar-fill.green  { background: #22cc55; }
-.hud-bar-fill.yellow { background: #ddcc00; }
+.hud-bar-fill.yellow { background: #eab308; }
+.hud-bar-fill.orange { background: #f97316; }
 .hud-bar-fill.red    { background: #dd2222; }
 .hud-wound-label { font-size: 10px; color: #667; margin-top: 2px; }
 </style>

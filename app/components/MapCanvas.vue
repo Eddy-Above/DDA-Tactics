@@ -130,31 +130,22 @@ const emit = defineEmits<{
   (e: 'map-changed'): void
 }>()
 
-// ── Participant display names (seq-stable for same-entityId groups) ─────────
+// ── Participant display names matching encounter page getDisplayName logic ───
 const participantDisplayNames = computed(() => {
-  const entityIdCount: Record<string, number> = {}
-  const nameCount: Record<string, number> = {}
+  const nameGroups: Record<string, string[]> = {}
   for (const p of props.participants) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (!info) continue
-    entityIdCount[p.entityId] = (entityIdCount[p.entityId] ?? 0) + 1
-    nameCount[info.name] = (nameCount[info.name] ?? 0) + 1
+    if (!nameGroups[info.name]) nameGroups[info.name] = []
+    nameGroups[info.name].push(p.id)
   }
-  const nameSeq: Record<string, number> = {}
+  for (const name in nameGroups) nameGroups[name].sort((a, b) => a.localeCompare(b))
   const result: Record<string, string> = {}
   for (const p of props.participants) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (!info) continue
-    const baseName = info.name
-    const seq = (p as any).seq as number | undefined
-    if (entityIdCount[p.entityId] > 1 && seq !== undefined) {
-      result[p.id] = `${baseName} ${seq}`
-    } else if (nameCount[baseName] > 1) {
-      nameSeq[baseName] = (nameSeq[baseName] ?? 0) + 1
-      result[p.id] = `${baseName} ${nameSeq[baseName]}`
-    } else {
-      result[p.id] = baseName
-    }
+    const group = nameGroups[info.name]
+    result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
   }
   return result
 })
@@ -1671,9 +1662,10 @@ watch(ghostWalls, (ghost) => {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function healthBarClass(pct: number) {
-  if (pct <= 0.25) return 'red'
-  if (pct <= 0.5) return 'yellow'
-  return 'green'
+  if (pct >= 1) return 'green'
+  if (pct > 0.5) return 'yellow'
+  if (pct > 0) return 'orange'
+  return 'red'
 }
 
 // Expose for parent use
@@ -1722,7 +1714,8 @@ defineExpose({ movingParticipantId })
   transition: width 0.2s;
 }
 .health-bar-fill.green  { background: #22cc55; }
-.health-bar-fill.yellow { background: #ddcc00; }
+.health-bar-fill.yellow { background: #eab308; }
+.health-bar-fill.orange { background: #f97316; }
 .health-bar-fill.red    { background: #dd2222; }
 .health-bar-label {
   font-size: 10px;
