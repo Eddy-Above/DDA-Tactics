@@ -779,7 +779,11 @@ export default defineEventHandler(async (event) => {
   const isSupportAttack = attackDef?.type === 'support'
 
   // --- Spatial intercede routing ---
+  // Check DB record first, then fall back to client-provided attackData (NPC attacks may not
+  // have range stored on the DB record) and the hugePower range override.
   const isRangedAttack = attackDef?.range === 'ranged'
+    || body.attackData?.range === 'ranged'
+    || body.hugePowerAttackRange === 'ranged'
   const targetPos_map = mapRecord ? (participantPositions[body.targetId!] ?? null) : null
   const attackerPos_map = mapRecord ? (participantPositions[body.attackerId] ?? null) : null
   const isRangedOnMap = isRangedAttack && !!targetPos_map && !!attackerPos_map

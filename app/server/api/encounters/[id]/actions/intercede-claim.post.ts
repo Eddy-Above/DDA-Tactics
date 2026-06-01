@@ -217,7 +217,9 @@ export default defineEventHandler(async (event) => {
 
   if (!isAreaAttack && claimMapRecord) {
     const interceptorPos = participantPositions[body.interceptorParticipantId]
-    const isRangedIntercede: boolean = request.data.isRangedIntercede ?? false
+    const isRangedIntercede: boolean =
+      !!(request.data.isRangedIntercede) ||
+      request.data.attackData?.range === 'ranged'
     const targetPos = participantPositions[effectiveTargetId]
     const attackerPos = participantPositions[attackerId]
     // For ranged intercede the destination is the pre-computed line-of-fire cell stored in the
