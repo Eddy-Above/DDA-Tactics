@@ -3,6 +3,7 @@ import { db, encounters, digimon, tamers, campaigns, evolutionLines, maps } from
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
+import { BASIC_ATTACKS } from '~/data/attackConstants'
 import {
   detectCapabilitiesFromQualities,
   getSizeFootprintDimension,
@@ -209,11 +210,12 @@ export default defineEventHandler(async (event) => {
   const attacker = participants.find((p: any) => p.id === attackerId)
   const isSupportAttack = request.data.isSupportAttack || false
 
-  // Fetch the attacking digimon's attack definition for reliable range detection.
-  // The stored isRangedIntercede flag can be wrong (e.g. NPC attacks where the DB record
-  // did not have range populated at offer time). This is the authoritative source.
-  let claimAttackRange: string | null = null
-  if (!isAreaAttack && attacker?.type === 'digimon') {
+  // Resolve the attack's range for reliable ranged-vs-melee detection at claim time.
+  // Basic attacks (basic-melee / basic-ranged) are client-only constants and are NOT stored on
+  // the digimon record, so resolve them by id first. Then fall back to the attacking digimon's
+  // stored attack definition. The stored isRangedIntercede flag alone can be wrong.
+  let claimAttackRange: string | null = BASIC_ATTACKS.find(a => a.id === request.data.attackId)?.range ?? null
+  if (!claimAttackRange && !isAreaAttack && attacker?.type === 'digimon') {
     const [attackerDigForRange] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
     if (attackerDigForRange?.attacks) {
       const attacks = typeof attackerDigForRange.attacks === 'string'

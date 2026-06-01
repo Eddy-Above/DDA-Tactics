@@ -14,7 +14,7 @@ import {
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 import { resolveParticipantName } from '~/server/utils/participantName'
-import { getEffectResolutionType, EFFECT_ALIGNMENT } from '~/data/attackConstants'
+import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
@@ -779,10 +779,14 @@ export default defineEventHandler(async (event) => {
   const isSupportAttack = attackDef?.type === 'support'
 
   // --- Spatial intercede routing ---
-  // Check DB record first, then fall back to client-provided attackData (NPC attacks may not
-  // have range stored on the DB record) and the hugePower range override.
-  const isRangedAttack = attackDef?.range === 'ranged'
-    || body.attackData?.range === 'ranged'
+  // Resolve the attack's range. Basic attacks (basic-melee / basic-ranged) are NOT stored on the
+  // digimon record — they are client-only constants — so attackDef is null for them. Resolve by id
+  // via BASIC_ATTACKS first, then DB record, then client attackData, then hugePower override.
+  const basicAttackDef = BASIC_ATTACKS.find(a => a.id === body.attackId)
+  const resolvedAttackRange = basicAttackDef?.range
+    ?? attackDef?.range
+    ?? body.attackData?.range
+  const isRangedAttack = resolvedAttackRange === 'ranged'
     || body.hugePowerAttackRange === 'ranged'
   const targetPos_map = mapRecord ? (participantPositions[body.targetId!] ?? null) : null
   const attackerPos_map = mapRecord ? (participantPositions[body.attackerId] ?? null) : null
