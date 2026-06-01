@@ -1948,7 +1948,9 @@ defineExpose({ movingParticipantId })
   inset: 0;
   pointer-events: none;
   overflow: visible;
-  z-index: 40;
+  /* Below the EncounterMap chrome overlays (combat log, HUD, etc. at z-index 20)
+     so UI panels render over the 3D tokens, but above the WebGL canvas. */
+  z-index: 15;
 }
 .char-token {
   position: absolute;
