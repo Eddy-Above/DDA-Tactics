@@ -7,6 +7,8 @@ import {
   detectCapabilitiesFromQualities,
   getSizeFootprintDimension,
   isValidLandingPosition,
+  getFootprintCells,
+  isFootprintValid,
   findClosestValidDisplacementPosition,
   findRangedIntercedPosition,
 } from '~/server/utils/mapMovement'
@@ -283,12 +285,16 @@ export default defineEventHandler(async (event) => {
           return detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
         })() : defaultCaps
 
-        // Occupied set: exclude interceptor (at target's tile) and target (leaving)
+        // Occupied set: exclude interceptor (at target's tile) and target (leaving),
+        // then add the interceptor's full footprint so target can't land in their space
         const claimOccupied = new Set(
           Object.entries(updatedParticipantPositions)
             .filter(([pid]) => pid !== body.interceptorParticipantId && pid !== effectiveTargetId)
             .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
         )
+        getFootprintCells(intercDePos, interceptorDim).forEach((cell: { x: number; y: number; z: number }) => {
+          claimOccupied.add(`${cell.x},${cell.y},${cell.z}`)
+        })
 
         // Preferred displacement: interceptorDim tiles in the direction away from attacker
         let displacedPos: { x: number; y: number; z: number } | null = null
@@ -304,7 +310,7 @@ export default defineEventHandler(async (event) => {
               y: targetPos.y + dir.y * interceptorDim,
               z: targetPos.z + dir.z * interceptorDim,
             }
-            if (isValidLandingPosition(preferred, claimMapRecord, claimOccupied)) {
+            if (isFootprintValid(preferred, targetDim, claimMapRecord, claimOccupied)) {
               displacedPos = preferred
             }
           }

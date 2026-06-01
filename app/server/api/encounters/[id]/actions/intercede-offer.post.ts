@@ -7,6 +7,7 @@ import {
   isValidLandingPosition,
   isPositionInAir,
   getSizeFootprintDimension,
+  getFootprintCells,
   isFootprintValid,
   findClosestValidDisplacementPosition,
   findRangedIntercedPosition,
@@ -781,18 +782,13 @@ export default defineEventHandler(async (event) => {
   const isRangedAttack = attackDef?.range === 'ranged'
   const targetPos_map = mapRecord ? (participantPositions[body.targetId!] ?? null) : null
   const attackerPos_map = mapRecord ? (participantPositions[body.attackerId] ?? null) : null
-  const isRangedWithGap = isRangedAttack && !!targetPos_map && !!attackerPos_map && (
-    Math.max(
-      Math.abs(targetPos_map.x - attackerPos_map.x),
-      Math.abs(targetPos_map.y - attackerPos_map.y),
-      Math.abs(targetPos_map.z - attackerPos_map.z),
-    ) > 1
-  )
+  const isRangedOnMap = isRangedAttack && !!targetPos_map && !!attackerPos_map
 
   // For melee with map: verify the target can be displaced before creating any offers.
   // If there is no valid non-occupied landing spot for the target, intercede is impossible.
+  let targetDimForOffer = 1
   let targetCanBeDisplaced = true
-  if (!isRangedWithGap && mapRecord && targetPos_map && target.type === 'digimon') {
+  if (!isRangedOnMap && mapRecord && targetPos_map && target.type === 'digimon') {
     const targetDigRec = digimonById.get(target.entityId)
     if (targetDigRec) {
       const tq = typeof targetDigRec.qualities === 'string' ? JSON.parse(targetDigRec.qualities) : (targetDigRec.qualities ?? [])
@@ -802,14 +798,14 @@ export default defineEventHandler(async (event) => {
         targetDigRec.size as any,
       )
       const targetCaps = detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
-      const targetDim = getSizeFootprintDimension(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
+      targetDimForOffer = getSizeFootprintDimension(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
       // Occupied set excludes target (interceptor will take their tile)
       const preOccupied = new Set(
         Object.entries(participantPositions)
           .filter(([pid]) => pid !== body.targetId)
           .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
       )
-      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCaps, preOccupied, targetDim) !== null
+      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCaps, preOccupied, targetDimForOffer) !== null
     }
   }
 
@@ -873,7 +869,7 @@ export default defineEventHandler(async (event) => {
           let foundPos: { x: number; y: number; z: number } | null = null
           let isRangedIntercede = false
 
-          if (isRangedWithGap && attackerPos_map) {
+          if (isRangedOnMap) {
             // Ranged: find line-of-fire cell between attacker and target
             const rangedOccupied = new Set(
               Object.entries(participantPositions)
@@ -885,18 +881,28 @@ export default defineEventHandler(async (event) => {
             )
             isRangedIntercede = true
           } else {
-            // Melee: interceptor must reach target's tile and fit their footprint there
+            // Melee: interceptor must reach the footprint cell of the target closest to the attacker
             const meleeOccupied = new Set(
               Object.entries(participantPositions)
                 .filter(([pid]) => pid !== partnerParticipant.id && pid !== body.targetId)
                 .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
             )
+            const targetFootprintCells = getFootprintCells(targetPos_map, targetDimForOffer)
+            let targetInterceptCell = targetPos_map
+            if (attackerPos_map && targetFootprintCells.length > 1) {
+              const sorted = [...targetFootprintCells].sort((a, b) => {
+                const dA = Math.max(Math.abs(a.x - attackerPos_map.x), Math.abs(a.y - attackerPos_map.y), Math.abs(a.z - attackerPos_map.z))
+                const dB = Math.max(Math.abs(b.x - attackerPos_map.x), Math.abs(b.y - attackerPos_map.y), Math.abs(b.z - attackerPos_map.z))
+                return dA - dB
+              })
+              targetInterceptCell = sorted[0]
+            }
             const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
             if (
-              reachable.has(`${targetPos_map.x},${targetPos_map.y},${targetPos_map.z}`) &&
-              isFootprintValid(targetPos_map, interceptorDim, mapRecord, meleeOccupied)
+              reachable.has(`${targetInterceptCell.x},${targetInterceptCell.y},${targetInterceptCell.z}`) &&
+              isFootprintValid(targetInterceptCell, interceptorDim, mapRecord, meleeOccupied)
             ) {
-              foundPos = targetPos_map
+              foundPos = targetInterceptCell
             }
           }
 
@@ -917,7 +923,7 @@ export default defineEventHandler(async (event) => {
             }
             spatialEntry = { interceptePos: foundPos, isRangedIntercede, requiresJump, requiresFly, fallHeight }
           }
-        } else if (isRangedWithGap) {
+        } else if (isRangedOnMap) {
           // Cannot verify line-of-fire reachability without digimon record — ineligible for ranged
           digimonSpatiallyEligible = false
         }
@@ -978,7 +984,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Melee only: if the target has no valid displacement position, suppress all offers.
-  if (!isRangedWithGap && !targetCanBeDisplaced) {
+  if (!isRangedOnMap && !targetCanBeDisplaced) {
     eligibleTamerIds.splice(0)
     gmEligible = false
   }
@@ -1206,7 +1212,7 @@ export default defineEventHandler(async (event) => {
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
-        isRangedIntercede: isRangedWithGap,
+        isRangedIntercede: isRangedAttack,
       },
     }
 
@@ -1272,7 +1278,7 @@ export default defineEventHandler(async (event) => {
         quickReactionDiceCount: qr.diceCount,
         // Spatial intercede data (null when no map)
         interceptePos: spatial?.interceptePos ?? null,
-        isRangedIntercede: spatial?.isRangedIntercede ?? isRangedWithGap,
+        isRangedIntercede: spatial?.isRangedIntercede || isRangedAttack,
         requiresJump: spatial?.requiresJump ?? false,
         requiresFly: spatial?.requiresFly ?? false,
         fallHeight: spatial?.fallHeight ?? 0,
@@ -1305,7 +1311,7 @@ export default defineEventHandler(async (event) => {
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
-        isRangedIntercede: isRangedWithGap,
+        isRangedIntercede: isRangedAttack,
       },
     })
   }
