@@ -21,9 +21,9 @@ function sphereCells(center: Vec3, radius: number): Vec3[] {
   return cells
 }
 
-// [Blast] — sphere centred on `center`, diameter 3 + BIT (radius = (3+BIT)/2)
+// [Blast] — sphere centred on `center`, diameter 3 + BIT (radius = ceil((3+BIT)/2))
 export function computeBlastCells(center: Vec3, bit: number): Vec3[] {
-  const radius = (3 + bit) / 2
+  const radius = Math.ceil((3 + bit) / 2)
   return sphereCells(center, radius)
 }
 

@@ -53,7 +53,7 @@
           @attack-cancelled="$emit('attack-cancelled')"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
-          @player-action="(id, action) => emit('player-action', id, action)"
+          @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else emit('player-action', id, action) }"
           @cell-hovered="onCellHovered"
           @movement-cancelled="() => { npcMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
@@ -165,7 +165,7 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'attack'): void
+  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   (e: 'attack-cancelled'): void
   // Note: 'move' is handled internally in EncounterMap
@@ -357,22 +357,25 @@ function npcMoveCaps(participantId: string) {
   const budget: number = dInfo?.movement ?? 4
   const qualities: any[] = dInfo?.qualities ?? []
   const caps = movement.detectCapabilities(qualities, budget, 0, 0)
-  const occupied = new Map<string, { pos: Vec3; size: any }>()
+  // Tamers are always player-side; digimon carry isEnemy from their DB record
+  const moverIsEnemy: boolean = p.type === 'digimon' && ((p as any).isEnemy === true)
+  const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean }>()
   for (const part of props.encounter.participants) {
     if (part.id === participantId) continue
     const partPos = positions.value[part.id]
     if (!partPos) continue
     const partSize = (digimonMapForCanvas.value[part.entityId] as any)?.size ?? 'medium'
-    occupied.set(part.id, { pos: partPos as Vec3, size: partSize })
+    const partIsEnemy: boolean = part.type === 'digimon' && ((part as any).isEnemy === true)
+    occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy })
   }
-  return { p, pos, dInfo, budget, caps, occupied }
+  return { p, pos, dInfo, budget, caps, occupied, moverIsEnemy }
 }
 
 function onNpcMove(participantId: string) {
   if (!map.value) return
   const ctx = npcMoveCaps(participantId)
   if (!ctx) return
-  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium')
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
   npcMoveParticipantId.value = participantId
 }
 
@@ -383,7 +386,7 @@ function onCellHovered(cell: Vec3 | null) {
   }
   const ctx = npcMoveCaps(npcMoveParticipantId.value)
   if (!ctx) return
-  movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium')
+  movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
 }
 
 function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack') {

@@ -41,12 +41,13 @@ export function computeAreaCells(
   sizeAboveLarge: number,
   cellSize: number,
   allPositions: Vec3[],
+  blastCenter?: Vec3,
 ): Vec3[] {
   switch (shape) {
     case 'burst':
       return computeBurst(rangeType, attackerPos, bit, cellSize, allPositions)
     case 'blast':
-      return computeBlast(attackerPos, dirVec, bit, cellSize, allPositions)
+      return computeBlast(attackerPos, dirVec, bit, cellSize, allPositions, blastCenter)
     case 'close-blast':
       return computeCloseBlast(rangeType, attackerPos, dirVec, bit, cellSize, allPositions)
     case 'cone':
@@ -96,9 +97,22 @@ function computeBlast(
   bit: number,
   _cellSize: number,
   allPositions: Vec3[],
+  blastCenter?: Vec3,
 ): Vec3[] {
-  // blast: radius = (3 + bit) / 2, centered on mouse world pos (approximated as attacker + dirVec * radius)
-  const radius = (3 + bit) / 2
+  const radius = Math.ceil((3 + bit) / 2)
+  if (blastCenter) {
+    // Enumerate every integer cell within the sphere — includes empty air so the ghost preview is complete
+    const cells: Vec3[] = []
+    for (let x = blastCenter.x - radius; x <= blastCenter.x + radius; x++) {
+      for (let y = blastCenter.y - radius; y <= blastCenter.y + radius; y++) {
+        for (let z = blastCenter.z - radius; z <= blastCenter.z + radius; z++) {
+          const dx = x - blastCenter.x, dy = y - blastCenter.y, dz = z - blastCenter.z
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) <= radius + 0.5) cells.push({ x, y, z })
+        }
+      }
+    }
+    return cells
+  }
   const center: Vec3 = {
     x: attackerPos.x + dirVec.x * radius,
     y: attackerPos.y,

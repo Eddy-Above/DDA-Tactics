@@ -40,19 +40,24 @@ export function useMapMovement() {
     caps: MovementCapabilities,
     map: GameMap,
     destroyedStructures: Set<string> = new Set(),
-    unitPositions: Map<string, { pos: Vec3; size: DigimonSize }> = new Map(),
+    unitPositions: Map<string, { pos: Vec3; size: DigimonSize; isEnemy?: boolean }> = new Map(),
     moverSize: DigimonSize = 'medium',
+    moverIsEnemy: boolean = false,
   ) {
-    // Build set of positions blocked by same-or-close-size units
+    // Build set of positions blocked by same-or-close-size units.
+    // Same-faction units are always passable-only (allies pass through freely).
+    // Cross-faction units use size-based blocking (< 2 size categories = blocked).
     const blockedPositions = new Set<string>()
-    for (const [, { pos, size }] of unitPositions) {
-      const interaction = sizeInteraction(moverSize, size)
+    for (const [, { pos, size, isEnemy: partIsEnemy }] of unitPositions) {
+      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
+      const interaction = sameFaction ? 'passable-only' : sizeInteraction(moverSize, size)
       if (interaction === 'blocked') blockedPositions.add(vec3Key(pos))
     }
     // Passable-only positions (can traverse but not land)
     const passableOnlyPositions = new Set<string>()
-    for (const [, { pos, size }] of unitPositions) {
-      const interaction = sizeInteraction(moverSize, size)
+    for (const [, { pos, size, isEnemy: partIsEnemy }] of unitPositions) {
+      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
+      const interaction = sameFaction ? 'passable-only' : sizeInteraction(moverSize, size)
       if (interaction === 'passable-only') passableOnlyPositions.add(vec3Key(pos))
     }
 
@@ -80,12 +85,14 @@ export function useMapMovement() {
     caps: MovementCapabilities,
     map: GameMap,
     destroyedStructures: Set<string> = new Set(),
-    unitPositions: Map<string, { pos: Vec3; size: DigimonSize }> = new Map(),
+    unitPositions: Map<string, { pos: Vec3; size: DigimonSize; isEnemy?: boolean }> = new Map(),
     moverSize: DigimonSize = 'medium',
+    moverIsEnemy: boolean = false,
   ) {
     const blockedPositions = new Set<string>()
-    for (const [, { pos, size }] of unitPositions) {
-      if (sizeInteraction(moverSize, size) === 'blocked') blockedPositions.add(vec3Key(pos))
+    for (const [, { pos, size, isEnemy: partIsEnemy }] of unitPositions) {
+      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
+      if (!sameFaction && sizeInteraction(moverSize, size) === 'blocked') blockedPositions.add(vec3Key(pos))
     }
     const path = findPath(from, to, (f, t) => {
       if (blockedPositions.has(vec3Key(t))) return false

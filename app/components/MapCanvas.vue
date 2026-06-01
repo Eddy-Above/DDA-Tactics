@@ -62,14 +62,22 @@
       <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
       <button class="npc-radial-btn attack" @click="npcAction('attack')">Attack</button>
     </div>
-    <!-- Player radial action menu (own digimon on their turn) -->
+    <!-- Player radial action menu -->
     <div
       v-if="playerRadialScreen && playerRadialId"
       class="npc-radial-menu"
       :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
     >
-      <button class="npc-radial-btn player move"  @click="playerRadialMove()">Move</button>
-      <button class="npc-radial-btn player attack" @click="playerRadialAction('attack')">Attack</button>
+      <button class="npc-radial-btn player move" @click="playerRadialMove()">Move</button>
+      <template v-if="playerRadialParticipantType === 'tamer'">
+        <button class="npc-radial-btn player direct"  @click="playerRadialAction('direct')">Direct</button>
+        <button class="npc-radial-btn player orders"  @click="playerRadialAction('special-order')">Orders</button>
+      </template>
+      <template v-else-if="playerRadialParticipantType === 'digimon'">
+        <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
+        <button class="npc-radial-btn player stance"    @click="playerRadialAction('stance')">Stance</button>
+        <button class="npc-radial-btn player digivolve" @click="playerRadialAction('digivolve')">Digivolve</button>
+      </template>
     </div>
   </div>
 </template>
@@ -123,7 +131,7 @@ const emit = defineEmits<{
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   (e: 'attack-cancelled'): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'attack'): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -162,12 +170,24 @@ const npcRadialId = ref<string | null>(null)
 const npcRadialScreen = ref<{ x: number; y: number } | null>(null)
 const playerRadialId = ref<string | null>(null)
 const playerRadialScreen = ref<{ x: number; y: number } | null>(null)
+const playerRadialParticipantType = computed(() =>
+  playerRadialId.value
+    ? (props.participants.find(p => p.id === playerRadialId.value)?.type ?? null)
+    : null
+)
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
 const npcMoveY = ref<number>(0)
 const areaHighlightCells = ref<Array<{ x: number; y: number; z: number }>>([])
 let lastAoeKey = ''
+
+const blastCenterY = ref<number>(0)
+const blastLosBlocked = ref<boolean>(false)
+const lastBlastCenter = ref<Vec3 | null>(null)
+const isBlastTargeting = computed(() =>
+  !!props.selectedAttack && getAreaShape(props.selectedAttack.tags) === 'blast'
+)
 
 
 // ── Three.js internals ─────────────────────────────────────────────────────
@@ -235,12 +255,18 @@ onMounted(() => {
   canvasRef.value!.addEventListener('mousedown', onMouseDown)
   canvasRef.value!.addEventListener('mouseup', onMouseUp)
   canvasRef.value!.addEventListener('contextmenu', e => e.preventDefault())
-  // Intercept wheel on canvas directly so OrbitControls never zooms during movement mode
+  // Intercept wheel on canvas directly so OrbitControls never zooms during movement or blast-aim mode
   canvasRef.value!.addEventListener('wheel', (e) => {
     if (movingParticipantId.value) {
       e.preventDefault()
       e.stopPropagation()
       npcMoveY.value = npcMoveY.value + (e.deltaY > 0 ? -1 : 1)
+      return
+    }
+    if (isBlastTargeting.value) {
+      e.preventDefault()
+      e.stopPropagation()
+      adjustBlastY(e.deltaY > 0 ? -1 : 1)
     }
   }, { passive: false, capture: true })
 })
@@ -778,12 +804,14 @@ function updatePlayerRadial() {
 
 function playerRadialMove() {
   if (!playerRadialId.value) return
-  movingParticipantId.value = playerRadialId.value
+  const id = playerRadialId.value
   playerRadialId.value = null
   playerRadialScreen.value = null
+  // Let EncounterMap call computeReachable (same path as NPC move) so reachableCells is populated
+  emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'attack') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve') {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null
@@ -911,6 +939,7 @@ function updateReticules() {
     attackerPosKey,
     props.attackerEffectiveLimit,
     'aoe:' + (aoeActive ? lastAoeKey : ''),
+    'blast:' + isBlastTargeting.value,
   ].join('|')
   if (key === lastAttackKey) return
   lastAttackKey = key
@@ -922,8 +951,9 @@ function updateReticules() {
   const isMelee = props.selectedAttack.range === 'melee'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
 
-  // When AOE is active, only show reticules on participants inside the highlighted area
-  const aoeCellSet = aoeActive
+  // When AOE is active or blast is being aimed, only show reticules on participants inside the highlighted area.
+  // For blast (even when LoS-blocked), never fall back to single-target range check so no stray reticules appear.
+  const aoeCellSet = (aoeActive || isBlastTargeting.value)
     ? new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
     : null
 
@@ -953,8 +983,8 @@ function updateReticules() {
     reticuleGroup.add(mesh)
   }
 
-  // Range rings on ground (ranged single-target attacks only)
-  if (!isMelee && !aoeCellSet) {
+  // Range rings on ground — for ranged single-target attacks AND blast (to show valid center placement zone)
+  if (!isMelee && (!aoeCellSet || isBlastTargeting.value)) {
     const addRing = (radius: number, color: number) => {
       const geo = new THREE.RingGeometry(radius - 0.05, radius + 0.05, 64)
       const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.5 })
@@ -976,22 +1006,107 @@ function clearAoeState() {
   lastAttackKey = ''  // force reticule rebuild next frame
 }
 
-function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>) {
-  const key = cells.map(c => `${c.x},${c.y},${c.z}`).sort().join('|')
+function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>, opts?: { blocked?: boolean }) {
+  const key = cells.map(c => `${c.x},${c.y},${c.z}`).sort().join('|') + (opts?.blocked ? ':blocked' : '')
   if (key === lastAoeKey) return
   lastAoeKey = key
-  areaHighlightCells.value = cells
+  // When LoS is blocked, don't register cells as valid targets so click confirmation is suppressed
+  areaHighlightCells.value = opts?.blocked ? [] : cells
   aoeGroup.clear()
 
+  const color   = opts?.blocked ? 0xff3300 : 0xffaa00
+  const opacity = opts?.blocked ? 0.35     : 0.7
   for (const c of cells) {
     const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.7 })
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
     aoeGroup.add(mesh)
   }
 
   lastAttackKey = ''  // force reticule rebuild
+}
+
+/**
+ * Clamp a desired blast center (world XZ + integer Y level) so its 3D distance from the
+ * attacker stays within the attacker's effective limit. Y consumes part of the budget first,
+ * leaving the remainder for the horizontal (XZ) offset. Y may be negative (underground).
+ */
+function clampBlastCenter(attackerPos: Vec3, worldX: number, worldZ: number, desiredY: number): Vec3 {
+  const limit = props.attackerEffectiveLimit
+  // Y offset (in floor levels = metres) clamped to ±limit
+  const dy = Math.max(-limit, Math.min(limit, desiredY - attackerPos.y))
+  // Remaining horizontal budget after Y is spent
+  const horizBudget = Math.sqrt(Math.max(0, limit * limit - dy * dy))
+  let dx = worldX - (attackerPos.x + 0.5)
+  let dz = worldZ - (attackerPos.z + 0.5)
+  const distXZ = Math.sqrt(dx * dx + dz * dz)
+  if (distXZ > horizBudget && distXZ > 0.01) {
+    const s = horizBudget / distXZ
+    dx *= s; dz *= s
+  }
+  return {
+    x: Math.floor((attackerPos.x + 0.5) + dx),
+    y: attackerPos.y + Math.round(dy),
+    z: Math.floor((attackerPos.z + 0.5) + dz),
+  }
+}
+
+/** Max integer Y offset (±) the blast center may have given the current horizontal offset. */
+function maxBlastDy(attackerPos: Vec3, center: Vec3): number {
+  const limit = props.attackerEffectiveLimit
+  const dx = (center.x + 0.5) - (attackerPos.x + 0.5)
+  const dz = (center.z + 0.5) - (attackerPos.z + 0.5)
+  const distXZ = Math.sqrt(dx * dx + dz * dz)
+  return Math.floor(Math.sqrt(Math.max(0, limit * limit - distXZ * distXZ)))
+}
+
+function adjustBlastY(step: number) {
+  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const center = lastBlastCenter.value
+  if (!attackerPos || !center) {
+    // No center aimed yet — just nudge Y within ±effectiveLimit of the attacker
+    const lim = props.attackerEffectiveLimit
+    const base = attackerPos?.y ?? 0
+    blastCenterY.value = Math.max(base - lim, Math.min(blastCenterY.value + step, base + lim))
+    return
+  }
+  const maxDy = maxBlastDy(attackerPos, center)
+  blastCenterY.value = Math.max(attackerPos.y - maxDy, Math.min(blastCenterY.value + step, attackerPos.y + maxDy))
+  renderBlastFromStoredCenter()
+}
+
+function renderBlastFromStoredCenter() {
+  if (!lastBlastCenter.value) return
+  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  if (!attackerPos) return
+  const attack = props.selectedAttack
+  if (!attack) return
+  const center: Vec3 = { x: lastBlastCenter.value.x, y: blastCenterY.value, z: lastBlastCenter.value.z }
+  lastBlastCenter.value = center
+  const los = hasLineOfSight(attackerPos, center)
+  blastLosBlocked.value = !los
+  const cells = computeAreaCells(
+    'blast', attack.range, attackerPos, { x: 1, z: 0 },
+    attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
+    TILE_SIZE, [], center,
+  )
+  updateAoeHighlight(cells, { blocked: !los })
+}
+
+function hasLineOfSight(from: Vec3, to: Vec3): boolean {
+  const fromW = new THREE.Vector3(from.x + 0.5, from.y * TILE_SIZE + TILE_H + 0.5, from.z + 0.5)
+  const toW   = new THREE.Vector3(to.x   + 0.5, to.y   * TILE_SIZE + TILE_H + 0.5, to.z   + 0.5)
+  const dir = toW.clone().sub(fromW)
+  const dist = dir.length()
+  if (dist < 0.1) return true
+  dir.normalize()
+  const los = new THREE.Raycaster(fromW, dir, 0.1, dist - 0.1)
+  // Filter to solid Mesh objects only — LineSegments (tile edges) have large default precision
+  // and cause false LoS blocks for any ray passing within ~1 world unit of an edge.
+  const solidMeshes = [...buildMeshes, ...voxelMeshes].filter(obj => obj instanceof THREE.Mesh)
+  const hits = los.intersectObjects(solidMeshes, true)
+  return hits.length === 0
 }
 
 function getMouseWorldXZ(event: MouseEvent): { x: number; z: number } | null {
@@ -1026,6 +1141,29 @@ function computeAndRenderAoe(event: MouseEvent) {
   for (const p of participantPositionsList) {
     const k = `${p.x},${p.y},${p.z}`
     if (!posSet.has(k)) { posSet.add(k); allPositions.push(p) }
+  }
+
+  // Blast: mouse controls XZ center position; scroll wheel controls Y (blastCenterY)
+  if (shape === 'blast') {
+    setMouseFromEvent(event)
+    const planeY = blastCenterY.value * TILE_SIZE + TILE_H
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
+    const pt = new THREE.Vector3()
+    if (!raycaster.ray.intersectPlane(plane, pt)) return
+
+    const blastCenter = clampBlastCenter(attackerPos, pt.x, pt.z, blastCenterY.value)
+
+    const los = hasLineOfSight(attackerPos, blastCenter)
+    blastLosBlocked.value = !los
+    lastBlastCenter.value = blastCenter
+
+    const cells = computeAreaCells(
+      shape, attack.range, attackerPos, { x: 1, z: 0 },
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
+      TILE_SIZE, allPositions, blastCenter,
+    )
+    updateAoeHighlight(cells, { blocked: !los })
+    return
   }
 
   let dirVec = { x: 1, z: 0 }
@@ -1483,7 +1621,7 @@ function onCanvasClick(event: MouseEvent) {
     }
 
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (info) {
+    if (info && !props.myParticipantIds.includes(participantId)) {
       const screen = worldToScreen2D(spriteHit.point)
       const anyP = p as any
       const currentWounds = anyP.currentWounds ?? info.currentWounds
@@ -1498,8 +1636,10 @@ function onCanvasClick(event: MouseEvent) {
       }
     }
 
-    // If it's the active player's unit and it's their turn — show action radial
-    if (props.myParticipantIds.includes(participantId) && participantId === props.activeParticipantId) {
+    // Show radial for any owned participant when it's the player's turn
+    if (props.myParticipantIds.includes(participantId) &&
+        props.activeParticipantId !== null &&
+        props.myParticipantIds.includes(props.activeParticipantId)) {
       if (playerRadialId.value === participantId) {
         playerRadialId.value = null
         playerRadialScreen.value = null
@@ -1527,6 +1667,11 @@ function onCanvasClick(event: MouseEvent) {
 function onWheel(event: WheelEvent) {
   if (movingParticipantId.value) {
     npcMoveY.value = npcMoveY.value + (event.deltaY > 0 ? -1 : 1)
+    return
+  }
+  if (isBlastTargeting.value) {
+    // This path handles scroll events that target overlay elements (HUD, log, etc.) instead of the canvas
+    adjustBlastY(event.deltaY > 0 ? -1 : 1)
   }
 }
 
@@ -1613,9 +1758,25 @@ watch(movingParticipantId, id => {
   }
 })
 
-watch(() => props.selectedAttack, (attack) => {
-  if (!attack) { clearAoeState(); return }
+watch(() => props.selectedAttack, (attack, prevAttack) => {
+  if (!attack) {
+    clearAoeState()
+    blastCenterY.value = 0
+    blastLosBlocked.value = false
+    lastBlastCenter.value = null
+    return
+  }
   const shape = getAreaShape(attack.tags)
+  const prevShape = prevAttack ? getAreaShape(prevAttack.tags) : null
+  if (shape === 'blast') {
+    // Only initialise Y when NEWLY entering blast targeting — the parent poll loop re-creates
+    // this prop object every few seconds, which must not reset the user's chosen height.
+    if (prevShape !== 'blast') {
+      const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+      blastCenterY.value = attackerPos?.y ?? 0
+      blastLosBlocked.value = false
+    }
+  }
   if (shape === 'burst') {
     // Burst has no direction — render immediately centered on attacker
     const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
