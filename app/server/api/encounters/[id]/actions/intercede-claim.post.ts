@@ -240,7 +240,7 @@ export default defineEventHandler(async (event) => {
           .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
       )
       const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDim, claimMapRecord, occupied)
-      intercDePos = computed ?? undefined
+      intercDePos = computed ?? targetPos
     }
 
     if (interceptorPos && intercDePos) {
