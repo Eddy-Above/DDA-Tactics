@@ -732,6 +732,11 @@ function openGmIntercedeModal(request: any) {
   gmIntercedeAreaChosenTarget.value = null
   gmIntercedeView.value = request.data?.isAreaAttack ? 'select-area-target' : 'main'
   gmOptOutSelections.value = new Set()
+  // Auto-skip if no eligible interceptors exist — no need to show the modal
+  if (!request.data?.isAreaAttack && gmIntercedeOptionsWithNames.value.length === 0) {
+    handleGmIntercedeSkip(request.id)
+    return
+  }
   showGmIntercedeModal.value = true
 }
 

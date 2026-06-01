@@ -631,8 +631,14 @@ watch(() => currentDodgeRequest.value?.id, () => {
   dodgeRollResult.value = null
 })
 
-watch(() => currentIntercedeRequest.value?.id, () => {
+watch(() => currentIntercedeRequest.value?.id, (newId) => {
   playerIntercedeAreaChosenTarget.value = null
+  if (!newId) return
+  // Auto-skip if the player has no eligible interceptors for this offer
+  const req = currentIntercedeRequest.value
+  if (req && !req.data?.isAreaAttack && intercedeOptions.value.length === 0) {
+    handleIntercedeSkip()
+  }
 })
 
 watch(() => currentClashCheckRequest.value?.id, (newId) => {
