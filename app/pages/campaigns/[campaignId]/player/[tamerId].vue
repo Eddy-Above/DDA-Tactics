@@ -3250,6 +3250,7 @@ const mapSelectedAttackProp = computed(() => {
     sizeAboveLarge,
     effectiveLimit: stats.effectiveLimit,
     meleeRange: reachRanks > 0 ? reachRanks * 2 : 1,
+    attackerParticipantId: p.id,
   }
 })
 

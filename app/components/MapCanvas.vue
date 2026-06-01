@@ -108,7 +108,7 @@ const props = defineProps<{
   isDm: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2
@@ -139,6 +139,12 @@ const emit = defineEmits<{
 }>()
 
 // ── Participant display names matching encounter page getDisplayName logic ───
+// The participant whose position is the attack origin — may differ from activeParticipantId
+// when a tamer's partner digimon attacks on the tamer's turn.
+const effectiveAttackerId = computed(() =>
+  props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId
+)
+
 const participantDisplayNames = computed(() => {
   const nameGroups: Record<string, string[]> = {}
   for (const p of props.participants) {
@@ -931,11 +937,11 @@ function updatePathHighlights() {
 let lastAttackKey = ''
 function updateReticules() {
   const aoeActive = areaHighlightCells.value.length > 0
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   const attackerPosKey = attackerPos ? `${attackerPos.x},${attackerPos.y},${attackerPos.z}` : 'none'
   const key = [
     props.selectedAttack ? JSON.stringify(props.selectedAttack) : '',
-    props.activeParticipantId ?? '',
+    effectiveAttackerId.value ?? '',
     attackerPosKey,
     props.attackerEffectiveLimit,
     'aoe:' + (aoeActive ? lastAoeKey : ''),
@@ -960,7 +966,7 @@ function updateReticules() {
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
     if (!pos) continue
-    if (p.id === props.activeParticipantId) continue
+    if (p.id === effectiveAttackerId.value) continue
 
     if (aoeCellSet) {
       // Only show reticule if this participant's cell is in the AOE
@@ -1062,7 +1068,7 @@ function maxBlastDy(attackerPos: Vec3, center: Vec3): number {
 }
 
 function adjustBlastY(step: number) {
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   const center = lastBlastCenter.value
   if (!attackerPos || !center) {
     // No center aimed yet — just nudge Y within ±effectiveLimit of the attacker
@@ -1078,7 +1084,7 @@ function adjustBlastY(step: number) {
 
 function renderBlastFromStoredCenter() {
   if (!lastBlastCenter.value) return
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attackerPos) return
   const attack = props.selectedAttack
   if (!attack) return
@@ -1111,7 +1117,7 @@ function hasLineOfSight(from: Vec3, to: Vec3): boolean {
 
 function getMouseWorldXZ(event: MouseEvent): { x: number; z: number } | null {
   setMouseFromEvent(event)
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   const planeY = attackerPos ? attackerPos.y * TILE_SIZE + TILE_H : TILE_H
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
   const target = new THREE.Vector3()
@@ -1125,7 +1131,7 @@ function computeAndRenderAoe(event: MouseEvent) {
   const shape = getAreaShape(attack.tags)
   if (!shape) return
 
-  const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attackerPos) return
 
   // Build candidate positions: all ground tile positions + participant positions
@@ -1531,7 +1537,7 @@ function onCanvasClick(event: MouseEvent) {
       const aoeCellSet = new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
       const targetIds = props.participants
         .filter(p => {
-          if (p.id === props.activeParticipantId) return false
+          if (p.id === effectiveAttackerId.value) return false
           const pos = props.participantPositions[p.id]
           return pos && aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)
         })
@@ -1772,14 +1778,14 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
     // Only initialise Y when NEWLY entering blast targeting — the parent poll loop re-creates
     // this prop object every few seconds, which must not reset the user's chosen height.
     if (prevShape !== 'blast') {
-      const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+      const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
       blastCenterY.value = attackerPos?.y ?? 0
       blastLosBlocked.value = false
     }
   }
   if (shape === 'burst') {
     // Burst has no direction — render immediately centered on attacker
-    const attackerPos = props.activeParticipantId ? props.participantPositions[props.activeParticipantId] : null
+    const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
     if (!attackerPos) return
     const mapTiles: Array<{ x: number; y: number; z: number }> = props.map?.groundTiles
       ? props.map.groundTiles.map(t => ({ x: t.x, y: t.y, z: t.z }))
