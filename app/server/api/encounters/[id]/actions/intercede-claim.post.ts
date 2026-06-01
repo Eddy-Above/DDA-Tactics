@@ -8,6 +8,7 @@ import {
   getSizeFootprintDimension,
   isValidLandingPosition,
   findClosestValidDisplacementPosition,
+  findRangedIntercedPosition,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 
@@ -219,8 +220,28 @@ export default defineEventHandler(async (event) => {
     const attackerPos = participantPositions[attackerId]
     // For ranged intercede the destination is the pre-computed line-of-fire cell stored in the
     // offer; targetPos is only the fallback for melee (where it is always the intercede tile).
-    const intercDePos: { x: number; y: number; z: number } | undefined =
+    let intercDePos: { x: number; y: number; z: number } | undefined =
       request.data.interceptePos ?? targetPos
+
+    // GM ranged intercede: no specific interceptor was chosen at offer time, so no position was
+    // pre-computed. Compute the best reachable line-of-fire cell now using the chosen interceptor.
+    if (isRangedIntercede && !request.data.interceptePos && interceptorPos && targetPos && attackerPos && interceptorDigRec && interceptor.type === 'digimon') {
+      const quals = typeof interceptorDigRec.qualities === 'string' ? JSON.parse(interceptorDigRec.qualities) : (interceptorDigRec.qualities ?? [])
+      const derived = calculateDigimonDerivedStats(
+        typeof interceptorDigRec.baseStats === 'string' ? JSON.parse(interceptorDigRec.baseStats) : interceptorDigRec.baseStats,
+        interceptorDigRec.stage as any,
+        interceptorDigRec.size as any,
+      )
+      const caps = detectCapabilitiesFromQualities(quals, derived.movement, derived.ram, derived.cpu)
+      const interceptorDim = getSizeFootprintDimension(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
+      const occupied = new Set(
+        Object.entries(participantPositions)
+          .filter(([pid]) => pid !== body.interceptorParticipantId)
+          .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+      )
+      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDim, claimMapRecord, occupied)
+      intercDePos = computed ?? undefined
+    }
 
     if (interceptorPos && intercDePos) {
       updatedParticipantPositions = { ...participantPositions }

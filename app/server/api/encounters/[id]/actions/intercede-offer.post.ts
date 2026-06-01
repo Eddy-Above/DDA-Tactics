@@ -917,8 +917,11 @@ export default defineEventHandler(async (event) => {
             }
             spatialEntry = { interceptePos: foundPos, isRangedIntercede, requiresJump, requiresFly, fallHeight }
           }
+        } else if (isRangedWithGap) {
+          // Cannot verify line-of-fire reachability without digimon record — ineligible for ranged
+          digimonSpatiallyEligible = false
         }
-        // If !digRec: no spatial data — remain eligible (permissive fallback)
+        // else (melee with missing digimon record): permissive fallback remains eligible
       }
       // If !targetPos_map: remain eligible (no map position for target)
     }
@@ -1203,6 +1206,7 @@ export default defineEventHandler(async (event) => {
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+        isRangedIntercede: isRangedWithGap,
       },
     }
 
@@ -1268,7 +1272,7 @@ export default defineEventHandler(async (event) => {
         quickReactionDiceCount: qr.diceCount,
         // Spatial intercede data (null when no map)
         interceptePos: spatial?.interceptePos ?? null,
-        isRangedIntercede: spatial?.isRangedIntercede ?? false,
+        isRangedIntercede: spatial?.isRangedIntercede ?? isRangedWithGap,
         requiresJump: spatial?.requiresJump ?? false,
         requiresFly: spatial?.requiresFly ?? false,
         fallHeight: spatial?.fallHeight ?? 0,
@@ -1301,6 +1305,7 @@ export default defineEventHandler(async (event) => {
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+        isRangedIntercede: isRangedWithGap,
       },
     })
   }
