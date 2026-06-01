@@ -214,14 +214,16 @@ export default defineEventHandler(async (event) => {
 
   if (!isAreaAttack && claimMapRecord) {
     const interceptorPos = participantPositions[body.interceptorParticipantId]
+    const isRangedIntercede: boolean = request.data.isRangedIntercede ?? false
     const targetPos = participantPositions[effectiveTargetId]
     const attackerPos = participantPositions[attackerId]
+    // For ranged intercede the destination is the pre-computed line-of-fire cell stored in the
+    // offer; targetPos is only the fallback for melee (where it is always the intercede tile).
+    const intercDePos: { x: number; y: number; z: number } | undefined =
+      request.data.interceptePos ?? targetPos
 
-    if (interceptorPos && targetPos) {
+    if (interceptorPos && intercDePos) {
       updatedParticipantPositions = { ...participantPositions }
-
-      const isRangedIntercede: boolean = request.data.isRangedIntercede ?? false
-      const intercDePos: { x: number; y: number; z: number } = request.data.interceptePos ?? targetPos
 
       // Move interceptor to their intercede position
       updatedParticipantPositions[body.interceptorParticipantId] = { ...intercDePos }
@@ -236,7 +238,7 @@ export default defineEventHandler(async (event) => {
         }
       }
 
-      if (!isRangedIntercede) {
+      if (!isRangedIntercede && targetPos) {
         // Melee: displace the target away from the interceptor's new position
         const interceptorDim = interceptorDigRec
           ? getSizeFootprintDimension(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
