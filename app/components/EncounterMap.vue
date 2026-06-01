@@ -187,12 +187,22 @@ watch(() => props.encounter.mapId, async (id) => {
 })
 
 // ── Positions (local, authoritative within this component) ─────────────────
-const positions = ref<Record<string, Vec3>>({ ...(props.encounter.participantPositions ?? {}) })
+// participantPositions can arrive as a parsed object (GET endpoint) or as a raw JSON
+// string (POST action responses spread the unparsed DB column, e.g. intercede-claim).
+// Coerce to an object so a string never gets spread into garbage numeric keys, which
+// would make every token's position lookup fail and the tokens vanish.
+function toPositionsObj(v: any): Record<string, Vec3> {
+  if (!v) return {}
+  if (typeof v === 'string') { try { return JSON.parse(v) || {} } catch { return {} } }
+  return { ...v }
+}
+
+const positions = ref<Record<string, Vec3>>(toPositionsObj(props.encounter.participantPositions))
 
 // Sync from server polls
 watch(
   () => props.encounter.participantPositions,
-  (incoming) => { positions.value = { ...(incoming ?? {}) } },
+  (incoming) => { positions.value = toPositionsObj(incoming) },
   { deep: true }
 )
 
@@ -206,8 +216,8 @@ ws.onMessage((msg) => {
   } else if (msg.type === 'map-edited' || msg.type === 'element-painted' || msg.type === 'door-toggled') {
     if (props.encounter.mapId) mapStore.fetchMap(props.encounter.mapId).then(m => { map.value = m })
   } else if (msg.type === 'full-state') {
-    positions.value = { ...msg.participantPositions }
-    emit('positions-updated', msg.participantPositions)
+    positions.value = toPositionsObj(msg.participantPositions)
+    emit('positions-updated', positions.value)
   }
 })
 
