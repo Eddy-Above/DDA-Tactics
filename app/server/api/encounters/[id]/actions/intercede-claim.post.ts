@@ -209,6 +209,20 @@ export default defineEventHandler(async (event) => {
   const attacker = participants.find((p: any) => p.id === attackerId)
   const isSupportAttack = request.data.isSupportAttack || false
 
+  // Fetch the attacking digimon's attack definition for reliable range detection.
+  // The stored isRangedIntercede flag can be wrong (e.g. NPC attacks where the DB record
+  // did not have range populated at offer time). This is the authoritative source.
+  let claimAttackRange: string | null = null
+  if (!isAreaAttack && attacker?.type === 'digimon') {
+    const [attackerDigForRange] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
+    if (attackerDigForRange?.attacks) {
+      const attacks = typeof attackerDigForRange.attacks === 'string'
+        ? JSON.parse(attackerDigForRange.attacks) : attackerDigForRange.attacks
+      const foundAttack = (attacks as any[])?.find((a: any) => a.id === request.data.attackId)
+      claimAttackRange = foundAttack?.range ?? null
+    }
+  }
+
   // Single-target position swap with spatial validation.
   // For melee: interceptor moves to target's tile; target is displaced to nearest valid spot.
   // For ranged: interceptor moves to a line-of-fire cell stored in the offer; target stays put.
@@ -218,6 +232,7 @@ export default defineEventHandler(async (event) => {
   if (!isAreaAttack && claimMapRecord) {
     const interceptorPos = participantPositions[body.interceptorParticipantId]
     const isRangedIntercede: boolean =
+      claimAttackRange === 'ranged' ||
       !!(request.data.isRangedIntercede) ||
       request.data.attackData?.range === 'ranged'
     const targetPos = participantPositions[effectiveTargetId]
