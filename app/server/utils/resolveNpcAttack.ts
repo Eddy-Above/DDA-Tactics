@@ -82,7 +82,14 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
       const bonusStats = typeof (targetDigimon as any).bonusStats === 'string'
         ? JSON.parse((targetDigimon as any).bonusStats) : (targetDigimon as any).bonusStats
-      dodgePool = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0) || 3
+      const rawTargetStats = {
+        accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
+        damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
+        dodge: (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0),
+        armor: (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0),
+      }
+      const dodgeSource = (target.statSwaps as Record<string, string> | undefined)?.dodge ?? 'dodge'
+      dodgePool = (rawTargetStats[dodgeSource as keyof typeof rawTargetStats] ?? rawTargetStats.dodge) || 3
       const targetQualities = typeof targetDigimon.qualities === 'string'
         ? JSON.parse(targetDigimon.qualities) : targetDigimon.qualities
       targetHasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')

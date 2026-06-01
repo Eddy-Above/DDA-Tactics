@@ -782,6 +782,30 @@ export function useEncounters() {
     }
   }
 
+  async function modeChange(
+    encounterId: string,
+    participantId: string,
+    newSwaps: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>,
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/mode-change`, {
+        method: 'POST',
+        body: { participantId, newSwaps },
+      })
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) currentEncounter.value = result
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to use Mode Change'
+      console.error('Failed to use Mode Change:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     encounters,
     currentEncounter,
@@ -816,5 +840,6 @@ export function useEncounters() {
     // Combat actions
     performAttack,
     performNpcAttack,
+    modeChange,
   }
 }

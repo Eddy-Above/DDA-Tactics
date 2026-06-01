@@ -38,6 +38,18 @@ export interface ComputeAttackDamageResult {
   targetHealthStat: number
 }
 
+type SwappableStat = 'accuracy' | 'damage' | 'dodge' | 'armor'
+type StatBlock = Record<SwappableStat, number>
+
+function applyStatSwaps(stats: StatBlock, swaps: Partial<Record<SwappableStat, SwappableStat>> | undefined): StatBlock {
+  if (!swaps || Object.keys(swaps).length === 0) return stats
+  const result = { ...stats }
+  for (const [slot, source] of Object.entries(swaps) as [SwappableStat, SwappableStat][]) {
+    result[slot] = stats[source]
+  }
+  return result
+}
+
 /**
  * Canonical damage calculation used by both dodge-roll resolution (resolveNpcAttack)
  * and intercede resolution (intercede-claim). Pass dodgeSuccesses=0 for intercede.
@@ -72,7 +84,14 @@ export async function computeAttackDamage(
         ? JSON.parse(attackerDigimon.baseStats) : attackerDigimon.baseStats
       const bonusStats = typeof attackerDigimon.bonusStats === 'string'
         ? JSON.parse(attackerDigimon.bonusStats) : attackerDigimon.bonusStats
-      attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
+      const rawAttackerStats: StatBlock = {
+        accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
+        damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
+        dodge: (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0),
+        armor: (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0),
+      }
+      const resolvedAttackerStats = applyStatSwaps(rawAttackerStats, attackerParticipant.statSwaps)
+      attackBaseDamage = resolvedAttackerStats.damage
 
       const attacks = typeof attackerDigimon.attacks === 'string'
         ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
@@ -131,7 +150,14 @@ export async function computeAttackDamage(
         ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
       const bonusStats = typeof targetDigimon.bonusStats === 'string'
         ? JSON.parse(targetDigimon.bonusStats) : targetDigimon.bonusStats
-      targetArmor = (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0)
+      const rawTargetStats: StatBlock = {
+        accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
+        damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
+        dodge: (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0),
+        armor: (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0),
+      }
+      const resolvedTargetStats = applyStatSwaps(rawTargetStats, targetParticipant.statSwaps)
+      targetArmor = resolvedTargetStats.armor
       targetHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
       const qualities = typeof targetDigimon.qualities === 'string'

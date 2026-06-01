@@ -499,6 +499,7 @@ export interface CombatParticipant {
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
+  statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
 }
 
 export interface ActiveEffect {
