@@ -3,9 +3,10 @@ import type { Tamer, Digimon, Encounter } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
 import type { DigimonStage, EddySoulRules } from '~/types'
-import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
+import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
+import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
@@ -14,7 +15,7 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { campaignId, campaignLevel, skillRenames, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
 const skillLabels = computed(() => getResolvedSkillLabels(skillRenames.value))
 const tamerId = computed(() => route.params.tamerId as string)
 
@@ -172,7 +173,7 @@ const hugePowerRank2Enabled = ref(false)
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
-const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn } = useEncounters()
+const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const digimonMap = computed(() => {
@@ -491,6 +492,14 @@ const specialOrders = computed(() => {
   return getUnlockedSpecialOrders(attrs, xpB, campaignLevel.value)
 })
 
+const skillOrders = computed(() => {
+  if (!tamer.value || !skillOrdersEnabled.value) return []
+  const attrs = typeof tamer.value.attributes === 'string' ? JSON.parse(tamer.value.attributes) : tamer.value.attributes
+  const skills = typeof tamer.value.skills === 'string' ? JSON.parse(tamer.value.skills) : tamer.value.skills
+  const xpB = typeof tamer.value.xpBonuses === 'string' ? JSON.parse(tamer.value.xpBonuses) : tamer.value.xpBonuses
+  return getUnlockedSkillOrders(skills, attrs, xpB, campaignLevel.value)
+})
+
 const hasStrikeFirst = computed(() =>
   specialOrders.value.some((o) => o.name === 'Strike First!')
 )
@@ -530,6 +539,22 @@ const myTamerParticipant = computed(() =>
   myParticipants.value.find((p) => p.type === 'tamer') ?? null
 )
 
+const currentCombatInspiration = computed(() => {
+  const inCombat = myTamerParticipant.value
+  if (inCombat && (inCombat as any).currentInspiration !== undefined) return (inCombat as any).currentInspiration as number
+  if (!tamer.value) return 0
+  return (tamer.value.inspiration ?? 1) + (tamer.value.grantedInspiration ?? 0) + (tamer.value.xpBonuses?.inspiration ?? 0)
+})
+
+const maxCombatInspiration = computed(() =>
+  Math.max(1, tamer.value?.attributes?.willpower ?? 1)
+)
+
+const actOfInspirationCost = computed(() => INSPIRATION_ACT_COST[campaignLevel.value ?? 'standard'])
+const fatefulInterventionCost = computed(() => INSPIRATION_FATEFUL_COST[campaignLevel.value ?? 'standard'])
+
+const modifierSpendAmount = ref(1)
+
 const currentTurnParticipant = computed(() => {
   if (!activeEncounter.value) return null
   return getCurrentParticipant(activeEncounter.value)
@@ -546,6 +571,8 @@ const hasInitiativeRequest = computed(() => myRequests.value.some((r) => r.type 
 const hasDodgeRequest = computed(() => myRequests.value.some((r) => r.type === 'dodge-roll'))
 const hasHealthRequest = computed(() => myRequests.value.some((r) => r.type === 'health-roll'))
 const hasIntercedeRequest = computed(() => myRequests.value.some((r) => r.type === 'intercede-offer'))
+const hasDivineProtectionRequest = computed(() => myRequests.value.some((r) => r.type === 'divine-protection-offer'))
+const currentDivineProtectionRequest = computed(() => myRequests.value.find((r) => r.type === 'divine-protection-offer'))
 
 function playIntercedeChime() {
   try {
@@ -1229,6 +1256,34 @@ function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any):
   }
   // Check if tamer has enough actions
   const requiredActions = getOrderActionCost(order.type)
+  return (participant.actionsRemaining?.simple || 0) >= requiredActions
+}
+
+function getTamerSkillOrders(participant: CombatParticipant): any[] {
+  if (participant.type !== 'tamer' || !skillOrdersEnabled.value) return []
+  const tamedData = allTamers.value.find((t) => t.id === participant.entityId)
+  if (!tamedData) return []
+
+  const attrs = typeof tamedData.attributes === 'string' ? JSON.parse(tamedData.attributes) : tamedData.attributes
+  const skills = typeof tamedData.skills === 'string' ? JSON.parse(tamedData.skills) : tamedData.skills
+  const xpB = typeof tamedData.xpBonuses === 'string' ? JSON.parse(tamedData.xpBonuses) : tamedData.xpBonuses
+  return getUnlockedSkillOrders(skills, attrs, xpB, campaignLevel.value)
+}
+
+// A skill order is "passive-only" (informational, not invokable) when it costs no action
+// AND has no per-day/per-battle limit. Active abilities like Bravado (Complex) are NOT passive-only.
+function isPassiveSkillOrder(order: any): boolean {
+  return getSkillOrderActionCost(order.type) === 0 && getOrderUsageLimit(order.type) === 'passive'
+}
+
+function canUseSkillOrderInCombat(participant: CombatParticipant, order: any): boolean {
+  if ((participant.usedSkillOrders || []).includes(order.name)) return false
+  if (isPassiveSkillOrder(order)) return false
+  if (getOrderUsageLimit(order.type) === 'per-day') {
+    const t = allTamers.value.find((tam) => tam.id === participant.entityId)
+    if (((t as any)?.usedPerDaySkillOrders || []).includes(order.name)) return false
+  }
+  const requiredActions = getSkillOrderActionCost(order.type)
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 
@@ -2656,6 +2711,67 @@ async function handleSaveIntercedeOptions() {
   }
 }
 
+// Divine Protection response handlers
+const divineProtectionLoading = ref(false)
+
+async function handleDivineProtectionUsed() {
+  if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
+  divineProtectionLoading.value = true
+  try {
+    await respondToRequest(
+      activeEncounter.value.id,
+      currentDivineProtectionRequest.value.id,
+      tamer.value.id,
+      { type: 'divine-protection-used' },
+    )
+    await loadData()
+  } catch (e: any) {
+    console.error('Divine Protection failed:', e)
+    alert(e?.data?.message || 'Failed to invoke Divine Protection')
+  } finally {
+    divineProtectionLoading.value = false
+  }
+}
+
+async function handleDivineProtectionDeclined() {
+  if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
+  divineProtectionLoading.value = true
+  try {
+    await respondToRequest(
+      activeEncounter.value.id,
+      currentDivineProtectionRequest.value.id,
+      tamer.value.id,
+      { type: 'divine-protection-declined' },
+    )
+    await loadData()
+  } catch (e: any) {
+    console.error('Divine Protection declined failed:', e)
+    alert(e?.data?.message || 'Failed to decline Divine Protection')
+  } finally {
+    divineProtectionLoading.value = false
+  }
+}
+
+// Inspiration spend
+const inspirationSpendLoading = ref(false)
+
+async function handleSpendInspiration(
+  spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
+  amount: number,
+) {
+  if (!activeEncounter.value || !myTamerParticipant.value) return
+  inspirationSpendLoading.value = true
+  try {
+    await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
+    await loadData()
+  } catch (e: any) {
+    console.error('Inspiration spend failed:', e)
+    alert(e?.data?.message || 'Failed to spend Inspiration')
+  } finally {
+    inspirationSpendLoading.value = false
+  }
+}
+
 async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
   if (!activeEncounter.value) return
   try {
@@ -2668,6 +2784,20 @@ async function handleUseSpecialOrder(participant: CombatParticipant, orderName: 
   } catch (e: any) {
     console.error('Special order failed:', e)
     alert(e?.data?.message || 'Failed to use special order')
+  }
+}
+
+async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
+  if (!activeEncounter.value) return
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
+      method: 'POST',
+      body: { participantId: participant.id, orderName },
+    })
+    await loadData()
+  } catch (e: any) {
+    console.error('Skill order failed:', e)
+    alert(e?.data?.message || 'Failed to use skill order')
   }
 }
 
@@ -3716,6 +3846,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     </button>
                   </div>
                 </div>
+
+                <!-- Skill Orders (Tamer Only, homebrew) -->
+                <div v-if="participant.type === 'tamer' && getTamerSkillOrders(participant).length > 0 && (!(participant as any).clash || (participant as any).clash.isController)" class="mb-3">
+                  <label class="block text-xs text-digimon-dark-400 mb-2 font-semibold">🎯 Skill Orders</label>
+                  <div class="space-y-2">
+                    <button
+                      v-for="order in getTamerSkillOrders(participant)"
+                      :key="order.name"
+                      :disabled="!canUseSkillOrderInCombat(participant, order)"
+                      @click="handleUseSkillOrder(participant, order.name)"
+                      :class="[
+                        'w-full text-left text-xs px-3 py-2 rounded transition-colors',
+                        !canUseSkillOrderInCombat(participant, order)
+                          ? 'bg-digimon-dark-700 text-digimon-dark-500 cursor-not-allowed opacity-50'
+                          : 'bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 cursor-pointer'
+                      ]"
+                    >
+                      <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ order.name }}</span>
+                        <span class="text-digimon-dark-400 text-xs">
+                          {{ isPassiveSkillOrder(order) ? 'Passive' : getSkillOrderActionCost(order.type) === 0 ? 'Free' : getSkillOrderActionCost(order.type) === 1 ? '1' : '2' }}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Enemy Scan Target Modal (Player) -->
@@ -3859,6 +4015,64 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inspiration Spend Panel (available throughout combat) -->
+        <div
+          v-if="activeEncounter && activeEncounter.phase === 'combat' && myTamerParticipant"
+          class="mb-6 rounded-xl p-4 border-2 border-yellow-600/50 bg-yellow-900/10"
+        >
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-display text-lg font-semibold text-yellow-400">✦ Inspiration</h3>
+            <span class="text-yellow-300 font-semibold text-sm">
+              {{ currentCombatInspiration }}/{{ maxCombatInspiration }}
+            </span>
+          </div>
+          <p class="text-xs text-digimon-dark-400 mb-3">
+            Spend freely on any roll. The GM applies the effect to your in-progress roll.
+          </p>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              :disabled="inspirationSpendLoading || currentCombatInspiration < 1"
+              class="text-sm px-3 py-2 rounded bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
+              @click="handleSpendInspiration('reroll', 1)"
+            >
+              🎲 Re-roll
+              <span class="block text-xs text-yellow-200/70">Spend 1 — take the new result</span>
+            </button>
+            <button
+              :disabled="inspirationSpendLoading || currentCombatInspiration < actOfInspirationCost"
+              class="text-sm px-3 py-2 rounded bg-yellow-800 hover:bg-yellow-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
+              @click="handleSpendInspiration('act-of-inspiration', actOfInspirationCost)"
+            >
+              ⚡ Act of Inspiration
+              <span class="block text-xs text-yellow-200/70">Spend {{ actOfInspirationCost }} — ±5 to a check / dice pool</span>
+            </button>
+            <button
+              :disabled="inspirationSpendLoading || currentCombatInspiration < fatefulInterventionCost"
+              class="text-sm px-3 py-2 rounded bg-amber-800 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
+              @click="handleSpendInspiration('fateful-intervention', fatefulInterventionCost)"
+            >
+              🌟 Fateful Intervention
+              <span class="block text-xs text-yellow-200/70">Spend {{ fatefulInterventionCost }} — set every die + ±5 + Willpower</span>
+            </button>
+            <div class="flex items-center gap-1 bg-digimon-dark-800 rounded px-2 py-1">
+              <input
+                v-model.number="modifierSpendAmount"
+                type="number"
+                min="1"
+                :max="currentCombatInspiration"
+                class="w-12 text-sm bg-digimon-dark-700 border border-digimon-dark-500 rounded px-1 py-0.5 text-white"
+              />
+              <button
+                :disabled="inspirationSpendLoading || currentCombatInspiration < modifierSpendAmount || modifierSpendAmount < 1"
+                class="flex-1 text-sm px-2 py-1 rounded bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium"
+                @click="handleSpendInspiration('modifier', modifierSpendAmount)"
+              >
+                +/− Modify
+              </button>
             </div>
           </div>
         </div>
@@ -4098,7 +4312,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     </div>
                     <div class="flex items-center gap-2 text-sm">
                       <span class="text-digimon-dark-400">Inspiration:</span>
-                      <span class="text-digimon-dark-300">{{ (tamer.inspiration || 0) + (tamer.xpBonuses?.inspiration || 0) + (tamer.grantedInspiration || 0) }}/{{ tamerStats?.maxInspiration }}</span>
+                      <span class="text-yellow-400 font-semibold">
+                        {{ currentCombatInspiration }}/{{ maxCombatInspiration }}
+                        <span v-if="currentCombatInspiration > 0">
+                          <span v-for="i in currentCombatInspiration" :key="i" class="text-yellow-400">✦</span><span v-for="i in (maxCombatInspiration - currentCombatInspiration)" :key="'e'+i" class="text-digimon-dark-600">✦</span>
+                        </span>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -4249,6 +4468,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     <span class="text-digimon-dark-400">{{ order.attribute.charAt(0).toUpperCase() + order.attribute.slice(1) }}</span>
                     <span v-if="getOrderUsageLimit(order.type) !== 'passive'" class="text-digimon-dark-400">
                       {{ getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skill Orders (homebrew) -->
+            <div v-if="skillOrders.length > 0" class="mt-4 pt-4 border-t border-digimon-dark-700">
+              <h3 class="text-sm font-semibold text-digimon-dark-400 mb-3">Skill Orders</h3>
+              <div class="space-y-2">
+                <div
+                  v-for="order in skillOrders"
+                  :key="order.name"
+                  class="bg-digimon-dark-700 rounded-lg p-3"
+                >
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-white">{{ order.name }}</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-300">
+                      {{ isPassiveSkillOrder(order) ? 'Passive' : getOrderUsageLimit(order.type) === 'per-day' ? 'Once/Day' : order.type }}
+                    </span>
+                  </div>
+                  <p class="text-xs text-digimon-dark-400 mb-1">{{ order.effect }}</p>
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-digimon-dark-400">{{ order.skill.charAt(0).toUpperCase() + order.skill.slice(1) }}</span>
+                    <span v-if="!isPassiveSkillOrder(order)" class="text-digimon-dark-400">
+                      {{ getSkillOrderActionCost(order.type) === 0 ? 'Free' : getSkillOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
                     </span>
                   </div>
                 </div>
@@ -5320,6 +5565,61 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
         </template>
 
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Divine Protection Offer Modal -->
+  <Teleport to="body">
+    <div
+      v-if="hasDivineProtectionRequest && currentDivineProtectionRequest"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
+        <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
+          ✦ Divine Protection?
+        </h2>
+
+        <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">
+          <p class="text-white text-sm">
+            <span class="font-semibold">{{ currentDivineProtectionRequest.data?.attackerName || 'An attack' }}</span>
+            would deal
+            <span class="font-semibold text-red-400">{{ currentDivineProtectionRequest.data?.pendingDamage }}</span>
+            damage to you.
+          </p>
+        </div>
+
+        <div class="mb-4 p-3 bg-digimon-dark-700 rounded-lg text-sm text-digimon-dark-300">
+          <p class="mb-1">If you invoke Divine Protection:</p>
+          <ul class="list-disc list-inside space-y-1 text-xs">
+            <li>The damage is fully negated</li>
+            <li>You lose 1 Simple Action on your next turn</li>
+            <li v-if="currentDivineProtectionRequest.data?.firstUse" class="text-green-400">
+              First use this battle — free!
+            </li>
+            <li v-else class="text-yellow-300">
+              Costs {{ currentDivineProtectionRequest.data?.inspirationCost }} Inspiration
+              (you have {{ currentCombatInspiration }})
+            </li>
+          </ul>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <button
+            :disabled="divineProtectionLoading"
+            @click="handleDivineProtectionUsed"
+            class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            {{ divineProtectionLoading ? 'Processing...' : 'Protect (negate damage)' }}
+          </button>
+          <button
+            :disabled="divineProtectionLoading"
+            @click="handleDivineProtectionDeclined"
+            class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            {{ divineProtectionLoading ? 'Processing...' : `Take the hit (${currentDivineProtectionRequest.data?.pendingDamage} damage)` }}
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>

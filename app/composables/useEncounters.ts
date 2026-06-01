@@ -30,6 +30,7 @@ export interface CombatParticipant {
   evolutionLineId?: string
   woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number }>
   usedSpecialOrders?: string[]
+  usedSkillOrders?: string[]
   interceptPenalty?: number
   intercedeOptOuts?: string[]
   hasDirectedThisTurn?: boolean
@@ -59,6 +60,10 @@ export interface CombatParticipant {
   usedFreeClashThisRound?: boolean
   usedCounterattackThisCombat?: boolean
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
+  currentInspiration?: number
+  divineProtectionUsesThisBattle?: number
+  pendingDivineProtectionDamage?: number
+  pendingSimpleActionPenalty?: number
 }
 
 export interface BattleLogEntry {
@@ -210,7 +215,8 @@ export function useEncounters() {
     evolutionLineId?: string,
     isEnemy?: boolean,
     initialWounds: number = 0,
-    totalHealth?: number
+    totalHealth?: number,
+    initialInspiration?: number
   ): CombatParticipant {
     return {
       id: `${type}-${entityId}-${Date.now()}`,
@@ -228,6 +234,10 @@ export function useEncounters() {
       ...(evolutionLineId ? { evolutionLineId } : {}),
       ...(isEnemy ? { isEnemy } : {}),
       ...(totalHealth !== undefined ? { totalHealth } : {}),
+      ...(type === 'tamer' ? {
+        currentInspiration: initialInspiration ?? 1,
+        divineProtectionUsesThisBattle: 0,
+      } : {}),
     }
   }
 
@@ -432,6 +442,16 @@ export function useEncounters() {
       nextParticipant.dodgePenalty = 0
       nextParticipant.hasDirectedThisTurn = false
 
+      // Apply Divine Protection Simple Action penalty carried from previous turn
+      if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
+        nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
+        nextParticipant.actionsRemaining.simple = Math.max(
+          0,
+          nextParticipant.actionsRemaining.simple - nextParticipant.pendingSimpleActionPenalty,
+        )
+        nextParticipant.pendingSimpleActionPenalty = 0
+      }
+
       // Also reset partner digimon's dodge penalty and apply accumulated intercede penalty
       if (digimonMap && nextParticipant.type === 'tamer') {
         const partner = participants.find((p) => {
@@ -565,7 +585,7 @@ export function useEncounters() {
     requestId: string,
     tamerId: string,
     response: {
-      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled'
+      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled' | 'divine-protection-used' | 'divine-protection-declined'
       digimonId?: string
       initiative?: number
       initiativeRoll?: number
@@ -782,6 +802,55 @@ export function useEncounters() {
     }
   }
 
+  async function spendInspiration(
+    encounterId: string,
+    participantId: string,
+    spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
+    amount: number,
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/spend-inspiration`, {
+        method: 'POST',
+        body: { participantId, spendType, amount },
+      })
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) currentEncounter.value = result
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to spend inspiration'
+      console.error('Failed to spend inspiration:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function grantInspiration(
+    encounterId: string,
+    participantId: string,
+    amount: number,
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/grant-inspiration`, {
+        method: 'POST',
+        body: { participantId, amount },
+      })
+      encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
+      if (currentEncounter.value?.id === encounterId) currentEncounter.value = result
+      return result
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to grant inspiration'
+      console.error('Failed to grant inspiration:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function modeChange(
     encounterId: string,
     participantId: string,
@@ -841,5 +910,8 @@ export function useEncounters() {
     performAttack,
     performNpcAttack,
     modeChange,
+    // Inspiration
+    spendInspiration,
+    grantInspiration,
   }
 }

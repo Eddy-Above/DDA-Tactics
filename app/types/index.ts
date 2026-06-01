@@ -247,6 +247,7 @@ export interface CampaignRulesSettings {
   tormentRequirements?: TormentRequirements
   skillRenames?: SkillRenames
   eddySoulRules?: EddySoulRules
+  skillOrders?: boolean
 }
 
 export type CampaignLevel = 'standard' | 'enhanced' | 'extreme'
@@ -255,6 +256,20 @@ export const DIGIVOLVE_WILLPOWER_DC: Record<CampaignLevel, number> = {
   standard: 12,
   enhanced: 15,
   extreme: 17,
+}
+
+// Inspiration: cost to trigger Act of Inspiration (1 below Starting Cap per level)
+export const INSPIRATION_ACT_COST: Record<CampaignLevel, number> = {
+  standard: 2,
+  enhanced: 4,
+  extreme: 6,
+}
+
+// Inspiration: cost to trigger Fateful Intervention (entire maximum pool per level)
+export const INSPIRATION_FATEFUL_COST: Record<CampaignLevel, number> = {
+  standard: 5,
+  enhanced: 7,
+  extreme: 10,
 }
 
 // === Stage Configuration ===
@@ -373,6 +388,7 @@ export interface Tamer {
   partnerDigimonIds: string[]
   currentWounds: number
   usedPerDayOrders: string[]        // order names used today (once-per-day)
+  usedPerDaySkillOrders: string[]   // skill order names used today (once-per-day)
   digivolutionsUsedToday: number    // for EddySoul digivolution limit rule
   notes: string
   createdAt: Date
@@ -500,6 +516,10 @@ export interface CombatParticipant {
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
+  currentInspiration?: number       // Tamer-only: live pool tracked during combat, initialized from DB totals
+  divineProtectionUsesThisBattle?: number  // Tamer-only: 0 = first use free, 1+ = costs 2 inspiration
+  pendingDivineProtectionDamage?: number   // Tamer-only: damage held while DP offer is awaiting player response
+  pendingSimpleActionPenalty?: number      // Tamer-only: simple actions to deduct at start of next turn (Divine Protection cost)
 }
 
 export interface ActiveEffect {

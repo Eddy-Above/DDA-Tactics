@@ -60,6 +60,7 @@ const form = reactive({
     bonusDPMinPerCategory: false,
     enemyDoubleWounds: false,
   },
+  skillOrders: false,
 })
 
 const changePassword = ref(false)
@@ -123,6 +124,9 @@ onMounted(async () => {
       form.eddySoulRules.bonusDPMinPerCategory = eddySoul.bonusDPMinPerCategory ?? false
       form.eddySoulRules.enemyDoubleWounds = eddySoul.enemyDoubleWounds ?? false
     }
+
+    // Load Skill Orders homebrew toggle
+    form.skillOrders = campaign.value.rulesSettings?.skillOrders ?? false
   }
   loading.value = false
 })
@@ -201,6 +205,7 @@ async function handleSave() {
         ...(form.eddySoulRules.enemyDoubleWounds && { enemyDoubleWounds: true }),
       },
     }),
+    ...(form.skillOrders && { skillOrders: true }),
   }
 
   await updateCampaign(campaignId.value, data)
@@ -440,6 +445,28 @@ async function handleDelete() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Skill Orders (Homebrew) -->
+      <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h3 class="font-semibold text-white mb-2">Skill Orders</h3>
+        <p class="text-xs text-digimon-dark-500 mb-4">
+          Homebrew: unlocks a Skill Option per skill. Each requires the skill at {{ form.level === 'extreme' ? 6 : form.level === 'enhanced' ? 5 : 4 }}+
+          and the first Special Order of its governing attribute.
+        </p>
+        <div class="space-y-3">
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
+              v-model="form.skillOrders"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Enable Skill Orders</span>
+              <p class="text-xs text-digimon-dark-500">Show unlocked Skill Options on tamer sheets and offer active ones in combat.</p>
+            </div>
+          </label>
         </div>
       </div>
 

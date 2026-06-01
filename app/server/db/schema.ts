@@ -84,6 +84,7 @@ export const tamers = pgTable('tamers', {
 
   currentWounds: integer('current_wounds').notNull().default(0),
   usedPerDayOrders: text('used_per_day_orders', { mode: 'json' }).notNull().default('[]').$type<string[]>(),
+  usedPerDaySkillOrders: text('used_per_day_skill_orders', { mode: 'json' }).notNull().default('[]').$type<string[]>(),
   digivolutionsUsedToday: integer('digivolutions_used_today').notNull().default(0),
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),

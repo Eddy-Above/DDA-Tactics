@@ -4,6 +4,7 @@ import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/us
 import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
+import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
@@ -13,7 +14,7 @@ definePageMeta({
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, campaignLevel, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
 
 const {
   currentEncounter,
@@ -41,6 +42,8 @@ const {
   performNpcAttack,
   modeChange,
   deleteResponse,
+  spendInspiration,
+  grantInspiration,
 } = useEncounters()
 
 const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats } = useDigimon()
@@ -78,6 +81,11 @@ const hugePowerRank2Enabled = ref(false)
 // Direct action state
 const showDirectTargetSelector = ref(false)
 const pendingDirectBolstered = ref(false)
+
+// Inspiration grant state
+const grantInspirationTargetId = ref<string | null>(null)
+const grantInspirationAmount = ref(1)
+const grantInspirationLoading = ref(false)
 
 // Willpower roll modal state for digivolution
 const showWillpowerRollModal = ref(false)
@@ -1198,7 +1206,10 @@ async function handleAddParticipant() {
     const derived = tamer ? calcTamerStats(tamer, eddySoulRules.value) : null
     const maxWounds = derived?.woundBoxes ?? 5
     const initialWounds = tamer?.currentWounds ?? 0
-    const participant = createParticipant('tamer', selectedEntityId.value, -1, 0, maxWounds, undefined, undefined, initialWounds)
+    const initialInspiration = tamer
+      ? (tamer.inspiration ?? 1) + (tamer.grantedInspiration ?? 0) + ((tamer.xpBonuses?.inspiration) ?? 0)
+      : 1
+    const participant = createParticipant('tamer', selectedEntityId.value, -1, 0, maxWounds, undefined, undefined, initialWounds, undefined, initialInspiration)
     await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
     showAddParticipant.value = false
     selectedEntityId.value = ''
@@ -1528,7 +1539,8 @@ async function processResponse(response: any) {
 
           if (!participant) {
             const derived = calcTamerStats(tamer, eddySoulRules.value)
-            participant = createParticipant('tamer', tamer.id, response.response.initiative, response.response.initiativeRoll, derived.woundBoxes, undefined, undefined, tamer.currentWounds ?? 0)
+            const tamerInitInsp = (tamer.inspiration ?? 1) + (tamer.grantedInspiration ?? 0) + ((tamer.xpBonuses?.inspiration) ?? 0)
+            participant = createParticipant('tamer', tamer.id, response.response.initiative, response.response.initiativeRoll, derived.woundBoxes, undefined, undefined, tamer.currentWounds ?? 0, undefined, tamerInitInsp)
             const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
@@ -2008,6 +2020,41 @@ async function handleUseSpecialOrder(participant: CombatParticipant, orderName: 
   } catch (e: any) {
     console.error('Special order failed:', e)
     alert(e?.data?.message || 'Failed to use special order')
+  }
+}
+
+// Skill Orders (homebrew)
+function getTamerSkillOrders(participant: CombatParticipant) {
+  if (participant.type !== 'tamer' || !skillOrdersEnabled.value) return []
+  const tamer = tamers.value.find(t => t.id === participant.entityId)
+  if (!tamer) return []
+
+  const attrs = typeof tamer.attributes === 'string' ? JSON.parse(tamer.attributes as any) : tamer.attributes
+  const skills = typeof tamer.skills === 'string' ? JSON.parse(tamer.skills as any) : tamer.skills
+  const xpB = typeof tamer.xpBonuses === 'string' ? JSON.parse(tamer.xpBonuses as any) : tamer.xpBonuses
+  return getUnlockedSkillOrders(skills, attrs, xpB, campaignLevel.value)
+}
+
+// A skill order is "passive-only" (informational, not invokable) when it costs no action
+// AND has no per-day/per-battle limit. Active abilities like Bravado (Complex) are NOT passive-only.
+function isPassiveSkillOrder(order: { type: string }) {
+  return getSkillOrderActionCost(order.type) === 0 && getOrderUsageLimit(order.type) === 'passive'
+}
+
+async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
+  if (!currentEncounter.value) return
+  try {
+    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/skill-order`, {
+      method: 'POST',
+      body: { participantId: participant.id, orderName },
+    })
+    await Promise.all([
+      fetchEncounter(currentEncounter.value.id),
+      fetchTamers(campaignId.value),
+    ])
+  } catch (e: any) {
+    console.error('Skill order failed:', e)
+    alert(e?.data?.message || 'Failed to use skill order')
   }
 }
 
@@ -2730,6 +2777,32 @@ async function handleModeChangeSwap(participant: CombatParticipant, statA: Swapp
 
   await modeChange(currentEncounter.value.id, participant.id, newSwaps)
   await fetchEncounter(currentEncounter.value.id)
+}
+
+// Inspiration handlers
+async function handleGrantInspiration(participantId: string) {
+  if (!currentEncounter.value) return
+  const amount = grantInspirationAmount.value
+  if (amount < 1) return
+  grantInspirationLoading.value = true
+  await grantInspiration(currentEncounter.value.id, participantId, amount)
+  grantInspirationTargetId.value = null
+  grantInspirationAmount.value = 1
+  grantInspirationLoading.value = false
+}
+
+async function handleDivineProtectionUsed(request: any) {
+  if (!currentEncounter.value) return
+  await respondToRequest(currentEncounter.value.id, request.id, request.targetTamerId, {
+    type: 'divine-protection-used',
+  })
+}
+
+async function handleDivineProtectionDeclined(request: any) {
+  if (!currentEncounter.value) return
+  await respondToRequest(currentEncounter.value.id, request.id, request.targetTamerId, {
+    type: 'divine-protection-declined',
+  })
 }
 
 // Hazard handlers
@@ -3465,6 +3538,34 @@ function onMapAttackCancelled() {
                       >
                         Battery {{ (item.participant as any).battery ?? 0 }}/{{ STAGE_BATTERY_CAPACITY[digimonMap.get(item.participant.entityId)?.stage as keyof typeof STAGE_BATTERY_CAPACITY] ?? 0 }}
                       </span>
+                      <span v-if="item.participant.type === 'tamer'" class="text-yellow-400 font-medium">
+                        ✦ {{ (item.participant as any).currentInspiration ?? 0 }}/{{ Math.max(1, tamerMap.get(item.participant.entityId)?.attributes?.willpower ?? 1) }} Insp
+                      </span>
+                    </div>
+
+                    <!-- Grant Inspiration inline UI (tamer cards only) -->
+                    <div v-if="item.participant.type === 'tamer'" class="flex items-center gap-1 mb-2">
+                      <template v-if="grantInspirationTargetId === item.participant.id">
+                        <input
+                          v-model.number="grantInspirationAmount"
+                          type="number" min="1" max="10"
+                          class="w-14 text-xs bg-digimon-dark-700 border border-digimon-dark-500 rounded px-1 py-0.5 text-white"
+                        />
+                        <button
+                          :disabled="grantInspirationLoading"
+                          class="text-xs px-2 py-0.5 rounded bg-yellow-600 hover:bg-yellow-500 text-white disabled:opacity-50"
+                          @click="handleGrantInspiration(item.participant.id)"
+                        >Grant</button>
+                        <button
+                          class="text-xs px-1.5 py-0.5 rounded bg-digimon-dark-600 hover:bg-digimon-dark-500 text-digimon-dark-300"
+                          @click="grantInspirationTargetId = null"
+                        >✕</button>
+                      </template>
+                      <button
+                        v-else
+                        class="text-xs px-2 py-0.5 rounded bg-digimon-dark-700 hover:bg-yellow-900/40 text-yellow-500 border border-digimon-dark-600 hover:border-yellow-700"
+                        @click="grantInspirationTargetId = item.participant.id; grantInspirationAmount = 1"
+                      >+ Grant Inspiration</button>
                     </div>
 
                     <!-- Digivolve/Devolve buttons for non-partner digimon -->
@@ -4032,6 +4133,46 @@ function onMapAttackCancelled() {
               </div>
             </div>
 
+            <!-- Skill Orders (Tamer only, homebrew) -->
+            <div v-if="activeParticipant.type === 'tamer' && getTamerSkillOrders(activeParticipant).length > 0 && !(activeParticipant.clash && !activeParticipant.clash.isController)" class="space-y-2 mb-4">
+              <label class="block text-sm text-digimon-dark-400">Skill Orders</label>
+              <div class="space-y-1">
+                <button
+                  v-for="order in getTamerSkillOrders(activeParticipant)"
+                  :key="order.name"
+                  :disabled="
+                    (activeParticipant.usedSkillOrders || []).includes(order.name) ||
+                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name)) ||
+                    (activeParticipant.actionsRemaining?.simple || 0) < getSkillOrderActionCost(order.type) ||
+                    isPassiveSkillOrder(order)
+                  "
+                  :class="[
+                    'w-full px-3 py-2 rounded text-xs text-left transition-colors',
+                    (activeParticipant.usedSkillOrders || []).includes(order.name)
+                      ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
+                      : (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name))
+                        ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
+                        : isPassiveSkillOrder(order)
+                          ? 'bg-digimon-dark-700 text-digimon-dark-400 cursor-default'
+                          : (activeParticipant.actionsRemaining?.simple || 0) < getSkillOrderActionCost(order.type)
+                            ? 'bg-digimon-dark-700 text-digimon-dark-500 cursor-not-allowed'
+                            : 'bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 cursor-pointer'
+                  ]"
+                  @click="handleUseSkillOrder(activeParticipant, order.name)"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="font-medium">{{ order.name }}</span>
+                    <span class="text-digimon-dark-400 ml-2">
+                      {{ isPassiveSkillOrder(order) ? 'Passive' : getSkillOrderActionCost(order.type) === 0 ? 'Free' : getSkillOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
+                    </span>
+                  </div>
+                  <div class="text-digimon-dark-400 mt-0.5">{{ order.effect }}</div>
+                  <div v-if="(activeParticipant.usedSkillOrders || []).includes(order.name)" class="text-red-400 mt-0.5">Used</div>
+                  <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
+                </button>
+              </div>
+            </div>
+
             <!-- Enemy Scan Target Modal -->
             <div v-if="showSpecialOrdersModal && activeParticipant.type === 'tamer'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showSpecialOrdersModal = false">
               <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-600 max-w-md w-full mx-4">
@@ -4140,6 +4281,9 @@ function onMapAttackCancelled() {
                   <span v-else-if="request.type === 'clash-check'" class="text-orange-400 text-sm ml-2">
                     Clash Check — {{ request.data?.initiatorName || 'Unknown' }} initiated, awaiting response
                   </span>
+                  <span v-else-if="request.type === 'divine-protection-offer'" class="text-yellow-400 text-sm ml-2">
+                    Divine Protection — {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
+                  </span>
                   <span v-else class="text-digimon-dark-400 text-sm ml-2">
                     {{ request.type === 'digimon-selection' ? 'Select Digimon' : 'Roll Initiative' }}
                   </span>
@@ -4207,6 +4351,25 @@ function onMapAttackCancelled() {
                       class="text-digimon-dark-400 hover:text-white text-xs font-semibold"
                     >
                       Never for this target
+                    </button>
+                  </template>
+                  <template v-else-if="request.type === 'divine-protection-offer'">
+                    <!-- GM can resolve Divine Protection offer on behalf of slow players -->
+                    <div class="text-yellow-300 text-xs mr-2">
+                      {{ request.data?.targetName }} — {{ request.data?.pendingDamage }} damage pending
+                      {{ request.data?.firstUse ? '(free)' : `(costs ${request.data?.inspirationCost} Inspiration)` }}
+                    </div>
+                    <button
+                      @click="handleDivineProtectionUsed(request)"
+                      class="bg-yellow-600 hover:bg-yellow-500 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
+                    >
+                      Protect
+                    </button>
+                    <button
+                      @click="handleDivineProtectionDeclined(request)"
+                      class="bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-3 py-1 rounded text-sm font-semibold transition-colors"
+                    >
+                      Take Hit
                     </button>
                   </template>
                   <template v-else>

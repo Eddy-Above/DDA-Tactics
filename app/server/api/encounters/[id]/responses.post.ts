@@ -11,7 +11,7 @@ interface SubmitResponseBody {
   requestId: string
   tamerId: string
   response: {
-    type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled'
+    type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled' | 'divine-protection-used' | 'divine-protection-declined'
     digimonId?: string
     initiative?: number
     initiativeRoll?: number
@@ -179,6 +179,13 @@ export default defineEventHandler(async (event) => {
       throw createError({
         statusCode: 400,
         message: 'attackId, accuracyDicePool, accuracySuccesses, and accuracyDiceResults are required for counterattack-triggered response',
+      })
+    }
+  } else if (body.response.type === 'divine-protection-used' || body.response.type === 'divine-protection-declined') {
+    if (request.type !== 'divine-protection-offer') {
+      throw createError({
+        statusCode: 400,
+        message: 'Response type does not match request type',
       })
     }
   }
@@ -618,6 +625,59 @@ export default defineEventHandler(async (event) => {
         // Outside-clash penalty: outsider attacks deal reduced damage
         if (request.data.outsideClashCpuPenalty && request.data.outsideClashCpuPenalty > 0) {
           damageDealt = Math.max(1, damageDealt - request.data.outsideClashCpuPenalty)
+        }
+      }
+
+      // === DIVINE PROTECTION: offer to tamer targets before applying damage ===
+      if (hit && targetParticipant?.type === 'tamer' && damageDealt > 0) {
+        const dpUses = targetParticipant.divineProtectionUsesThisBattle ?? 0
+        const currentInsp = targetParticipant.currentInspiration ?? 0
+        const firstUse = dpUses === 0
+        const eligible = firstUse || currentInsp >= 2
+
+        if (eligible) {
+          // Store pending damage on participant (do NOT apply wounds yet)
+          const updatedWithPending = participants.map((p: any) =>
+            p.id === request.targetParticipantId
+              ? { ...p, pendingDivineProtectionDamage: damageDealt }
+              : p,
+          )
+
+          const dpRequest = {
+            id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            type: 'divine-protection-offer',
+            targetTamerId: request.data.targetEntityId,
+            targetParticipantId: request.targetParticipantId,
+            timestamp: new Date().toISOString(),
+            data: {
+              pendingDamage: damageDealt,
+              targetName: request.data.targetName,
+              attackerName: request.data.attackerName,
+              targetParticipantId: request.targetParticipantId,
+              firstUse,
+              inspirationCost: firstUse ? 0 : 2,
+            },
+          }
+
+          const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+
+          await db.update(encounters).set({
+            participants: JSON.stringify(updatedWithPending) as any,
+            pendingRequests: JSON.stringify([...filteredRequests, dpRequest]) as any,
+            requestResponses: JSON.stringify(currentResponses) as any,
+            updatedAt: new Date(),
+          }).where(eq(encounters.id, encounterId))
+
+          const [earlyUpdated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+          return {
+            ...earlyUpdated,
+            participants: parseJsonField(earlyUpdated.participants),
+            turnOrder: parseJsonField(earlyUpdated.turnOrder),
+            battleLog: parseJsonField(earlyUpdated.battleLog),
+            hazards: parseJsonField(earlyUpdated.hazards),
+            pendingRequests: parseJsonField(earlyUpdated.pendingRequests),
+            requestResponses: parseJsonField(earlyUpdated.requestResponses),
+          }
         }
       }
 
@@ -1240,6 +1300,131 @@ export default defineEventHandler(async (event) => {
       participants: JSON.stringify(participants),
       battleLog: JSON.stringify([...battleLog, recoveryLog]),
       pendingRequests: JSON.stringify(filteredRequests),
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
+  }
+
+  // === DIVINE-PROTECTION-USED: player negates the pending damage ===
+  if (body.response.type === 'divine-protection-used') {
+    let participants = parseJsonField(encounter.participants)
+    const battleLog = parseJsonField(encounter.battleLog)
+    const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+
+    const targetParticipantId = request.data?.targetParticipantId
+    const firstUse = request.data?.firstUse ?? true
+    const inspirationCost = request.data?.inspirationCost ?? 0
+    const pendingDamage = request.data?.pendingDamage ?? 0
+    const targetName = request.data?.targetName ?? 'Tamer'
+
+    participants = participants.map((p: any) => {
+      if (p.id !== targetParticipantId) return p
+
+      const updated: any = {
+        ...p,
+        divineProtectionUsesThisBattle: (p.divineProtectionUsesThisBattle ?? 0) + 1,
+        pendingDivineProtectionDamage: undefined,
+        // Lose a Simple Action at the start of their next turn
+        pendingSimpleActionPenalty: (p.pendingSimpleActionPenalty ?? 0) + 1,
+      }
+
+      if (!firstUse && inspirationCost > 0) {
+        updated.currentInspiration = Math.max(0, (p.currentInspiration ?? 0) - inspirationCost)
+      }
+
+      return updated
+    })
+
+    // Sync inspiration deduction to tamer DB if not the first use
+    if (!firstUse && inspirationCost > 0) {
+      const targetParticipant = participants.find((p: any) => p.id === targetParticipantId)
+      if (targetParticipant?.type === 'tamer') {
+        const [tamer] = await db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId))
+        if (tamer) {
+          const newInspiration = Math.max(0, (tamer.inspiration ?? 0) - inspirationCost)
+          await db.update(tamers).set({
+            inspiration: newInspiration,
+            updatedAt: new Date(),
+          }).where(eq(tamers.id, tamer.id))
+        }
+      }
+    }
+
+    const dpLog = {
+      id: `log-${Date.now()}-divine-protection`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: targetParticipantId,
+      actorName: targetName,
+      action: 'Divine Protection',
+      target: null,
+      result: `${targetName} invokes Divine Protection — ${pendingDamage} damage negated!${!firstUse ? ` (costs ${inspirationCost} Inspiration)` : ''} Loses 1 Simple Action next turn.`,
+      damage: 0,
+      effects: ['Divine Protection', 'Damage Negated'],
+    }
+
+    await db.update(encounters).set({
+      participants: JSON.stringify(participants) as any,
+      battleLog: JSON.stringify([...battleLog, dpLog]) as any,
+      pendingRequests: JSON.stringify(filteredRequests) as any,
+      updatedAt: new Date(),
+    }).where(eq(encounters.id, encounterId))
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return {
+      ...updated,
+      participants: parseJsonField(updated.participants),
+      turnOrder: parseJsonField(updated.turnOrder),
+      battleLog: parseJsonField(updated.battleLog),
+      hazards: parseJsonField(updated.hazards),
+      pendingRequests: parseJsonField(updated.pendingRequests),
+      requestResponses: parseJsonField(updated.requestResponses),
+    }
+  }
+
+  // === DIVINE-PROTECTION-DECLINED: apply the pending damage ===
+  if (body.response.type === 'divine-protection-declined') {
+    let participants = parseJsonField(encounter.participants)
+    const battleLog = parseJsonField(encounter.battleLog)
+    const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
+
+    const targetParticipantId = request.data?.targetParticipantId
+    const pendingDamage = request.data?.pendingDamage ?? 0
+    const targetName = request.data?.targetName ?? 'Tamer'
+
+    participants = participants.map((p: any) => {
+      if (p.id !== targetParticipantId) return p
+      const wounds = Math.min(p.maxWounds, (p.currentWounds ?? 0) + pendingDamage)
+      return { ...p, currentWounds: wounds, pendingDivineProtectionDamage: undefined }
+    })
+
+    const declineLog = {
+      id: `log-${Date.now()}-dp-declined`,
+      timestamp: new Date().toISOString(),
+      round: encounter.round,
+      actorId: targetParticipantId,
+      actorName: targetName,
+      action: 'Divine Protection Declined',
+      target: null,
+      result: `${targetName} takes ${pendingDamage} damage`,
+      damage: pendingDamage,
+      effects: ['Divine Protection', 'Declined'],
+    }
+
+    await db.update(encounters).set({
+      participants: JSON.stringify(participants) as any,
+      battleLog: JSON.stringify([...battleLog, declineLog]) as any,
+      pendingRequests: JSON.stringify(filteredRequests) as any,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
