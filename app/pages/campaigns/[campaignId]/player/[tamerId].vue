@@ -6,6 +6,7 @@ import type { DigimonStage, EddySoulRules } from '~/types'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
+import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
@@ -14,7 +15,7 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { campaignId, campaignLevel, skillRenames, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
 const skillLabels = computed(() => getResolvedSkillLabels(skillRenames.value))
 const tamerId = computed(() => route.params.tamerId as string)
 
@@ -489,6 +490,14 @@ const specialOrders = computed(() => {
   const attrs = typeof tamer.value.attributes === 'string' ? JSON.parse(tamer.value.attributes) : tamer.value.attributes
   const xpB = typeof tamer.value.xpBonuses === 'string' ? JSON.parse(tamer.value.xpBonuses) : tamer.value.xpBonuses
   return getUnlockedSpecialOrders(attrs, xpB, campaignLevel.value)
+})
+
+const skillOrders = computed(() => {
+  if (!tamer.value || !skillOrdersEnabled.value) return []
+  const attrs = typeof tamer.value.attributes === 'string' ? JSON.parse(tamer.value.attributes) : tamer.value.attributes
+  const skills = typeof tamer.value.skills === 'string' ? JSON.parse(tamer.value.skills) : tamer.value.skills
+  const xpB = typeof tamer.value.xpBonuses === 'string' ? JSON.parse(tamer.value.xpBonuses) : tamer.value.xpBonuses
+  return getUnlockedSkillOrders(skills, attrs, xpB, campaignLevel.value)
 })
 
 const hasStrikeFirst = computed(() =>
@@ -1229,6 +1238,34 @@ function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any):
   }
   // Check if tamer has enough actions
   const requiredActions = getOrderActionCost(order.type)
+  return (participant.actionsRemaining?.simple || 0) >= requiredActions
+}
+
+function getTamerSkillOrders(participant: CombatParticipant): any[] {
+  if (participant.type !== 'tamer' || !skillOrdersEnabled.value) return []
+  const tamedData = allTamers.value.find((t) => t.id === participant.entityId)
+  if (!tamedData) return []
+
+  const attrs = typeof tamedData.attributes === 'string' ? JSON.parse(tamedData.attributes) : tamedData.attributes
+  const skills = typeof tamedData.skills === 'string' ? JSON.parse(tamedData.skills) : tamedData.skills
+  const xpB = typeof tamedData.xpBonuses === 'string' ? JSON.parse(tamedData.xpBonuses) : tamedData.xpBonuses
+  return getUnlockedSkillOrders(skills, attrs, xpB, campaignLevel.value)
+}
+
+// A skill order is "passive-only" (informational, not invokable) when it costs no action
+// AND has no per-day/per-battle limit. Active abilities like Bravado (Complex) are NOT passive-only.
+function isPassiveSkillOrder(order: any): boolean {
+  return getSkillOrderActionCost(order.type) === 0 && getOrderUsageLimit(order.type) === 'passive'
+}
+
+function canUseSkillOrderInCombat(participant: CombatParticipant, order: any): boolean {
+  if ((participant.usedSkillOrders || []).includes(order.name)) return false
+  if (isPassiveSkillOrder(order)) return false
+  if (getOrderUsageLimit(order.type) === 'per-day') {
+    const t = allTamers.value.find((tam) => tam.id === participant.entityId)
+    if (((t as any)?.usedPerDaySkillOrders || []).includes(order.name)) return false
+  }
+  const requiredActions = getSkillOrderActionCost(order.type)
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 
@@ -2671,6 +2708,20 @@ async function handleUseSpecialOrder(participant: CombatParticipant, orderName: 
   }
 }
 
+async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
+  if (!activeEncounter.value) return
+  try {
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
+      method: 'POST',
+      body: { participantId: participant.id, orderName },
+    })
+    await loadData()
+  } catch (e: any) {
+    console.error('Skill order failed:', e)
+    alert(e?.data?.message || 'Failed to use skill order')
+  }
+}
+
 // Parse rank from tag with roman or arabic numerals (e.g., "Weapon II" = 2, "Weapon 3" = 3)
 function parseTagRank(tag: string, prefix: string): number {
   const romanToNumber: Record<string, number> = {
@@ -3716,6 +3767,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     </button>
                   </div>
                 </div>
+
+                <!-- Skill Orders (Tamer Only, homebrew) -->
+                <div v-if="participant.type === 'tamer' && getTamerSkillOrders(participant).length > 0 && (!(participant as any).clash || (participant as any).clash.isController)" class="mb-3">
+                  <label class="block text-xs text-digimon-dark-400 mb-2 font-semibold">🎯 Skill Orders</label>
+                  <div class="space-y-2">
+                    <button
+                      v-for="order in getTamerSkillOrders(participant)"
+                      :key="order.name"
+                      :disabled="!canUseSkillOrderInCombat(participant, order)"
+                      @click="handleUseSkillOrder(participant, order.name)"
+                      :class="[
+                        'w-full text-left text-xs px-3 py-2 rounded transition-colors',
+                        !canUseSkillOrderInCombat(participant, order)
+                          ? 'bg-digimon-dark-700 text-digimon-dark-500 cursor-not-allowed opacity-50'
+                          : 'bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 cursor-pointer'
+                      ]"
+                    >
+                      <div class="flex items-center justify-between">
+                        <span class="font-medium">{{ order.name }}</span>
+                        <span class="text-digimon-dark-400 text-xs">
+                          {{ isPassiveSkillOrder(order) ? 'Passive' : getSkillOrderActionCost(order.type) === 0 ? 'Free' : getSkillOrderActionCost(order.type) === 1 ? '1' : '2' }}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <!-- Enemy Scan Target Modal (Player) -->
@@ -4249,6 +4326,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     <span class="text-digimon-dark-400">{{ order.attribute.charAt(0).toUpperCase() + order.attribute.slice(1) }}</span>
                     <span v-if="getOrderUsageLimit(order.type) !== 'passive'" class="text-digimon-dark-400">
                       {{ getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skill Orders (homebrew) -->
+            <div v-if="skillOrders.length > 0" class="mt-4 pt-4 border-t border-digimon-dark-700">
+              <h3 class="text-sm font-semibold text-digimon-dark-400 mb-3">Skill Orders</h3>
+              <div class="space-y-2">
+                <div
+                  v-for="order in skillOrders"
+                  :key="order.name"
+                  class="bg-digimon-dark-700 rounded-lg p-3"
+                >
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-medium text-white">{{ order.name }}</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-300">
+                      {{ isPassiveSkillOrder(order) ? 'Passive' : getOrderUsageLimit(order.type) === 'per-day' ? 'Once/Day' : order.type }}
+                    </span>
+                  </div>
+                  <p class="text-xs text-digimon-dark-400 mb-1">{{ order.effect }}</p>
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-digimon-dark-400">{{ order.skill.charAt(0).toUpperCase() + order.skill.slice(1) }}</span>
+                    <span v-if="!isPassiveSkillOrder(order)" class="text-digimon-dark-400">
+                      {{ getSkillOrderActionCost(order.type) === 0 ? 'Free' : getSkillOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
                     </span>
                   </div>
                 </div>

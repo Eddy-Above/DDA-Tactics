@@ -31,6 +31,7 @@ export default defineEventHandler(async (event) => {
     await db.update(tamers)
       .set({
         usedPerDayOrders: JSON.stringify([]),
+        usedPerDaySkillOrders: JSON.stringify([]),
         digivolutionsUsedToday: 0,
         ...(healAllWounds ? { currentWounds: 0 } : {}),
         updatedAt: new Date(),

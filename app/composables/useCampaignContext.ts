@@ -30,6 +30,11 @@ export function useCampaignContext() {
     return rules?.houseRules
   })
 
+  const skillOrdersEnabled = computed<boolean>(() => {
+    const rules = campaign.value?.rulesSettings as CampaignRulesSettings | undefined
+    return rules?.skillOrders === true
+  })
+
   async function loadCampaign(force?: boolean) {
     const id = campaignId.value
     if (!id) return
@@ -45,6 +50,7 @@ export function useCampaignContext() {
     skillRenames,
     eddySoulRules,
     houseRules,
+    skillOrdersEnabled,
     loadCampaign,
   }
 }

@@ -30,6 +30,7 @@ export interface CombatParticipant {
   evolutionLineId?: string
   woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number }>
   usedSpecialOrders?: string[]
+  usedSkillOrders?: string[]
   interceptPenalty?: number
   intercedeOptOuts?: string[]
   hasDirectedThisTurn?: boolean

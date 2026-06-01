@@ -247,6 +247,7 @@ export interface CampaignRulesSettings {
   tormentRequirements?: TormentRequirements
   skillRenames?: SkillRenames
   eddySoulRules?: EddySoulRules
+  skillOrders?: boolean
 }
 
 export type CampaignLevel = 'standard' | 'enhanced' | 'extreme'
@@ -373,6 +374,7 @@ export interface Tamer {
   partnerDigimonIds: string[]
   currentWounds: number
   usedPerDayOrders: string[]        // order names used today (once-per-day)
+  usedPerDaySkillOrders: string[]   // skill order names used today (once-per-day)
   digivolutionsUsedToday: number    // for EddySoul digivolution limit rule
   notes: string
   createdAt: Date

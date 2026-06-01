@@ -8,6 +8,7 @@ import type { CreateTamerData } from './useTamers'
 import { getTormentBoxCount, type TormentSeverity, type CampaignLevel, type TormentRequirements, type SkillRenames, type EddySoulRules } from '../types'
 import { skillsByAttribute, skillLabels, getResolvedSkillLabels } from '../constants/tamer-skills'
 import { specialOrderThresholds, specialOrdersData } from '../data/special-orders'
+import { skillOrdersData, SKILL_ORDER_SKILL_THRESHOLD, SKILL_ATTRIBUTE_MAP } from '../data/skill-orders'
 import { validateTorments } from '../utils/torment-validation'
 
 export interface TormentEntry {
@@ -508,6 +509,28 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
   })
 
   // ========================
+  // Skill Orders (homebrew)
+  // ========================
+  const unlockedSkillOrders = computed(() => {
+    const skillThreshold = SKILL_ORDER_SKILL_THRESHOLD[campaignLevel.value]
+    const attrThreshold = specialOrderThresholds[campaignLevel.value][0]
+    const groups: Record<string, { skill: string; name: string; type: string; effect: string }[]> = {}
+
+    for (const [skill, orderData] of Object.entries(skillOrdersData)) {
+      const skillValue = getTotalSkill(skill as keyof typeof form.skills)
+      const attribute = SKILL_ATTRIBUTE_MAP[skill as keyof typeof SKILL_ATTRIBUTE_MAP]
+      const attrValue = getTotalAttribute(attribute)
+
+      if (skillValue >= skillThreshold && attrValue >= attrThreshold) {
+        if (!groups[attribute]) groups[attribute] = []
+        groups[attribute].push({ skill, ...orderData })
+      }
+    }
+
+    return Object.entries(groups).map(([attribute, orders]) => ({ attribute, orders }))
+  })
+
+  // ========================
   // Watchers
   // ========================
   watch(() => form.spriteUrl, () => {
@@ -574,6 +597,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
     canAffordTormentBox,
     getTormentBoxCost,
     unlockedSpecialOrders,
+    unlockedSkillOrders,
     tormentMarkingLimits,
   }
 }

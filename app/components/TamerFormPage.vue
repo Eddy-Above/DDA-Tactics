@@ -17,7 +17,7 @@ const showRefundCosts = isLibrary || isEdit
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
 const { fetchTamer, updateTamer, createTamer, loading, error } = useTamers()
 
 const recordId = computed(() => isLibrary ? route.params.id as string : route.params.tamerId as string)
@@ -92,6 +92,7 @@ const {
   canAffordTormentBox,
   getTormentBoxCost,
   unlockedSpecialOrders,
+  unlockedSkillOrders,
   tormentMarkingLimits,
 } = useTamerForm(undefined, campaignLevel, campaignRules, skillRenames, eddySoulRules)
 
@@ -1115,6 +1116,35 @@ async function handleSubmit() {
 
         <div v-else class="space-y-4">
           <div v-for="group in unlockedSpecialOrders" :key="group.attribute">
+            <h3 class="text-sm font-semibold text-digimon-orange-400 mb-2 capitalize">{{ group.attribute }}</h3>
+            <div class="space-y-2">
+              <div
+                v-for="order in group.orders"
+                :key="order.name"
+                class="bg-digimon-dark-700 rounded-lg p-3"
+              >
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-semibold text-white">{{ order.name }}</span>
+                  <span class="text-xs px-2 py-0.5 rounded bg-digimon-dark-600 text-digimon-dark-300">{{ order.type }}</span>
+                </div>
+                <p class="text-sm text-digimon-dark-300">{{ order.effect }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Skill Orders (Homebrew) -->
+      <div v-if="skillOrdersEnabled" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Skill Orders</h2>
+        <p class="text-xs text-digimon-dark-500 mb-4">Skill Options unlocked when a skill reaches its threshold and the first Special Order of its governing attribute is unlocked.</p>
+
+        <div v-if="unlockedSkillOrders.length === 0" class="text-center py-4 text-digimon-dark-400">
+          No Skill Orders unlocked yet. Increase a skill and its governing attribute to unlock options.
+        </div>
+
+        <div v-else class="space-y-4">
+          <div v-for="group in unlockedSkillOrders" :key="group.attribute">
             <h3 class="text-sm font-semibold text-digimon-orange-400 mb-2 capitalize">{{ group.attribute }}</h3>
             <div class="space-y-2">
               <div
