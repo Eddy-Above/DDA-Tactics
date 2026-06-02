@@ -42,12 +42,14 @@ interface Props {
   systemBoostMaxRanks?: { bit: number; cpu: number; ram: number } // Dynamic max ranks per System Boost choice
   eddySoulRules?: EddySoulRules
   houseRules?: HouseRules
+  isBossDigimon?: boolean // Only enemy/NPC digimon may see and select Boss Qualities
 }
 
 const props = withDefaults(defineProps<Props>(), {
   canAdd: true,
   availableDP: Infinity,
   speedyMaxRanks: undefined, // Use stage-based default if not provided
+  isBossDigimon: false,
 })
 const emit = defineEmits<{
   (e: 'add', quality: Quality): void
@@ -67,7 +69,10 @@ const showChoiceSelector = ref(false)
 // Get all purchasable categories for the dropdown
 const purchasableCategories = computed(() => {
   return getQualityCategories().filter(
-    (cat) => cat.id !== 'free' && cat.id !== 'negative'
+    (cat) =>
+      cat.id !== 'free' &&
+      cat.id !== 'negative' &&
+      (cat.id !== 'boss' || props.isBossDigimon)
   )
 })
 
@@ -134,6 +139,11 @@ const filteredQualities = computed(() => {
     if (filterCategory.value !== 'all' && filterType.value === 'purchasable') {
       qualities = qualities.filter((q) => q.category === filterCategory.value)
     }
+  }
+
+  // Hide boss-only qualities from player-partner digimon
+  if (!props.isBossDigimon) {
+    qualities = qualities.filter((q) => !q.bossOnly)
   }
 
   // Search filter

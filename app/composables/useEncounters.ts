@@ -414,6 +414,28 @@ export function useEncounters() {
         })
       }
 
+      // Boss quality: Data Absorb — heal at end of this participant's turn
+      if (currentParticipant.dataAbsorbActive) {
+        // Potency is tracked via the GM's last toggle action; use base BIT as fallback
+        // The heal multiplier was logged at activation time; here we apply BIT×2 minimum
+        const dataAbsorbHeal = Math.max(0, (currentParticipant as any).dataAbsorbHealAmount ?? 0)
+        if (dataAbsorbHeal > 0) {
+          currentParticipant.currentWounds = Math.max(0, (currentParticipant.currentWounds || 0) - dataAbsorbHeal)
+        }
+        poisonLogEntries.push({
+          id: `log-data-absorb-${currentParticipant.id}-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          round: encounter.round,
+          actorId: currentParticipant.id,
+          actorName: currentParticipant.id,
+          action: 'Data Absorb',
+          target: currentParticipant.id,
+          result: dataAbsorbHeal > 0 ? `Healed ${dataAbsorbHeal} wounds` : 'Data Absorb healing (server resolves BIT×2)',
+          damage: null,
+          effects: ['Data Absorb'],
+        })
+      }
+
       // Decrement effect durations at end of this participant's turn; skip permanent effects
       currentParticipant.activeEffects = (currentParticipant.activeEffects || [])
         .map((e) => PERMANENT_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })

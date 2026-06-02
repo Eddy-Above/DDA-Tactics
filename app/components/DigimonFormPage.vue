@@ -1137,6 +1137,7 @@ async function handleCopy() {
           :system-boost-max-ranks="systemBoostMaxRanks"
           :eddy-soul-rules="eddySoulRules"
           :house-rules="houseRules"
+          :is-boss-digimon="form.isEnemy"
           @add="handleAddQuality"
           @remove="removeQuality"
           @update-ranks="handleUpdateQualityRanks"

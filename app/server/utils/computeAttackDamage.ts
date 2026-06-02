@@ -28,6 +28,7 @@ export interface ComputeAttackDamageResult {
   attackDef: any                // Full attack definition (type, effect, tags, etc.)
   appliedEffectName: string | null
   effectData: any | null        // Fully-built effect object ready to apply to participants
+  secondaryEffectData: any | null  // Tank Buster secondary Stun, etc.
   attackerHasCombatMonster: boolean
   attackerCombatMonsterBonus: number
   attackerHasPositiveReinforcement: boolean
@@ -68,6 +69,12 @@ export async function computeAttackDamage(
     dodgeSuccesses,
   } = params
 
+  // Lazy-cached derived stats (shared by Weapons Expert + effect potency calculation)
+  let atkDerivedCached: any = null
+  // Boss quality: Finesse ranks (set in attacker/target blocks, used during armor/damage calc)
+  let attackerFinesseRanks = 0
+  let targetFinesseRanks = 0
+
   // ── Attacker ──────────────────────────────────────────────────────────────
   let attackBaseDamage = 0
   let armorPiercing = 0
@@ -97,10 +104,12 @@ export async function computeAttackDamage(
         ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
       attackDef = attacks?.find((a: any) => a.id === attackId)
 
+      const attackerIsDisarmed = (attackerParticipant.activeEffects || []).some((e: any) => e.name === 'Disarmed')
+
       if (attackDef?.tags && Array.isArray(attackDef.tags)) {
         for (const tag of attackDef.tags) {
           const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
-          if (weaponMatch) {
+          if (weaponMatch && !attackerIsDisarmed) {
             const romanMap: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5 }
             attackBaseDamage += romanMap[weaponMatch[1].toUpperCase()] || parseInt(weaponMatch[1]) || 1
           }
@@ -119,6 +128,19 @@ export async function computeAttackDamage(
         ? JSON.parse(attackerDigimon.qualities) : attackerDigimon.qualities
       attackerHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       attackerHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
+
+      // Weapons Expert: add chosen SPEC value (bit/cpu/ram) to Weapon-tagged attacks
+      const attackerHasWeaponTag = attackDef?.tags?.some((t: string) => /^Weapon/i.test(t))
+      if (attackerHasWeaponTag && !attackerIsDisarmed) {
+        const weaponsExpertQ = (qualities || []).find((q: any) => q.id === 'weapons-expert')
+        if (weaponsExpertQ) {
+          if (!atkDerivedCached) atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+          const chosenSpec = (weaponsExpertQ.choiceId || 'bit') as 'bit' | 'cpu' | 'ram'
+          attackBaseDamage += atkDerivedCached?.[chosenSpec] ?? 0
+        }
+      }
+
+      attackerFinesseRanks = (qualities || []).find((q: any) => q.id === 'finesse')?.ranks ?? 0
     }
   }
 
@@ -166,6 +188,8 @@ export async function computeAttackDamage(
       targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       const dataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
       if (dataOpt?.choiceId === 'guardian') targetArmor += 2
+
+      targetFinesseRanks = (qualities || []).find((q: any) => q.id === 'finesse')?.ranks ?? 0
     }
   } else if (targetParticipant.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId))
@@ -184,6 +208,14 @@ export async function computeAttackDamage(
   const targetEffectMods = getEffectStatModifiers(targetParticipant.activeEffects || [])
   targetArmor += targetEffectMods.armor
 
+  // Boss quality: Juggernaut stacking stat bonuses
+  attackBaseDamage += attackerParticipant.juggernauntBonuses?.damage ?? 0
+  targetArmor += targetParticipant.juggernauntBonuses?.armor ?? 0
+
+  // Boss quality: Tormentor stacking stat bonuses (+2 per stack to all stats)
+  attackBaseDamage += (attackerParticipant.tormentorBonusStacks ?? 0) * 2
+  targetArmor += (targetParticipant.tormentorBonusStacks ?? 0) * 2
+
   // Positive Reinforcement mood modifiers
   if (attackerHasPositiveReinforcement && attackerMoodValue >= 5) {
     attackBaseDamage += attackerMoodValue - 4   // Mood 5 → +1, Mood 6 → +2
@@ -192,8 +224,18 @@ export async function computeAttackDamage(
     targetArmor -= 3 - targetMoodValue          // Mood 2 → –1, Mood 1 → –2
   }
 
+  // Boss quality: Finesse — attacker ignores ranks points of target armor
+  if (attackerFinesseRanks > 0) {
+    targetArmor = Math.max(0, targetArmor - attackerFinesseRanks)
+  }
+
+  // Boss quality: Tank Buster — halve target armor on hit
+  const hasTankBusterTag = attackDef?.tags?.some((t: string) => t === 'Tank Buster')
+
   // ── Final damage ──────────────────────────────────────────────────────────
-  const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+  let effectiveTargetArmor = targetArmor
+  if (hasTankBusterTag) effectiveTargetArmor = Math.floor(effectiveTargetArmor / 2)
+  const effectiveArmor = Math.max(0, effectiveTargetArmor - armorPiercing)
   let damageDealt = 0
   if (hit && attackDef?.type !== 'support') {
     damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
@@ -201,15 +243,40 @@ export async function computeAttackDamage(
     if (penalty > 0) damageDealt = Math.max(1, damageDealt - penalty)
   }
 
+  // Boss quality: Smite — deal floor(baseDamage/2) even on a miss
+  if (!hit && attackDef?.type !== 'support' && attackDef?.tags?.some((t: string) => t === 'Smite')) {
+    damageDealt = Math.max(1, Math.floor(attackBaseDamage / 2))
+  }
+
+  // Boss quality: Finesse — target ignores ranks points of incoming damage
+  if (targetFinesseRanks > 0 && damageDealt > 0) {
+    damageDealt = Math.max(0, damageDealt - targetFinesseRanks)
+  }
+
   // ── Effect potency & data ─────────────────────────────────────────────────
   let appliedEffectName: string | null = null
   let effectData: any | null = null
+  let secondaryEffectData: any | null = null
+
+  // Boss quality: Tank Buster secondary Stun when damage ≥ 4
+  if (hit && hasTankBusterTag && damageDealt >= 4) {
+    secondaryEffectData = {
+      name: 'Stun',
+      type: 'debuff' as const,
+      duration: 1,
+      source: attackerName,
+      description: 'Tank Buster: stunned by overwhelming strike.',
+      potency: 1,
+    }
+  }
 
   if (attackDef?.effect) {
     const shouldApply = attackDef.type === 'damage' ? damageDealt >= 2 : true
     if (hit && shouldApply) {
-      const atkDerived = attackerParticipant.type === 'digimon'
-        ? await getDigimonDerivedStats(attackerParticipant.entityId) : null
+      if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
+        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+      }
+      const atkDerived = atkDerivedCached
       const tgtDerived = targetParticipant.type === 'digimon'
         ? await getDigimonDerivedStats(targetParticipant.entityId) : null
       const { potency, potencyStat } = calculateEffectPotency(attackDef.effect, atkDerived, tgtDerived)
@@ -243,6 +310,7 @@ export async function computeAttackDamage(
     attackDef,
     appliedEffectName,
     effectData,
+    secondaryEffectData,
     attackerHasCombatMonster,
     attackerCombatMonsterBonus,
     attackerHasPositiveReinforcement,

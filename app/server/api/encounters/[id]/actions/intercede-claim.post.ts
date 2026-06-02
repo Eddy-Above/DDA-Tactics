@@ -408,6 +408,9 @@ export default defineEventHandler(async (event) => {
         if (!isAreaAttack && damageCalc.effectData) {
           updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
           appliedEffectName = damageCalc.attackDef?.effect ?? null
+          if (damageCalc.secondaryEffectData) {
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules)
+          }
         }
 
         // Fall damage from jumping to intercede position
@@ -583,6 +586,9 @@ export default defineEventHandler(async (event) => {
       if (!isAreaAttack && damageCalc.effectData) {
         updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
         appliedEffectName = damageCalc.attackDef?.effect ?? null
+        if (damageCalc.secondaryEffectData) {
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules)
+        }
       }
 
       return updated

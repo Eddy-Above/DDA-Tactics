@@ -5,6 +5,7 @@ import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { computeAttackDamage } from './computeAttackDamage'
+import { getDigimonDerivedStats } from './resolveSupportAttack'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -72,6 +73,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let targetHasPositiveReinforcement = false
   let targetHasCombatMonster = false
   const targetMoodValue = target.moodValue ?? 3
+  let targetQualities: any[] = []  // Hoisted: needed for Immunity + Adaptive Intelligence
 
   // --- Target dodge pool ---
   let dodgePool = 3
@@ -90,11 +92,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       }
       const dodgeSource = (target.statSwaps as Record<string, string> | undefined)?.dodge ?? 'dodge'
       dodgePool = (rawTargetStats[dodgeSource as keyof typeof rawTargetStats] ?? rawTargetStats.dodge) || 3
-      const targetQualities = typeof targetDigimon.qualities === 'string'
-        ? JSON.parse(targetDigimon.qualities) : targetDigimon.qualities
-      targetHasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')
-      targetHasCombatMonster = (targetQualities || []).some((q: any) => q.id === 'combat-monster')
-      const instinct = (targetQualities || []).find((q: any) => q.id === 'instinct')
+      targetQualities = typeof targetDigimon.qualities === 'string'
+        ? JSON.parse(targetDigimon.qualities) : (targetDigimon.qualities || [])
+      targetHasPositiveReinforcement = targetQualities.some((q: any) => q.id === 'positive-reinforcement')
+      targetHasCombatMonster = targetQualities.some((q: any) => q.id === 'combat-monster')
+      const instinct = targetQualities.find((q: any) => q.id === 'instinct')
       dodgePool += instinct?.ranks || 0
     }
   } else if (target.type === 'tamer') {
@@ -117,6 +119,15 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // Apply Positive Reinforcement mood dodge bonus for target
   if (targetHasPositiveReinforcement && targetMoodValue >= 5) {
     dodgePool += targetMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
+  }
+
+  // Boss quality: Juggernaut dodge stacking bonus
+  dodgePool += (target as any).juggernauntBonuses?.dodge ?? 0
+
+  // Boss quality: Adaptive Intelligence — +2 dodge per prior sighting of this attack
+  if (targetQualities.some((q: any) => q.id === 'adaptive-intelligence')) {
+    const seenCount = (target as any).seenAttackIds?.[params.attackId] ?? 0
+    if (seenCount > 0) dodgePool += seenCount * 2
   }
 
   // Apply Directed bonus to dodge pool (for NPC targets that were directed by a tamer)
@@ -182,8 +193,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         }
 
         if (hit && damageCalc.effectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities)
           appliedEffectName = damageCalc.appliedEffectName
+          if (damageCalc.secondaryEffectData) {
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities)
+          }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
@@ -278,8 +292,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         }
 
         if (damageCalc.effectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities)
           appliedEffectName = damageCalc.appliedEffectName
+          if (damageCalc.secondaryEffectData) {
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities)
+          }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef?.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
@@ -291,6 +308,13 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           }
         }
       }
+
+      // Boss quality: Adaptive Intelligence — record this attack ID for future dodge bonuses
+      if (targetQualities.some((q: any) => q.id === 'adaptive-intelligence')) {
+        const prev = updated.seenAttackIds ?? {}
+        updated.seenAttackIds = { ...prev, [params.attackId]: (prev[params.attackId] ?? 0) + 1 }
+      }
+
       return updated
     }
     return p
@@ -338,6 +362,53 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         effects: ['Auto-Devolve'],
       }
     }
+  }
+
+  // --- Boss quality: Time Control — intercept first KO, restore wounds + stat bonus ---
+  if (damagedTarget && hit &&
+      damagedTarget.currentWounds >= damagedTarget.maxWounds &&
+      damagedTarget.isEnemy &&
+      !autoDevolveLog &&
+      !(damagedTarget as any).timeControlUsed &&
+      targetQualities.some((q: any) => q.id === 'time-control')) {
+    const stageBonus = 3  // Default stage bonus; covers most boss stages
+    const tcDerived = await getDigimonDerivedStats(damagedTarget.entityId)
+    const bitBonus = tcDerived?.bit ?? 0
+    const restoredWounds = Math.max(0, damagedTarget.maxWounds - stageBonus)
+
+    // Mutate directly so the defeat check below sees the restored wounds (same pattern as auto-devolve)
+    damagedTarget.currentWounds = restoredWounds
+    damagedTarget.timeControlUsed = true
+
+    participants = participants.map((p: any) => {
+      if (p.id !== params.targetParticipantId) return p
+      return {
+        ...p,
+        currentWounds: restoredWounds,
+        timeControlUsed: true,
+        activeEffects: applyEffectToParticipant(p.activeEffects || [], {
+          name: 'Time Control',
+          type: 'buff',
+          duration: 999,
+          source: 'Time Control',
+          description: `+${bitBonus} to all stats for the rest of combat.`,
+          potency: bitBonus,
+          potencyStat: 'bit',
+        }, params.houseRules, []),
+      }
+    })
+    battleLog.push({
+      id: `log-${Date.now()}-timecontrol`,
+      timestamp: new Date().toISOString(),
+      round: params.round,
+      actorId: damagedTarget.id,
+      actorName: resolveParticipantName(damagedTarget, params.participants, '', damagedTarget.isEnemy),
+      action: 'activates Time Control — the clock rewinds!',
+      target: null,
+      result: `Restored to ${restoredWounds} wounds. Gains +${bitBonus} to all stats.`,
+      damage: null,
+      effects: ['Time Control'],
+    })
   }
 
   // --- Remove defeated NPC from encounter ---

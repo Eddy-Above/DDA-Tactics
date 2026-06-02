@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '../../../../../utils/specialOrders'
+import { specialOrdersData } from '../../../../../data/special-orders'
 
 interface SpecialOrderBody {
   participantId: string
@@ -84,6 +85,19 @@ export default defineEventHandler(async (event) => {
 
   if (!order) {
     throw createError({ statusCode: 400, message: `Order "${body.orderName}" is not unlocked` })
+  }
+
+  // Boss quality: Demoralize — block orders whose governing attribute has been demoralized
+  if (participant.demoralizedAttributes) {
+    const governingAttr = Object.entries(specialOrdersData).find(([, orders]) =>
+      orders.some(o => o.name === body.orderName)
+    )?.[0]
+    if (governingAttr && participant.demoralizedAttributes[governingAttr as keyof typeof participant.demoralizedAttributes] !== undefined) {
+      throw createError({
+        statusCode: 400,
+        message: `Order "${body.orderName}" is unavailable — ${governingAttr} was demoralized`,
+      })
+    }
   }
 
   // Check if already used (per-battle)

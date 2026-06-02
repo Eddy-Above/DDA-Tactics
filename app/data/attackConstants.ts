@@ -32,6 +32,13 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'DOT': 'N',
   'Lag': 'N',
   'Burn': 'N',
+  // Boss-only Negative [N]
+  'Bug': 'N',
+  'Charm': 'N',
+  'Demoralize': 'N',
+  'Tank Buster': 'N',
+  // Boss-only Non-Aligned [NA]
+  'Frenzy': 'NA',
   // Non-Aligned [NA]
   'Cleanse': 'NA',
   'Lifesteal': 'NA',
@@ -53,7 +60,7 @@ export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal'])
 /**
  * Permanent effects — no round duration; persist until replaced or removed by game event
  */
-export const PERMANENT_EFFECTS = new Set(['Shield'])
+export const PERMANENT_EFFECTS = new Set(['Shield', 'Demoralize'])
 
 /**
  * Duration caps/floors per effect
@@ -63,6 +70,7 @@ export const EFFECT_DURATION_LIMITS: Record<string, { min?: number; max?: number
   'Poison': { min: 3 },
   'Burn': { max: 3 },
   'DOT': { max: 3 },
+  'Frenzy': { max: 3 },
 }
 
 /**
@@ -95,6 +103,12 @@ export const EFFECT_POTENCY_STAT: Record<string, 'bit' | 'ram' | 'cpu'> = {
   'Regenerate': 'bit',  // Heal per round = user's BIT
   'Cleanse': 'bit',     // Duration reduction = user's BIT
   'Lag': 'bit',         // Initiative roll = 1d[user's BIT]
+  // Boss effects — attacker BIT-based (complex mechanics GM-resolved)
+  'Bug': 'bit',         // SPEC value rotation (BIT→RAM→CPU→BIT); GM applies
+  'Charm': 'bit',       // Mind control duration; GM enforces action control
+  'Demoralize': 'bit',  // Tamer attribute reduction; GM applies (permanent)
+  'Frenzy': 'bit',      // Damage buff = BIT½ (GM halves stored potency); forced-attack GM-resolved
+  'Tank Buster': 'bit', // Armor halving + conditional Stun; GM applies at wound thresholds
   // Attacker CPU-based
   'Knockback': 'cpu',   // Push distance = user's CPU + Stage Bonus
   'Pull': 'cpu',        // Pull distance = user's CPU + Stage Bonus
@@ -124,6 +138,8 @@ export const EFFECT_STAT_MODIFIERS: Record<string, { accuracy?: number; damage?:
   'Swiftness': { dodge: 1, accuracy: 1 },
   'Vigilance': { dodge: 1, armor: 1 },
   'Vigor': { dodge: 1 },
+  // Boss effects
+  'Frenzy': { damage: 1 },   // BIT½ damage buff; potency stored as Math.floor(BIT/2) via special case below
   // Debuffs
   'Weaken': { damage: -1, armor: -1 },
   'Distract': { dodge: -1, accuracy: -1 },
@@ -223,6 +239,12 @@ export const EFFECT_ATTACK_TYPE_RESTRICTIONS: Record<string, 'damage' | 'support
   'Blind': 'both',
   'Paralysis': 'both',
   'Lag': 'both',
+  // Boss-only effects
+  'Bug': 'both',
+  'Charm': 'both',
+  'Demoralize': 'both',
+  'Frenzy': 'both',
+  'Tank Buster': 'damage',
 }
 
 /**

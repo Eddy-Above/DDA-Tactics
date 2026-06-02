@@ -520,6 +520,17 @@ export interface CombatParticipant {
   divineProtectionUsesThisBattle?: number  // Tamer-only: 0 = first use free, 1+ = costs 2 inspiration
   pendingDivineProtectionDamage?: number   // Tamer-only: damage held while DP offer is awaiting player response
   pendingSimpleActionPenalty?: number      // Tamer-only: simple actions to deduct at start of next turn (Divine Protection cost)
+  // Boss Qualities
+  seenAttackIds?: Record<string, number>   // Adaptive Intelligence: attackId → times seen by this participant
+  juggernauntBonuses?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', number>>  // Juggernaut: cumulative +2 stacks per round
+  timeControlUsed?: boolean                // Time Control: prevents re-triggering in same combat
+  dataAbsorbActive?: boolean               // Data Absorb: whether absorption mode is toggled on
+  dataAbsorbHealAmount?: number            // Data Absorb: wounds healed per round (BIT×2/4/6, set at toggle-on)
+  buggedSpecValues?: { bit: number; cpu: number; ram: number }  // Bug effect: rotated SPEC values while active
+  demoralizedAttributes?: Partial<Record<'agility' | 'body' | 'charisma' | 'intelligence' | 'willpower', number>>  // Demoralize: attribute → reduction amount
+  tormentorBonusStacks?: number            // Tormentor: stacking +2 per participant that failed the check
+  tankBusterUsedAtThresholds?: number[]    // Tank Buster: wound-% thresholds already consumed (e.g. [0.75, 0.50])
+  usedCounterattackThisCombat?: boolean    // Counterattack: set after use (Chain Counter conditionally skips setting this)
 }
 
 export interface ActiveEffect {

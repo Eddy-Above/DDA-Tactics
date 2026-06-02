@@ -136,7 +136,12 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   }
   const accuracySuccesses = accuracyDiceResults.filter((d: number) => d >= 5).length
 
-  // Mark used
+  // Parse counterattacker qualities (needed for Chain Counter check below)
+  const counterattackerQualities: any[] = typeof counterattackerDigimon.qualities === 'string'
+    ? JSON.parse(counterattackerDigimon.qualities) : (counterattackerDigimon.qualities || [])
+  const hasChainCounter = counterattackerQualities.some((q: any) => q.id === 'chain-counter')
+
+  // Mark used (for NPC counterattackers this may be skipped below if Chain Counter + KO)
   participants = participants.map((p: any) =>
     p.id === params.counterattackerParticipantId
       ? { ...p, usedCounterattackThisCombat: true }
@@ -250,6 +255,32 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
     })
     participants = result.participants
     battleLog = result.battleLog
+
+    // Boss quality: Chain Counter — if the counterattack KO'd the target, retain counterattack use
+    if (hasChainCounter) {
+      const targetAfter = participants.find((p: any) => p.id === params.originalAttackerParticipantId)
+      const targetKod = !targetAfter || targetAfter.currentWounds >= targetAfter.maxWounds
+      if (targetKod) {
+        participants = participants.map((p: any) =>
+          p.id === params.counterattackerParticipantId
+            ? { ...p, usedCounterattackThisCombat: false }
+            : p,
+        )
+        battleLog.push({
+          id: `log-${Date.now()}-chain-counter`,
+          timestamp: new Date().toISOString(),
+          round: params.round,
+          actorId: params.counterattackerParticipantId,
+          actorName: counterattackerName,
+          action: 'Chain Counter activated — Counterattack retained!',
+          target: null,
+          result: 'Can Counterattack again this combat.',
+          damage: null,
+          effects: ['Chain Counter'],
+        })
+      }
+    }
+
     return { participants, battleLog, pendingRequests, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
   }
 

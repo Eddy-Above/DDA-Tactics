@@ -32,8 +32,14 @@ interface ActiveEffect extends EffectInput {
 export function applyEffectToParticipant(
   activeEffects: ActiveEffect[],
   newEffect: EffectInput,
-  houseRules?: { stunMaxDuration1?: boolean }
+  houseRules?: { stunMaxDuration1?: boolean },
+  targetQualities?: Array<{ id: string }>
 ): ActiveEffect[] {
+  // Boss quality: Immunity — any effect targeting this digimon has no Duration or Potency
+  if (targetQualities?.some((q) => q.id === 'immunity')) {
+    return [...activeEffects]
+  }
+
   // Don't persist instant effects
   if (INSTANT_EFFECTS.has(newEffect.name)) {
     return [...activeEffects]

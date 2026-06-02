@@ -30,6 +30,11 @@ export default defineEventHandler(async (event) => {
     updatedAt: new Date(),
   }
 
+  // Parse existing round for Juggernaut comparison
+  const existingRound = typeof existing.round === 'number' ? existing.round : 0
+  const incomingRound = typeof body.round === 'number' ? body.round : existingRound
+  const isNewRound = incomingRound > existingRound
+
   // Drizzle's text mode:json isn't working properly, so manually serialize
   if (body.participants) {
     const participants = Array.isArray(body.participants)
@@ -59,6 +64,29 @@ export default defineEventHandler(async (event) => {
             ? Math.min(p.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
             : 0
         }
+      }
+    }
+
+    // Boss quality: Juggernaut — at the start of each new round, add stacking +2 to a random stat
+    if (isNewRound) {
+      const juggernauntStatMap: Record<number, 'accuracy' | 'damage' | 'dodge' | 'armor'> = {
+        1: 'armor',    // 1: Health → nearest analog is armor for automation
+        2: 'accuracy',
+        3: 'damage',
+        4: 'dodge',
+        5: 'armor',
+        6: 'damage',   // 6: Choose → default to damage
+      }
+      for (const p of participants) {
+        if (p.type !== 'digimon') continue
+        const [digi] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
+        if (!digi) continue
+        const quals = typeof digi.qualities === 'string' ? JSON.parse(digi.qualities) : (digi.qualities || [])
+        if (!(quals as any[]).some((q: any) => q.id === 'juggernaut')) continue
+        const roll = Math.floor(Math.random() * 6) + 1
+        const stat = juggernauntStatMap[roll]
+        const prev = p.juggernauntBonuses ?? {}
+        p.juggernauntBonuses = { ...prev, [stat]: ((prev as any)[stat] ?? 0) + 2 }
       }
     }
 

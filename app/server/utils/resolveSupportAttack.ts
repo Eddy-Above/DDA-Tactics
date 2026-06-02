@@ -144,7 +144,9 @@ export function calculateEffectPotency(
     return { potency: 0, potencyStat: '' }
   }
   const potencyStat = EFFECT_POTENCY_STAT[effectName]
-  const potency = attackerDerived ? (attackerDerived[potencyStat] ?? 0) : 0
+  const rawPotency = attackerDerived ? (attackerDerived[potencyStat] ?? 0) : 0
+  // Frenzy damage buff is BIT½ (halved at apply-time so EFFECT_STAT_MODIFIERS returns the right value)
+  const potency = effectName === 'Frenzy' ? Math.floor(rawPotency / 2) : rawPotency
   return { potency, potencyStat }
 }
 
