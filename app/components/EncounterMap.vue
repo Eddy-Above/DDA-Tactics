@@ -41,6 +41,7 @@
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
+          :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
           @unit-placed="onCanvasPlace"
           @unit-moved="onCombatMove"
           @cell-draw="onCellDraw"
