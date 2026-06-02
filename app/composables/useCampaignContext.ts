@@ -32,7 +32,7 @@ export function useCampaignContext() {
 
   const skillOrdersEnabled = computed<boolean>(() => {
     const rules = campaign.value?.rulesSettings as CampaignRulesSettings | undefined
-    return rules?.skillOrders === true
+    return rules?.houseRules?.skillOrders === true
   })
 
   async function loadCampaign(force?: boolean) {

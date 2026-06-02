@@ -651,7 +651,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 - **House rules** (`HouseRules`): 6 toggles — stun max duration, max temp wounds, signature move battery, healing rules, allow duplicate stat max values (tamer creation), flexible CP splits (tamer creation)
 - **Torment requirements** (`TormentRequirements`): Mode + minimum severity counts
 - **Skill renames** (`SkillRenames`): Per-campaign renaming of tamer skill labels
-- **Skill Orders** (`rulesSettings.skillOrders: boolean`): Homebrew. When enabled, each tamer skill unlocks a Skill Option once the skill hits its threshold (4/5/6) and the governing attribute has its first Special Order (3/5/6). Surfaced on tamer sheets + an in-combat action panel via `skill-order` endpoint.
+- **Skill Orders** (`rulesSettings.houseRules.skillOrders: boolean`): House rule. When enabled, each tamer skill unlocks a Skill Option once the skill hits its threshold (4/5/6) and the governing attribute has its first Special Order (3/5/6). Surfaced on tamer sheets + an in-combat action panel via `skill-order` endpoint. Toggle is now part of the House Rules section in campaign settings.
 - All flags read from `campaign.rulesSettings` passed into composables and server action handlers; no external flag service
 
 ---

@@ -233,6 +233,7 @@ export interface HouseRules {
   allowDuplicateStatValues?: boolean
   allowFlexCPSplits?: boolean
   giganticMaxSize?: { x: number; y: number; z: number } | null
+  skillOrders?: boolean
 }
 
 export const STAGE_BATTERY_CAPACITY: Partial<Record<DigimonStage, number>> = {

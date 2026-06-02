@@ -88,7 +88,7 @@ export default defineEventHandler(async (event) => {
             : (campaign.rulesSettings || {})
         } catch { return {} }
       })()
-      skillOrdersEnabled = rules.skillOrders === true
+      skillOrdersEnabled = rules.houseRules?.skillOrders === true
     }
   }
 
