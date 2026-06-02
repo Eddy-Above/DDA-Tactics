@@ -17,174 +17,200 @@ export function getAreaShape(tags: string[]): AreaShape | null {
 }
 
 /**
- * Compute the set of world-space cells covered by an area attack.
+ * Compute the full set of world-space integer cells covered by an area attack.
  *
- * @param shape         Area shape type
- * @param rangeType     'melee' | 'ranged'
- * @param attackerPos   World position of the attacker
- * @param dirVec        Normalized direction from attacker toward mouse (XZ plane). Ignored for burst.
- * @param bit           Attacker BIT stat
- * @param ram           Attacker RAM stat
- * @param movement      Attacker movement in meters
- * @param sizeAboveLarge Number of size classes above Large (0 = Large or smaller)
- * @param cellSize      Size of one grid cell in world units (typically 1)
- * @param allPositions  All participant/cell positions to test for inclusion
+ * Every shape enumerates its complete 3D volume (including empty-air cells) so the
+ * map can ghost-highlight the whole area, and so coverage accounts for the attacker's
+ * footprint as the origin region rather than a single anchor cell.
+ *
+ * @param shape        Area shape type
+ * @param rangeType    'melee' | 'ranged'
+ * @param attackerPos  Attacker footprint anchor (min-corner) cell
+ * @param dir          3D aim direction (attacker edge → aim point). Ignored for burst/blast.
+ * @param bit          Attacker BIT stat
+ * @param ram          Attacker RAM stat
+ * @param movement     Attacker movement in metres (pass)
+ * @param attackerDim  Attacker footprint dimension (1 = Medium/Small, 2 = Large, 3 = Huge, N = Gigantic)
+ * @param blastCenter  Free-aimed sphere centre (blast only)
  */
 export function computeAreaCells(
   shape: AreaShape,
   rangeType: 'melee' | 'ranged',
   attackerPos: Vec3,
-  dirVec: { x: number; z: number },
+  dir: Vec3,
   bit: number,
   ram: number,
   movement: number,
-  sizeAboveLarge: number,
-  cellSize: number,
-  allPositions: Vec3[],
+  attackerDim: number,
   blastCenter?: Vec3,
 ): Vec3[] {
   switch (shape) {
     case 'burst':
-      return computeBurst(rangeType, attackerPos, bit, cellSize, allPositions)
+      return computeBurst(rangeType, attackerPos, bit, attackerDim)
     case 'blast':
-      return computeBlast(attackerPos, dirVec, bit, cellSize, allPositions, blastCenter)
+      return computeBlast(bit, blastCenter)
     case 'close-blast':
-      return computeCloseBlast(rangeType, attackerPos, dirVec, bit, cellSize, allPositions)
+      return computeCloseBlast(rangeType, attackerPos, dir, bit, attackerDim)
     case 'cone':
-      return computeCone(rangeType, attackerPos, dirVec, bit, cellSize, allPositions)
+      return computeCone(rangeType, attackerPos, dir, bit, attackerDim)
     case 'line':
-      return computeLine(rangeType, attackerPos, dirVec, bit, sizeAboveLarge, cellSize, allPositions)
+      return computeLine(rangeType, attackerPos, dir, bit, attackerDim)
     case 'pass':
-      return computePass(attackerPos, movement, ram, cellSize, allPositions)
+      return computePass(attackerPos, dir, movement, ram, attackerDim)
   }
 }
 
-// --- helpers ---
+// --- geometry helpers ---
 
-function dist2d(a: Vec3, b: Vec3): number {
-  const dx = a.x - b.x
-  const dz = a.z - b.z
-  return Math.sqrt(dx * dx + dz * dz)
+function dist3d(a: Vec3, b: Vec3): number {
+  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z
+  return Math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 
-/** Project world pos onto unit direction, returning signed distance along dir and perpendicular offset. */
-function projectOnDir(pos: Vec3, origin: Vec3, dir: { x: number; z: number }): { along: number; perp: number } {
-  const dx = pos.x - origin.x
-  const dz = pos.z - origin.z
-  const along = dx * dir.x + dz * dir.z
-  const perp = Math.abs(-dx * dir.z + dz * dir.x)
-  return { along, perp }
+function normalize3(d: Vec3): Vec3 | null {
+  const len = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
+  if (len < 1e-6) return null
+  return { x: d.x / len, y: d.y / len, z: d.z / len }
 }
+
+/** All integer cells whose centre lies within `radius` of `center` (centre may be fractional). */
+function sphereCells(center: Vec3, radius: number): Vec3[] {
+  const r = Math.ceil(radius + 0.5)
+  const cells: Vec3[] = []
+  const cx = Math.round(center.x), cy = Math.round(center.y), cz = Math.round(center.z)
+  for (let x = cx - r; x <= cx + r; x++) {
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let z = cz - r; z <= cz + r; z++) {
+        if (dist3d({ x, y, z }, center) <= radius + 0.5) cells.push({ x, y, z })
+      }
+    }
+  }
+  return cells
+}
+
+/** The dim×dim footprint cells anchored at the min corner (same convention as getFootprintCells). */
+function footprintCells(anchor: Vec3, dim: number): Vec3[] {
+  const cells: Vec3[] = []
+  const d = Math.max(1, Math.round(dim))
+  for (let dx = 0; dx < d; dx++)
+    for (let dz = 0; dz < d; dz++)
+      cells.push({ x: anchor.x + dx, y: anchor.y, z: anchor.z + dz })
+  return cells
+}
+
+/**
+ * The attacker's footprint centre pushed out to the edge facing `dir` (XZ).
+ * For dim=1 this is exactly the anchor cell; for larger footprints it lands on the
+ * centre of the leading edge so directional shapes emanate from the body, not a corner.
+ */
+function leadingEdgeOrigin(anchor: Vec3, dim: number, dir: Vec3): Vec3 {
+  const c = (Math.max(1, Math.round(dim)) - 1) / 2
+  const len = Math.sqrt(dir.x * dir.x + dir.z * dir.z)
+  const ux = len > 1e-6 ? dir.x / len : 0
+  const uz = len > 1e-6 ? dir.z / len : 0
+  return { x: anchor.x + c + ux * c, y: anchor.y, z: anchor.z + c + uz * c }
+}
+
+/** Integer cells within a length×(2*halfWidth) capsule from `origin` along unit dir `nd`. */
+function lineCells(origin: Vec3, nd: Vec3, length: number, halfWidth: number): Vec3[] {
+  const cells: Vec3[] = []
+  const r = Math.ceil(length + halfWidth + 1)
+  const ox = Math.round(origin.x), oy = Math.round(origin.y), oz = Math.round(origin.z)
+  for (let x = ox - r; x <= ox + r; x++) {
+    for (let y = oy - r; y <= oy + r; y++) {
+      for (let z = oz - r; z <= oz + r; z++) {
+        const px = x - origin.x, py = y - origin.y, pz = z - origin.z
+        const along = px * nd.x + py * nd.y + pz * nd.z
+        if (along < 0 || along > length + 0.5) continue
+        const ex = px - along * nd.x, ey = py - along * nd.y, ez = pz - along * nd.z
+        const perp = Math.sqrt(ex * ex + ey * ey + ez * ez)
+        if (perp <= halfWidth + 0.5) cells.push({ x, y, z })
+      }
+    }
+  }
+  return cells
+}
+
+// --- shapes ---
 
 function burst(rangeType: 'melee' | 'ranged', bit: number): number {
   return rangeType === 'ranged' ? 1 + bit : 1
 }
 
-function computeBurst(
-  rangeType: 'melee' | 'ranged',
-  attackerPos: Vec3,
-  bit: number,
-  _cellSize: number,
-  allPositions: Vec3[],
-): Vec3[] {
+// [Burst] — omnidirectional sphere from the attacker's whole perimeter (any footprint cell).
+function computeBurst(rangeType: 'melee' | 'ranged', attackerPos: Vec3, bit: number, attackerDim: number): Vec3[] {
   const radius = burst(rangeType, bit)
-  return allPositions.filter(p => dist2d(p, attackerPos) <= radius + 0.5)
+  const seen = new Set<string>()
+  const out: Vec3[] = []
+  for (const origin of footprintCells(attackerPos, attackerDim)) {
+    for (const c of sphereCells(origin, radius)) {
+      const k = `${c.x},${c.y},${c.z}`
+      if (!seen.has(k)) { seen.add(k); out.push(c) }
+    }
+  }
+  return out
 }
 
-function computeBlast(
-  attackerPos: Vec3,
-  dirVec: { x: number; z: number },
-  bit: number,
-  _cellSize: number,
-  allPositions: Vec3[],
-  blastCenter?: Vec3,
-): Vec3[] {
+// [Blast] — sphere centred on the free-aimed `blastCenter`, diameter 3 + BIT.
+function computeBlast(bit: number, blastCenter?: Vec3): Vec3[] {
+  if (!blastCenter) return []
   const radius = Math.ceil((3 + bit) / 2)
-  if (blastCenter) {
-    // Enumerate every integer cell within the sphere — includes empty air so the ghost preview is complete
-    const cells: Vec3[] = []
-    for (let x = blastCenter.x - radius; x <= blastCenter.x + radius; x++) {
-      for (let y = blastCenter.y - radius; y <= blastCenter.y + radius; y++) {
-        for (let z = blastCenter.z - radius; z <= blastCenter.z + radius; z++) {
-          const dx = x - blastCenter.x, dy = y - blastCenter.y, dz = z - blastCenter.z
-          if (Math.sqrt(dx * dx + dy * dy + dz * dz) <= radius + 0.5) cells.push({ x, y, z })
-        }
+  return sphereCells(blastCenter, radius)
+}
+
+// [Close Blast] — sphere of radius 2 (melee) / 2 + BIT (ranged), placed adjacent to the
+// attacker's leading edge in the aim direction.
+function computeCloseBlast(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
+  const radius = rangeType === 'ranged' ? 2 + bit : 2
+  const nd = normalize3(dir)
+  if (!nd) return []
+  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  const center: Vec3 = {
+    x: origin.x + nd.x * (radius + 1),
+    y: origin.y + nd.y * (radius + 1),
+    z: origin.z + nd.z * (radius + 1),
+  }
+  return sphereCells(center, radius)
+}
+
+// [Cone] — 90° arc (45° half-angle) up to (3 / 3 + BIT) from the leading edge in `dir`.
+function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
+  const length = rangeType === 'ranged' ? 3 + bit : 3
+  const nd = normalize3(dir)
+  if (!nd) return []
+  const apex = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  const cosHalf = Math.cos(Math.PI / 4)
+  const r = Math.ceil(length + 1)
+  const ax = Math.round(apex.x), ay = Math.round(apex.y), az = Math.round(apex.z)
+  const cells: Vec3[] = []
+  for (let x = ax - r; x <= ax + r; x++) {
+    for (let y = ay - r; y <= ay + r; y++) {
+      for (let z = az - r; z <= az + r; z++) {
+        const dx = x - apex.x, dy = y - apex.y, dz = z - apex.z
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz)
+        if (d < 0.01 || d > length + 0.5) continue
+        const dot = (dx * nd.x + dy * nd.y + dz * nd.z) / d
+        if (dot >= cosHalf) cells.push({ x, y, z })
       }
     }
-    return cells
   }
-  const center: Vec3 = {
-    x: attackerPos.x + dirVec.x * radius,
-    y: attackerPos.y,
-    z: attackerPos.z + dirVec.z * radius,
-  }
-  return allPositions.filter(p => dist2d(p, center) <= radius + 0.5)
+  return cells
 }
 
-function computeCloseBlast(
-  rangeType: 'melee' | 'ranged',
-  attackerPos: Vec3,
-  dirVec: { x: number; z: number },
-  bit: number,
-  cellSize: number,
-  allPositions: Vec3[],
-): Vec3[] {
-  // radius = 2 (melee) or 2 + bit (ranged)
-  // edge of circle touches the adjacent cell toward mouse → center = attacker + dirVec * (radius + cellSize)
-  const radius = rangeType === 'ranged' ? 2 + bit : 2
-  const center: Vec3 = {
-    x: attackerPos.x + dirVec.x * (radius + cellSize),
-    y: attackerPos.y,
-    z: attackerPos.z + dirVec.z * (radius + cellSize),
-  }
-  return allPositions.filter(p => dist2d(p, center) <= radius + 0.5)
-}
-
-function computeCone(
-  rangeType: 'melee' | 'ranged',
-  attackerPos: Vec3,
-  dirVec: { x: number; z: number },
-  bit: number,
-  _cellSize: number,
-  allPositions: Vec3[],
-): Vec3[] {
-  const length = rangeType === 'ranged' ? 3 + bit : 3
-  const halfAngle = Math.PI / 4 // 45° → 90° total arc
-  return allPositions.filter(p => {
-    const d = dist2d(p, attackerPos)
-    if (d > length + 0.5) return false
-    if (d < 0.01) return false
-    const dx = p.x - attackerPos.x
-    const dz = p.z - attackerPos.z
-    const angle = Math.acos(Math.max(-1, Math.min(1, (dx * dirVec.x + dz * dirVec.z) / d)))
-    return angle <= halfAngle
-  })
-}
-
-function computeLine(
-  rangeType: 'melee' | 'ranged',
-  attackerPos: Vec3,
-  dirVec: { x: number; z: number },
-  bit: number,
-  sizeAboveLarge: number,
-  _cellSize: number,
-  allPositions: Vec3[],
-): Vec3[] {
+// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = footprint.
+function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
   const length = rangeType === 'ranged' ? 5 + bit * 2 : 5
-  const halfWidth = (1 + sizeAboveLarge) / 2
-  return allPositions.filter(p => {
-    const { along, perp } = projectOnDir(p, attackerPos, dirVec)
-    return along >= 0 && along <= length + 0.5 && perp <= halfWidth + 0.5
-  })
+  const nd = normalize3(dir)
+  if (!nd) return []
+  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  return lineCells(origin, nd, length, attackerDim / 2)
 }
 
-function computePass(
-  attackerPos: Vec3,
-  movement: number,
-  ram: number,
-  _cellSize: number,
-  allPositions: Vec3[],
-): Vec3[] {
-  const radius = movement + ram
-  return allPositions.filter(p => dist2d(p, attackerPos) <= radius + 0.5)
+// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = footprint.
+function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDim: number): Vec3[] {
+  const length = movement + ram
+  const nd = normalize3(dir)
+  if (!nd) return []
+  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  return lineCells(origin, nd, length, attackerDim / 2)
 }

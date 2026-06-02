@@ -116,6 +116,7 @@ const props = defineProps<{
   activePath: Vec3[]
   placingParticipantId: string | null
   npcMoveParticipantId: string | null
+  showSpawnIndicators?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -191,9 +192,17 @@ let lastAoeKey = ''
 const blastCenterY = ref<number>(0)
 const blastLosBlocked = ref<boolean>(false)
 const lastBlastCenter = ref<Vec3 | null>(null)
-const isBlastTargeting = computed(() =>
-  !!props.selectedAttack && getAreaShape(props.selectedAttack.tags) === 'blast'
+// Any area shape is being aimed (blast + the directional shapes that share the blast aimer).
+const isAreaTargeting = computed(() =>
+  !!props.selectedAttack && getAreaShape(props.selectedAttack.tags) !== null
 )
+// Shapes whose elevation is aimed with the scroll wheel (everything except omnidirectional burst).
+const usesVerticalAim = computed(() => {
+  const s = props.selectedAttack ? getAreaShape(props.selectedAttack.tags) : null
+  return s !== null && s !== 'burst'
+})
+// Last mouse event used to aim a directional area shape — replayed on scroll to re-pitch.
+let lastAreaAimEvent: MouseEvent | null = null
 
 
 // ── Three.js internals ─────────────────────────────────────────────────────
@@ -207,6 +216,7 @@ let occludeRaycaster: THREE.Raycaster
 let spriteGroups: Map<string, THREE.Group>  // participantId → group
 let tileMeshes: THREE.Mesh[] = []
 let buildMeshes: THREE.Object3D[] = []
+let spawnMeshes: THREE.Object3D[] = []
 let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
 let voxelMeshes: THREE.Mesh[] = []
 let reticuleGroup: THREE.Group
@@ -246,6 +256,25 @@ function getSizeParams(size: DigimonSize, gig?: { width: number; height: number;
   }
 }
 
+// Footprint dimension (cells per side) for a participant; tamers and unknowns are 1×1.
+function getParticipantDim(participantId: string | null | undefined): number {
+  if (!participantId) return 1
+  const p = props.participants.find(pp => pp.id === participantId)
+  if (!p || p.type !== 'digimon') return 1
+  const dg = props.digimonMap[p.entityId]
+  if (!dg) return 1
+  return getSizeParams(dg.size, dg.giganticDimensions).tileCount
+}
+
+// True if any cell of a dim×dim footprint anchored at `anchor` is in the area cell set.
+function footprintIntersectsArea(anchor: Vec3, dim: number, cellSet: Set<string>): boolean {
+  const d = Math.max(1, Math.round(dim))
+  for (let dx = 0; dx < d; dx++)
+    for (let dz = 0; dz < d; dz++)
+      if (cellSet.has(`${anchor.x + dx},${anchor.y},${anchor.z + dz}`)) return true
+  return false
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
   initScene()
@@ -269,10 +298,10 @@ onMounted(() => {
       npcMoveY.value = npcMoveY.value + (e.deltaY > 0 ? -1 : 1)
       return
     }
-    if (isBlastTargeting.value) {
+    if (usesVerticalAim.value) {
       e.preventDefault()
       e.stopPropagation()
-      adjustBlastY(e.deltaY > 0 ? -1 : 1)
+      adjustAimY(e.deltaY > 0 ? -1 : 1)
     }
   }, { passive: false, capture: true })
 })
@@ -467,8 +496,10 @@ function buildMap() {
       spawnMesh.rotation.x = -Math.PI / 2
       spawnMesh.position.set(tile.x + 0.5, tile.y * TILE_SIZE + TILE_H + 0.003, tile.z + 0.5)
       spawnMesh.userData = { floorY: tile.y }
+      spawnMesh.visible = props.showSpawnIndicators !== false
       scene.add(spawnMesh)
       buildMeshes.push(spawnMesh)
+      spawnMeshes.push(spawnMesh)
     }
   }
 
@@ -518,8 +549,10 @@ function buildMap() {
       spawnMesh.rotation.x = -Math.PI / 2
       spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + TILE_SIZE + 0.004, voxel.z + 0.5)
       spawnMesh.userData = { floorY: voxel.y, type: 'voxel-spawn', voxel }
+      spawnMesh.visible = props.showSpawnIndicators !== false
       scene.add(spawnMesh)
       buildMeshes.push(spawnMesh)
+      spawnMeshes.push(spawnMesh)
     }
   }
 
@@ -945,7 +978,7 @@ function updateReticules() {
     attackerPosKey,
     props.attackerEffectiveLimit,
     'aoe:' + (aoeActive ? lastAoeKey : ''),
-    'blast:' + isBlastTargeting.value,
+    'area:' + isAreaTargeting.value,
   ].join('|')
   if (key === lastAttackKey) return
   lastAttackKey = key
@@ -957,9 +990,9 @@ function updateReticules() {
   const isMelee = props.selectedAttack.range === 'melee'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
 
-  // When AOE is active or blast is being aimed, only show reticules on participants inside the highlighted area.
-  // For blast (even when LoS-blocked), never fall back to single-target range check so no stray reticules appear.
-  const aoeCellSet = (aoeActive || isBlastTargeting.value)
+  // When AOE is active or an area shape is being aimed, only show reticules on participants inside the highlighted area.
+  // For area shapes (even when LoS-blocked), never fall back to single-target range check so no stray reticules appear.
+  const aoeCellSet = (aoeActive || isAreaTargeting.value)
     ? new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
     : null
 
@@ -969,8 +1002,8 @@ function updateReticules() {
     if (p.id === effectiveAttackerId.value) continue
 
     if (aoeCellSet) {
-      // Only show reticule if this participant's cell is in the AOE
-      if (!aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)) continue
+      // Show reticule if ANY of the target's footprint cells is in the AOE (big targets count if partially covered)
+      if (!footprintIntersectsArea(pos, getParticipantDim(p.id), aoeCellSet)) continue
     } else {
       // Single-target: 3D Euclidean distance so cross-floor targets are evaluated correctly
       const dx = pos.x - attackerPos.x
@@ -989,8 +1022,8 @@ function updateReticules() {
     reticuleGroup.add(mesh)
   }
 
-  // Range rings on ground — for ranged single-target attacks AND blast (to show valid center placement zone)
-  if (!isMelee && (!aoeCellSet || isBlastTargeting.value)) {
+  // Range rings on ground — for ranged single-target attacks AND area shapes (to show valid placement/reach zone)
+  if (!isMelee && (!aoeCellSet || isAreaTargeting.value)) {
     const addRing = (radius: number, color: number) => {
       const geo = new THREE.RingGeometry(radius - 0.05, radius + 0.05, 64)
       const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.5 })
@@ -1082,6 +1115,21 @@ function adjustBlastY(step: number) {
   renderBlastFromStoredCenter()
 }
 
+/**
+ * Scroll-wheel elevation aim shared by all aimed area shapes. Blast moves its sphere centre;
+ * the directional shapes (cone/close-blast/line/pass) nudge the aim-plane elevation within
+ * ±effectiveLimit and re-run the last aim so the shape re-pitches in 3D.
+ */
+function adjustAimY(step: number) {
+  const shape = props.selectedAttack ? getAreaShape(props.selectedAttack.tags) : null
+  if (shape === 'blast') { adjustBlastY(step); return }
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
+  const lim = props.attackerEffectiveLimit
+  const base = attackerPos?.y ?? 0
+  blastCenterY.value = Math.max(base - lim, Math.min(blastCenterY.value + step, base + lim))
+  if (lastAreaAimEvent) computeAndRenderAoe(lastAreaAimEvent)
+}
+
 function renderBlastFromStoredCenter() {
   if (!lastBlastCenter.value) return
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
@@ -1093,9 +1141,9 @@ function renderBlastFromStoredCenter() {
   const los = hasLineOfSight(attackerPos, center)
   blastLosBlocked.value = !los
   const cells = computeAreaCells(
-    'blast', attack.range, attackerPos, { x: 1, z: 0 },
-    attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
-    TILE_SIZE, [], center,
+    'blast', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
+    attack.bit, attack.ram ?? 0, attack.movement ?? 0,
+    getParticipantDim(effectiveAttackerId.value), center,
   )
   updateAoeHighlight(cells, { blocked: !los })
 }
@@ -1115,16 +1163,6 @@ function hasLineOfSight(from: Vec3, to: Vec3): boolean {
   return hits.length === 0
 }
 
-function getMouseWorldXZ(event: MouseEvent): { x: number; z: number } | null {
-  setMouseFromEvent(event)
-  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
-  const planeY = attackerPos ? attackerPos.y * TILE_SIZE + TILE_H : TILE_H
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
-  const target = new THREE.Vector3()
-  if (!raycaster.ray.intersectPlane(plane, target)) return null
-  return { x: target.x, z: target.z }
-}
-
 function computeAndRenderAoe(event: MouseEvent) {
   const attack = props.selectedAttack
   if (!attack) return
@@ -1134,20 +1172,7 @@ function computeAndRenderAoe(event: MouseEvent) {
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attackerPos) return
 
-  // Build candidate positions: all ground tile positions + participant positions
-  const mapTiles: Array<{ x: number; y: number; z: number }> = props.map?.groundTiles
-    ? props.map.groundTiles.map(t => ({ x: t.x, y: t.y, z: t.z }))
-    : []
-  const participantPositionsList = props.participants
-    .map(p => props.participantPositions[p.id])
-    .filter((p): p is { x: number; y: number; z: number } => !!p)
-  // Merge unique positions
-  const posSet = new Set(mapTiles.map(t => `${t.x},${t.y},${t.z}`))
-  const allPositions = [...mapTiles]
-  for (const p of participantPositionsList) {
-    const k = `${p.x},${p.y},${p.z}`
-    if (!posSet.has(k)) { posSet.add(k); allPositions.push(p) }
-  }
+  const dim = getParticipantDim(effectiveAttackerId.value)
 
   // Blast: mouse controls XZ center position; scroll wheel controls Y (blastCenterY)
   if (shape === 'blast') {
@@ -1164,37 +1189,59 @@ function computeAndRenderAoe(event: MouseEvent) {
     lastBlastCenter.value = blastCenter
 
     const cells = computeAreaCells(
-      shape, attack.range, attackerPos, { x: 1, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
-      TILE_SIZE, allPositions, blastCenter,
+      shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim, blastCenter,
     )
     updateAoeHighlight(cells, { blocked: !los })
     return
   }
 
-  let dirVec = { x: 1, z: 0 }
-  if (shape !== 'burst') {
-    const mouseXZ = getMouseWorldXZ(event)
-    if (!mouseXZ) return
-    const dx = mouseXZ.x - (attackerPos.x + 0.5)
-    const dz = mouseXZ.z - (attackerPos.z + 0.5)
-    const len = Math.sqrt(dx * dx + dz * dz)
-    if (len > 0.01) dirVec = { x: dx / len, z: dz / len }
+  // Burst: omnidirectional from the whole footprint — no aiming.
+  if (shape === 'burst') {
+    const cells = computeAreaCells(
+      shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim,
+    )
+    updateAoeHighlight(cells)
+    return
   }
 
+  // Directional shapes (cone / close-blast / line / pass): Blast-style 3D aim.
+  // Mouse picks an XZ point on the plane at the current aim elevation (scroll-wheel `blastCenterY`);
+  // the 3D direction runs from the attacker's footprint centre to that point, so the shape pitches up/down.
+  lastAreaAimEvent = event
+  setMouseFromEvent(event)
+  const planeY = blastCenterY.value * TILE_SIZE + TILE_H
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
+  const pt = new THREE.Vector3()
+  if (!raycaster.ray.intersectPlane(plane, pt)) return
+
+  // World-space footprint centre — used only for the direction vector (frame-independent).
+  const fcWorldX = attackerPos.x + dim / 2
+  const fcWorldZ = attackerPos.z + dim / 2
+  let dir: Vec3 = { x: pt.x - fcWorldX, y: blastCenterY.value - attackerPos.y, z: pt.z - fcWorldZ }
+  if (Math.sqrt(dir.x * dir.x + dir.z * dir.z) < 0.01 && Math.abs(dir.y) < 0.01) {
+    dir = { x: 1, y: 0, z: 0 }
+  }
+
+  // LoS proxy: ray from the attacker toward the aim point, capped at the effective limit.
+  // Tip is in cell-index space (hasLineOfSight adds the +0.5 cell-centre offset itself).
+  const cisX = attackerPos.x + (dim - 1) / 2
+  const cisZ = attackerPos.z + (dim - 1) / 2
+  const dlen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
+  const cap = Math.min(dlen, props.attackerEffectiveLimit || dlen)
+  const losTip = {
+    x: Math.round(cisX + (dir.x / dlen) * cap),
+    y: Math.round(attackerPos.y + (dir.y / dlen) * cap),
+    z: Math.round(cisZ + (dir.z / dlen) * cap),
+  }
+  const los = hasLineOfSight(attackerPos, losTip)
+
   const cells = computeAreaCells(
-    shape,
-    attack.range,
-    attackerPos,
-    dirVec,
-    attack.bit,
-    attack.ram ?? 0,
-    attack.movement ?? 0,
-    attack.sizeAboveLarge ?? 0,
-    TILE_SIZE,
-    allPositions,
+    shape, attack.range, attackerPos, dir,
+    attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim,
   )
-  updateAoeHighlight(cells)
+  updateAoeHighlight(cells, { blocked: !los })
 }
 
 // ── Mouse interaction ──────────────────────────────────────────────────────
@@ -1539,7 +1586,8 @@ function onCanvasClick(event: MouseEvent) {
         .filter(p => {
           if (p.id === effectiveAttackerId.value) return false
           const pos = props.participantPositions[p.id]
-          return pos && aoeCellSet.has(`${pos.x},${pos.y},${pos.z}`)
+          // A target is hit if ANY of its footprint cells falls in the area
+          return pos && footprintIntersectsArea(pos, getParticipantDim(p.id), aoeCellSet)
         })
         .map(p => p.id)
       clearAoeState()
@@ -1675,9 +1723,9 @@ function onWheel(event: WheelEvent) {
     npcMoveY.value = npcMoveY.value + (event.deltaY > 0 ? -1 : 1)
     return
   }
-  if (isBlastTargeting.value) {
+  if (usesVerticalAim.value) {
     // This path handles scroll events that target overlay elements (HUD, log, etc.) instead of the canvas
-    adjustBlastY(event.deltaY > 0 ? -1 : 1)
+    adjustAimY(event.deltaY > 0 ? -1 : 1)
   }
 }
 
@@ -1718,7 +1766,7 @@ function onResize() {
 watch(() => props.map, () => {
   if (!scene) return
   buildMeshes.forEach(m => scene.remove(m))
-  buildMeshes = []; tileMeshes = []; wallMeshes = []; voxelMeshes = []
+  buildMeshes = []; tileMeshes = []; wallMeshes = []; voxelMeshes = []; spawnMeshes = []
   blendTextureCache = new Map()
   buildMap()
 }, { deep: true })
@@ -1770,39 +1818,27 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
     blastCenterY.value = 0
     blastLosBlocked.value = false
     lastBlastCenter.value = null
+    lastAreaAimEvent = null
     return
   }
   const shape = getAreaShape(attack.tags)
   const prevShape = prevAttack ? getAreaShape(prevAttack.tags) : null
-  if (shape === 'blast') {
-    // Only initialise Y when NEWLY entering blast targeting — the parent poll loop re-creates
-    // this prop object every few seconds, which must not reset the user's chosen height.
-    if (prevShape !== 'blast') {
-      const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
-      blastCenterY.value = attackerPos?.y ?? 0
-      blastLosBlocked.value = false
-    }
+  // Initialise the aim elevation only when NEWLY entering an area shape — the parent poll loop
+  // re-creates this prop object every few seconds, which must not reset the user's chosen height.
+  if (shape !== null && shape !== prevShape) {
+    const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
+    blastCenterY.value = attackerPos?.y ?? 0
+    blastLosBlocked.value = false
+    lastBlastCenter.value = null
+    lastAreaAimEvent = null
   }
   if (shape === 'burst') {
-    // Burst has no direction — render immediately centered on attacker
+    // Burst has no direction — render immediately from the whole footprint.
     const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
     if (!attackerPos) return
-    const mapTiles: Array<{ x: number; y: number; z: number }> = props.map?.groundTiles
-      ? props.map.groundTiles.map(t => ({ x: t.x, y: t.y, z: t.z }))
-      : []
-    const participantPositionsList = props.participants
-      .map(p => props.participantPositions[p.id])
-      .filter((p): p is { x: number; y: number; z: number } => !!p)
-    const posSet = new Set(mapTiles.map(t => `${t.x},${t.y},${t.z}`))
-    const allPositions = [...mapTiles]
-    for (const p of participantPositionsList) {
-      const k = `${p.x},${p.y},${p.z}`
-      if (!posSet.has(k)) { posSet.add(k); allPositions.push(p) }
-    }
     const cells = computeAreaCells(
-      'burst', attack.range, attackerPos, { x: 1, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, attack.sizeAboveLarge ?? 0,
-      TILE_SIZE, allPositions,
+      'burst', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, getParticipantDim(effectiveAttackerId.value),
     )
     updateAoeHighlight(cells)
   }
@@ -1813,6 +1849,13 @@ watch(clipY, (y) => {
     const fY = (obj as any).userData?.floorY
     if (fY !== undefined) obj.visible = fY <= y
   }
+  if (props.showSpawnIndicators === false) {
+    for (const m of spawnMeshes) m.visible = false
+  }
+})
+
+watch(() => props.showSpawnIndicators, (show) => {
+  for (const m of spawnMeshes) m.visible = show !== false
 })
 
 watch(ghostWalls, (ghost) => {
