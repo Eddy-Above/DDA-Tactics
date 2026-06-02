@@ -2698,7 +2698,7 @@ type SwappableStat = 'accuracy' | 'damage' | 'dodge' | 'armor'
 type StatSwaps = Partial<Record<SwappableStat, SwappableStat>>
 
 function getModeChangeQualities(participant: CombatParticipant) {
-  const digi = digimonMap.get(participant.entityId)
+  const digi = digimonMap.value.get(participant.entityId)
   const qualities: any[] = digi?.qualities ?? []
   const mc = qualities.find((q: any) => q.id === 'mode-change')
   const x0 = qualities.find((q: any) => q.id === 'mode-change-x0')
