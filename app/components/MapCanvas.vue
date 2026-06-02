@@ -1649,6 +1649,29 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
+  // Single-target attack: clicking a ground/voxel tile that falls within a valid target's footprint
+  // Allows targeting Large/Huge/Gigantic digimon by clicking any footprint tile, not just the anchor
+  if (props.selectedAttack && !getAreaShape(props.selectedAttack.tags) && placementSurfaceHit) {
+    const hitType = placementSurfaceHit.object.userData.type
+    const tile = placementSurfaceHit.object.userData.tile as { y: number } | undefined
+    const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
+    const cell: Vec3 = hitType === 'voxel' && voxel
+      ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
+      : { x: Math.floor(placementSurfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(placementSurfaceHit.point.z) }
+    const cellSet = new Set([`${cell.x},${cell.y},${cell.z}`])
+    const targetParticipant = props.participants.find(p => {
+      if (p.id === effectiveAttackerId.value) return false
+      const pos = props.participantPositions[p.id]
+      if (!pos) return false
+      if (!reticuleGroup.children.some(r => r.userData.participantId === p.id)) return false
+      return footprintIntersectsArea(pos, getParticipantDim(p.id), cellSet)
+    })
+    if (targetParticipant) {
+      emit('target-selected', targetParticipant.id)
+      return
+    }
+  }
+
   // Check sprite click
   const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
   if (spriteHit) {
