@@ -157,7 +157,7 @@ export function useDigimon() {
   function calculateDerivedStats(digimon: Digimon, eddySoulRules?: EddySoulRules, partnerStrikeFirst?: boolean) {
     const { baseStats, stage, size } = digimon
     const bonusStats = (digimon as any).bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }
-    const stageConfig = STAGE_CONFIG[stage as DigimonStage]
+    const stageConfig = STAGE_CONFIG[stage as DigimonStage] ?? STAGE_CONFIG['rookie']
     const sizeConfig = SIZE_CONFIG[size as DigimonSize] || SIZE_CONFIG['medium']
 
     // Total stats = base + bonus

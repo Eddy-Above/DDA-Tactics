@@ -4315,7 +4315,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       <span class="text-yellow-400 font-semibold">
                         {{ currentCombatInspiration }}/{{ maxCombatInspiration }}
                         <span v-if="currentCombatInspiration > 0">
-                          <span v-for="i in currentCombatInspiration" :key="i" class="text-yellow-400">✦</span><span v-for="i in (maxCombatInspiration - currentCombatInspiration)" :key="'e'+i" class="text-digimon-dark-600">✦</span>
+                          <span v-for="i in currentCombatInspiration" :key="i" class="text-yellow-400">✦</span><span v-for="i in Math.max(0, maxCombatInspiration - currentCombatInspiration)" :key="'e'+i" class="text-digimon-dark-600">✦</span>
                         </span>
                       </span>
                     </div>
