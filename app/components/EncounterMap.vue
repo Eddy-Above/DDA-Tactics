@@ -155,6 +155,7 @@ const props = defineProps<{
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     giganticDimensions?: { width: number; height: number; depth: number } | null
+    isEnemy?: boolean
   }>
   selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number } | null
   playerPlacementMode?: boolean

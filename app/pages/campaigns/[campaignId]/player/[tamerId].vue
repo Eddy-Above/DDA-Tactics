@@ -3335,6 +3335,7 @@ const digimonMapForMap = computed(() => {
       baseStats: d.baseStats,
       qualities: typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? []),
       giganticDimensions: (d as any).giganticDimensions ?? null,
+      isEnemy: (d as any).isEnemy ?? false,
     }
   })
   return out
