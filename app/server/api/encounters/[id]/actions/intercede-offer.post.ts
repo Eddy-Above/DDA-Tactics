@@ -294,16 +294,39 @@ export default defineEventHandler(async (event) => {
       // Check if tamer or their partner digimon has eligible intercede actions
       // (also covers the case where both are targeted — neither would be eligible)
       const digimonParticipant = partnerParticipantId ? participants.find((pp: any) => pp.id === partnerParticipantId) : null
-      const tamerEligible = !allTargetIdSet.has(p.id) && hasEligibleInterceptor(p)
-      // Spatial check: can the digimon reach at least one target?
+      const partnerIsAttacker = partnerParticipantId === body.attackerId
+      const tamerIsAttacker = p.id === body.attackerId
+      // Spatial check: can the digimon reach at least one target? (skip if digimon is the attacker)
       let digimonSpatiallyEligible = true
-      if (digimonParticipant && partnerParticipantId && mapRecord) {
+      if (digimonParticipant && partnerParticipantId && !partnerIsAttacker && mapRecord) {
         const targetPositions = allTargetIds.map(tid => participantPositions[tid]).filter(Boolean)
         if (targetPositions.length > 0) {
           digimonSpatiallyEligible = targetPositions.some(tp => canReachTarget(partnerParticipantId!, tp))
         }
       }
-      const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && hasEligibleInterceptor(digimonParticipant) && digimonSpatiallyEligible)
+      const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && !partnerIsAttacker && hasEligibleInterceptor(digimonParticipant) && digimonSpatiallyEligible)
+      // Spatial check for tamer: if map active, verify tamer can reach at least one target from their own location
+      let tamerSpatiallyEligible = true
+      if (mapRecord && !allTargetIdSet.has(p.id) && !tamerIsAttacker) {
+        const tamerPos = participantPositions[p.id]
+        if (!tamerPos) {
+          tamerSpatiallyEligible = false
+        } else {
+          const tamerRecord = tamerById.get(p.entityId)
+          if (tamerRecord) {
+            const attrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
+            const skills = typeof tamerRecord.skills === 'string' ? JSON.parse(tamerRecord.skills) : (tamerRecord.skills || {})
+            const tamerMovement = (attrs.agility || 0) + (skills.survival || 0)
+            const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
+            const targetPositions = allTargetIds.map((tid: string) => participantPositions[tid]).filter(Boolean)
+            if (targetPositions.length > 0) {
+              const tamerReachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
+              tamerSpatiallyEligible = targetPositions.some((tp: any) => tamerReachable.has(`${tp.x},${tp.y},${tp.z}`))
+            }
+          }
+        }
+      }
+      const tamerEligible = !allTargetIdSet.has(p.id) && !tamerIsAttacker && hasEligibleInterceptor(p) && tamerSpatiallyEligible
       if (!tamerEligible && !digimonEligible) continue
 
       // Filter areaTargetIds by this tamer's opt-outs
@@ -827,6 +850,22 @@ export default defineEventHandler(async (event) => {
   }
   const tamerSpatialData: Record<string, TamerSpatialEntry> = {}
 
+  // Pre-compute the melee intercept cell — it depends only on target and attacker positions, not the interceptor
+  let meleeInterceptCell: { x: number; y: number; z: number } | null = null
+  if (!isRangedOnMap && mapRecord && targetPos_map) {
+    const targetFootprintCells = getFootprintCells(targetPos_map, targetDimForOffer)
+    let cell = targetPos_map
+    if (attackerPos_map && targetFootprintCells.length > 1) {
+      const sorted = [...targetFootprintCells].sort((a, b) => {
+        const dA = Math.max(Math.abs(a.x - attackerPos_map.x), Math.abs(a.y - attackerPos_map.y), Math.abs(a.z - attackerPos_map.z))
+        const dB = Math.max(Math.abs(b.x - attackerPos_map.x), Math.abs(b.y - attackerPos_map.y), Math.abs(b.z - attackerPos_map.z))
+        return dA - dB
+      })
+      cell = sorted[0]
+    }
+    meleeInterceptCell = cell
+  }
+
   // Find eligible tamers (those with partner digimon in encounter, not opted out)
   const eligibleTamerIds: string[] = []
   for (const p of participants) {
@@ -850,13 +889,15 @@ export default defineEventHandler(async (event) => {
 
     // Check action eligibility: at least one of tamer or partner digimon must have eligible actions
     const tamerIsTarget = p.id === body.targetId
+    const tamerIsAttacker = p.id === body.attackerId
     const digimonIsTarget = partnerParticipant.id === body.targetId
-    const tamerEligible = !tamerIsTarget && hasEligibleInterceptor(p)
+    const digimonIsAttacker = partnerParticipant.id === body.attackerId
 
     let digimonSpatiallyEligible = true
+    let tamerSpatiallyEligible = true
     let spatialEntry: TamerSpatialEntry | null = null
 
-    if (!digimonIsTarget && mapRecord) {
+    if (!digimonIsTarget && !digimonIsAttacker && mapRecord) {
       const interceptorPos = participantPositions[partnerParticipant.id]
       if (!interceptorPos) {
         // Unplaced on map = ineligible
@@ -888,29 +929,19 @@ export default defineEventHandler(async (event) => {
               attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDim, mapRecord, rangedOccupied,
             )
             isRangedIntercede = true
-          } else {
+          } else if (meleeInterceptCell) {
             // Melee: interceptor must reach the footprint cell of the target closest to the attacker
             const meleeOccupied = new Set(
               Object.entries(participantPositions)
                 .filter(([pid]) => pid !== partnerParticipant.id && pid !== body.targetId)
                 .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
             )
-            const targetFootprintCells = getFootprintCells(targetPos_map, targetDimForOffer)
-            let targetInterceptCell = targetPos_map
-            if (attackerPos_map && targetFootprintCells.length > 1) {
-              const sorted = [...targetFootprintCells].sort((a, b) => {
-                const dA = Math.max(Math.abs(a.x - attackerPos_map.x), Math.abs(a.y - attackerPos_map.y), Math.abs(a.z - attackerPos_map.z))
-                const dB = Math.max(Math.abs(b.x - attackerPos_map.x), Math.abs(b.y - attackerPos_map.y), Math.abs(b.z - attackerPos_map.z))
-                return dA - dB
-              })
-              targetInterceptCell = sorted[0]
-            }
             const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
             if (
-              reachable.has(`${targetInterceptCell.x},${targetInterceptCell.y},${targetInterceptCell.z}`) &&
-              isFootprintValid(targetInterceptCell, interceptorDim, mapRecord, meleeOccupied)
+              reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
+              isFootprintValid(meleeInterceptCell, interceptorDim, mapRecord, meleeOccupied)
             ) {
-              foundPos = targetInterceptCell
+              foundPos = meleeInterceptCell
             }
           }
 
@@ -940,7 +971,66 @@ export default defineEventHandler(async (event) => {
       // If !targetPos_map: remain eligible (no map position for target)
     }
 
-    const digimonEligible = !digimonIsTarget && hasEligibleInterceptor(partnerParticipant) && digimonSpatiallyEligible
+    // Tamer spatial check: if map active and tamer is not the attacker, verify tamer can reach
+    // the intercede position from their own location using their own movement budget (Agility + Survival)
+    if (mapRecord && !tamerIsTarget && !tamerIsAttacker && targetPos_map) {
+      const tamerPos = participantPositions[p.id]
+      if (!tamerPos) {
+        tamerSpatiallyEligible = false
+      } else {
+        const tamerRecord = tamerById.get(p.entityId)
+        if (tamerRecord) {
+          const attrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
+          const skills = typeof tamerRecord.skills === 'string' ? JSON.parse(tamerRecord.skills) : (tamerRecord.skills || {})
+          const tamerMovement = (attrs.agility || 0) + (skills.survival || 0)
+          const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
+          let tamerFoundPos: { x: number; y: number; z: number } | null = null
+          if (isRangedOnMap) {
+            const rangedOccupied = new Set(
+              Object.entries(participantPositions)
+                .filter(([pid]) => pid !== p.id)
+                .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+            )
+            tamerFoundPos = findRangedIntercedPosition(
+              attackerPos_map, targetPos_map, tamerPos, tamerMovement, tamerCaps, 1, mapRecord, rangedOccupied,
+            )
+          } else if (meleeInterceptCell) {
+            const meleeOccupied = new Set(
+              Object.entries(participantPositions)
+                .filter(([pid]) => pid !== p.id && pid !== body.targetId)
+                .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+            )
+            const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
+            if (
+              reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
+              isFootprintValid(meleeInterceptCell, 1, mapRecord, meleeOccupied)
+            ) {
+              tamerFoundPos = meleeInterceptCell
+            }
+          }
+          tamerSpatiallyEligible = tamerFoundPos !== null
+          // If digimon has no spatialEntry (e.g. it's the attacker) but tamer can intercede, store the tamer's intercede position
+          if (tamerFoundPos && !spatialEntry) {
+            const inAir = isPositionInAir(tamerFoundPos, mapRecord)
+            const requiresFly = false  // tamers cannot fly
+            const requiresJump = inAir
+            let fallHeight = 0
+            if (inAir) {
+              for (let scanY = tamerFoundPos.y - 1; scanY >= -10; scanY--) {
+                if (isValidLandingPosition({ x: tamerFoundPos.x, y: scanY, z: tamerFoundPos.z }, mapRecord, new Set())) {
+                  fallHeight = tamerFoundPos.y - scanY
+                  break
+                }
+              }
+            }
+            spatialEntry = { interceptePos: tamerFoundPos, isRangedIntercede: isRangedOnMap, requiresJump, requiresFly, fallHeight }
+          }
+        }
+      }
+    }
+
+    const tamerEligible = !tamerIsTarget && !tamerIsAttacker && hasEligibleInterceptor(p) && tamerSpatiallyEligible
+    const digimonEligible = !digimonIsTarget && !digimonIsAttacker && hasEligibleInterceptor(partnerParticipant) && digimonSpatiallyEligible
     if (!tamerEligible && !digimonEligible) continue
 
     eligibleTamerIds.push(p.entityId)
