@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
-import { chebyshev, hasLineOfSight } from '../../../../utils/gridDistance'
+import { chebyshev } from '../../../../utils/gridDistance'
+import { getSizeFootprintDimension, getFootprintCells } from '../../../../utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 
 interface AttackActionBody {
@@ -144,32 +145,31 @@ export default defineEventHandler(async (event) => {
         const reachRanks = (qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
         const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
 
-        const [mapRecord] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
-        const mapData = mapRecord ? {
-          walls: typeof mapRecord.walls === 'string' ? JSON.parse(mapRecord.walls) : (mapRecord.walls ?? []),
-          ceilings: typeof mapRecord.ceilings === 'string' ? JSON.parse(mapRecord.ceilings) : (mapRecord.ceilings ?? []),
-          doors: typeof mapRecord.doors === 'string' ? JSON.parse(mapRecord.doors) : (mapRecord.doors ?? []),
-          voxels: typeof (mapRecord as any).voxels === 'string' ? JSON.parse((mapRecord as any).voxels) : ((mapRecord as any).voxels ?? []),
-        } : null
-
-        const dist = chebyshev(attackerPos, targetPos)
-
         // Fetch attack definition to get tags
         const attacks = typeof attackerDig.attacks === 'string' ? JSON.parse(attackerDig.attacks) : (attackerDig.attacks ?? [])
         const attackDef = (attacks as any[]).find((a: any) => a.id === body.attackId)
         const isMelee = attackDef?.range === 'melee'
         const isRanged = attackDef?.range === 'ranged'
 
-        if (isMelee && dist > meleeRange) {
-          throw createError({ statusCode: 400, message: `Target out of melee range (distance: ${dist}, reach: ${meleeRange})` })
+        const dist = chebyshev(attackerPos, targetPos)
+
+        if (isMelee) {
+          const [targetDig] = target.type === 'digimon'
+            ? await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+            : []
+          const attackerDim = getSizeFootprintDimension(attackerDig.size as any, (attackerDig as any).giganticDimensions)
+          const targetDim = targetDig ? getSizeFootprintDimension(targetDig.size as any, (targetDig as any).giganticDimensions) : 1
+          const attackerCells = getFootprintCells(attackerPos, attackerDim)
+          const targetCells = getFootprintCells(targetPos, targetDim)
+          const minMeleeDist = Math.min(...attackerCells.flatMap(a =>
+            targetCells.map(t => Math.max(Math.abs(a.x - t.x), Math.abs(a.y - t.y), Math.abs(a.z - t.z)))
+          ))
+          if (minMeleeDist > meleeRange) {
+            throw createError({ statusCode: 400, message: `Target out of melee range (distance: ${minMeleeDist}, reach: ${meleeRange})` })
+          }
         }
-        if (isRanged) {
-          if (dist > derived.effectiveLimit) {
-            throw createError({ statusCode: 400, message: `Target out of effective range (distance: ${dist}, limit: ${derived.effectiveLimit})` })
-          }
-          if (mapData && !hasLineOfSight(attackerPos, targetPos, mapData as any)) {
-            throw createError({ statusCode: 400, message: 'No line of sight to target' })
-          }
+        if (isRanged && dist > derived.effectiveLimit) {
+          throw createError({ statusCode: 400, message: `Target out of effective range (distance: ${dist}, limit: ${derived.effectiveLimit})` })
         }
       }
     }
