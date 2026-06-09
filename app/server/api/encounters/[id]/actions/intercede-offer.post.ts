@@ -393,6 +393,8 @@ export default defineEventHandler(async (event) => {
           outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
           canUseQuickReaction: canUseQR,
           quickReactionDiceCount: qrDiceCount,
+          tamerCanReach: tamerSpatiallyEligible,
+          digimonCanReach: digimonSpatiallyEligible,
         },
       })
     }
@@ -849,6 +851,7 @@ export default defineEventHandler(async (event) => {
     fallHeight: number
   }
   const tamerSpatialData: Record<string, TamerSpatialEntry> = {}
+  const tamerReachability: Record<string, { tamerCanReach: boolean; digimonCanReach: boolean }> = {}
 
   // Pre-compute the melee intercept cell — it depends only on target and attacker positions, not the interceptor
   let meleeInterceptCell: { x: number; y: number; z: number } | null = null
@@ -1035,6 +1038,7 @@ export default defineEventHandler(async (event) => {
 
     eligibleTamerIds.push(p.entityId)
     if (spatialEntry) tamerSpatialData[p.entityId] = spatialEntry
+    tamerReachability[p.entityId] = { tamerCanReach: tamerSpatiallyEligible, digimonCanReach: digimonSpatiallyEligible }
   }
 
   // Per-tamer Quick Reaction eligibility: only if target is their partner and order not used today
@@ -1344,6 +1348,7 @@ export default defineEventHandler(async (event) => {
   for (const tamerId of eligibleTamerIds) {
     const qr = tamerQuickReactionMap[tamerId] || { canUse: false, diceCount: 0 }
     const spatial = tamerSpatialData[tamerId] ?? null
+    const reachability = tamerReachability[tamerId] ?? { tamerCanReach: true, digimonCanReach: true }
     newRequests.push({
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'intercede-offer',
@@ -1380,6 +1385,8 @@ export default defineEventHandler(async (event) => {
         requiresJump: spatial?.requiresJump ?? false,
         requiresFly: spatial?.requiresFly ?? false,
         fallHeight: spatial?.fallHeight ?? 0,
+        tamerCanReach: reachability.tamerCanReach,
+        digimonCanReach: reachability.digimonCanReach,
       },
     })
   }

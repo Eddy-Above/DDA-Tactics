@@ -2542,12 +2542,22 @@ const intercedeOptions = computed(() => {
     return digi?.partnerId === tamer.value?.id
   })
 
-  // Offer tamer as interceptor (if tamer is not excluded and has actions)
-  if (myTamerParticipant && !excludedIds.has(myTamerParticipant.id) && canIntercede(myTamerParticipant)) {
+  // Offer tamer as interceptor (if tamer is not excluded, has actions, and can reach)
+  if (
+    myTamerParticipant &&
+    !excludedIds.has(myTamerParticipant.id) &&
+    canIntercede(myTamerParticipant) &&
+    currentIntercedeRequest.value.data?.tamerCanReach !== false
+  ) {
     options.push({ id: myTamerParticipant.id, name: tamer.value?.name || 'Tamer', type: 'tamer' })
   }
-  // Offer partner digimon as interceptor (if digimon is not excluded and has actions)
-  if (myDigimonParticipant && !excludedIds.has(myDigimonParticipant.id) && canIntercede(myDigimonParticipant)) {
+  // Offer partner digimon as interceptor (if digimon is not excluded, has actions, and can reach)
+  if (
+    myDigimonParticipant &&
+    !excludedIds.has(myDigimonParticipant.id) &&
+    canIntercede(myDigimonParticipant) &&
+    currentIntercedeRequest.value.data?.digimonCanReach !== false
+  ) {
     const digi = allDigimon.value.find((d) => d.id === myDigimonParticipant.entityId)
     options.push({ id: myDigimonParticipant.id, name: digi?.name || 'Digimon', type: 'digimon' })
   }
