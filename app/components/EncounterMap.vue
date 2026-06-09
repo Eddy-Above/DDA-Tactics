@@ -340,16 +340,13 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
   emit('positions-updated', positions.value)
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path })
 
-  // Deduct 1 simple action and clear NPC move state
   if (npcMoveParticipantId.value === participantId) {
-    const participants = props.encounter.participants as any[]
-    const mover = participants.find(p => p.id === participantId)
-    if (mover?.actionsRemaining) {
-      mover.actionsRemaining.simple = Math.max(0, (mover.actionsRemaining.simple ?? 0) - 1)
-      emit('encounter-updated', { participants })
-    }
     npcMoveParticipantId.value = null
     movement.clearMovement()
+    $fetch(`/api/encounters/${props.encounter.id}/actions/move`, {
+      method: 'POST',
+      body: { participantId },
+    }).catch((e: unknown) => console.error('move action deduct failed', e))
   }
 }
 
