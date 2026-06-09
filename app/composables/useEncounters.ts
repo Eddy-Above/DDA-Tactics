@@ -171,6 +171,13 @@ export function useEncounters() {
         method: 'PUT',
         body: data,
       })
+      // Don't clobber locally-updated positions when this PUT didn't include them.
+      // Concurrent PUTs (e.g. action-cost deduction) can resolve before the positions
+      // PUT and carry stale participantPositions from the DB, which would visually undo
+      // a move that hasn't been persisted yet.
+      if (currentEncounter.value?.id === id && !('participantPositions' in data)) {
+        updated.participantPositions = currentEncounter.value.participantPositions
+      }
       encounters.value = encounters.value.map((e) => (e.id === id ? updated : e))
       if (currentEncounter.value?.id === id) {
         currentEncounter.value = updated

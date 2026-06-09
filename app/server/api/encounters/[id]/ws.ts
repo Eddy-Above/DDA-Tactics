@@ -101,7 +101,7 @@ export default defineWebSocketHandler({
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
         }
-      } catch { /* ignore db error */ }
+      } catch (e) { console.error('[ws] Failed to persist unit-moved position:', e) }
       broadcast(encounterId, msg, peer)
     } else if (msg.type === 'door-toggled') {
       broadcast(encounterId, msg, peer)
