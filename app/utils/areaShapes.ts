@@ -111,14 +111,20 @@ function leadingEdgeOrigin(anchor: Vec3, dim: number, dir: Vec3): Vec3 {
   return { x: anchor.x + c + ux * c, y: anchor.y, z: anchor.z + c + uz * c }
 }
 
-/** Integer cells within a pillar of `totalWidth` cells from `origin` along unit dir `nd`.
- *  Odd widths are symmetric; even widths extend one extra cell to the right of `nd` in XZ. */
+/** Integer cells within a `totalWidth` x `totalWidth` pillar from `origin` along unit dir `nd`.
+ *  Odd sizes are symmetric; even sizes extend one extra cell to the right of `nd` (XZ) and one
+ *  extra cell above `nd` in the line's own pitched frame, so the height band stays perpendicular
+ *  to the 3D line direction (rotates with pitch). */
 function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): Vec3[] {
   const halfN = Math.floor((totalWidth - 1) / 2)
   const halfP = totalWidth - 1 - halfN
   const pLen = Math.sqrt(nd.x * nd.x + nd.z * nd.z)
   const pdx = pLen > 1e-6 ? nd.z / pLen : 0
   const pdz = pLen > 1e-6 ? -nd.x / pLen : 0
+  // "Up" perpendicular in the line's own frame: nd x perpDir (unit, since nd is perpendicular to perpDir).
+  const vdx = nd.y * pdz
+  const vdy = nd.z * pdx - nd.x * pdz
+  const vdz = -nd.y * pdx
   const cells: Vec3[] = []
   const r = Math.ceil(length + halfP + 1)
   const ox = Math.round(origin.x), oy = Math.round(origin.y), oz = Math.round(origin.z)
@@ -130,7 +136,10 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): 
         if (along < 0 || along > length + 0.5) continue
         const ex = px - along * nd.x, ez = pz - along * nd.z
         const signedPerp = ex * pdx + ez * pdz
-        if (signedPerp >= -halfN - 0.5 && signedPerp <= halfP + 0.5) cells.push({ x, y, z })
+        if (signedPerp < -halfN - 0.5 || signedPerp > halfP + 0.5) continue
+        const signedUp = px * vdx + py * vdy + pz * vdz
+        if (signedUp < -halfN - 0.5 || signedUp > halfP + 0.5) continue
+        cells.push({ x, y, z })
       }
     }
   }
@@ -203,7 +212,8 @@ function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3
   return cells
 }
 
-// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = 1 + size classes above Large.
+// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = height = 1 + size
+// classes above Large. Scroll-wheel pitch raises/lowers the endpoint and the height band tilts with it.
 function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
   const length = rangeType === 'ranged' ? 5 + bit * 2 : 5
   const nd = normalize3(dir)
@@ -212,7 +222,8 @@ function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3
   return lineCells(origin, nd, length, Math.max(1, attackerDim - 1))
 }
 
-// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = 1 + size classes above Large.
+// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = height = 1 + size
+// classes above Large. Scroll-wheel pitch raises/lowers the endpoint and the height band tilts with it.
 function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDim: number): Vec3[] {
   const length = movement + ram
   const nd = normalize3(dir)
