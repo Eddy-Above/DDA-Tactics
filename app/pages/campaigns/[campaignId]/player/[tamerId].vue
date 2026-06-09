@@ -3506,10 +3506,20 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @attack-cancelled="onMapAttackCancelled"
             >
               <template #combat-controls>
-                <button
-                  class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                  @click="showMapView = false"
-                >✕ Close Map</button>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="isMyTurn && activeEncounter?.phase === 'combat'"
+                    :disabled="endingTurn"
+                    class="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-lg font-orbitron text-sm transition-colors"
+                    @click="handleEndTurn"
+                  >
+                    {{ endingTurn ? 'Ending...' : 'End Turn' }}
+                  </button>
+                  <button
+                    class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                    @click="showMapView = false"
+                  >✕ Close Map</button>
+                </div>
               </template>
             </EncounterMap>
             <!-- Floating attack picker (shown when player clicks Attack from map radial) -->
