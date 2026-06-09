@@ -111,10 +111,16 @@ function leadingEdgeOrigin(anchor: Vec3, dim: number, dir: Vec3): Vec3 {
   return { x: anchor.x + c + ux * c, y: anchor.y, z: anchor.z + c + uz * c }
 }
 
-/** Integer cells within a length×(2*halfWidth) capsule from `origin` along unit dir `nd`. */
-function lineCells(origin: Vec3, nd: Vec3, length: number, halfWidth: number): Vec3[] {
+/** Integer cells within a pillar of `totalWidth` cells from `origin` along unit dir `nd`.
+ *  Odd widths are symmetric; even widths extend one extra cell to the right of `nd` in XZ. */
+function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): Vec3[] {
+  const halfN = Math.floor((totalWidth - 1) / 2)
+  const halfP = totalWidth - 1 - halfN
+  const pLen = Math.sqrt(nd.x * nd.x + nd.z * nd.z)
+  const pdx = pLen > 1e-6 ? nd.z / pLen : 0
+  const pdz = pLen > 1e-6 ? -nd.x / pLen : 0
   const cells: Vec3[] = []
-  const r = Math.ceil(length + halfWidth + 1)
+  const r = Math.ceil(length + halfP + 1)
   const ox = Math.round(origin.x), oy = Math.round(origin.y), oz = Math.round(origin.z)
   for (let x = ox - r; x <= ox + r; x++) {
     for (let y = oy - r; y <= oy + r; y++) {
@@ -122,9 +128,9 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, halfWidth: number): V
         const px = x - origin.x, py = y - origin.y, pz = z - origin.z
         const along = px * nd.x + py * nd.y + pz * nd.z
         if (along < 0 || along > length + 0.5) continue
-        const ex = px - along * nd.x, ey = py - along * nd.y, ez = pz - along * nd.z
-        const perp = Math.sqrt(ex * ex + ey * ey + ez * ez)
-        if (perp <= halfWidth + 0.5) cells.push({ x, y, z })
+        const ex = px - along * nd.x, ez = pz - along * nd.z
+        const signedPerp = ex * pdx + ez * pdz
+        if (signedPerp >= -halfN - 0.5 && signedPerp <= halfP + 0.5) cells.push({ x, y, z })
       }
     }
   }
@@ -197,20 +203,20 @@ function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3
   return cells
 }
 
-// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = footprint.
+// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = 1 + size classes above Large.
 function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
   const length = rangeType === 'ranged' ? 5 + bit * 2 : 5
   const nd = normalize3(dir)
   if (!nd) return []
   const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
-  return lineCells(origin, nd, length, attackerDim / 2)
+  return lineCells(origin, nd, length, Math.max(1, attackerDim - 1))
 }
 
-// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = footprint.
+// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = 1 + size classes above Large.
 function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDim: number): Vec3[] {
   const length = movement + ram
   const nd = normalize3(dir)
   if (!nd) return []
   const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
-  return lineCells(origin, nd, length, attackerDim / 2)
+  return lineCells(origin, nd, length, Math.max(1, attackerDim - 1))
 }
