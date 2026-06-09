@@ -630,6 +630,7 @@ export default defineEventHandler(async (event) => {
     result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
     effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+    attackerParticipantId: actor.id,
 
     // Damage calculation breakdown
     baseDamage: attackBaseDamage,

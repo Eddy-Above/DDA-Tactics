@@ -55,18 +55,25 @@ watch(() => props.battleLog, (log) => {
 }, { immediate: true, deep: true })
 
 const filteredLog = computed(() => {
-  if (props.isDm) return entries.value
   return entries.value.map(e => {
-    // Redact NPC stats — check if the actor is an NPC
-    const isNpcAction = props.npcEntityIds.has(e.actorId)
-    if (isNpcAction) {
-      return {
-        ...e,
-        result: e.result.replace(/armor:\s*\d+/gi, 'armor: —').replace(/base damage:\s*\d+/gi, 'base damage: —'),
-        damage: null,  // hide raw damage number for NPC attacks
-      }
+    const ext = e as any
+    const damageDealt: number = ext.finalDamage ?? (typeof e.damage === 'number' ? e.damage : 0)
+    const damageSuffix = damageDealt > 0 ? ` (${damageDealt} dmg)` : ''
+
+    if (props.isDm) {
+      return { ...e, result: e.result + damageSuffix }
     }
-    return e
+
+    const isNpcAction = props.npcEntityIds.has(e.actorId)
+    const attackerIsNpc = ext.attackerParticipantId && props.npcEntityIds.has(ext.attackerParticipantId)
+
+    if (isNpcAction || attackerIsNpc) {
+      // Strip the dice pool+results prefix (e.g. "6d6 => [3,5,2,5,3,5] = ") but keep successes, Net, verdict
+      const stripped = e.result.replace(/^\d+d6\s*=>\s*\[[^\]]*\]\s*=\s*/i, '')
+      return { ...e, result: stripped + damageSuffix }
+    }
+
+    return { ...e, result: e.result + damageSuffix }
   })
 })
 </script>

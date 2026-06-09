@@ -246,9 +246,9 @@ const activeParticipantId = computed(() =>
 // ── NPC entity ID set (for battle log redaction) ───────────────────────────
 const npcEntityIds = computed(() => {
   const ids = new Set<string>()
-  for (const [id, d] of Object.entries(props.digimonMap)) {
-    if (!d) continue
-    ids.add(id)
+  for (const p of props.encounter.participants) {
+    if (p.type !== 'digimon') continue
+    if (props.digimonMap[p.entityId]?.isEnemy) ids.add(p.id)
   }
   return ids
 })
