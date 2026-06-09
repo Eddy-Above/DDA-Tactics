@@ -1007,8 +1007,28 @@ function updateReticules() {
     if (aoeCellSet) {
       // Show reticule if ANY of the target's footprint cells is in the AOE (big targets count if partially covered)
       if (!footprintIntersectsArea(pos, getParticipantDim(p.id), aoeCellSet)) continue
+    } else if (isMelee) {
+      // Melee: min Chebyshev distance across all footprint cell pairs (handles large digimon + diagonals)
+      const attackerDim = getParticipantDim(effectiveAttackerId.value)
+      const targetDim = getParticipantDim(p.id)
+      let inRange = false
+      for (let adx = 0; adx < attackerDim && !inRange; adx++) {
+        for (let adz = 0; adz < attackerDim && !inRange; adz++) {
+          for (let tdx = 0; tdx < targetDim && !inRange; tdx++) {
+            for (let tdz = 0; tdz < targetDim && !inRange; tdz++) {
+              const d = Math.max(
+                Math.abs((attackerPos.x + adx) - (pos.x + tdx)),
+                Math.abs(attackerPos.y - pos.y),
+                Math.abs((attackerPos.z + adz) - (pos.z + tdz)),
+              )
+              if (d <= maxDist) inRange = true
+            }
+          }
+        }
+      }
+      if (!inRange) continue
     } else {
-      // Single-target: 3D Euclidean distance so cross-floor targets are evaluated correctly
+      // Ranged: 3D Euclidean distance from anchor to anchor
       const dx = pos.x - attackerPos.x
       const dy = pos.y - attackerPos.y
       const dz = pos.z - attackerPos.z
