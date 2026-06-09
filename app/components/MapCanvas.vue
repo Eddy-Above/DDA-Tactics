@@ -44,6 +44,7 @@
       >
         <img v-if="ov.spriteUrl" :src="ov.spriteUrl" class="char-token-img" />
         <div v-else class="char-token-fallback">{{ ov.initial }}</div>
+        <div v-if="reticuleParticipantIds.includes(String(pid))" class="target-reticule" />
       </div>
     </div>
     <!-- Movement distance label -->
@@ -707,6 +708,7 @@ function buildMap() {
 // ── Character footprints + HTML token overlays ───────────────────────────────
 
 const characterOverlays = ref<Record<string, { x: number; y: number; w: number; h: number; spriteUrl: string | null; initial: string }>>({})
+const reticuleParticipantIds = ref<string[]>([])
 
 function buildSprites() {
   for (const [, group] of spriteGroups) scene.remove(group)
@@ -897,9 +899,6 @@ function animate() {
   applyKeyMovement()
   controls.update()
 
-  // Rotate reticules slowly
-  reticuleGroup.children.forEach(r => { r.rotation.y += 0.02 })
-
   // Health bar screen position stays fixed after click — no update needed
 
   // Update pending move screen position
@@ -984,8 +983,12 @@ function updateReticules() {
   lastAttackKey = key
 
   reticuleGroup.clear()
-  if (!props.selectedAttack) return
-  if (!attackerPos) return
+  const ids: string[] = []
+
+  if (!props.selectedAttack || !attackerPos) {
+    reticuleParticipantIds.value = ids
+    return
+  }
 
   const isMelee = props.selectedAttack.range === 'melee'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
@@ -1013,14 +1016,10 @@ function updateReticules() {
       if (dist3d > maxDist) continue
     }
 
-    const ring = new THREE.RingGeometry(0.45, 0.55, 24)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xff2222, side: THREE.DoubleSide })
-    const mesh = new THREE.Mesh(ring, mat)
-    mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 0.1, pos.z + 0.5)
-    mesh.userData = { type: 'reticule', participantId: p.id }
-    reticuleGroup.add(mesh)
+    ids.push(p.id)
   }
+
+  reticuleParticipantIds.value = ids
 
   // Range rings on ground — for ranged single-target attacks AND area shapes (to show valid placement/reach zone)
   if (!isMelee && (!aoeCellSet || isAreaTargeting.value)) {
@@ -1601,13 +1600,6 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  // Check reticule click (single-target attack targeting)
-  const reticuleHit = hits.find(h => h.object.userData.type === 'reticule')
-  if (reticuleHit) {
-    emit('target-selected', reticuleHit.object.userData.participantId)
-    return
-  }
-
   const placementSurfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
 
   // Placement: a character is selected in the panel — clicking a tile/voxel places them
@@ -1663,7 +1655,7 @@ function onCanvasClick(event: MouseEvent) {
       if (p.id === effectiveAttackerId.value) return false
       const pos = props.participantPositions[p.id]
       if (!pos) return false
-      if (!reticuleGroup.children.some(r => r.userData.participantId === p.id)) return false
+      if (!reticuleParticipantIds.value.includes(p.id)) return false
       return footprintIntersectsArea(pos, getParticipantDim(p.id), cellSet)
     })
     if (targetParticipant) {
@@ -1681,7 +1673,7 @@ function onCanvasClick(event: MouseEvent) {
 
     // In single-target targeting mode, clicking a sprite that has a reticule selects them as target
     if (props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) {
-      const hasReticule = reticuleGroup.children.some(r => r.userData.participantId === participantId)
+      const hasReticule = reticuleParticipantIds.value.includes(participantId)
       if (hasReticule) {
         emit('target-selected', participantId)
         return
@@ -2043,6 +2035,17 @@ defineExpose({ movingParticipantId })
   font-size: 18px;
   font-weight: 700;
   color: #fff;
+}
+.target-reticule {
+  position: absolute;
+  width: 50%;
+  height: 50%;
+  top: 25%;
+  left: 25%;
+  border: 2px solid #ff2222;
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(255, 34, 34, 0.7);
 }
 .move-distance-label {
   position: absolute;
