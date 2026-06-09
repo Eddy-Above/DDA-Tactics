@@ -3362,6 +3362,11 @@ function onPositionsUpdated(positions: Record<string, any>) {
   updateEncounter(id, { participantPositions: positions } as any)
 }
 
+const intercedeMapTargetIds = computed((): string[] => {
+  if (!hasIntercedeRequest.value || !currentIntercedeRequest.value?.data?.isAreaAttack || playerIntercedeAreaChosenTarget.value) return []
+  return (currentIntercedeRequest.value.data?.areaTargetIds as string[]) ?? []
+})
+
 const mapSelectedAttackProp = computed(() => {
   if (!selectedAttack.value || !showMapView.value) return null
   const p = selectedAttack.value.participant
@@ -3385,6 +3390,10 @@ const mapSelectedAttackProp = computed(() => {
 })
 
 function onMapTargetSelected(targetId: string) {
+  if (intercedeMapTargetIds.value.includes(targetId)) {
+    playerIntercedeAreaChosenTarget.value = targetId
+    return
+  }
   const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
   const target = participants.find(p => p.id === targetId)
   if (!target || !selectedAttack.value) return
@@ -3490,6 +3499,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"
               :selected-attack="mapSelectedAttackProp"
+              :selectable-participant-ids="intercedeMapTargetIds"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               @positions-updated="onPositionsUpdated"
@@ -3541,6 +3551,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 </button>
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="playerAttackParticipantId = null">Cancel</button>
+            </div>
+            <!-- AOE intercede target picker — shown in place of full modal when map view is active -->
+            <div
+              v-if="hasIntercedeRequest && currentIntercedeRequest?.data?.isAreaAttack && !playerIntercedeAreaChosenTarget"
+              class="absolute top-4 left-1/2 -translate-x-1/2 z-[45] bg-digimon-dark-800/95 rounded-xl p-4 w-80 border-2 border-yellow-500 shadow-xl"
+            >
+              <h2 class="font-display text-lg font-semibold text-yellow-400 mb-1">Area Attack — Choose a target to protect</h2>
+              <p class="text-digimon-dark-300 text-xs mb-3">Click a highlighted target on the map, or use the buttons below.</p>
+              <div class="flex flex-col gap-2">
+                <button
+                  v-for="tid in currentIntercedeRequest.data?.areaTargetIds || []"
+                  :key="tid"
+                  :disabled="intercedeLoading"
+                  @click="playerIntercedeAreaChosenTarget = tid"
+                  class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
+                >{{ resolveParticipantName(tid) }}</button>
+                <button
+                  :disabled="intercedeLoading"
+                  @click="handleIntercedeSkip"
+                  class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
+                >{{ intercedeLoading ? 'Processing…' : 'Skip All' }}</button>
+              </div>
             </div>
             <!-- Floating stance picker (shown when player clicks Stance from map radial) -->
             <div
@@ -5468,10 +5500,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
     </div>
   </Teleport>
 
-  <!-- Intercede Offer Modal -->
+  <!-- Intercede Offer Modal (hidden during map-view AOE step 1 — compact map picker shown instead) -->
   <Teleport to="body">
     <div
-      v-if="hasIntercedeRequest && currentIntercedeRequest"
+      v-if="hasIntercedeRequest && currentIntercedeRequest && !(showMapView && currentIntercedeRequest.data?.isAreaAttack && !playerIntercedeAreaChosenTarget)"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">

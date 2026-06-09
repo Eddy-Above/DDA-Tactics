@@ -118,6 +118,7 @@ const props = defineProps<{
   placingParticipantId: string | null
   npcMoveParticipantId: string | null
   showSpawnIndicators?: boolean
+  selectableParticipantIds?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -978,6 +979,7 @@ function updateReticules() {
     props.attackerEffectiveLimit,
     'aoe:' + (aoeActive ? lastAoeKey : ''),
     'area:' + isAreaTargeting.value,
+    'selectable:' + (props.selectableParticipantIds?.join(',') ?? ''),
   ].join('|')
   if (key === lastAttackKey) return
   lastAttackKey = key
@@ -986,7 +988,7 @@ function updateReticules() {
   const ids: string[] = []
 
   if (!props.selectedAttack || !attackerPos) {
-    reticuleParticipantIds.value = ids
+    reticuleParticipantIds.value = props.selectableParticipantIds?.slice() ?? []
     return
   }
 
@@ -1661,9 +1663,9 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  // Single-target attack: clicking a ground/voxel tile that falls within a valid target's footprint
+  // Single-target attack or intercede target selection: clicking a ground/voxel tile within a valid target's footprint
   // Allows targeting Large/Huge/Gigantic digimon by clicking any footprint tile, not just the anchor
-  if (props.selectedAttack && !getAreaShape(props.selectedAttack.tags) && placementSurfaceHit) {
+  if (((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || (props.selectableParticipantIds?.length && !props.selectedAttack)) && placementSurfaceHit) {
     const hitType = placementSurfaceHit.object.userData.type
     const tile = placementSurfaceHit.object.userData.tile as { y: number } | undefined
     const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
@@ -1691,8 +1693,8 @@ function onCanvasClick(event: MouseEvent) {
     const p = props.participants.find(p => p.id === participantId)
     if (!p) return
 
-    // In single-target targeting mode, clicking a sprite that has a reticule selects them as target
-    if (props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) {
+    // In single-target targeting mode or intercede selection mode, clicking a sprite with a reticule selects it
+    if ((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || props.selectableParticipantIds?.length) {
       const hasReticule = reticuleParticipantIds.value.includes(participantId)
       if (hasReticule) {
         emit('target-selected', participantId)

@@ -35,6 +35,7 @@
           :my-participant-ids="myParticipantIds"
           :active-participant-id="activeParticipantId"
           :selected-attack="selectedAttack"
+          :selectable-participant-ids="selectableParticipantIds"
           :attacker-range="attackerStats.range"
           :attacker-effective-limit="attackerStats.effectiveLimit"
           :attacker-melee-range="attackerStats.meleeRange"
@@ -159,6 +160,7 @@ const props = defineProps<{
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean
+  selectableParticipantIds?: string[]
 }>()
 
 const emit = defineEmits<{
