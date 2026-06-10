@@ -156,12 +156,16 @@ const filteredQualities = computed(() => {
     } else if (filterType.value === 'attack-effects') {
       qualities = qualities.filter((q) => q.category === 'attack-effects')
     } else if (filterType.value === 'boss') {
-      qualities = qualities.filter((q) => q.category === 'boss')
+      qualities = qualities.filter((q) => q.bossOnly)
     }
 
     // Filter by category (only for purchasable)
     if (filterCategory.value !== 'all' && filterType.value === 'purchasable') {
-      qualities = qualities.filter((q) => q.category === filterCategory.value)
+      if (filterCategory.value === 'boss') {
+        qualities = qualities.filter((q) => q.bossOnly)
+      } else {
+        qualities = qualities.filter((q) => q.category === filterCategory.value)
+      }
     }
   }
 

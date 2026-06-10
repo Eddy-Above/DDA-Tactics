@@ -2479,7 +2479,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
   // --- Boss Attack Effects [A] ---
   {
     id: 'effect-bug',
-    name: 'Effect: Bug',
+    name: 'Bug',
     type: 'purchasable',
     category: 'attack-effects',
     qualityType: 'attack',
@@ -2492,7 +2492,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
   },
   {
     id: 'effect-charm',
-    name: 'Effect: Charm',
+    name: 'Charm',
     type: 'purchasable',
     category: 'attack-effects',
     qualityType: 'attack',
@@ -2505,7 +2505,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
   },
   {
     id: 'effect-demoralize',
-    name: 'Effect: Demoralize',
+    name: 'Demoralize',
     type: 'purchasable',
     category: 'attack-effects',
     qualityType: 'attack',
@@ -2518,7 +2518,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
   },
   {
     id: 'effect-frenzy',
-    name: 'Effect: Frenzy',
+    name: 'Frenzy',
     type: 'purchasable',
     category: 'attack-effects',
     qualityType: 'attack',
@@ -2531,7 +2531,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
   },
   {
     id: 'effect-tank-buster',
-    name: 'Effect: Tank Buster',
+    name: 'Tank Buster',
     type: 'purchasable',
     category: 'attack-effects',
     qualityType: 'attack',
