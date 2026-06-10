@@ -91,7 +91,7 @@ import type {
   DestructibleState, WallFace,
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
-import { vec3Key } from '~/utils/mapGeometry'
+import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
 
@@ -117,6 +117,8 @@ const props = defineProps<{
   activePath: Vec3[]
   placingParticipantId: string | null
   npcMoveParticipantId: string | null
+  chargeMode: 'before' | 'after' | null
+  chargeMoveParticipantId: string | null
   showSpawnIndicators?: boolean
   selectableParticipantIds?: string[]
 }>()
@@ -133,6 +135,7 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   (e: 'attack-cancelled'): void
+  (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
   (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
@@ -274,6 +277,26 @@ function footprintIntersectsArea(anchor: Vec3, dim: number, cellSet: Set<string>
   for (let dx = 0; dx < d; dx++)
     for (let dz = 0; dz < d; dz++)
       if (cellSet.has(`${anchor.x + dx},${anchor.y},${anchor.z + dz}`)) return true
+  return false
+}
+
+// True if a dim×dim attacker footprint anchored at `attackerAnchor` is within `maxDist`
+// (Chebyshev) of a dim×dim target footprint anchored at `targetAnchor`, for any pair of cells.
+function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDim: number, targetDim: number, maxDist: number): boolean {
+  for (let adx = 0; adx < attackerDim; adx++) {
+    for (let adz = 0; adz < attackerDim; adz++) {
+      for (let tdx = 0; tdx < targetDim; tdx++) {
+        for (let tdz = 0; tdz < targetDim; tdz++) {
+          const d = Math.max(
+            Math.abs((attackerAnchor.x + adx) - (targetAnchor.x + tdx)),
+            Math.abs(attackerAnchor.y - targetAnchor.y),
+            Math.abs((attackerAnchor.z + adz) - (targetAnchor.z + tdz)),
+          )
+          if (d <= maxDist) return true
+        }
+      }
+    }
+  }
   return false
 }
 
@@ -1013,19 +1036,10 @@ function updateReticules() {
       // Melee: min Chebyshev distance across all footprint cell pairs (handles large digimon + diagonals)
       const attackerDim = getParticipantDim(effectiveAttackerId.value)
       const targetDim = getParticipantDim(p.id)
-      let inRange = false
-      for (let adx = 0; adx < attackerDim && !inRange; adx++) {
-        for (let adz = 0; adz < attackerDim && !inRange; adz++) {
-          for (let tdx = 0; tdx < targetDim && !inRange; tdx++) {
-            for (let tdz = 0; tdz < targetDim && !inRange; tdz++) {
-              const d = Math.max(
-                Math.abs((attackerPos.x + adx) - (pos.x + tdx)),
-                Math.abs(attackerPos.y - pos.y),
-                Math.abs((attackerPos.z + adz) - (pos.z + tdz)),
-              )
-              if (d <= maxDist) inRange = true
-            }
-          }
+      let inRange = meleeInRange(attackerPos, pos, attackerDim, targetDim, maxDist)
+      if (!inRange && props.chargeMode === 'before') {
+        for (const k of props.reachableCells) {
+          if (meleeInRange(parseVec3Key(k), pos, attackerDim, targetDim, maxDist)) { inRange = true; break }
         }
       }
       if (!inRange) continue
@@ -1575,6 +1589,29 @@ function onMouseUp(event: MouseEvent) {
   dragStartHit = null
 }
 
+// Charge "before" mode: find the closest reachable anchor (or current position) from which
+// `targetId` is in melee range, and emit charge-target-selected to move the attacker there.
+// Returns true if a valid anchor was found and the move was emitted.
+function tryChargeMove(targetId: string): boolean {
+  const attackerId = effectiveAttackerId.value
+  const attackerPos = attackerId ? props.participantPositions[attackerId] : null
+  const targetPos = props.participantPositions[targetId]
+  if (!attackerId || !attackerPos || !targetPos) return false
+  const attackerDim = getParticipantDim(attackerId)
+  const targetDim = getParticipantDim(targetId)
+  const anchors: Vec3[] = [attackerPos, ...Array.from(props.reachableCells, parseVec3Key)]
+  let best: Vec3 | null = null
+  let bestDist = Infinity
+  for (const anchor of anchors) {
+    if (!meleeInRange(anchor, targetPos, attackerDim, targetDim, props.attackerMeleeRange)) continue
+    const dist = Math.max(Math.abs(anchor.x - attackerPos.x), Math.abs(anchor.y - attackerPos.y), Math.abs(anchor.z - attackerPos.z))
+    if (dist < bestDist) { bestDist = dist; best = anchor }
+  }
+  if (!best) return false
+  emit('charge-target-selected', attackerId, best, targetId)
+  return true
+}
+
 function onCanvasClick(event: MouseEvent) {
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
@@ -1593,6 +1630,26 @@ function onCanvasClick(event: MouseEvent) {
         hoverGhostGroup.clear()
         hoveredMoveScreen.value = null
         emit('unit-moved', pid, cell, props.activePath)
+      }
+    }
+    return
+  }
+
+  // Charge "before" + area attack: first click picks the move destination from reachableCells.
+  // onChargeTargetSelected moves the attacker and clears chargeMode, letting the normal AOE
+  // aiming/placement flow take over from the new position on the next click.
+  if (props.chargeMode === 'before' && props.selectedAttack && getAreaShape(props.selectedAttack.tags)) {
+    const surfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
+    if (surfaceHit) {
+      const hitType = surfaceHit.object.userData.type
+      const tile = surfaceHit.object.userData.tile as { y: number } | undefined
+      const voxel = surfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
+      const cell: Vec3 = hitType === 'voxel' && voxel
+        ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
+        : { x: Math.floor(surfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(surfaceHit.point.z) }
+      const attackerId = effectiveAttackerId.value
+      if (attackerId && props.reachableCells.has(vec3Key(cell))) {
+        emit('charge-target-selected', attackerId, cell, null)
       }
     }
     return
@@ -1681,7 +1738,11 @@ function onCanvasClick(event: MouseEvent) {
       return footprintIntersectsArea(pos, getParticipantDim(p.id), cellSet)
     })
     if (targetParticipant) {
-      emit('target-selected', targetParticipant.id)
+      if (props.chargeMode === 'before') {
+        tryChargeMove(targetParticipant.id)
+      } else {
+        emit('target-selected', targetParticipant.id)
+      }
       return
     }
   }
@@ -1697,7 +1758,11 @@ function onCanvasClick(event: MouseEvent) {
     if ((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || props.selectableParticipantIds?.length) {
       const hasReticule = reticuleParticipantIds.value.includes(participantId)
       if (hasReticule) {
-        emit('target-selected', participantId)
+        if (props.chargeMode === 'before') {
+          tryChargeMove(participantId)
+        } else {
+          emit('target-selected', participantId)
+        }
         return
       }
     }
@@ -1822,6 +1887,14 @@ watch(() => props.activeTool, (tool) => {
 
 // Enter NPC movement mode when EncounterMap signals reachable cells are ready
 watch(() => props.npcMoveParticipantId, id => {
+  if (id) {
+    movingParticipantId.value = id
+    npcMoveY.value = props.participantPositions[id]?.y ?? 0
+  }
+})
+
+// Enter movement mode for the post-charge "Move After Attack" relocation step
+watch(() => props.chargeMoveParticipantId, id => {
   if (id) {
     movingParticipantId.value = id
     npcMoveY.value = props.participantPositions[id]?.y ?? 0

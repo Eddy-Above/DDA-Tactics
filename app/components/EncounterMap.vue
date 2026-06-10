@@ -34,7 +34,7 @@
           :is-dm="isDm"
           :my-participant-ids="myParticipantIds"
           :active-participant-id="activeParticipantId"
-          :selected-attack="selectedAttack"
+          :selected-attack="mapSelectedAttack"
           :selectable-participant-ids="selectableParticipantIds"
           :attacker-range="attackerStats.range"
           :attacker-effective-limit="attackerStats.effectiveLimit"
@@ -42,6 +42,8 @@
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
+          :charge-mode="chargeMode"
+          :charge-move-participant-id="chargeMoveParticipantId"
           :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
           @unit-placed="onCanvasPlace"
           @unit-moved="onCombatMove"
@@ -50,14 +52,15 @@
           @wall-edit-at-edge="onWallEditAtEdge"
           @wall-place="onWallPlace"
           @voxel-edit="onVoxelEdit"
-          @target-selected="$emit('target-selected', $event)"
-          @area-attack-confirmed="$emit('area-attack-confirmed', $event)"
+          @target-selected="onTargetSelected"
+          @area-attack-confirmed="onAreaAttackConfirmed"
           @attack-cancelled="$emit('attack-cancelled')"
+          @charge-target-selected="onChargeTargetSelected"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
           @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else emit('player-action', id, action) }"
           @cell-hovered="onCellHovered"
-          @movement-cancelled="() => { npcMoveParticipantId = null; movement.clearMovement() }"
+          @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
         />
         <div v-else class="no-map">
@@ -131,6 +134,26 @@
           @save="onStructureSave"
         />
       </div>
+
+      <!-- Floating charge attack picker (shown when a Charge Attack is selected) -->
+      <div
+        v-if="isChargeAttack && chargeMode === null"
+        class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+        style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+      >
+        <div class="text-sm text-digimon-dark-400 mb-3 text-center">Charge Attack</div>
+        <div class="flex flex-col gap-2">
+          <button
+            class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+            @click="startChargeBefore"
+          >Move Before Attack</button>
+          <button
+            class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+            @click="chargeMode = 'after'"
+          >Move After Attack</button>
+        </div>
+        <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="$emit('attack-cancelled')">Cancel</button>
+      </div>
     </div>
   </div>
 </template>
@@ -143,6 +166,7 @@ import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
+import { useEncounters } from '~/composables/useEncounters'
 import { calculateDigimonDerivedStats } from '~/types'
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -157,7 +181,7 @@ const props = defineProps<{
     giganticDimensions?: { width: number; height: number; depth: number } | null
     isEnemy?: boolean
   }>
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean
@@ -294,6 +318,17 @@ const digimonMapForCanvas = computed(() => {
 const selectedId = ref<string | null>(null)
 const npcMoveParticipantId = ref<string | null>(null)
 
+// ── Charge Attack ────────────────────────────────────────────────────────────
+const chargeMode = ref<'before' | 'after' | null>(null)
+const chargeAfterAttackerId = ref<string | null>(null)
+const chargeMoveParticipantId = ref<string | null>(null)
+
+const isChargeAttack = computed(() => props.selectedAttack?.tags?.includes('Charge Attack') ?? false)
+
+const mapSelectedAttack = computed(() =>
+  isChargeAttack.value && chargeMode.value === null ? null : props.selectedAttack
+)
+
 const showPanel = computed(() =>
   !props.editorMode &&
   ((props.isDm && props.encounter.phase === 'setup') || (props.playerPlacementMode ?? false))
@@ -341,6 +376,13 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
   emit('positions-updated', positions.value)
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path })
 
+  if (chargeMoveParticipantId.value === participantId) {
+    chargeMoveParticipantId.value = null
+    movement.clearMovement()
+    useEncounters().updateEncounter(props.encounter.id, { participantPositions: positions.value } as any)
+    return
+  }
+
   if (npcMoveParticipantId.value === participantId) {
     npcMoveParticipantId.value = null
     movement.clearMovement()
@@ -381,6 +423,65 @@ function npcMoveCaps(participantId: string) {
   }
   return { p, pos, dInfo, budget, caps, occupied, moverIsEnemy }
 }
+
+// ── Charge Attack handlers ───────────────────────────────────────────────────
+function sameVec3(a: Vec3 | undefined, b: Vec3): boolean {
+  return !!a && a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+function startChargeBefore() {
+  const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
+  if (!attackerId || !map.value) return
+  const ctx = npcMoveCaps(attackerId)
+  if (!ctx) return
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+  chargeMode.value = 'before'
+}
+
+async function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
+  if (!sameVec3(positions.value[attackerId], destination)) {
+    positions.value = { ...positions.value, [attackerId]: destination }
+    emit('positions-updated', positions.value)
+    ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [] })
+    await useEncounters().updateEncounter(props.encounter.id, { participantPositions: positions.value } as any)
+  }
+  chargeMode.value = null
+  movement.clearMovement()
+  if (targetId) emit('target-selected', targetId)
+}
+
+function onTargetSelected(targetId: string) {
+  if (chargeMode.value === 'after') {
+    chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
+    chargeMode.value = null
+  }
+  emit('target-selected', targetId)
+}
+
+function onAreaAttackConfirmed(targetIds: string[]) {
+  if (chargeMode.value === 'after') {
+    chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
+    chargeMode.value = null
+  }
+  emit('area-attack-confirmed', targetIds)
+}
+
+watch(() => props.selectedAttack, (val) => {
+  if (val !== null) return
+  if (chargeMode.value === 'before') {
+    chargeMode.value = null
+    movement.clearMovement()
+  }
+  if (chargeAfterAttackerId.value) {
+    const attackerId = chargeAfterAttackerId.value
+    chargeAfterAttackerId.value = null
+    const ctx = npcMoveCaps(attackerId)
+    if (ctx && map.value) {
+      movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+      chargeMoveParticipantId.value = attackerId
+    }
+  }
+})
 
 function onNpcMove(participantId: string) {
   if (!map.value) return
