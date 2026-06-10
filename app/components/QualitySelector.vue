@@ -42,7 +42,8 @@ interface Props {
   systemBoostMaxRanks?: { bit: number; cpu: number; ram: number } // Dynamic max ranks per System Boost choice
   eddySoulRules?: EddySoulRules
   houseRules?: HouseRules
-  isBossDigimon?: boolean // Only enemy/NPC digimon may see and select Boss Qualities
+  isBossDigimon?: boolean // True for enemy/NPC digimon OR Dark Digivolutions; gates Boss Qualities
+  bossQualityDPCap?: number // DP cap for 'boss' category qualities (Dark Digivolutions only); Infinity = unrestricted
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -50,6 +51,7 @@ const props = withDefaults(defineProps<Props>(), {
   availableDP: Infinity,
   speedyMaxRanks: undefined, // Use stage-based default if not provided
   isBossDigimon: false,
+  bossQualityDPCap: Infinity,
 })
 const emit = defineEmits<{
   (e: 'add', quality: Quality): void
@@ -97,6 +99,26 @@ const currentPurchasableDP = computed(() => {
   const seenIds = new Set<string>()
 
   return purchasableQualities.reduce((sum, q) => {
+    const template = QUALITY_DATABASE.find((t) => t.id === q.id)
+    if (!template) return sum + (q.dpCost * (q.ranks || 1))
+
+    const isFirstOfType = !seenIds.has(q.id)
+    seenIds.add(q.id)
+
+    return sum + getEffectiveDPCost(template, q.ranks || 1, q.dpCost, props.stage, isFirstOfType, props.eddySoulRules)
+  }, 0)
+})
+
+const dpUsedOnBossQualities = computed(() => {
+  const bossQualities = props.currentQualities.filter((q) => {
+    const template = QUALITY_DATABASE.find((t) => t.id === q.id)
+    return template?.category === 'boss'
+  })
+
+  // Track which quality IDs we've seen to determine "first of type"
+  const seenIds = new Set<string>()
+
+  return bossQualities.reduce((sum, q) => {
     const template = QUALITY_DATABASE.find((t) => t.id === q.id)
     if (!template) return sum + (q.dpCost * (q.ranks || 1))
 
@@ -177,6 +199,11 @@ function getFullQualityStatus(template: QualityTemplate): { canSelect: boolean; 
       reasons.push('No DP remaining for qualities')
     } else if (cost > props.availableDP) {
       reasons.push(`Costs ${cost} DP (${props.availableDP} available)`)
+    }
+
+    // Check Dark Digivolution boss-quality DP cap (scaled by stage)
+    if (template.category === 'boss' && cost > 0 && dpUsedOnBossQualities.value + cost > props.bossQualityDPCap) {
+      reasons.push(`Boss qualities limited to ${props.bossQualityDPCap} DP for Dark Digivolutions (${dpUsedOnBossQualities.value} used)`)
     }
   }
 

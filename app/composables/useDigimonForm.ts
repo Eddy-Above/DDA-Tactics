@@ -334,8 +334,9 @@ export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulR
     derivedStats: statsComposable.derivedStats,
     currentSpeedyMaxRanks: statsComposable.currentSpeedyMaxRanks,
 
-    // Qualities composable exports (4 total)
+    // Qualities composable exports (5 total)
     dpUsedOnQualities: qualitiesComposable.dpUsedOnQualities,
+    bossQualityDPCap: qualitiesComposable.bossQualityDPCap,
     handleAddQuality: qualitiesComposable.handleAddQuality,
     handleUpdateQualityRanks: qualitiesComposable.handleUpdateQualityRanks,
     removeQuality: qualitiesComposable.removeQuality,

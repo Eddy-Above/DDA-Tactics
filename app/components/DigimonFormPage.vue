@@ -60,6 +60,7 @@ const {
   baseDP,
   dpUsedOnStats,
   dpUsedOnQualities,
+  bossQualityDPCap,
   baseDPRemaining,
   bonusStatsTotal,
   bonusDPForStats,
@@ -143,6 +144,9 @@ const systemBoostMaxRanks = computed(() => {
 })
 const bonusDPAllocated = computed(() => bonusStatsTotal.value + (form.bonusDPForQualities || 0))
 const qualitiesFromBaseDP = computed(() => Math.max(0, dpUsedOnQualities.value - (form.bonusDPForQualities || 0)))
+
+// Boss Qualities are available to NPC/enemy digimon and to Dark Digivolution forms
+const isBossDigimon = computed(() => form.isEnemy || form.isDarkEvolution)
 
 const digimonLinkBase = computed(() =>
   isLibrary
@@ -540,7 +544,10 @@ async function handleCopy() {
                 />
                 <span class="text-white">This is an enemy Digimon</span>
               </label>
-              <label class="flex items-center gap-2 cursor-pointer">
+              <label
+                class="flex items-center gap-2 cursor-pointer"
+                title="Unlocks Boss Qualities in the quality selector, capped by DP based on stage"
+              >
                 <input
                   v-model="form.isDarkEvolution"
                   type="checkbox"
@@ -1137,7 +1144,8 @@ async function handleCopy() {
           :system-boost-max-ranks="systemBoostMaxRanks"
           :eddy-soul-rules="eddySoulRules"
           :house-rules="houseRules"
-          :is-boss-digimon="form.isEnemy"
+          :is-boss-digimon="isBossDigimon"
+          :boss-quality-d-p-cap="bossQualityDPCap"
           @add="handleAddQuality"
           @remove="removeQuality"
           @update-ranks="handleUpdateQualityRanks"

@@ -6,7 +6,7 @@
 import { computed, type Ref, isRef } from 'vue'
 import type { DigimonFormData } from './useDigimonForm'
 import type { EddySoulRules } from '../types/index'
-import { QUALITY_DATABASE, getEffectiveDPCost } from '../data/qualities'
+import { QUALITY_DATABASE, getEffectiveDPCost, STAGE_ORDER } from '../data/qualities'
 
 export interface UseDigimonQualitiesOptions {
   form: Ref<any> | any
@@ -44,6 +44,28 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
     }, 0)
   })
 
+  // Boss-quality DP usage (qualities with category === 'boss')
+  const dpUsedOnBossQualities = computed(() => {
+    const f = formRef.value
+    return (f.qualities || []).reduce((total: number, q: any) => {
+      const template = QUALITY_DATABASE.find((t) => t.id === q.id)
+      if (!template || template.category !== 'boss') return total
+      const baseCost = (q.dpCost || 0) as number
+      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, f.stage, true, options.eddySoulRules?.value)
+      return total + cost
+    }, 0)
+  })
+
+  // DP cap for 'boss' category qualities. Dark Digivolutions (not also flagged as enemy/NPC)
+  // are capped by stage; true NPC/enemy bosses have unrestricted access.
+  const bossQualityDPCap = computed(() => {
+    const f = formRef.value
+    if (f.isDarkEvolution && !f.isEnemy) {
+      return Math.max(0, STAGE_ORDER.indexOf(f.stage) - 1)
+    }
+    return Infinity
+  })
+
   // ========================
   // Quality CRUD Operations
   // ========================
@@ -62,6 +84,10 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
     const newTotalUsed = dpUsedOnQualities.value + qualityCost
 
     if (qualityCost > 0 && newTotalUsed > totalDPForQualitiesVal) {
+      return
+    }
+
+    if (template?.category === 'boss' && dpUsedOnBossQualities.value + qualityCost > bossQualityDPCap.value) {
       return
     }
 
@@ -91,6 +117,8 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
   return {
     // Computed
     dpUsedOnQualities,
+    dpUsedOnBossQualities,
+    bossQualityDPCap,
 
     // Operations
     handleAddQuality,

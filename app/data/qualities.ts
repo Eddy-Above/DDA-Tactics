@@ -77,7 +77,7 @@ export interface QualityTemplate {
   requiresGMApproval?: boolean // Some qualities need GM approval
   freeFirstRank?: boolean // First rank is free, subsequent ranks cost dpCost
   firstRankDiscountAtStage?: { stage: DigimonStage; discount: number } // Discount on first rank at certain stage+
-  bossOnly?: boolean // Only available to NPC/enemy digimon (isEnemy: true)
+  bossOnly?: boolean // Only available to NPC/enemy digimon (isEnemy: true) or Dark Digivolutions (capped by stage)
 }
 
 export const QUALITY_DATABASE: QualityTemplate[] = [
