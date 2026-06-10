@@ -243,7 +243,7 @@ export default defineEventHandler(async (event) => {
       if (p.id === body.targetId && hit && npcAttackDef.effect) {
         const effectDuration = Math.max(1, netSuccesses)
         const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
-        const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+        const effectType: 'buff' | 'debuff' | 'status' = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
         const newEffect = {
           id: `effect-${Date.now()}`,
           name: npcAttackDef.effect,
@@ -434,7 +434,7 @@ export default defineEventHandler(async (event) => {
         if (shouldApply) {
           const effectDuration = Math.max(1, netSuccesses)
           const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
-          const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
+          const effectType: 'buff' | 'debuff' | 'status' = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
           const newEffect = {
             id: `effect-${Date.now()}`,
             name: npcAttackDef.effect,

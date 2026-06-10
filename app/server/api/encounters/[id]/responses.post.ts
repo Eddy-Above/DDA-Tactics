@@ -129,7 +129,7 @@ export default defineEventHandler(async (event) => {
       })
     }
     // Validate realistic initiative roll (3d6 = 3-18)
-    if (body.response.initiativeRoll < 3 || body.response.initiativeRoll > 18) {
+    if (body.response.initiativeRoll! < 3 || body.response.initiativeRoll! > 18) {
       throw createError({
         statusCode: 400,
         message: 'Initiative roll must be between 3 and 18 (3d6)',
@@ -422,12 +422,12 @@ export default defineEventHandler(async (event) => {
         actorName: request.data.targetName,
         action: 'Dodge (Support)',
         target: null,
-        result: `${body.response.dodgeDicePool}d6 => [${body.response.dodgeDiceResults.join(',')}] = ${body.response.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
+        result: `${body.response.dodgeDicePool}d6 => [${(body.response.dodgeDiceResults ?? []).join(',')}] = ${body.response.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
         damage: 0,
         effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
         hit,
         dodgeDicePool: body.response.dodgeDicePool,
-        dodgeDiceResults: body.response.dodgeDiceResults,
+        dodgeDiceResults: body.response.dodgeDiceResults ?? [],
         dodgeSuccesses: body.response.dodgeSuccesses,
         netSuccesses,
       }
@@ -868,7 +868,7 @@ export default defineEventHandler(async (event) => {
         actorName: request.data.targetName,
         action: 'Dodge',
         target: null,
-        result: `${body.response.dodgeDicePool}d6 => [${body.response.dodgeDiceResults.join(',')}] = ${body.response.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
+        result: `${body.response.dodgeDicePool}d6 => [${(body.response.dodgeDiceResults ?? []).join(',')}] = ${body.response.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
         damage: hit ? damageDealt : 0,
         effects: [
           'Dodge',
@@ -884,7 +884,7 @@ export default defineEventHandler(async (event) => {
         finalDamage: hit ? damageDealt : 0,
         hit: hit,
         dodgeDicePool: body.response.dodgeDicePool,
-        dodgeDiceResults: body.response.dodgeDiceResults,
+        dodgeDiceResults: body.response.dodgeDiceResults ?? [],
         dodgeSuccesses: body.response.dodgeSuccesses,
       }
 

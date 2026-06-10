@@ -334,7 +334,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       const oldEntityId = damagedTarget.entityId
       damagedTarget.entityId = previousState.entityId
       damagedTarget.maxWounds = previousState.maxWounds
-      damagedTarget.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
+      damagedTarget.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0;
 
       // Update npcStageIndex on the participant (NPCs track stage locally)
       (damagedTarget as any).npcStageIndex = previousState.stageIndex

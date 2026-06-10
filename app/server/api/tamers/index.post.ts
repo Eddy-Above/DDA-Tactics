@@ -54,6 +54,7 @@ interface CreateTamerBody {
   spriteUrl?: string
   xp?: number
   inspiration?: number
+  grantedInspiration?: number
 }
 
 export default defineEventHandler(async (event) => {

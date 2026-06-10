@@ -340,7 +340,7 @@ export default defineEventHandler(async (event) => {
     }
 
     // Delegate to intercede-offer with clashAttack: true
-    return await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
+    const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
       method: 'POST',
       body: {
         attackerId: body.participantId,
@@ -354,6 +354,7 @@ export default defineEventHandler(async (event) => {
         clashAttack: true,
       },
     })
+    return result
   }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
