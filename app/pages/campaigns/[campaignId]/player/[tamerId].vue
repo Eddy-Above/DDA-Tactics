@@ -1245,6 +1245,16 @@ function canUseAttack(participant: CombatParticipant, attack: any): boolean {
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 
+// Resolved participant + affordable attack/action options for the floating player attack picker
+const playerAttackParticipant = computed(() =>
+  (activeEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === playerAttackParticipantId.value)
+)
+const playerAttackOptions = computed(() => {
+  const p = playerAttackParticipant.value
+  if (!p) return []
+  return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
+})
+
 function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any): boolean {
   // Can't use if already used
   if ((participant.usedSpecialOrders || []).includes(order.name)) {
@@ -3553,10 +3563,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Attack</div>
               <div class="flex flex-col gap-2">
                 <button
-                  v-for="attack in getParticipantAttacks((activeEncounter?.participants as CombatParticipant[])?.find(x => x.id === playerAttackParticipantId)!)"
+                  v-for="attack in playerAttackOptions"
                   :key="attack.id"
                   class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-                  @click="selectAttackAndShowTargets((activeEncounter?.participants as CombatParticipant[])?.find(x => x.id === playerAttackParticipantId)!, attack); playerAttackParticipantId = null"
+                  @click="selectAttackAndShowTargets(playerAttackParticipant!, attack); playerAttackParticipantId = null"
                 >
                   <span class="font-semibold">{{ attack.name }}</span>
                   <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>

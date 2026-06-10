@@ -572,6 +572,16 @@ function canUseAttack(participant: CombatParticipant, attack: any): boolean {
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
 }
 
+// Resolved participant + affordable attack/action options for the floating NPC attack picker
+const npcAttackParticipant = computed(() =>
+  (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === npcAttackParticipantId.value)
+)
+const npcAttackOptions = computed(() => {
+  const p = npcAttackParticipant.value
+  if (!p) return []
+  return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
+})
+
 // Check if target is player-controlled
 function isPlayerControlled(participant: CombatParticipant): boolean {
   if (participant.type === 'tamer') {
@@ -3221,10 +3231,10 @@ function onMapAttackCancelled() {
           <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Attack</div>
           <div class="flex flex-col gap-2">
             <button
-              v-for="attack in getParticipantAttacks((currentEncounter?.participants as CombatParticipant[])?.find(x => x.id === npcAttackParticipantId)!)"
+              v-for="attack in npcAttackOptions"
               :key="attack.id"
               class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-              @click="selectAttackAndShowTargets((currentEncounter?.participants as CombatParticipant[])?.find(x => x.id === npcAttackParticipantId)!, attack); npcAttackParticipantId = null"
+              @click="selectAttackAndShowTargets(npcAttackParticipant!, attack); npcAttackParticipantId = null"
             >
               <span class="font-semibold">{{ attack.name }}</span>
               <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
