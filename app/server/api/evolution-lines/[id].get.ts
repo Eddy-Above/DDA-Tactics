@@ -20,9 +20,5 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse chain from JSON string to array
-  return {
-    ...evolutionLine,
-    chain: typeof evolutionLine.chain === 'string' ? JSON.parse(evolutionLine.chain) : evolutionLine.chain,
-  }
+  return evolutionLine
 })

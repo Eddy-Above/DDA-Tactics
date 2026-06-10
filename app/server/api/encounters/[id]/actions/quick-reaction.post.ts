@@ -26,18 +26,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let pendingRequests = parseJsonField(encounter.pendingRequests)
-  let battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  let pendingRequests = encounter.pendingRequests
+  let battleLog = encounter.battleLog
 
   // Find the intercede-offer request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -103,8 +94,8 @@ export default defineEventHandler(async (event) => {
   }
 
   // Verify Quick Reaction is unlocked
-  const tamerAttrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
-  const tamerXp = typeof tamerRecord.xpBonuses === 'string' ? JSON.parse(tamerRecord.xpBonuses) : (tamerRecord.xpBonuses || {})
+  const tamerAttrs = tamerRecord.attributes || {}
+  const tamerXp = tamerRecord.xpBonuses || {}
 
   // Get campaign level
   let campaignLevel: string = 'standard'
@@ -120,8 +111,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Verify not already used today
-  const usedPerDayOrders: string[] = typeof tamerRecord.usedPerDayOrders === 'string'
-    ? JSON.parse(tamerRecord.usedPerDayOrders) : (tamerRecord.usedPerDayOrders || [])
+  const usedPerDayOrders: string[] = tamerRecord.usedPerDayOrders || []
   if (usedPerDayOrders.includes('Quick Reaction')) {
     throw createError({ statusCode: 409, message: 'Quick Reaction already used today' })
   }
@@ -298,7 +288,7 @@ export default defineEventHandler(async (event) => {
 
   // Persist Quick Reaction to tamer's usedPerDayOrders
   await db.update(tamers).set({
-    usedPerDayOrders: JSON.stringify([...usedPerDayOrders, 'Quick Reaction']),
+    usedPerDayOrders: [...usedPerDayOrders, 'Quick Reaction'],
   }).where(eq(tamers.id, tamerParticipant.entityId))
 
   // Add battle log entry
@@ -318,9 +308,9 @@ export default defineEventHandler(async (event) => {
   battleLog = [...battleLog, logEntry]
 
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    pendingRequests: JSON.stringify(pendingRequests),
-    battleLog: JSON.stringify(battleLog),
+    participants,
+    pendingRequests,
+    battleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
@@ -329,13 +319,5 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

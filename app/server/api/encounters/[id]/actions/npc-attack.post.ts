@@ -53,29 +53,13 @@ export default defineEventHandler(async (event) => {
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
-      const rulesSettings = typeof campaign.rulesSettings === 'string'
-        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
-      houseRules = rulesSettings.houseRules
+      houseRules = campaign.rulesSettings.houseRules
     }
   }
 
-  // Parse JSON fields
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  const participants = parseJsonField(encounter.participants) || []
-  const turnOrder = parseJsonField(encounter.turnOrder) || []
-  const battleLog = parseJsonField(encounter.battleLog) || []
+  const participants = encounter.participants || []
+  const turnOrder = encounter.turnOrder || []
+  const battleLog = encounter.battleLog || []
 
   // Validate attacker
   const actor = participants.find((p: any) => p.id === body.participantId)
@@ -169,22 +153,15 @@ export default defineEventHandler(async (event) => {
   let armorPiercing = 0
   let npcAttackDef: any = null
   if (attackerDigimon) {
-    // Parse baseStats and bonusStats if they're JSON strings
-    const baseStats = typeof attackerDigimon.baseStats === 'string'
-      ? JSON.parse(attackerDigimon.baseStats)
-      : attackerDigimon.baseStats
-    const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-      ? JSON.parse((attackerDigimon as any).bonusStats)
-      : (attackerDigimon as any).bonusStats
+    const baseStats = attackerDigimon.baseStats
+    const bonusStats = (attackerDigimon as any).bonusStats
 
     // Base damage comes from digimon stats
     attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
 
     // Parse attacks array to get tag bonuses
     if (attackerDigimon.attacks) {
-      const attacks = typeof attackerDigimon.attacks === 'string'
-        ? JSON.parse(attackerDigimon.attacks)
-        : attackerDigimon.attacks
+      const attacks = attackerDigimon.attacks
 
       const attackDef = attacks?.find((a: any) => a.id === body.attackId)
       npcAttackDef = attackDef
@@ -316,21 +293,13 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      participants: JSON.stringify(supportParticipants),
-      battleLog: JSON.stringify([...battleLog, supportAttackLog, supportDodgeLog]),
+      participants: supportParticipants,
+      battleLog: [...battleLog, supportAttackLog, supportDodgeLog],
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [supportUpdated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...supportUpdated,
-      participants: parseJsonField(supportUpdated.participants),
-      turnOrder: parseJsonField(supportUpdated.turnOrder),
-      battleLog: parseJsonField(supportUpdated.battleLog),
-      hazards: parseJsonField(supportUpdated.hazards),
-      pendingRequests: parseJsonField(supportUpdated.pendingRequests),
-      requestResponses: parseJsonField(supportUpdated.requestResponses),
-    }
+    return supportUpdated
   }
 
   // Combat Monster for attacker
@@ -338,17 +307,11 @@ export default defineEventHandler(async (event) => {
   let attackerHealthStat = 0
   let attackerCombatMonsterBonus = 0
   if (attackerDigimon) {
-    const baseStats = typeof attackerDigimon.baseStats === 'string'
-      ? JSON.parse(attackerDigimon.baseStats)
-      : attackerDigimon.baseStats
-    const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-      ? JSON.parse((attackerDigimon as any).bonusStats)
-      : (attackerDigimon as any).bonusStats
+    const baseStats = attackerDigimon.baseStats
+    const bonusStats = (attackerDigimon as any).bonusStats
     attackerHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
-    const attackerQualities = typeof attackerDigimon.qualities === 'string'
-      ? JSON.parse(attackerDigimon.qualities)
-      : attackerDigimon.qualities
+    const attackerQualities = attackerDigimon.qualities
     attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
     attackerCombatMonsterBonus = actor.combatMonsterBonus ?? 0
   }
@@ -360,20 +323,13 @@ export default defineEventHandler(async (event) => {
     const [tDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
     targetDigimon = tDigimon
     if (targetDigimon) {
-      // Parse baseStats and bonusStats if they're JSON strings
-      const targetBaseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats)
-        : targetDigimon.baseStats
-      const targetBonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimon as any).bonusStats)
-        : (targetDigimon as any).bonusStats
+      const targetBaseStats = targetDigimon.baseStats
+      const targetBonusStats = (targetDigimon as any).bonusStats
 
       targetArmor = (targetBaseStats?.armor ?? 0) + (targetBonusStats?.armor ?? 0)
 
       // Add Guardian data optimization bonus (+2 armor)
-      const targetQualities = typeof targetDigimon.qualities === 'string'
-        ? JSON.parse(targetDigimon.qualities)
-        : targetDigimon.qualities
+      const targetQualities = targetDigimon.qualities
       const targetDataOpt = targetQualities?.find((q: any) => q.id === 'data-optimization')
       if (targetDataOpt?.choiceId === 'guardian') {
         targetArmor += 2
@@ -387,8 +343,8 @@ export default defineEventHandler(async (event) => {
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
     if (targetTamer) {
-      const attrs = typeof targetTamer.attributes === 'string' ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-      const skills = typeof targetTamer.skills === 'string' ? JSON.parse(targetTamer.skills) : targetTamer.skills
+      const attrs = targetTamer.attributes
+      const skills = targetTamer.skills
       targetArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
     }
   }
@@ -482,8 +438,7 @@ export default defineEventHandler(async (event) => {
       const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
       const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
-      const devolvedQualities = typeof newDigimon?.qualities === 'string'
-        ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+      const devolvedQualities = newDigimon?.qualities || []
       const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
       damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
         ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
@@ -646,9 +601,9 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter
   const updateData: any = {
-    participants: JSON.stringify(finalParticipantsAfterDefeat),
-    battleLog: JSON.stringify(updatedBattleLog),
-    ...(npcDefeatedLog ? { turnOrder: JSON.stringify(updatedTurnOrder) } : {}),
+    participants: finalParticipantsAfterDefeat,
+    battleLog: updatedBattleLog,
+    ...(npcDefeatedLog ? { turnOrder: updatedTurnOrder } : {}),
     ...(npcDefeatNextTurnIndex !== undefined ? { currentTurnIndex: npcDefeatNextTurnIndex } : {}),
     ...(npcDefeatNextRound !== undefined ? { round: npcDefeatNextRound } : {}),
     updatedAt: new Date(),
@@ -659,13 +614,5 @@ export default defineEventHandler(async (event) => {
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

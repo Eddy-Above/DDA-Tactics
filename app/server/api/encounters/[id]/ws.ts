@@ -36,12 +36,11 @@ async function startReconciliation(encounterId: string) {
     try {
       const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
       if (!enc) return
-      const p = (v: any, fb: any) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? fb) } catch { return fb } }
       const msg: WebSocketMapMessage = {
         type: 'full-state',
         encounterId,
-        participantPositions: p((enc as any).participantPositions, {}),
-        destructibleStates: p((enc as any).destructibleStates, []),
+        participantPositions: enc.participantPositions ?? {},
+        destructibleStates: enc.destructibleStates ?? [],
       }
       broadcast(encounterId, msg)
     } catch { /* db error, skip */ }
@@ -65,12 +64,11 @@ export default defineWebSocketHandler({
     try {
       const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
       if (enc) {
-        const p = (v: any, fb: any) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? fb) } catch { return fb } }
         const msg: WebSocketMapMessage = {
           type: 'full-state',
           encounterId,
-          participantPositions: p((enc as any).participantPositions, {}),
-          destructibleStates: p((enc as any).destructibleStates, []),
+          participantPositions: enc.participantPositions ?? {},
+          destructibleStates: enc.destructibleStates ?? [],
         }
         peer.send(JSON.stringify(msg))
       }
@@ -93,11 +91,10 @@ export default defineWebSocketHandler({
       try {
         const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
         if (enc) {
-          const p = (v: any, fb: any) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? fb) } catch { return fb } }
-          const positions = p((enc as any).participantPositions, {})
+          const positions = enc.participantPositions ?? {}
           positions[msg.participantId] = msg.position
           await db.update(encounters).set({
-            participantPositions: JSON.stringify(positions) as any,
+            participantPositions: positions,
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
         }
@@ -112,13 +109,12 @@ export default defineWebSocketHandler({
       try {
         const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
         if (enc) {
-          const p = (v: any, fb: any) => { try { return typeof v === 'string' ? JSON.parse(v) : (v ?? fb) } catch { return fb } }
-          const states: Array<{ structureId: string; currentWounds: number }> = p((enc as any).destructibleStates, [])
+          const states: Array<{ structureId: string; currentWounds: number }> = enc.destructibleStates ?? []
           const idx = states.findIndex(s => s.structureId === msg.structureId)
           if (idx >= 0) states[idx].currentWounds = msg.woundsRemaining
           else states.push({ structureId: msg.structureId, currentWounds: msg.woundsRemaining })
           await db.update(encounters).set({
-            destructibleStates: JSON.stringify(states) as any,
+            destructibleStates: states,
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
         }

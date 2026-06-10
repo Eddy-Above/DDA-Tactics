@@ -36,20 +36,6 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse existing requests
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
   // Create new request
   const newRequest = {
     id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -60,27 +46,16 @@ export default defineEventHandler(async (event) => {
     data: body.data,
   }
 
-  const currentRequests = parseJsonField(encounter.pendingRequests)
-  currentRequests.push(newRequest)
+  const currentRequests = [...encounter.pendingRequests, newRequest]
 
   // Update encounter
-  const updateData: any = {
-    pendingRequests: JSON.stringify(currentRequests),
+  await db.update(encounters).set({
+    pendingRequests: currentRequests,
     updatedAt: new Date(),
-  }
-
-  await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
+  }).where(eq(encounters.id, encounterId))
 
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

@@ -57,24 +57,10 @@ export default defineEventHandler(async (event) => {
   // Fetch campaign to read EddySoul rules
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId!))
 
-  // Parse JSON fields
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  const participants = parseJsonField(encounter.participants) || []
-  const turnOrder = parseJsonField(encounter.turnOrder) || []
-  const battleLog = parseJsonField(encounter.battleLog) || []
-  const pendingRequests = parseJsonField(encounter.pendingRequests) || []
+  const participants = encounter.participants || []
+  const turnOrder = encounter.turnOrder || []
+  const battleLog = encounter.battleLog || []
+  const pendingRequests = encounter.pendingRequests || []
 
   // Validate participant exists and is active
   const actor = participants.find((p: any) => p.id === body.participantId)
@@ -130,23 +116,20 @@ export default defineEventHandler(async (event) => {
 
   // === Spatial range validation (skipped if no map attached) ===
   if ((encounter as any).mapId && body.targetId && target && actor.type === 'digimon') {
-    const positions: Record<string, { x: number; y: number; z: number }> = (() => {
-      const raw = (encounter as any).participantPositions
-      try { return typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {}) } catch { return {} }
-    })()
+    const positions: Record<string, { x: number; y: number; z: number }> = (encounter as any).participantPositions ?? {}
     const attackerPos = positions[actor.id]
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {
       const [attackerDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
       if (attackerDig) {
-        const baseStats = typeof attackerDig.baseStats === 'string' ? JSON.parse(attackerDig.baseStats) : attackerDig.baseStats
+        const baseStats = attackerDig.baseStats
         const derived = calculateDigimonDerivedStats(baseStats, attackerDig.stage as any, attackerDig.size as any)
-        const qualities = typeof attackerDig.qualities === 'string' ? JSON.parse(attackerDig.qualities) : (attackerDig.qualities ?? [])
+        const qualities = attackerDig.qualities ?? []
         const reachRanks = (qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
         const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
 
         // Fetch attack definition to get tags
-        const attacks = typeof attackerDig.attacks === 'string' ? JSON.parse(attackerDig.attacks) : (attackerDig.attacks ?? [])
+        const attacks = attackerDig.attacks ?? []
         const attackDef = (attacks as any[]).find((a: any) => a.id === body.attackId)
         const isMelee = attackDef?.range === 'melee'
         const isRanged = attackDef?.range === 'ranged'
@@ -199,8 +182,7 @@ export default defineEventHandler(async (event) => {
     if (actor.type === 'digimon') {
       const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
       if (actorDigimon?.attacks) {
-        const attacks = typeof actorDigimon.attacks === 'string'
-          ? JSON.parse(actorDigimon.attacks) : actorDigimon.attacks
+        const attacks = actorDigimon.attacks
         const attackDef = attacks?.find((a: any) => a.id === body.attackId)
         if (attackDef?.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
           throw createError({
@@ -225,8 +207,7 @@ export default defineEventHandler(async (event) => {
   if (actor.type === 'digimon') {
     const [actorDigimonForHaste] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
     if (actorDigimonForHaste?.attacks) {
-      const hasteAttacks = typeof actorDigimonForHaste.attacks === 'string'
-        ? JSON.parse(actorDigimonForHaste.attacks) : actorDigimonForHaste.attacks
+      const hasteAttacks = actorDigimonForHaste.attacks
       const hasteAttackDef = hasteAttacks?.find((a: any) => a.id === body.attackId)
       if (hasteAttackDef?.effect === 'Haste') {
         attackHasHaste = true
@@ -250,7 +231,7 @@ export default defineEventHandler(async (event) => {
   let actionCostSimple = (body.bolstered || body.lifestealed || attackHasHaste) ? 2 : 1
 
   // EddySoul: Combat Monster + Area Attack requires a Complex Action (unless no bonus)
-  const campaignRulesSettings = typeof campaign?.rulesSettings === 'string' ? JSON.parse(campaign.rulesSettings) : (campaign?.rulesSettings || {})
+  const campaignRulesSettings = campaign?.rulesSettings || {}
   const eddySoulRules = campaignRulesSettings?.eddySoulRules
   const houseRules = campaignRulesSettings?.houseRules
   if (eddySoulRules?.combatMonsterAreaAttackRequiresComplex) {
@@ -258,8 +239,7 @@ export default defineEventHandler(async (event) => {
     if (combatMonsterBonus > 0 && actor.type === 'digimon') {
       const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
       if (actorDigimon?.attacks) {
-        const attacks = typeof actorDigimon.attacks === 'string'
-          ? JSON.parse(actorDigimon.attacks) : actorDigimon.attacks
+        const attacks = actorDigimon.attacks
         const attackDef = attacks?.find((a: any) => a.id === body.attackId)
         if (attackDef?.tags?.some((t: string) => t.startsWith('Area Attack'))) {
           if (body.bolstered) {
@@ -288,8 +268,7 @@ export default defineEventHandler(async (event) => {
   if (houseRules?.signatureMoveBattery && actor.type === 'digimon') {
     const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
     if (actorDigimon?.attacks) {
-      const attacks = typeof actorDigimon.attacks === 'string'
-        ? JSON.parse(actorDigimon.attacks) : actorDigimon.attacks
+      const attacks = actorDigimon.attacks
       const attackDef = attacks?.find((a: any) => a.id === body.attackId)
       if (attackDef?.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
         isSignatureMove = true
@@ -401,26 +380,18 @@ export default defineEventHandler(async (event) => {
       }
       updatedBattleLog.push(missLogEntry)
       await db.update(encounters).set({
-        participants: JSON.stringify(updatedParticipants),
-        battleLog: JSON.stringify(updatedBattleLog),
+        participants: updatedParticipants,
+        battleLog: updatedBattleLog,
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-      return {
-        ...updated,
-        participants: parseJsonField(updated.participants),
-        turnOrder: parseJsonField(updated.turnOrder),
-        battleLog: parseJsonField(updated.battleLog),
-        hazards: parseJsonField(updated.hazards),
-        pendingRequests: parseJsonField(updated.pendingRequests),
-        requestResponses: parseJsonField(updated.requestResponses),
-      }
+      return updated
     }
 
     // Save action deduction and attack log, then delegate to intercede-offer with all targetIds
     await db.update(encounters).set({
-      participants: JSON.stringify(updatedParticipants),
-      battleLog: JSON.stringify(updatedBattleLog),
+      participants: updatedParticipants,
+      battleLog: updatedBattleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -467,8 +438,8 @@ export default defineEventHandler(async (event) => {
     updatedBattleLog.push(missLogEntry)
 
     const updateData: any = {
-      participants: JSON.stringify(updatedParticipants),
-      battleLog: JSON.stringify(updatedBattleLog),
+      participants: updatedParticipants,
+      battleLog: updatedBattleLog,
       updatedAt: new Date(),
     }
 
@@ -477,24 +448,24 @@ export default defineEventHandler(async (event) => {
     // Check for Counterattack quality on the target (the one who was missed)
     if (target && target.type === 'digimon' && !target.usedCounterattackThisCombat) {
       const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-      const tgtQualities = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+      const tgtQualities = tgtDig?.qualities || []
       if ((tgtQualities as any[]).some((q: any) => q.id === 'counterattack')) {
         const freshEnc = await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0])
         const caResult = await triggerCounterattack({
-          participants: parseJsonField(freshEnc.participants),
-          battleLog: parseJsonField(freshEnc.battleLog),
-          pendingRequests: parseJsonField(freshEnc.pendingRequests),
+          participants: freshEnc.participants,
+          battleLog: freshEnc.battleLog,
+          pendingRequests: freshEnc.pendingRequests,
           round: encounter.round || 0,
           counterattackerParticipantId: target.id,
           originalAttackerParticipantId: actor.id,
           houseRules,
-          turnOrder: parseJsonField(freshEnc.turnOrder),
+          turnOrder: freshEnc.turnOrder,
           currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
         })
         await db.update(encounters).set({
-          participants: JSON.stringify(caResult.participants),
-          battleLog: JSON.stringify(caResult.battleLog),
-          pendingRequests: JSON.stringify(caResult.pendingRequests),
+          participants: caResult.participants,
+          battleLog: caResult.battleLog,
+          pendingRequests: caResult.pendingRequests,
           ...(caResult.nextTurnIndex !== undefined ? { currentTurnIndex: caResult.nextTurnIndex } : {}),
           ...(caResult.nextRound !== undefined ? { round: caResult.nextRound } : {}),
           updatedAt: new Date(),
@@ -504,27 +475,19 @@ export default defineEventHandler(async (event) => {
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // Save validated participants (action deducted) and battle log to DB first
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants),
-    battleLog: JSON.stringify(updatedBattleLog),
+    participants: updatedParticipants,
+    battleLog: updatedBattleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   // Detect outside-clash attack: target is in a clash, attacker is not part of it
   let outsideClashCpuPenalty = 0
-  const freshParticipants = parseJsonField((await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0]))?.participants)
+  const freshParticipants = (await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0]))?.participants ?? []
   const freshTarget = freshParticipants.find((p: any) => p.id === body.targetId)
   const freshActor = freshParticipants.find((p: any) => p.id === body.participantId)
 
@@ -536,13 +499,13 @@ export default defineEventHandler(async (event) => {
     if (freshTarget.type === 'digimon') {
       const [tgtDigimon] = await db.select().from(digimon).where(eq(digimon.id, freshTarget.entityId))
       if (tgtDigimon) {
-        const ds = typeof tgtDigimon.derivedStats === 'string' ? JSON.parse(tgtDigimon.derivedStats) : (tgtDigimon.derivedStats || {})
+        const ds = tgtDigimon.derivedStats || {}
         targetCpu = ds.cpu ?? 0
       }
     } else if (freshTarget.type === 'tamer') {
       const [tgtTamer] = await db.select().from(tamers).where(eq(tamers.id, freshTarget.entityId))
       if (tgtTamer) {
-        const attrs = typeof tgtTamer.attributes === 'string' ? JSON.parse(tgtTamer.attributes) : (tgtTamer.attributes || {})
+        const attrs = tgtTamer.attributes || {}
         targetCpu = attrs.body ?? 0
       }
     }
@@ -552,13 +515,13 @@ export default defineEventHandler(async (event) => {
       if (clashOpponent.type === 'digimon') {
         const [oppDigimon] = await db.select().from(digimon).where(eq(digimon.id, clashOpponent.entityId))
         if (oppDigimon) {
-          const ds = typeof oppDigimon.derivedStats === 'string' ? JSON.parse(oppDigimon.derivedStats) : (oppDigimon.derivedStats || {})
+          const ds = oppDigimon.derivedStats || {}
           opponentCpu = ds.cpu ?? 0
         }
       } else if (clashOpponent.type === 'tamer') {
         const [oppTamer] = await db.select().from(tamers).where(eq(tamers.id, clashOpponent.entityId))
         if (oppTamer) {
-          const attrs = typeof oppTamer.attributes === 'string' ? JSON.parse(oppTamer.attributes) : (oppTamer.attributes || {})
+          const attrs = oppTamer.attributes || {}
           opponentCpu = attrs.body ?? 0
         }
       }
@@ -569,7 +532,7 @@ export default defineEventHandler(async (event) => {
     if (freshActor?.type === 'digimon') {
       const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, freshActor.entityId))
       if (actorDigimon) {
-        const qualities = typeof actorDigimon.qualities === 'string' ? JSON.parse(actorDigimon.qualities) : (actorDigimon.qualities || [])
+        const qualities = actorDigimon.qualities || []
         attackerHasSelectiveTargeting = qualities.some((q: any) => q.id === 'selective-targeting')
       }
     }

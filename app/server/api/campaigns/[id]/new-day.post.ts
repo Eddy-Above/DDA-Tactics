@@ -1,6 +1,5 @@
 import { eq } from 'drizzle-orm'
 import { db, campaigns, tamers, digimon } from '../../../db'
-import type { CampaignRulesSettings } from '../../../../types'
 
 export default defineEventHandler(async (event) => {
   const campaignId = getRouterParam(event, 'id')
@@ -14,13 +13,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Campaign not found' })
   }
 
-  const rulesSettings: CampaignRulesSettings = (() => {
-    try {
-      return typeof campaign.rulesSettings === 'string'
-        ? JSON.parse(campaign.rulesSettings)
-        : (campaign.rulesSettings || {})
-    } catch { return {} }
-  })()
+  const rulesSettings = campaign.rulesSettings || {}
 
   const healAllWounds = rulesSettings.houseRules?.newDayHealsAllWounds ?? false
 
@@ -30,8 +23,8 @@ export default defineEventHandler(async (event) => {
   for (const tamer of campaignTamers) {
     await db.update(tamers)
       .set({
-        usedPerDayOrders: JSON.stringify([]),
-        usedPerDaySkillOrders: JSON.stringify([]),
+        usedPerDayOrders: [],
+        usedPerDaySkillOrders: [],
         digivolutionsUsedToday: 0,
         ...(healAllWounds ? { currentWounds: 0 } : {}),
         updatedAt: new Date(),

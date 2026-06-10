@@ -28,15 +28,8 @@ export default defineEventHandler(async (event) => {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  let battleLog = encounter.battleLog
 
   const actor = participants.find((p: any) => p.id === body.participantId)
   if (!actor) throw createError({ statusCode: 404, message: 'Participant not found' })
@@ -52,7 +45,7 @@ export default defineEventHandler(async (event) => {
 
   // Check it's actor's turn (or partner tamer's turn)
   const currentIndex = encounter.currentTurnIndex || 0
-  const turnOrder = parseJsonField(encounter.turnOrder)
+  const turnOrder = encounter.turnOrder
   const currentTurnParticipantId = turnOrder[currentIndex]
   let canAct = actor.id === currentTurnParticipantId
   if (!canAct && actor.type === 'digimon') {
@@ -117,8 +110,8 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
+      participants,
+      battleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -136,7 +129,7 @@ export default defineEventHandler(async (event) => {
       actorCpu = ds?.cpu ?? 0
     } else if (actor.type === 'tamer') {
       const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-      const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+      const attrs = t?.attributes || {}
       actorCpu = attrs.body ?? 0
     }
     if (targetDigimonEntity) {
@@ -144,7 +137,7 @@ export default defineEventHandler(async (event) => {
       targetCpu = ds?.cpu ?? 0
     } else if (target.type === 'tamer') {
       const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-      const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+      const attrs = t?.attributes || {}
       targetCpu = attrs.body ?? 0
     }
 
@@ -186,8 +179,8 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
+      participants,
+      battleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -202,42 +195,35 @@ export default defineEventHandler(async (event) => {
     let targetArmor = 0
 
     if (actorDigimonEntity) {
-      const bs = typeof actorDigimonEntity.baseStats === 'string'
-        ? JSON.parse(actorDigimonEntity.baseStats) : (actorDigimonEntity.baseStats || {})
-      const bonusStats = typeof (actorDigimonEntity as any).bonusStats === 'string'
-        ? JSON.parse((actorDigimonEntity as any).bonusStats) : ((actorDigimonEntity as any).bonusStats || {})
+      const bs = actorDigimonEntity.baseStats || {}
+      const bonusStats = (actorDigimonEntity as any).bonusStats || {}
       actorDamage = (bs.damage ?? 0) + (bonusStats.damage ?? 0)
 
       // Check Wrestlemania: -1 to Damage
-      const actorQualities = typeof actorDigimonEntity.qualities === 'string'
-        ? JSON.parse(actorDigimonEntity.qualities) : (actorDigimonEntity.qualities || [])
+      const actorQualities = actorDigimonEntity.qualities || []
       if (actorQualities.some((q: any) => q.choiceId === 'wrestlemania')) {
         actorDamage = Math.max(0, actorDamage - 1)
       }
     } else if (actor.type === 'tamer') {
       const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-      const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
-      const skills = typeof t?.skills === 'string' ? JSON.parse(t.skills) : (t?.skills || {})
+      const attrs = t?.attributes || {}
+      const skills = t?.skills || {}
       actorDamage = (attrs.body ?? 0) + (skills.fight ?? 0)
     }
 
     if (targetDigimonEntity) {
-      const bs = typeof targetDigimonEntity.baseStats === 'string'
-        ? JSON.parse(targetDigimonEntity.baseStats) : (targetDigimonEntity.baseStats || {})
-      const bonusStats = typeof (targetDigimonEntity as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimonEntity as any).bonusStats) : ((targetDigimonEntity as any).bonusStats || {})
+      const bs = targetDigimonEntity.baseStats || {}
+      const bonusStats = (targetDigimonEntity as any).bonusStats || {}
       targetArmor = (bs.armor ?? 0) + (bonusStats.armor ?? 0)
     } else if (target.type === 'tamer') {
       const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-      const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
-      const skills = typeof t?.skills === 'string' ? JSON.parse(t.skills) : (t?.skills || {})
+      const attrs = t?.attributes || {}
+      const skills = t?.skills || {}
       targetArmor = (attrs.body ?? 0) + (skills.endurance ?? 0)
     }
 
     // Reach-initiated clash: non-Reach controller deals half damage
-    const actorQualities = actorDigimonEntity
-      ? (typeof actorDigimonEntity.qualities === 'string' ? JSON.parse(actorDigimonEntity.qualities) : (actorDigimonEntity.qualities || []))
-      : []
+    const actorQualities = actorDigimonEntity ? (actorDigimonEntity.qualities || []) : []
     const actorHasReach = actorQualities.some((q: any) => q.id === 'reach')
     const reachInitiated = actor.clash?.reachInitiated || target.clash?.reachInitiated
     if (reachInitiated && !actorHasReach) {
@@ -280,8 +266,8 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
+      participants,
+      battleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -320,23 +306,15 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
+      participants,
+      battleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     // Auto-miss check
     if (body.accuracySuccesses === 0) {
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-      return {
-        ...updated,
-        participants: parseJsonField(updated.participants),
-        turnOrder: parseJsonField(updated.turnOrder),
-        battleLog: parseJsonField(updated.battleLog),
-        pendingRequests: parseJsonField(updated.pendingRequests),
-        requestResponses: parseJsonField(updated.requestResponses),
-        hazards: parseJsonField(updated.hazards),
-      }
+      return updated
     }
 
     // Delegate to intercede-offer with clashAttack: true
@@ -358,13 +336,5 @@ export default defineEventHandler(async (event) => {
   }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

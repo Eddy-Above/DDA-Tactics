@@ -23,16 +23,9 @@ export default defineEventHandler(async (event) => {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let battleLog = parseJsonField(encounter.battleLog)
-  const pendingRequests = parseJsonField(encounter.pendingRequests)
+  let participants = encounter.participants
+  let battleLog = encounter.battleLog
+  const pendingRequests = encounter.pendingRequests
 
   // Find both participants in this clash
   const clashParticipants = participants.filter((p: any) => p.clash?.clashId === body.clashId)
@@ -55,7 +48,7 @@ export default defineEventHandler(async (event) => {
   if (submitter.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, submitter.entityId))
     submitterDigimonEntity = d
-    submitterQualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    submitterQualities = d?.qualities || []
     const ds = await getDigimonDerivedStats(submitter.entityId)
     submitterBody = ds?.body ?? 0
     submitterAgility = ds?.agility ?? 0
@@ -63,7 +56,7 @@ export default defineEventHandler(async (event) => {
     submitterIsPlayer = !!d?.partnerId
   } else if (submitter.type === 'tamer') {
     const [t] = await db.select().from(tamers).where(eq(tamers.id, submitter.entityId))
-    const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+    const attrs = t?.attributes || {}
     submitterBody = attrs.body ?? 0
     submitterAgility = attrs.agility ?? 0
     submitterIsPlayer = true
@@ -80,7 +73,7 @@ export default defineEventHandler(async (event) => {
   if (opponent.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, opponent.entityId))
     opponentDigimonEntity = d
-    opponentQualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    opponentQualities = d?.qualities || []
     const ds = await getDigimonDerivedStats(opponent.entityId)
     opponentBody = ds?.body ?? 0
     opponentAgility = ds?.agility ?? 0
@@ -88,7 +81,7 @@ export default defineEventHandler(async (event) => {
     opponentIsPlayer = !!d?.partnerId
   } else if (opponent.type === 'tamer') {
     const [t] = await db.select().from(tamers).where(eq(tamers.id, opponent.entityId))
-    const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+    const attrs = t?.attributes || {}
     opponentBody = attrs.body ?? 0
     opponentAgility = attrs.agility ?? 0
     opponentIsPlayer = true
@@ -168,21 +161,13 @@ export default defineEventHandler(async (event) => {
     )
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      pendingRequests: JSON.stringify(updatedRequests),
+      participants,
+      pendingRequests: updatedRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-      hazards: parseJsonField(updated.hazards),
-    }
+    return updated
   }
 
   const opponentTN = submitterAgility
@@ -247,21 +232,15 @@ export default defineEventHandler(async (event) => {
   }]
 
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify(battleLog),
-    pendingRequests: JSON.stringify(updatedRequests),
+    participants,
+    battleLog,
+    pendingRequests: updatedRequests,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   return {
     ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
     opponentRollTotal: opponentRoll,
   }
 })

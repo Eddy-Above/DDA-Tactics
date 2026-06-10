@@ -7,13 +7,6 @@ interface DataAbsorbBody {
   extraActions?: number  // 0 = BIT×2, 1 = BIT×4, 2 = BIT×6
 }
 
-const parseJsonField = (field: any): any[] => {
-  if (!field) return []
-  if (Array.isArray(field)) return field
-  if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-  return []
-}
-
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<DataAbsorbBody>(event)
@@ -30,8 +23,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  let participants = parseJsonField(encounter.participants)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  const battleLog = encounter.battleLog
 
   const participant = participants.find((p: any) => p.id === body.participantId)
   if (!participant) {
@@ -46,7 +39,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Digimon not found' })
   }
 
-  const quals = typeof digi.qualities === 'string' ? JSON.parse(digi.qualities) : (digi.qualities || [])
+  const quals = digi.qualities || []
   if (!(quals as any[]).some((q: any) => q.id === 'data-absorb')) {
     throw createError({ statusCode: 400, message: 'Digimon does not have Data Absorb' })
   }
@@ -94,15 +87,11 @@ export default defineEventHandler(async (event) => {
   battleLog.push(logEntry)
 
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify(battleLog),
+    participants: participants,
+    battleLog: battleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    battleLog: parseJsonField(updated.battleLog),
-  }
+  return updated
 })

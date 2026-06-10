@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-06-10 | Data Models, Dependency Graph | **JSONB migration.** All 34 `text({mode:'json'})` columns across `tamers`, `digimon`, `encounters`, `campaigns`, `evolutionLines`, `maps` converted to native Postgres `jsonb` (migration `0013_jsonb_columns.sql`); removed ~478 now-redundant manual `JSON.parse`/`JSON.stringify` calls across ~55 server route/util files, and deleted `server/utils/parsers.ts` (`parseTamerData`/`parseDigimonData`/`safeJSONParse`/`ensureArray`) entirely. Drizzle now returns/accepts parsed objects/arrays directly for these columns. |
 | 2026-06-10 | Pages & Components | **Map view: tamer + partner digimon highlighted together on the active player's turn.** `digimonMapForMap` (both `encounters/[id].vue` and `player/[tamerId].vue`) now includes `partnerId: (d as any).partnerId ?? null`; `EncounterMap.vue`'s `digimonMap` prop type gains `partnerId?: string | null`, and a new `secondaryActiveParticipantId` computed finds the active participant's tamer/partner-digimon counterpart (via `partnerId` matching, in either direction) and passes it to `MapCanvas` as a new `secondaryActiveParticipantId: string | null` prop. `MapCanvas.vue`'s orange active-turn highlight (`buildSprites()`) now applies when `p.id === activeParticipantId \|\| p.id === secondaryActiveParticipantId`; new watcher on `[activeParticipantId, secondaryActiveParticipantId]` triggers `buildSprites()` on turn change. |
 | 2026-06-10 | Pages & Components, Dependency Graph | **Charge Attack now functional in map view.** Selecting an attack tagged `'Charge Attack'` shows a new floating picker ("Move Before Attack" / "Move After Attack" / Cancel) in `EncounterMap.vue`, gated by new `isChargeAttack`/`chargeMode`/`mapSelectedAttack` state — `mapSelectedAttack` withholds `selectedAttack` from `MapCanvas` until a mode is chosen. **Move Before**: `startChargeBefore()` calls `movement.computeReachable(...)` (via `npcMoveCaps`) to populate `reachableCells`; `MapCanvas.vue` reticules (melee branch) and click-targeting now also test footprint-in-range from every `reachableCells` anchor (new `meleeInRange` helper, generalizes the prior single-anchor Chebyshev loop), and clicking a valid target emits new `charge-target-selected(attackerId, destination, targetId)` with the closest valid anchor (`tryChargeMove`) instead of `target-selected`. **Move After**: targeting proceeds normally; `onTargetSelected`/`onAreaAttackConfirmed` capture `chargeAfterAttackerId` when `chargeMode === 'after'`, and a `selectedAttack` watcher (fires once the page nulls `selectedAttack` after the attack resolves) computes reachable cells and sets `chargeMoveParticipantId`, reusing the existing NPC-move UI via a new watcher in `MapCanvas.vue` mirroring `npcMoveParticipantId`. Charge+area-attack (`attacks.ts:733`): in `chargeMode === 'before'` with an area shape, clicking a `reachableCells` cell emits `charge-target-selected(attackerId, cell, null)`; `onChargeTargetSelected` moves the attacker (persisted via new `useEncounters().updateEncounter(id, { participantPositions })` call, then `chargeMode = null` lets normal AOE aiming resume from the new position. All charge movement is position-only (no `/api/encounters/[id]/actions/move` call), so the combined move+attack consumes only the attack's normal 1 simple action. Works identically for player and GM/NPC flows via the shared `EncounterMap.vue`/`MapCanvas.vue` pipeline. |
 | 2026-06-10 | API Schema, Pages & Components | **Fix: intercede dialog offered interceptors who couldn't reach the intercede position.** The 2026-06-09 per-character spatial check fix computed `tamerSpatiallyEligible`/`digimonSpatiallyEligible` per household but never sent them to the client — `intercedeOptions` in `player/[tamerId].vue` only checked action economy (`canIntercede()`), so both "Intercede with [Tamer]" and "Intercede with [Digimon]" buttons were shown even when only one of the two could actually reach (e.g. partner digimon in range, tamer's Agility+Survival movement insufficient). Fixed by adding `tamerCanReach`/`digimonCanReach` booleans to the `intercede-offer` request `data` payload (single-target path: new `tamerReachability` map populated in the eligible-tamers loop, looked up when building each request; area-attack path: added directly from the already-computed `tamerSpatiallyEligible`/`digimonSpatiallyEligible`). `intercedeOptions` now additionally requires `data?.tamerCanReach !== false` / `data?.digimonCanReach !== false` (the `!== false` check preserves backward compatibility with non-map encounters where the fields are absent). |
@@ -214,7 +215,9 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 
 **Sources:** `server/db/schema.ts`, `server/db/index.ts`, `drizzle.config.ts`
 
-**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/` (0000–0009; note: 0002 is missing — sequence gap, appears intentional). No caching layer (no Redis). No message queue.
+**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/` (0000–0013; note: 0002 is missing — sequence gap, appears intentional). No caching layer (no Redis). No message queue.
+
+All 34 `jsonb` columns listed below are native Postgres `jsonb` (migration 0013 converted them from `text`); server routes pass/receive parsed objects/arrays directly with no manual `JSON.parse`/`JSON.stringify`. `server/utils/parsers.ts` (formerly `parseTamerData`/`parseDigimonData`/`safeJSONParse`/`ensureArray`) was removed as part of this conversion.
 
 ### Table: `tamers`
 
@@ -334,6 +337,7 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 | `dimensions` | jsonb | `{width, depth, height}` |
 | `groundTiles` | jsonb | `MapGroundTile[]` — `{x,y,z,element,terrain}` |
 | `spaceTiles` | jsonb | `MapSpaceTile[]` — `{x,y,z,spaceType}` |
+| `voxels` | jsonb | `MapVoxel[]` — `{x,y,z,materialId,element?,color?,blocksMovement?,blocksSight?,opacity?,feature?,isSpawnPoint?,tags?}` |
 | `walls` | jsonb | `MapWall[]` — `{id,x,y,z,face,woundBoxes?}` |
 | `windows` | jsonb | `MapWindow[]` — `{id,wallId,woundBoxes?}` |
 | `doors` | jsonb | `MapDoor[]` — `{id,wallId,isOpen}` |
@@ -523,7 +527,7 @@ flowchart TD
     Constants["constants/tamer-skills.ts"]
     Middleware["middleware/\ncampaign-access, dm-access"]
     ServerAPI["server/api/**\n(40+ endpoints)"]
-    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, parsers, id, password, participantName, mapMovement, gridDistance, areaShapes"]
+    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, id, password, participantName, mapMovement, gridDistance, areaShapes"]
     DB["server/db/\nindex.ts + schema.ts"]
     Postgres[("PostgreSQL")]
 

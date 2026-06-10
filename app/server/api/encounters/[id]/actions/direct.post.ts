@@ -35,23 +35,9 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse JSON fields
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  const participants = parseJsonField(encounter.participants) || []
-  const turnOrder = parseJsonField(encounter.turnOrder) || []
-  const battleLog = parseJsonField(encounter.battleLog) || []
+  const participants = encounter.participants || []
+  const turnOrder = encounter.turnOrder || []
+  const battleLog = encounter.battleLog || []
 
   // Find tamer participant
   const actor = participants.find((p: any) => p.id === body.participantId)
@@ -115,9 +101,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const tamerAttrs = typeof tamerEntity.attributes === 'string'
-    ? JSON.parse(tamerEntity.attributes)
-    : tamerEntity.attributes
+  const tamerAttrs = tamerEntity.attributes
   const charisma = tamerAttrs?.charisma ?? 0
 
   // Determine partner status
@@ -184,21 +168,13 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants),
-    battleLog: JSON.stringify(updatedBattleLog),
+    participants: updatedParticipants,
+    battleLog: updatedBattleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

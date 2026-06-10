@@ -36,17 +36,8 @@ export default defineEventHandler(async (event) => {
     if (campaign?.level) campaignLevel = campaign.level as typeof campaignLevel
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  const participants: any[] = parseJsonField(encounter.participants)
-  const battleLog: any[] = parseJsonField(encounter.battleLog)
+  const participants: any[] = encounter.participants || []
+  const battleLog: any[] = encounter.battleLog || []
 
   const participant = participants.find((p: any) => p.id === body.participantId)
   if (!participant) {
@@ -96,8 +87,7 @@ export default defineEventHandler(async (event) => {
   // Sync deduction to tamer DB record (inspiration → grantedInspiration → xpBonuses.inspiration)
   const [tamer] = await db.select().from(tamers).where(eq(tamers.id, participant.entityId))
   if (tamer) {
-    const xpBonuses = typeof tamer.xpBonuses === 'string'
-      ? JSON.parse(tamer.xpBonuses) : (tamer.xpBonuses || { attributes: {}, skills: {}, inspiration: 0 })
+    const xpBonuses = tamer.xpBonuses || { attributes: {}, skills: {}, inspiration: 0 }
 
     let toDeduct = body.amount
     let newInspiration = tamer.inspiration ?? 1
@@ -122,7 +112,7 @@ export default defineEventHandler(async (event) => {
     await db.update(tamers).set({
       inspiration: newInspiration,
       grantedInspiration: newGranted,
-      xpBonuses: JSON.stringify({ ...xpBonuses, inspiration: newXpInspiration }) as any,
+      xpBonuses: { ...xpBonuses, inspiration: newXpInspiration },
       updatedAt: new Date(),
     }).where(eq(tamers.id, tamer.id))
   }
@@ -149,19 +139,11 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants) as any,
-    battleLog: JSON.stringify([...battleLog, newLog]) as any,
+    participants: updatedParticipants,
+    battleLog: [...battleLog, newLog],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

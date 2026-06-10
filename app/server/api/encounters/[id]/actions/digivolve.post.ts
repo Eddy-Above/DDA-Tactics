@@ -30,18 +30,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  const turnOrder = parseJsonField(encounter.turnOrder)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  const turnOrder = encounter.turnOrder
+  const battleLog = encounter.battleLog
 
   // Find participant
   const participant = participants.find((p: any) => p.id === body.participantId)
@@ -95,13 +86,7 @@ export default defineEventHandler(async (event) => {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       campaignLevel = campaign.level || 'standard'
-      const rs: CampaignRulesSettings = (() => {
-        try {
-          return typeof campaign.rulesSettings === 'string'
-            ? JSON.parse(campaign.rulesSettings)
-            : (campaign.rulesSettings || {})
-        } catch { return {} }
-      })()
+      const rs: CampaignRulesSettings = campaign.rulesSettings || {}
       eddySoulRules = rs.eddySoulRules || {}
     }
   }
@@ -112,7 +97,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Evolution line not found' })
   }
 
-  const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
+  const chain = evoLine.chain
   const currentStageIndex = (isNpc && (participant as any).npcStageIndex !== undefined)
     ? (participant as any).npcStageIndex
     : evoLine.currentStageIndex
@@ -206,15 +191,14 @@ export default defineEventHandler(async (event) => {
   }
 
   // Calculate new max wounds
-  const baseStats = typeof newDigimon.baseStats === 'string' ? JSON.parse(newDigimon.baseStats) : newDigimon.baseStats
-  const bonusStats = typeof newDigimon.bonusStats === 'string' ? JSON.parse(newDigimon.bonusStats) : newDigimon.bonusStats
+  const baseStats = newDigimon.baseStats
+  const bonusStats = newDigimon.bonusStats
   const newStage = (newDigimon.stage || targetEntry.stage) as DigimonStage
   const stageConfig = STAGE_CONFIG[newStage]
   const newMaxWounds = (baseStats?.health || 0) + (bonusStats?.health || 0) + (stageConfig?.woundBonus || 0)
   const newTotalHealth = (baseStats?.health || 0) + (bonusStats?.health || 0)
 
-  const newQualities = typeof newDigimon.qualities === 'string'
-    ? JSON.parse(newDigimon.qualities) : (newDigimon.qualities || [])
+  const newQualities = newDigimon.qualities || []
   const newHasCombatMonster = (newQualities as any[]).some((q: any) => q.id === 'combat-monster')
 
   // Update participant
@@ -315,8 +299,8 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify([...battleLog, logEntry]),
+    participants,
+    battleLog: [...battleLog, logEntry],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
@@ -326,13 +310,5 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

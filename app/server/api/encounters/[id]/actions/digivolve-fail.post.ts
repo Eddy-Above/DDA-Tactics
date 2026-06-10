@@ -26,17 +26,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  const battleLog = encounter.battleLog
 
   // Find participant
   const participant = participants.find((p: any) => p.id === body.participantId)
@@ -62,7 +53,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Validate it's the tamer's turn
-  const turnOrder = parseJsonField(encounter.turnOrder)
+  const turnOrder = encounter.turnOrder
   const currentIndex = encounter.currentTurnIndex || 0
   const currentTurnParticipantId = turnOrder[currentIndex]
   const canAct = tamerParticipant.id === currentTurnParticipantId || participant.id === currentTurnParticipantId
@@ -109,8 +100,8 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify([...battleLog, logEntry]),
+    participants,
+    battleLog: [...battleLog, logEntry],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
@@ -120,13 +111,5 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

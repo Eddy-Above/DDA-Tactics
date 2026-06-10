@@ -30,17 +30,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  const turnOrder = parseJsonField(encounter.turnOrder)
-  let battleLog = parseJsonField(encounter.battleLog)
-  const pendingRequests = parseJsonField(encounter.pendingRequests)
+  let participants = encounter.participants
+  const turnOrder = encounter.turnOrder
+  let battleLog = encounter.battleLog
+  const pendingRequests = encounter.pendingRequests
 
   const actor = participants.find((p: any) => p.id === body.participantId)
   if (!actor) throw createError({ statusCode: 404, message: 'Participant not found' })
@@ -63,15 +56,12 @@ export default defineEventHandler(async (event) => {
 
   // Spatial range check for clash initiation
   if ((encounter as any).mapId && actor.type === 'digimon') {
-    const positions: Record<string, any> = (() => {
-      const raw = (encounter as any).participantPositions
-      try { return typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {}) } catch { return {} }
-    })()
+    const positions: Record<string, any> = (encounter as any).participantPositions ?? {}
     const attackerPos = positions[actor.id]
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {
       const [actDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-      const qs = typeof actDig?.qualities === 'string' ? JSON.parse(actDig?.qualities ?? '[]') : (actDig?.qualities ?? [])
+      const qs = actDig?.qualities ?? []
       const reachRanks = (qs as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
       const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
       const dist = chebyshev(attackerPos, targetPos)
@@ -99,7 +89,7 @@ export default defineEventHandler(async (event) => {
   if (actor.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
     actorDigimonEntity = d
-    actorQualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    actorQualities = d?.qualities || []
   }
 
   const hasWrestlemania = actorQualities.some((q: any) => q.choiceId === 'wrestlemania')
@@ -125,7 +115,7 @@ export default defineEventHandler(async (event) => {
     actorIsGigantic = actorSize === 'gigantic'
   } else if (actor.type === 'tamer') {
     const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-    const attrs = typeof tamerEntity?.attributes === 'string' ? JSON.parse(tamerEntity.attributes) : (tamerEntity?.attributes || {})
+    const attrs = tamerEntity?.attributes || {}
     actorBody = attrs.body ?? 0
     actorSize = 'medium'
   }
@@ -142,7 +132,7 @@ export default defineEventHandler(async (event) => {
   if (target.type === 'digimon') {
     const [d] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
     targetDigimonEntity = d
-    targetQualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    targetQualities = d?.qualities || []
     targetDs = await getDigimonDerivedStats(target.entityId)
     targetBody = targetDs?.body ?? 0
     targetAgility = targetDs?.agility ?? 0
@@ -150,7 +140,7 @@ export default defineEventHandler(async (event) => {
     targetIsPlayer = !!d?.partnerId
   } else if (target.type === 'tamer') {
     const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-    const attrs = typeof tamerEntity?.attributes === 'string' ? JSON.parse(tamerEntity.attributes) : (tamerEntity?.attributes || {})
+    const attrs = tamerEntity?.attributes || {}
     targetBody = attrs.body ?? 0
     targetAgility = attrs.agility ?? 0
     targetSize = 'medium'
@@ -222,7 +212,7 @@ export default defineEventHandler(async (event) => {
       actorAgility = actorDs?.agility ?? 0
     } else if (actor.type === 'tamer') {
       const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-      const attrs = typeof tamerEntity?.attributes === 'string' ? JSON.parse(tamerEntity.attributes) : (tamerEntity?.attributes || {})
+      const attrs = tamerEntity?.attributes || {}
       actorAgility = attrs.agility ?? 0
     }
 
@@ -281,8 +271,8 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
+      participants,
+      battleLog,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -294,7 +284,7 @@ export default defineEventHandler(async (event) => {
       actorAgility = actorDs?.agility ?? 0
     } else if (actor.type === 'tamer') {
       const [tamerEntity] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-      const attrs = typeof tamerEntity?.attributes === 'string' ? JSON.parse(tamerEntity.attributes) : (tamerEntity?.attributes || {})
+      const attrs = tamerEntity?.attributes || {}
       actorAgility = attrs.agility ?? 0
     }
     let opponentTamerId = 'GM'
@@ -374,9 +364,9 @@ export default defineEventHandler(async (event) => {
     }]
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
-      pendingRequests: JSON.stringify([...pendingRequests, clashRequest]),
+      participants,
+      battleLog,
+      pendingRequests: [...pendingRequests, clashRequest],
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
   }
@@ -384,12 +374,6 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   return {
     ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
     opponentRollTotal,
   }
 })

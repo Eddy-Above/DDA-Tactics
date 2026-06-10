@@ -27,17 +27,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  const participants: any[] = parseJsonField(encounter.participants)
-  const battleLog: any[] = parseJsonField(encounter.battleLog)
+  const participants: any[] = encounter.participants
+  const battleLog: any[] = encounter.battleLog
 
   const participant = participants.find((p: any) => p.id === body.participantId)
   if (!participant) {
@@ -80,19 +71,11 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants) as any,
-    battleLog: JSON.stringify([...battleLog, newLog]) as any,
+    participants: updatedParticipants,
+    battleLog: [...battleLog, newLog],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

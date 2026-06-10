@@ -87,10 +87,8 @@ export async function computeAttackDamage(
   if (attackerParticipant.type === 'digimon') {
     const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attackerParticipant.entityId))
     if (attackerDigimon) {
-      const baseStats = typeof attackerDigimon.baseStats === 'string'
-        ? JSON.parse(attackerDigimon.baseStats) : attackerDigimon.baseStats
-      const bonusStats = typeof attackerDigimon.bonusStats === 'string'
-        ? JSON.parse(attackerDigimon.bonusStats) : attackerDigimon.bonusStats
+      const baseStats = attackerDigimon.baseStats
+      const bonusStats = attackerDigimon.bonusStats
       const rawAttackerStats: StatBlock = {
         accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
         damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
@@ -100,8 +98,7 @@ export async function computeAttackDamage(
       const resolvedAttackerStats = applyStatSwaps(rawAttackerStats, attackerParticipant.statSwaps)
       attackBaseDamage = resolvedAttackerStats.damage
 
-      const attacks = typeof attackerDigimon.attacks === 'string'
-        ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
+      const attacks = attackerDigimon.attacks
       attackDef = attacks?.find((a: any) => a.id === attackId)
 
       const attackerIsDisarmed = (attackerParticipant.activeEffects || []).some((e: any) => e.name === 'Disarmed')
@@ -124,8 +121,7 @@ export async function computeAttackDamage(
         }
       }
 
-      const qualities = typeof attackerDigimon.qualities === 'string'
-        ? JSON.parse(attackerDigimon.qualities) : attackerDigimon.qualities
+      const qualities = attackerDigimon.qualities
       attackerHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       attackerHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
 
@@ -168,10 +164,8 @@ export async function computeAttackDamage(
   if (targetParticipant.type === 'digimon') {
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetParticipant.entityId))
     if (targetDigimon) {
-      const baseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
-      const bonusStats = typeof targetDigimon.bonusStats === 'string'
-        ? JSON.parse(targetDigimon.bonusStats) : targetDigimon.bonusStats
+      const baseStats = targetDigimon.baseStats
+      const bonusStats = targetDigimon.bonusStats
       const rawTargetStats: StatBlock = {
         accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
         damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
@@ -182,8 +176,7 @@ export async function computeAttackDamage(
       targetArmor = resolvedTargetStats.armor
       targetHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
-      const qualities = typeof targetDigimon.qualities === 'string'
-        ? JSON.parse(targetDigimon.qualities) : targetDigimon.qualities
+      const qualities = targetDigimon.qualities
       targetHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       const dataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
@@ -194,10 +187,8 @@ export async function computeAttackDamage(
   } else if (targetParticipant.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId))
     if (targetTamer) {
-      const attrs = typeof targetTamer.attributes === 'string'
-        ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-      const skills = typeof targetTamer.skills === 'string'
-        ? JSON.parse(targetTamer.skills) : targetTamer.skills
+      const attrs = targetTamer.attributes
+      const skills = targetTamer.skills
       targetArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
     }
   }

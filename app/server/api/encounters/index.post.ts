@@ -34,8 +34,8 @@ export default defineEventHandler(async (event) => {
     currentTurnIndex: 0,
     battleLog: [],
     hazards: [],
-    participantPositions: JSON.stringify({}),
-    destructibleStates: JSON.stringify([]),
+    participantPositions: {},
+    destructibleStates: [],
     createdAt: now,
     updatedAt: now,
   }

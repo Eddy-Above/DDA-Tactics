@@ -1,6 +1,5 @@
 import { eq, or, inArray, and } from 'drizzle-orm'
 import { db, digimon, tamers } from '../../db'
-import { parseDigimonData } from '../../utils/parsers'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
 
@@ -43,6 +42,5 @@ export default defineEventHandler(async (event) => {
     conditions.push(eq(digimon.stage, stage))
   }
 
-  const allDigimon = await db.select().from(digimon).where(and(...conditions))
-  return allDigimon.map(parseDigimonData)
+  return await db.select().from(digimon).where(and(...conditions))
 })

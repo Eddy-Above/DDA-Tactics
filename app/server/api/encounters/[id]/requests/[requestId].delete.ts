@@ -22,22 +22,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse existing requests and responses
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  let pendingRequests = parseJsonField(encounter.pendingRequests)
-  let currentResponses = parseJsonField(encounter.requestResponses)
+  let pendingRequests = encounter.pendingRequests
 
   // Check if request exists
   const requestExists = pendingRequests.some((r: any) => r.id === requestId)
@@ -53,24 +38,13 @@ export default defineEventHandler(async (event) => {
   // Don't remove responses - they need to persist so players can see attack outcomes
 
   // Update encounter
-  const updateData: any = {
-    pendingRequests: JSON.stringify(pendingRequests),
-    requestResponses: JSON.stringify(currentResponses),
+  await db.update(encounters).set({
+    pendingRequests,
     updatedAt: new Date(),
-  }
-
-  await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
+  }).where(eq(encounters.id, encounterId))
 
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

@@ -52,10 +52,8 @@ export async function getDigimonDerivedStats(entityId: string) {
   const [dig] = await db.select().from(digimon).where(eq(digimon.id, entityId))
   if (!dig) return null
 
-  const baseStats = typeof dig.baseStats === 'string'
-    ? JSON.parse(dig.baseStats) : dig.baseStats
-  const bonusStats = typeof (dig as any).bonusStats === 'string'
-    ? JSON.parse((dig as any).bonusStats) : (dig as any).bonusStats
+  const baseStats = dig.baseStats
+  const bonusStats = (dig as any).bonusStats
 
   const totalBaseStats: DigimonBaseStats = {
     accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
@@ -71,8 +69,7 @@ export async function getDigimonDerivedStats(entityId: string) {
   const derived = calculateDigimonDerivedStats(totalBaseStats, stage, size)
 
   // Apply Quality bonuses to derived stats
-  const qualities = typeof (dig as any).qualities === 'string'
-    ? JSON.parse((dig as any).qualities) : ((dig as any).qualities ?? [])
+  const qualities = (dig as any).qualities ?? []
 
   // Improved Derived Stat: apply to primary derived stats first, then recompute spec values
   for (const ids of qualities.filter((q: any) => q.id === 'improved-derived-stat')) {
@@ -111,10 +108,8 @@ async function getTargetHealthPool(targetEntityId: string, targetType: string): 
   if (targetType === 'digimon') {
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetEntityId))
     if (targetDigimon) {
-      const baseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
-      const bonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimon as any).bonusStats) : (targetDigimon as any).bonusStats
+      const baseStats = targetDigimon.baseStats
+      const bonusStats = (targetDigimon as any).bonusStats
       return (baseStats?.health ?? 0) + (bonusStats?.health ?? 0) || 3
     }
   }
@@ -389,19 +384,15 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
   if (target.type === 'digimon') {
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
     if (targetDigimon) {
-      const baseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
-      const bonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimon as any).bonusStats) : (targetDigimon as any).bonusStats
+      const baseStats = targetDigimon.baseStats
+      const bonusStats = (targetDigimon as any).bonusStats
       dodgePool = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0) || 3
     }
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
     if (targetTamer) {
-      const attrs = typeof targetTamer.attributes === 'string'
-        ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-      const skills = typeof targetTamer.skills === 'string'
-        ? JSON.parse(targetTamer.skills) : targetTamer.skills
+      const attrs = targetTamer.attributes
+      const skills = targetTamer.skills
       dodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
     }
   }

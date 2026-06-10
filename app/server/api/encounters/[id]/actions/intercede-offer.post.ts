@@ -69,27 +69,17 @@ export default defineEventHandler(async (event) => {
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
-      const rulesSettings = typeof campaign.rulesSettings === 'string'
-        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
+      const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
       eddySoulRules = rulesSettings.eddySoulRules
       if (campaign.level) campaignLevel = campaign.level
     }
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let turnOrder = parseJsonField(encounter.turnOrder)
-  let pendingRequests = parseJsonField(encounter.pendingRequests)
-  let battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants || []
+  let turnOrder = encounter.turnOrder || []
+  let pendingRequests = encounter.pendingRequests || []
+  let battleLog = encounter.battleLog || []
 
   // Batch-fetch all digimon and tamer records for encounter participants (eliminates N+1 per-participant queries)
   const participantDigimonIds = participants
@@ -110,11 +100,7 @@ export default defineEventHandler(async (event) => {
   const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
 
   // Spatial map state (for intercede reach check)
-  const participantPositions: Record<string, { x: number; y: number; z: number }> = (() => {
-    const raw = (encounter as any).participantPositions
-    if (!raw) return {}
-    try { return typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return {} }
-  })()
+  const participantPositions: Record<string, { x: number; y: number; z: number }> = (encounter as any).participantPositions || {}
 
   let mapRecord: any = null
   if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {
@@ -122,14 +108,14 @@ export default defineEventHandler(async (event) => {
     if (m) {
       mapRecord = {
         ...m,
-        groundTiles: typeof m.groundTiles === 'string' ? JSON.parse(m.groundTiles) : (m.groundTiles ?? []),
-        spaceTiles: typeof m.spaceTiles === 'string' ? JSON.parse(m.spaceTiles) : (m.spaceTiles ?? []),
-        voxels: typeof (m as any).voxels === 'string' ? JSON.parse((m as any).voxels) : ((m as any).voxels ?? []),
-        walls: typeof m.walls === 'string' ? JSON.parse(m.walls) : (m.walls ?? []),
-        ceilings: typeof m.ceilings === 'string' ? JSON.parse(m.ceilings) : (m.ceilings ?? []),
-        stairs: typeof m.stairs === 'string' ? JSON.parse(m.stairs) : (m.stairs ?? []),
-        windows: typeof m.windows === 'string' ? JSON.parse(m.windows) : (m.windows ?? []),
-        doors: typeof m.doors === 'string' ? JSON.parse(m.doors) : (m.doors ?? []),
+        groundTiles: m.groundTiles ?? [],
+        spaceTiles: m.spaceTiles ?? [],
+        voxels: (m as any).voxels ?? [],
+        walls: m.walls ?? [],
+        ceilings: m.ceilings ?? [],
+        stairs: m.stairs ?? [],
+        windows: m.windows ?? [],
+        doors: m.doors ?? [],
       }
     }
   }
@@ -143,9 +129,9 @@ export default defineEventHandler(async (event) => {
     if (!interceptorP || interceptorP.type !== 'digimon') return true
     const digRecord = digimonById.get(interceptorP.entityId)
     if (!digRecord) return true
-    const qualities = typeof digRecord.qualities === 'string' ? JSON.parse(digRecord.qualities) : (digRecord.qualities ?? [])
+    const qualities = digRecord.qualities ?? []
     const derived = calculateDigimonDerivedStats(
-      typeof digRecord.baseStats === 'string' ? JSON.parse(digRecord.baseStats) : digRecord.baseStats,
+      digRecord.baseStats,
       digRecord.stage as any,
       digRecord.size as any,
     )
@@ -227,7 +213,7 @@ export default defineEventHandler(async (event) => {
       const attackerDig = digimonById.get(attacker.entityId)
       attackerName = resolveParticipantName(attacker, participants, attackerDig?.name || 'Digimon', attackerDig?.isEnemy || false)
       if (attackerDig?.attacks) {
-        const attacks = typeof attackerDig.attacks === 'string' ? JSON.parse(attackerDig.attacks) : attackerDig.attacks
+        const attacks = attackerDig.attacks
         areaAttackDef = attacks?.find((a: any) => a.id === body.attackId)
         isSupportAttack = areaAttackDef?.type === 'support'
       }
@@ -314,8 +300,8 @@ export default defineEventHandler(async (event) => {
         } else {
           const tamerRecord = tamerById.get(p.entityId)
           if (tamerRecord) {
-            const attrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
-            const skills = typeof tamerRecord.skills === 'string' ? JSON.parse(tamerRecord.skills) : (tamerRecord.skills || {})
+            const attrs = tamerRecord.attributes || {}
+            const skills = tamerRecord.skills || {}
             const tamerMovement = (attrs.agility || 0) + (skills.survival || 0)
             const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
             const targetPositions = allTargetIds.map((tid: string) => participantPositions[tid]).filter(Boolean)
@@ -342,11 +328,11 @@ export default defineEventHandler(async (event) => {
         if (info?.partnerId === p.entityId) {
           const tamerRecord = tamerById.get(p.entityId)
           if (tamerRecord) {
-            const tamerAttrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
-            const tamerXp = typeof tamerRecord.xpBonuses === 'string' ? JSON.parse(tamerRecord.xpBonuses) : (tamerRecord.xpBonuses || {})
+            const tamerAttrs = tamerRecord.attributes || {}
+            const tamerXp = tamerRecord.xpBonuses || {}
             const unlockedOrders = getUnlockedSpecialOrders(tamerAttrs, tamerXp, campaignLevel as any)
             if (unlockedOrders.some((o: any) => o.name === 'Quick Reaction')) {
-              const usedPerDay = typeof tamerRecord.usedPerDayOrders === 'string' ? JSON.parse(tamerRecord.usedPerDayOrders) : (tamerRecord.usedPerDayOrders || [])
+              const usedPerDay = tamerRecord.usedPerDayOrders || []
               if (!usedPerDay.includes('Quick Reaction')) {
                 canUseQR = true
                 const targetPart = participants.find((pp: any) => pp.id === tid)
@@ -541,25 +527,17 @@ export default defineEventHandler(async (event) => {
         }
       })
       await db.update(encounters).set({
-        participants: JSON.stringify(participants),
-        battleLog: JSON.stringify(battleLog),
-        pendingRequests: JSON.stringify([...pendingRequests, ...dodgeRequests]),
-        turnOrder: JSON.stringify(turnOrder),
+        participants,
+        battleLog,
+        pendingRequests: [...pendingRequests, ...dodgeRequests],
+        turnOrder,
         ...(areaAutoAdvanceTurnIndex !== undefined ? { currentTurnIndex: areaAutoAdvanceTurnIndex } : {}),
         ...(areaAutoAdvanceRound !== undefined ? { round: areaAutoAdvanceRound } : {}),
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
       if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-      return {
-        ...updated,
-        participants: parseJsonField(updated.participants),
-        turnOrder: parseJsonField(updated.turnOrder),
-        battleLog: parseJsonField(updated.battleLog),
-        pendingRequests: parseJsonField(updated.pendingRequests),
-        requestResponses: parseJsonField(updated.requestResponses),
-        hazards: parseJsonField(updated.hazards),
-      }
+      return updated
     }
 
     // Push intercede-group-state tracker so claims are accumulated before resolution
@@ -597,24 +575,16 @@ export default defineEventHandler(async (event) => {
 
     // Save intercede offers
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify(battleLog),
-      pendingRequests: JSON.stringify([...pendingRequests, ...newRequests]),
-      turnOrder: JSON.stringify(turnOrder),
+      participants,
+      battleLog,
+      pendingRequests: [...pendingRequests, ...newRequests],
+      turnOrder,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updatedArea] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
     if (!updatedArea) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-    return {
-      ...updatedArea,
-      participants: parseJsonField(updatedArea.participants),
-      turnOrder: parseJsonField(updatedArea.turnOrder),
-      battleLog: parseJsonField(updatedArea.battleLog),
-      pendingRequests: parseJsonField(updatedArea.pendingRequests),
-      requestResponses: parseJsonField(updatedArea.requestResponses),
-      hazards: parseJsonField(updatedArea.hazards),
-    }
+    return updatedArea
   }
 
   // ========================
@@ -706,21 +676,13 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify([...battleLog, missLog]),
+      participants,
+      battleLog: [...battleLog, missLog],
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-      hazards: parseJsonField(updated.hazards),
-    }
+    return updated
   }
 
   // === SUPPORT ATTACK ROUTING ===
@@ -729,8 +691,7 @@ export default defineEventHandler(async (event) => {
   if (attacker.type === 'digimon') {
     const attackerDigimon = digimonById.get(attacker.entityId)
     if (attackerDigimon?.attacks) {
-      const attacks = typeof attackerDigimon.attacks === 'string'
-        ? JSON.parse(attackerDigimon.attacks) : attackerDigimon.attacks
+      const attacks = attackerDigimon.attacks
       attackDef = attacks?.find((a: any) => a.id === body.attackId)
     }
   }
@@ -776,25 +737,17 @@ export default defineEventHandler(async (event) => {
 
       if (supportResult?.resolved) {
         await db.update(encounters).set({
-          participants: JSON.stringify(supportResult.participants),
-          battleLog: JSON.stringify(supportResult.battleLog),
-          pendingRequests: JSON.stringify(supportResult.pendingRequests),
-          ...(supportResult.turnOrder ? { turnOrder: JSON.stringify(supportResult.turnOrder) } : {}),
+          participants: supportResult.participants,
+          battleLog: supportResult.battleLog,
+          pendingRequests: supportResult.pendingRequests,
+          ...(supportResult.turnOrder ? { turnOrder: supportResult.turnOrder } : {}),
           updatedAt: new Date(),
         }).where(eq(encounters.id, encounterId))
 
         const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
         if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
 
-        return {
-          ...updated,
-          participants: parseJsonField(updated.participants),
-          turnOrder: parseJsonField(updated.turnOrder),
-          battleLog: parseJsonField(updated.battleLog),
-          pendingRequests: parseJsonField(updated.pendingRequests),
-          requestResponses: parseJsonField(updated.requestResponses),
-          hazards: parseJsonField(updated.hazards),
-        }
+        return updated
       }
     }
     // All other support attacks fall through to intercede
@@ -824,9 +777,9 @@ export default defineEventHandler(async (event) => {
   if (!isRangedOnMap && mapRecord && targetPos_map && target.type === 'digimon') {
     const targetDigRec = digimonById.get(target.entityId)
     if (targetDigRec) {
-      const tq = typeof targetDigRec.qualities === 'string' ? JSON.parse(targetDigRec.qualities) : (targetDigRec.qualities ?? [])
+      const tq = targetDigRec.qualities ?? []
       const td = calculateDigimonDerivedStats(
-        typeof targetDigRec.baseStats === 'string' ? JSON.parse(targetDigRec.baseStats) : targetDigRec.baseStats,
+        targetDigRec.baseStats,
         targetDigRec.stage as any,
         targetDigRec.size as any,
       )
@@ -908,9 +861,9 @@ export default defineEventHandler(async (event) => {
       } else if (targetPos_map) {
         const digRec = digimonById.get(partnerParticipant.entityId)
         if (digRec) {
-          const quals = typeof digRec.qualities === 'string' ? JSON.parse(digRec.qualities) : (digRec.qualities ?? [])
+          const quals = digRec.qualities ?? []
           const deriv = calculateDigimonDerivedStats(
-            typeof digRec.baseStats === 'string' ? JSON.parse(digRec.baseStats) : digRec.baseStats,
+            digRec.baseStats,
             digRec.stage as any,
             digRec.size as any,
           )
@@ -983,8 +936,8 @@ export default defineEventHandler(async (event) => {
       } else {
         const tamerRecord = tamerById.get(p.entityId)
         if (tamerRecord) {
-          const attrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
-          const skills = typeof tamerRecord.skills === 'string' ? JSON.parse(tamerRecord.skills) : (tamerRecord.skills || {})
+          const attrs = tamerRecord.attributes || {}
+          const skills = tamerRecord.skills || {}
           const tamerMovement = (attrs.agility || 0) + (skills.survival || 0)
           const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
           let tamerFoundPos: { x: number; y: number; z: number } | null = null
@@ -1055,12 +1008,12 @@ export default defineEventHandler(async (event) => {
         }
         const tamerRecord = tamerById.get(tamerId)
         if (!tamerRecord) { tamerQuickReactionMap[tamerId] = { canUse: false, diceCount: 0 }; continue }
-        const tamerAttrs = typeof tamerRecord.attributes === 'string' ? JSON.parse(tamerRecord.attributes) : (tamerRecord.attributes || {})
-        const tamerXp = typeof tamerRecord.xpBonuses === 'string' ? JSON.parse(tamerRecord.xpBonuses) : (tamerRecord.xpBonuses || {})
+        const tamerAttrs = tamerRecord.attributes || {}
+        const tamerXp = tamerRecord.xpBonuses || {}
         const unlockedOrders = getUnlockedSpecialOrders(tamerAttrs, tamerXp, campaignLevel as any)
         const hasQR = unlockedOrders.some((o: any) => o.name === 'Quick Reaction')
         if (!hasQR) { tamerQuickReactionMap[tamerId] = { canUse: false, diceCount: 0 }; continue }
-        const usedPerDay = typeof tamerRecord.usedPerDayOrders === 'string' ? JSON.parse(tamerRecord.usedPerDayOrders) : (tamerRecord.usedPerDayOrders || [])
+        const usedPerDay = tamerRecord.usedPerDayOrders || []
         tamerQuickReactionMap[tamerId] = { canUse: !usedPerDay.includes('Quick Reaction'), diceCount }
       }
     }
@@ -1145,8 +1098,8 @@ export default defineEventHandler(async (event) => {
       }
 
       await db.update(encounters).set({
-        pendingRequests: JSON.stringify([...pendingRequests, dodgeRequest]),
-        participants: JSON.stringify(participants),
+        pendingRequests: [...pendingRequests, dodgeRequest],
+        participants,
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
 
@@ -1156,15 +1109,7 @@ export default defineEventHandler(async (event) => {
         throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
       }
 
-      return {
-        ...updated,
-        participants: parseJsonField(updated.participants),
-        turnOrder: parseJsonField(updated.turnOrder),
-        battleLog: parseJsonField(updated.battleLog),
-        pendingRequests: parseJsonField(updated.pendingRequests),
-        requestResponses: parseJsonField(updated.requestResponses),
-        hazards: parseJsonField(updated.hazards),
-      }
+      return updated
     } else {
       // NPC target — resolve based on attack type
       if (isSupportAttack && attackDef) {
@@ -1190,25 +1135,17 @@ export default defineEventHandler(async (event) => {
 
         if (supportResult) {
           await db.update(encounters).set({
-            participants: JSON.stringify(supportResult.participants),
-            battleLog: JSON.stringify(supportResult.battleLog),
-            pendingRequests: JSON.stringify(supportResult.pendingRequests),
-            ...(supportResult.turnOrder ? { turnOrder: JSON.stringify(supportResult.turnOrder) } : {}),
+            participants: supportResult.participants,
+            battleLog: supportResult.battleLog,
+            pendingRequests: supportResult.pendingRequests,
+            ...(supportResult.turnOrder ? { turnOrder: supportResult.turnOrder } : {}),
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
 
           const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
           if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
 
-          return {
-            ...updated,
-            participants: parseJsonField(updated.participants),
-            turnOrder: parseJsonField(updated.turnOrder),
-            battleLog: parseJsonField(updated.battleLog),
-            pendingRequests: parseJsonField(updated.pendingRequests),
-            requestResponses: parseJsonField(updated.requestResponses),
-            hazards: parseJsonField(updated.hazards),
-          }
+          return updated
         }
       } else {
         // Damage attack — auto-resolve NPC (roll dodge, calculate damage)
@@ -1229,9 +1166,9 @@ export default defineEventHandler(async (event) => {
         })
 
         await db.update(encounters).set({
-          participants: JSON.stringify(result.participants),
-          battleLog: JSON.stringify(result.battleLog),
-          ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
+          participants: result.participants,
+          battleLog: result.battleLog,
+          ...(result.turnOrder ? { turnOrder: result.turnOrder } : {}),
           ...(result.nextTurnIndex !== undefined ? { currentTurnIndex: result.nextTurnIndex } : {}),
           ...(result.nextRound !== undefined ? { round: result.nextRound } : {}),
           updatedAt: new Date(),
@@ -1240,24 +1177,24 @@ export default defineEventHandler(async (event) => {
         // Check for Counterattack quality on the target (the one who was missed)
         if (!result.hit && target?.type === 'digimon' && !target?.usedCounterattackThisCombat) {
           const tgtDig = digimonById.get(target.entityId)
-          const tgtQualities = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+          const tgtQualities = tgtDig?.qualities || []
           if ((tgtQualities as any[]).some((q: any) => q.id === 'counterattack')) {
             const freshEnc = await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0])
             const caResult = await triggerCounterattack({
-              participants: parseJsonField(freshEnc.participants),
-              battleLog: parseJsonField(freshEnc.battleLog),
-              pendingRequests: parseJsonField(freshEnc.pendingRequests),
+              participants: freshEnc.participants,
+              battleLog: freshEnc.battleLog,
+              pendingRequests: freshEnc.pendingRequests,
               round: encounter.round || 0,
               counterattackerParticipantId: body.targetId!,
               originalAttackerParticipantId: body.attackerId,
               houseRules,
-              turnOrder: parseJsonField(freshEnc.turnOrder),
+              turnOrder: freshEnc.turnOrder,
               currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
             })
             await db.update(encounters).set({
-              participants: JSON.stringify(caResult.participants),
-              battleLog: JSON.stringify(caResult.battleLog),
-              pendingRequests: JSON.stringify(caResult.pendingRequests),
+              participants: caResult.participants,
+              battleLog: caResult.battleLog,
+              pendingRequests: caResult.pendingRequests,
               ...(caResult.nextTurnIndex !== undefined ? { currentTurnIndex: caResult.nextTurnIndex } : {}),
               ...(caResult.nextRound !== undefined ? { round: caResult.nextRound } : {}),
               updatedAt: new Date(),
@@ -1271,15 +1208,7 @@ export default defineEventHandler(async (event) => {
           throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
         }
 
-        return {
-          ...updated,
-          participants: parseJsonField(updated.participants),
-          turnOrder: parseJsonField(updated.turnOrder),
-          battleLog: parseJsonField(updated.battleLog),
-          pendingRequests: parseJsonField(updated.pendingRequests),
-          requestResponses: parseJsonField(updated.requestResponses),
-          hazards: parseJsonField(updated.hazards),
-        }
+        return updated
       }
     }
   }
@@ -1319,8 +1248,8 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      pendingRequests: JSON.stringify([...pendingRequests, gmRequest]),
-      participants: JSON.stringify(participants),
+      pendingRequests: [...pendingRequests, gmRequest],
+      participants,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
@@ -1329,15 +1258,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
     }
 
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-      hazards: parseJsonField(updated.hazards),
-    }
+    return updated
   }
 
   // Create a unique intercede group ID to link all offers for this attack
@@ -1423,8 +1344,8 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter with new requests and updated participants (attacker actions deducted)
   await db.update(encounters).set({
-    pendingRequests: JSON.stringify([...pendingRequests, ...newRequests]),
-    participants: JSON.stringify(participants),
+    pendingRequests: [...pendingRequests, ...newRequests],
+    participants,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
@@ -1434,13 +1355,5 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

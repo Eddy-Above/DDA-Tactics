@@ -91,11 +91,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
 
   // NPC counterattacker → auto-resolve
   // Pick best attack: first damage attack without Area Attack tag, then fall back to any damage attack
-  const attacks = counterattackerDigimon.attacks
-    ? (typeof counterattackerDigimon.attacks === 'string'
-        ? JSON.parse(counterattackerDigimon.attacks)
-        : counterattackerDigimon.attacks)
-    : []
+  const attacks = counterattackerDigimon.attacks ?? []
 
   const damageAttacks = (attacks as any[]).filter((a: any) => a.type === 'damage')
   const nonAreaAttacks = damageAttacks.filter(
@@ -123,10 +119,8 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   }
 
   // Determine accuracy pool
-  const baseStats = typeof counterattackerDigimon.baseStats === 'string'
-    ? JSON.parse(counterattackerDigimon.baseStats) : counterattackerDigimon.baseStats
-  const bonusStats = typeof (counterattackerDigimon as any).bonusStats === 'string'
-    ? JSON.parse((counterattackerDigimon as any).bonusStats) : (counterattackerDigimon as any).bonusStats
+  const baseStats = counterattackerDigimon.baseStats
+  const bonusStats = (counterattackerDigimon as any).bonusStats
   const accuracyPool = Math.max(1, (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0) || 3)
 
   // Roll accuracy dice server-side
@@ -137,8 +131,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   const accuracySuccesses = accuracyDiceResults.filter((d: number) => d >= 5).length
 
   // Parse counterattacker qualities (needed for Chain Counter check below)
-  const counterattackerQualities: any[] = typeof counterattackerDigimon.qualities === 'string'
-    ? JSON.parse(counterattackerDigimon.qualities) : (counterattackerDigimon.qualities || [])
+  const counterattackerQualities: any[] = counterattackerDigimon.qualities || []
   const hasChainCounter = counterattackerQualities.some((q: any) => q.id === 'chain-counter')
 
   // Mark used (for NPC counterattackers this may be skipped below if Chain Counter + KO)

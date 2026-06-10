@@ -22,21 +22,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse existing responses
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  let currentResponses = parseJsonField(encounter.requestResponses)
+  let currentResponses = encounter.requestResponses
 
   // Check if response exists
   const responseExists = currentResponses.some((r: any) => r.id === responseId)
@@ -51,23 +37,13 @@ export default defineEventHandler(async (event) => {
   currentResponses = currentResponses.filter((r: any) => r.id !== responseId)
 
   // Update encounter
-  const updateData: any = {
-    requestResponses: JSON.stringify(currentResponses),
+  await db.update(encounters).set({
+    requestResponses: currentResponses,
     updatedAt: new Date(),
-  }
-
-  await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
+  }).where(eq(encounters.id, encounterId))
 
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

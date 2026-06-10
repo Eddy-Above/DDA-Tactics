@@ -1,6 +1,5 @@
 import { db, tamers, type NewTamer } from '../../db'
 import { generateId } from '../../utils/id'
-import { parseTamerData } from '../../utils/parsers'
 
 interface CreateTamerBody {
   name: string
@@ -94,25 +93,24 @@ export default defineEventHandler(async (event) => {
     inspiration: 0,
   }
 
-  // For Drizzle with PostgreSQL text + JSON mode, we might need to handle serialization explicitly
-  const newTamer: any = {
+  const newTamer: NewTamer = {
     id,
     name: body.name,
     age: body.age,
     campaignId: body.campaignId || null,
-    attributes: JSON.stringify(attributes),
-    skills: JSON.stringify(skills),
-    aspects: JSON.stringify(body.aspects || []),
-    torments: JSON.stringify(body.torments || []),
-    specialOrders: JSON.stringify([]),
+    attributes,
+    skills,
+    aspects: body.aspects || [],
+    torments: body.torments || [],
+    specialOrders: [],
     inspiration: body.inspiration ?? 1,
     grantedInspiration: body.grantedInspiration ?? 0,
     xp: body.xp ?? 0,
-    equipment: JSON.stringify([]),
+    equipment: [],
     currentWounds: 0,
     notes: body.notes || '',
     spriteUrl: body.spriteUrl,
-    xpBonuses: JSON.stringify(xpBonuses),
+    xpBonuses,
     createdAt: now,
     updatedAt: now,
   }
@@ -127,17 +125,5 @@ export default defineEventHandler(async (event) => {
 
   console.log('[POST /api/tamers] Successfully inserted tamer')
 
-  // Parse the stringified values back to objects for the response
-  const response = {
-    ...newTamer,
-    attributes: attributes,
-    skills: skills,
-    aspects: body.aspects || [],
-    torments: body.torments || [],
-    specialOrders: [],
-    equipment: [],
-    xpBonuses: xpBonuses,
-  }
-
-  return response
+  return newTamer
 })

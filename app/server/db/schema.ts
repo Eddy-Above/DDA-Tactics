@@ -12,7 +12,7 @@ export const tamers = pgTable('tamers', {
   campaignId: text('campaign_id').references(() => campaigns.id),
 
   // Attributes (stored as JSON for flexibility)
-  attributes: text('attributes', { mode: 'json' }).notNull().$type<{
+  attributes: jsonb('attributes').notNull().$type<{
     agility: number
     body: number
     charisma: number
@@ -21,7 +21,7 @@ export const tamers = pgTable('tamers', {
   }>(),
 
   // Skills (stored as JSON)
-  skills: text('skills', { mode: 'json' }).notNull().$type<{
+  skills: jsonb('skills').notNull().$type<{
     dodge: number
     fight: number
     stealth: number
@@ -40,7 +40,7 @@ export const tamers = pgTable('tamers', {
   }>(),
 
   // Aspects (stored as JSON array)
-  aspects: text('aspects', { mode: 'json' }).notNull().$type<Array<{
+  aspects: jsonb('aspects').notNull().$type<Array<{
     id: string
     name: string
     description: string
@@ -49,7 +49,7 @@ export const tamers = pgTable('tamers', {
   }>>(),
 
   // Torments (stored as JSON array)
-  torments: text('torments', { mode: 'json' }).notNull().$type<Array<{
+  torments: jsonb('torments').notNull().$type<Array<{
     id: string
     name: string
     description: string
@@ -60,14 +60,24 @@ export const tamers = pgTable('tamers', {
   }>>(),
 
   // Special Orders (array of unlocked order IDs)
-  specialOrders: text('special_orders', { mode: 'json' }).notNull().$type<string[]>(),
+  specialOrders: jsonb('special_orders').notNull().$type<string[]>(),
 
   inspiration: integer('inspiration').notNull().default(1),
   grantedInspiration: integer('granted_inspiration').notNull().default(0),
   xp: integer('xp').notNull().default(0),
 
   // XP Bonuses - stored separately from base values for reallocation
-  xpBonuses: text('xp_bonuses', { mode: 'json' }).notNull().default('{"attributes":{"agility":0,"body":0,"charisma":0,"intelligence":0,"willpower":0},"skills":{"dodge":0,"fight":0,"stealth":0,"athletics":0,"endurance":0,"featsOfStrength":0,"manipulate":0,"perform":0,"persuasion":0,"computer":0,"survival":0,"knowledge":0,"perception":0,"decipherIntent":0,"bravery":0},"inspiration":0}').$type<{
+  xpBonuses: jsonb('xp_bonuses').notNull().default({
+    attributes: { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0 },
+    skills: {
+      dodge: 0, fight: 0, stealth: 0,
+      athletics: 0, endurance: 0, featsOfStrength: 0,
+      manipulate: 0, perform: 0, persuasion: 0,
+      computer: 0, survival: 0, knowledge: 0,
+      perception: 0, decipherIntent: 0, bravery: 0,
+    },
+    inspiration: 0,
+  }).$type<{
     attributes: { agility: number; body: number; charisma: number; intelligence: number; willpower: number }
     skills: {
       dodge: number; fight: number; stealth: number
@@ -80,11 +90,11 @@ export const tamers = pgTable('tamers', {
   }>(),
 
   // Equipment (array of item names/descriptions)
-  equipment: text('equipment', { mode: 'json' }).notNull().$type<string[]>(),
+  equipment: jsonb('equipment').notNull().$type<string[]>(),
 
   currentWounds: integer('current_wounds').notNull().default(0),
-  usedPerDayOrders: text('used_per_day_orders', { mode: 'json' }).notNull().default('[]').$type<string[]>(),
-  usedPerDaySkillOrders: text('used_per_day_skill_orders', { mode: 'json' }).notNull().default('[]').$type<string[]>(),
+  usedPerDayOrders: jsonb('used_per_day_orders').notNull().default([]).$type<string[]>(),
+  usedPerDaySkillOrders: jsonb('used_per_day_skill_orders').notNull().default([]).$type<string[]>(),
   digivolutionsUsedToday: integer('digivolutions_used_today').notNull().default(0),
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),
@@ -114,7 +124,7 @@ export const digimon = pgTable('digimon', {
   >(),
 
   // Base Stats
-  baseStats: text('base_stats', { mode: 'json' }).notNull().$type<{
+  baseStats: jsonb('base_stats').notNull().$type<{
     accuracy: number
     damage: number
     dodge: number
@@ -124,7 +134,7 @@ export const digimon = pgTable('digimon', {
 
   // Attacks (stored as JSON array) - DDA 1.4 format
   // Attacks have: range (melee/ranged), type (damage/support), tags from qualities, optional effect
-  attacks: text('attacks', { mode: 'json' }).notNull().$type<Array<{
+  attacks: jsonb('attacks').notNull().$type<Array<{
     id: string
     name: string
     range: 'melee' | 'ranged'        // [Melee] or [Ranged] - free tag
@@ -135,7 +145,7 @@ export const digimon = pgTable('digimon', {
   }>>(),
 
   // Qualities (stored as JSON array)
-  qualities: text('qualities', { mode: 'json' }).notNull().$type<Array<{
+  qualities: jsonb('qualities').notNull().$type<Array<{
     id: string
     name: string
     type: 'static' | 'trigger' | 'attack' | Array<'static' | 'trigger' | 'attack'>
@@ -151,7 +161,7 @@ export const digimon = pgTable('digimon', {
   baseDP: integer('base_dp').notNull(),
   bonusDP: integer('bonus_dp').notNull().default(0),
   // Track bonus DP allocation per stat
-  bonusStats: text('bonus_stats', { mode: 'json' }).notNull().default('{"accuracy":0,"damage":0,"dodge":0,"armor":0,"health":0}').$type<{
+  bonusStats: jsonb('bonus_stats').notNull().default({ accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }).$type<{
     accuracy: number
     damage: number
     dodge: number
@@ -166,7 +176,7 @@ export const digimon = pgTable('digimon', {
   >(),
 
   // Evolution paths (array of Digimon IDs this can evolve to)
-  evolutionPathIds: text('evolution_path_ids', { mode: 'json' }).notNull().$type<string[]>(),
+  evolutionPathIds: jsonb('evolution_path_ids').notNull().$type<string[]>(),
 
   // Evolution link (ID of the Digimon this evolves from)
   evolvesFromId: text('evolves_from_id'),
@@ -176,7 +186,7 @@ export const digimon = pgTable('digimon', {
   isDarkEvolution: boolean('is_dark_evolution').notNull().default(false),
   campaignId: text('campaign_id').references(() => campaigns.id),
 
-  giganticDimensions: text('gigantic_dimensions', { mode: 'json' }).$type<{
+  giganticDimensions: jsonb('gigantic_dimensions').$type<{
     width: number
     height: number
     depth: number
@@ -204,7 +214,7 @@ export const encounters = pgTable('encounters', {
   >(),
 
   // Participants with full combat state
-  participants: text('participants', { mode: 'json' }).notNull().$type<Array<{
+  participants: jsonb('participants').notNull().$type<Array<{
     id: string
     type: 'tamer' | 'digimon'
     entityId: string
@@ -219,17 +229,79 @@ export const encounters = pgTable('encounters', {
       duration: number
       source: string
       description: string
+      value?: number
+      potency?: number
+      potencyStat?: string
     }>
     isActive: boolean
     hasActed: boolean
+    name?: string
+    currentWounds?: number
+    maxWounds?: number
+    currentTempWounds?: number
+    usedAttackIds?: string[]
+    dodgePenalty?: number
+    evolutionLineId?: string
+    woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number }>
+    usedSpecialOrders?: string[]
+    usedSkillOrders?: string[]
+    interceptPenalty?: number
+    intercedeOptOuts?: string[]
+    gmCharacterOptOuts?: Record<string, string[]>
+    hasDirectedThisTurn?: boolean
+    digimonBolsterCount?: number
+    lastBitCpuBolsterRound?: number
+    lastHugePowerRound?: number
+    lastHugePowerRank2Round?: number
+    isEnemy?: boolean
+    battery?: number
+    usedSignatureMoveThisTurn?: boolean
+    combatMonsterBonus?: number
+    totalHealth?: number
+    hasAttemptedDigivolve?: boolean
+    npcStageIndex?: number
+    clash?: {
+      clashId: string
+      opponentParticipantId: string
+      isController: boolean
+      isPinned: boolean
+      clashPinsUsed?: number
+      clashCheckNeeded: boolean
+      pendingRoll?: number
+      reachInitiated?: boolean
+      reachDistance?: number
+      cannotInitiateUntilRound?: number
+    }
+    clashCooldownUntilRound?: number
+    usedFreeClashThisRound?: boolean
+    usedCounterattackThisCombat?: boolean
+    moodValue?: number
+    currentInspiration?: number
+    divineProtectionUsesThisBattle?: number
+    pendingDivineProtectionDamage?: number
+    pendingSimpleActionPenalty?: number
+    statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
+    quickReactionDiceBonus?: number
+    stunActionReducedThisRound?: boolean
+    dataAbsorbActive?: boolean
+    dataAbsorbHealAmount?: number
+    maxPostTurnIntercedes?: number
+    seenAttackIds?: Record<string, number>
+    juggernauntBonuses?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', number>>
+    timeControlUsed?: boolean
+    buggedSpecValues?: { bit: number; cpu: number; ram: number }
+    demoralizedAttributes?: Partial<Record<'agility' | 'body' | 'charisma' | 'intelligence' | 'willpower', number>>
+    tormentorBonusStacks?: number
+    tankBusterUsedAtThresholds?: number[]
+    mapPosition?: { x: number; y: number; z: number }
   }>>(),
 
   // Turn order (participant IDs)
-  turnOrder: text('turn_order', { mode: 'json' }).notNull().$type<string[]>(),
+  turnOrder: jsonb('turn_order').notNull().$type<string[]>(),
   currentTurnIndex: integer('current_turn_index').notNull().default(0),
 
   // Battle log
-  battleLog: text('battle_log', { mode: 'json' }).notNull().$type<Array<{
+  battleLog: jsonb('battle_log').notNull().$type<Array<{
     id: string
     timestamp: string
     round: number
@@ -240,10 +312,24 @@ export const encounters = pgTable('encounters', {
     result: string
     damage: number | null
     effects: string[]
+    hit?: boolean
+    dodgeDicePool?: number
+    dodgeDiceResults?: number[]
+    dodgeSuccesses?: number
+    accuracyDicePool?: number
+    accuracyDiceResults?: number[]
+    accuracySuccesses?: number
+    attackerParticipantId?: string
+    baseDamage?: number
+    netSuccesses?: number
+    targetArmor?: number
+    armorPiercing?: number
+    effectiveArmor?: number
+    finalDamage?: number
   }>>(),
 
   // Environmental hazards
-  hazards: text('hazards', { mode: 'json' }).notNull().$type<Array<{
+  hazards: jsonb('hazards').notNull().$type<Array<{
     id: string
     name: string
     description: string
@@ -252,10 +338,10 @@ export const encounters = pgTable('encounters', {
     duration: number | null
   }>>(),
 
-  // Pending player requests (digimon selection, initiative roll, dodge roll)
-  pendingRequests: text('pending_requests', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  // Pending player requests (digimon selection, initiative roll, dodge roll, etc.)
+  pendingRequests: jsonb('pending_requests').notNull().default([]).$type<Array<{
     id: string
-    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll'
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'health-roll' | 'divine-protection-offer'
     targetTamerId: string
     targetParticipantId?: string
     timestamp: string
@@ -263,7 +349,7 @@ export const encounters = pgTable('encounters', {
   }>>(),
 
   // Player responses to requests
-  requestResponses: text('request_responses', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  requestResponses: jsonb('request_responses').notNull().default([]).$type<Array<{
     id: string
     requestId: string
     tamerId: string
@@ -275,6 +361,8 @@ export const encounters = pgTable('encounters', {
       initiativeRoll?: number
       dodgeRoll?: number
       timestamp: string
+      attackerParticipantId?: string
+      attackerName?: string
     }
   }>>(),
 
@@ -282,8 +370,8 @@ export const encounters = pgTable('encounters', {
   mapId: text('map_id'),  // FK to maps.id (added via migration; FK constraint omitted to avoid circular ref at schema load time)
 
   // Map state: participant positions and breakable structure states
-  participantPositions: text('participant_positions', { mode: 'json' }).notNull().default('{}').$type<Record<string, { x: number; y: number; z: number }>>(),
-  destructibleStates: text('destructible_states', { mode: 'json' }).notNull().default('[]').$type<Array<{ structureId: string; currentWounds: number }>>(),
+  participantPositions: jsonb('participant_positions').notNull().default({}).$type<Record<string, { x: number; y: number; z: number }>>(),
+  destructibleStates: jsonb('destructible_states').notNull().default([]).$type<Array<{ structureId: string; currentWounds: number }>>(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -301,7 +389,7 @@ export const campaigns = pgTable('campaigns', {
 
   passwordHash: text('password_hash'),
   dmPasswordHash: text('dm_password_hash'),
-  rulesSettings: text('rules_settings', { mode: 'json' }).notNull().default('{}').$type<Record<string, any>>(),
+  rulesSettings: jsonb('rules_settings').notNull().default({}).$type<Record<string, any>>(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -320,7 +408,7 @@ export const evolutionLines = pgTable('evolution_lines', {
   // Each entry must link to an actual Digimon in the library
   // GM can lock/unlock individual stages to control progression
   // Tree structure uses evolvesFromIndex to track parent-child relationships
-  chain: text('chain', { mode: 'json' }).notNull().$type<Array<{
+  chain: jsonb('chain').notNull().$type<Array<{
     stage: 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
     species: string // Species name (e.g., "Agumon", "Greymon")
     digimonId: string // Required: Link to actual Digimon sheet from library
@@ -350,24 +438,24 @@ export const maps = pgTable('maps', {
   description: text('description').notNull().default(''),
   campaignId: text('campaign_id').references(() => campaigns.id),
 
-  dimensions: text('dimensions', { mode: 'json' }).notNull().$type<{
+  dimensions: jsonb('dimensions').notNull().$type<{
     width: number
     depth: number
     height: number
   }>(),
 
-  groundTiles: text('ground_tiles', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  groundTiles: jsonb('ground_tiles').notNull().default([]).$type<Array<{
     x: number; y: number; z: number
     element: string
     terrain: string
   }>>(),
 
-  spaceTiles: text('space_tiles', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  spaceTiles: jsonb('space_tiles').notNull().default([]).$type<Array<{
     x: number; y: number; z: number
     spaceType: string
   }>>(),
 
-  voxels: text('voxels', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  voxels: jsonb('voxels').notNull().default([]).$type<Array<{
     x: number; y: number; z: number
     materialId: string
     element?: string
@@ -380,30 +468,30 @@ export const maps = pgTable('maps', {
     tags?: string[]
   }>>(),
 
-  walls: text('walls', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  walls: jsonb('walls').notNull().default([]).$type<Array<{
     id: string; x: number; y: number; z: number
     face: string
     woundBoxes?: number
   }>>(),
 
-  windows: text('windows', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  windows: jsonb('windows').notNull().default([]).$type<Array<{
     id: string
     wallId: string
     woundBoxes?: number
   }>>(),
 
-  doors: text('doors', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  doors: jsonb('doors').notNull().default([]).$type<Array<{
     id: string
     wallId: string
     isOpen: boolean
   }>>(),
 
-  ceilings: text('ceilings', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  ceilings: jsonb('ceilings').notNull().default([]).$type<Array<{
     id: string; x: number; y: number; z: number
     woundBoxes?: number
   }>>(),
 
-  stairs: text('stairs', { mode: 'json' }).notNull().default('[]').$type<Array<{
+  stairs: jsonb('stairs').notNull().default([]).$type<Array<{
     id: string; x: number; y: number; z: number
     face: string
   }>>(),

@@ -1,4 +1,4 @@
-import { db, maps } from '../../db'
+import { db, maps, type NewMap } from '../../db'
 import { generateId } from '../../utils/id'
 
 interface CreateMapBody {
@@ -23,30 +23,12 @@ export default defineEventHandler(async (event) => {
     for (let z = 0; z < body.dimensions.depth; z++)
       groundTiles.push({ x, y: 0, z, element: 'void', terrain: 'normal' })
 
-  await db.insert(maps).values({
+  const newMap: NewMap = {
     id,
     name: body.name,
     description: body.description || '',
     campaignId: body.campaignId,
-    dimensions: JSON.stringify(body.dimensions) as any,
-    groundTiles: JSON.stringify(groundTiles) as any,
-    spaceTiles: JSON.stringify([]) as any,
-    voxels: JSON.stringify([]) as any,
-    walls: JSON.stringify([]) as any,
-    windows: JSON.stringify([]) as any,
-    doors: JSON.stringify([]) as any,
-    ceilings: JSON.stringify([]) as any,
-    stairs: JSON.stringify([]) as any,
-    createdAt: now,
-    updatedAt: now,
-  })
-
-  return {
-    id,
-    name: body.name,
-    description: body.description || '',
-    campaignId: body.campaignId,
-    dimensions: body.dimensions,
+    dimensions: { height: 10, ...body.dimensions },
     groundTiles,
     spaceTiles: [],
     voxels: [],
@@ -58,4 +40,8 @@ export default defineEventHandler(async (event) => {
     createdAt: now,
     updatedAt: now,
   }
+
+  await db.insert(maps).values(newMap)
+
+  return newMap
 })

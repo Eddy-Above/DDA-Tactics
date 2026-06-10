@@ -16,19 +16,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'participantId is required' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }
 
-  const participants = parseJsonField(encounter.participants)
+  const participants = encounter.participants
   const mover = participants.find((p: any) => p.id === body.participantId)
   if (!mover) {
     throw createError({ statusCode: 404, message: 'Participant not found' })
@@ -46,7 +39,7 @@ export default defineEventHandler(async (event) => {
   })
 
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants),
+    participants: updatedParticipants,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 

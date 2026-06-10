@@ -136,8 +136,7 @@ export async function resolveAreaIntercedeGroup({
         interceptor.currentWounds >= interceptor.maxWounds &&
         interceptor.evolutionLineId &&
         interceptor.woundsHistory?.length > 0) {
-      const rawState = interceptor.woundsHistory.pop()
-      const previousState = typeof rawState === 'string' ? JSON.parse(rawState) : rawState
+      const previousState = interceptor.woundsHistory.pop()
       if (previousState) {
         const oldEntityId = interceptor.entityId
         interceptor.entityId = previousState.entityId
@@ -152,8 +151,7 @@ export async function resolveAreaIntercedeGroup({
         const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
         const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
-        const devolvedQualities = typeof newDigimon?.qualities === 'string'
-          ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+        const devolvedQualities = newDigimon?.qualities || []
         const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
         interceptor.combatMonsterBonus = devolvedHasCombatMonster
           ? Math.min(interceptor.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)

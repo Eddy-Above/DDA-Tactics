@@ -49,21 +49,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'participantId and newSwaps are required' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }
 
-  const participants = parseJsonField(encounter.participants)
-  const turnOrder = parseJsonField(encounter.turnOrder)
-  const battleLog = parseJsonField(encounter.battleLog)
+  const participants = encounter.participants
+  const turnOrder = encounter.turnOrder
+  const battleLog = encounter.battleLog
 
   const actor = participants.find((p: any) => p.id === body.participantId)
   if (!actor) {
@@ -87,8 +80,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Digimon not found' })
   }
 
-  const qualities: any[] = typeof digimonEntity.qualities === 'string'
-    ? JSON.parse(digimonEntity.qualities) : (digimonEntity.qualities ?? [])
+  const qualities: any[] = digimonEntity.qualities ?? []
 
   const mcQuality = qualities.find((q: any) => q.id === 'mode-change')
   if (!mcQuality) {
@@ -172,19 +164,11 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants),
-    battleLog: JSON.stringify([...battleLog, logEntry]),
+    participants: updatedParticipants,
+    battleLog: [...battleLog, logEntry],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

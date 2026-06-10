@@ -6,13 +6,6 @@ interface TormentorCheckBody {
   failingParticipantIds: string[]
 }
 
-const parseJsonField = (field: any): any[] => {
-  if (!field) return []
-  if (Array.isArray(field)) return field
-  if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-  return []
-}
-
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<TormentorCheckBody>(event)
@@ -29,8 +22,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  let participants = parseJsonField(encounter.participants)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  const battleLog = encounter.battleLog
 
   const boss = participants.find((p: any) => p.id === body.bossParticipantId)
   if (!boss) {
@@ -45,7 +38,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Boss digimon not found' })
   }
 
-  const quals = typeof digi.qualities === 'string' ? JSON.parse(digi.qualities) : (digi.qualities || [])
+  const quals = digi.qualities || []
   if (!(quals as any[]).some((q: any) => q.id === 'tormentor')) {
     throw createError({ statusCode: 400, message: 'Digimon does not have Tormentor' })
   }
@@ -80,15 +73,11 @@ export default defineEventHandler(async (event) => {
   })
 
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify(battleLog),
+    participants: participants,
+    battleLog: battleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    battleLog: parseJsonField(updated.battleLog),
-  }
+  return updated
 })

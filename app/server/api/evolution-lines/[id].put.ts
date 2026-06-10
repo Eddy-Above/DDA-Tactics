@@ -24,15 +24,11 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse existing chain once for validation
-  const existingChainData = typeof existing.chain === 'string'
-    ? JSON.parse(existing.chain)
-    : existing.chain
-  const existingChain = existingChainData as any[]
+  const existingChain = existing.chain
 
   // Validate chain if it's being updated
   if (body.chain) {
-    const chain = body.chain as any[]
+    const chain = body.chain
 
     // All entries must have valid digimonId
     if (chain.some((entry) => !entry.digimonId)) {
@@ -71,21 +67,15 @@ export default defineEventHandler(async (event) => {
   }
 
   // Update evolution line
-  const updateData = {
+  const updateData: Partial<EvolutionLine> = {
     ...body,
-    // Explicitly stringify chain if it's being updated
-    ...(body.chain ? { chain: JSON.stringify(body.chain) } : {}),
     updatedAt: new Date(),
   }
 
   await db.update(evolutionLines).set(updateData).where(eq(evolutionLines.id, id))
 
-  // Return updated evolution line with parsed chain
+  // Return updated evolution line
   const [updated] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
 
-  // Always return with parsed chain
-  return {
-    ...updated,
-    chain: body.chain || (typeof updated.chain === 'string' ? JSON.parse(updated.chain) : updated.chain),
-  }
+  return updated
 })

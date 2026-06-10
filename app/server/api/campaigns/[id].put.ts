@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, campaigns } from '../../db'
+import { db, campaigns, type Campaign } from '../../db'
 import { hashPassword } from '../../utils/password'
 
 interface UpdateCampaignBody {
@@ -31,12 +31,12 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const updateData: any = { updatedAt: new Date() }
+  const updateData: Partial<Campaign> = { updatedAt: new Date() }
 
   if (body.name !== undefined) updateData.name = body.name
   if (body.description !== undefined) updateData.description = body.description
   if (body.level !== undefined) updateData.level = body.level
-  if (body.rulesSettings !== undefined) updateData.rulesSettings = JSON.stringify(body.rulesSettings)
+  if (body.rulesSettings !== undefined) updateData.rulesSettings = body.rulesSettings
 
   // Handle password updates: null = remove, string = set new, undefined = no change
   if (body.password !== undefined) {
@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
     level: updated.level,
     hasPassword: !!updated.passwordHash,
     hasDmPassword: !!updated.dmPasswordHash,
-    rulesSettings: (() => { try { return typeof updated.rulesSettings === 'string' ? JSON.parse(updated.rulesSettings) : (updated.rulesSettings || {}) } catch { return {} } })(),
+    rulesSettings: updated.rulesSettings,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   }

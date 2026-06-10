@@ -29,10 +29,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Parse existing chain
-  const existingChain = typeof existing.chain === 'string'
-    ? JSON.parse(existing.chain)
-    : existing.chain
+  const existingChain = existing.chain
 
   // Build map of existing lock states
   const lockStates = new Map<string, boolean>()
@@ -80,19 +77,7 @@ export default defineEventHandler(async (event) => {
       evolvesFromIndex: parentIndex,
     })
 
-    // Parse evolutionPathIds (forward links)
-    let evolutionPathIds: string[] = []
-    if (digimon.evolutionPathIds) {
-      if (typeof digimon.evolutionPathIds === 'string') {
-        try {
-          evolutionPathIds = JSON.parse(digimon.evolutionPathIds)
-        } catch {
-          evolutionPathIds = []
-        }
-      } else if (Array.isArray(digimon.evolutionPathIds)) {
-        evolutionPathIds = digimon.evolutionPathIds
-      }
-    }
+    const evolutionPathIds: string[] = digimon.evolutionPathIds || []
 
     // Also find any Digimon that evolve FROM this one (backward links)
     const childrenByEvolvesFrom = allDigimon.filter((d) => d.evolvesFromId === digimon.id)
@@ -116,7 +101,7 @@ export default defineEventHandler(async (event) => {
 
   // Update evolution line with new chain
   const updateData = {
-    chain: JSON.stringify(newChain),
+    chain: newChain,
     updatedAt: new Date(),
   }
 

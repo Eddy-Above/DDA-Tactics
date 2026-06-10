@@ -19,6 +19,8 @@ export interface CombatParticipant {
     source: string
     description: string
     value?: number
+    potency?: number
+    potencyStat?: string
   }>
   isActive: boolean
   hasActed: boolean
@@ -64,6 +66,11 @@ export interface CombatParticipant {
   divineProtectionUsesThisBattle?: number
   pendingDivineProtectionDamage?: number
   pendingSimpleActionPenalty?: number
+  statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
+  quickReactionDiceBonus?: number
+  stunActionReducedThisRound?: boolean
+  dataAbsorbActive?: boolean
+  maxPostTurnIntercedes?: number
 }
 
 export interface BattleLogEntry {

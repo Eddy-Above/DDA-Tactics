@@ -34,25 +34,15 @@ export default defineEventHandler(async (event) => {
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
-      const rulesSettings = typeof campaign.rulesSettings === 'string'
-        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
+      const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
     }
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let pendingRequests = parseJsonField(encounter.pendingRequests)
-  let battleLog = parseJsonField(encounter.battleLog)
-  let turnOrder = parseJsonField(encounter.turnOrder)
+  let participants = encounter.participants
+  let pendingRequests = encounter.pendingRequests
+  let battleLog = encounter.battleLog
+  let turnOrder = encounter.turnOrder
 
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -77,25 +67,17 @@ export default defineEventHandler(async (event) => {
         type: 'gm',
         intercedeOptOuts: [],
         gmCharacterOptOuts: { [request.data.targetId]: body.characterOptOuts },
-      })
+      } as any)
     }
 
     // Save participants but do NOT remove the pending request
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
+      participants,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated!.participants),
-      turnOrder: parseJsonField(updated!.turnOrder),
-      battleLog: parseJsonField(updated!.battleLog),
-      pendingRequests: parseJsonField(updated!.pendingRequests),
-      requestResponses: parseJsonField(updated!.requestResponses),
-      hazards: parseJsonField(updated!.hazards),
-    }
+    return updated
   }
 
   // Handle opt-out: save target(s) to tamer's or GM's intercedeOptOuts
@@ -109,7 +91,7 @@ export default defineEventHandler(async (event) => {
       if (gmP) {
         gmP.intercedeOptOuts = [...(gmP.intercedeOptOuts || []), ...optOutTargets]
       } else {
-        participants.push({ id: 'gm', type: 'gm', intercedeOptOuts: optOutTargets })
+        participants.push({ id: 'gm', type: 'gm', intercedeOptOuts: optOutTargets } as any)
       }
     } else {
       const tamerParticipant = participants.find(
@@ -128,7 +110,7 @@ export default defineEventHandler(async (event) => {
   pendingRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
   const updateData: any = {
-    pendingRequests: JSON.stringify(pendingRequests),
+    pendingRequests,
     updatedAt: new Date(),
   }
 
@@ -157,10 +139,10 @@ export default defineEventHandler(async (event) => {
       if (resolved.nextRound !== undefined) updateData.round = resolved.nextRound
     }
 
-    updateData.pendingRequests = JSON.stringify(pendingRequests)
-    updateData.participants = JSON.stringify(participants)
-    updateData.battleLog = JSON.stringify(battleLog)
-    if (turnOrder) updateData.turnOrder = JSON.stringify(turnOrder)
+    updateData.pendingRequests = pendingRequests
+    updateData.participants = participants
+    updateData.battleLog = battleLog
+    if (turnOrder) updateData.turnOrder = turnOrder
   } else {
     // Single-target path: check if all eligible tamers have now skipped
     const remainingGroupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
@@ -217,9 +199,9 @@ export default defineEventHandler(async (event) => {
           }
 
           const updatedRequests = [...pendingRequests, dodgeRequest]
-          updateData.pendingRequests = JSON.stringify(updatedRequests)
+          updateData.pendingRequests = updatedRequests
 
-          updateData.participants = JSON.stringify(participants)
+          updateData.participants = participants
         } else {
           // NPC target — auto-resolve based on attack type
           const isSupportAttack = request.data.isSupportAttack || false
@@ -251,10 +233,10 @@ export default defineEventHandler(async (event) => {
             else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
 
             if (supportResult) {
-              updateData.participants = JSON.stringify(supportResult.participants)
-              updateData.battleLog = JSON.stringify(supportResult.battleLog)
-              updateData.pendingRequests = JSON.stringify(supportResult.pendingRequests)
-              if (supportResult.turnOrder) updateData.turnOrder = JSON.stringify(supportResult.turnOrder)
+              updateData.participants = supportResult.participants
+              updateData.battleLog = supportResult.battleLog
+              updateData.pendingRequests = supportResult.pendingRequests
+              if (supportResult.turnOrder) updateData.turnOrder = supportResult.turnOrder
             }
           } else {
             // Damage attack — auto-resolve (roll dodge, calculate damage)
@@ -272,10 +254,10 @@ export default defineEventHandler(async (event) => {
               currentTurnIndex: encounter.currentTurnIndex || 0,
             })
 
-            updateData.participants = JSON.stringify(result.participants)
-            updateData.battleLog = JSON.stringify(result.battleLog)
+            updateData.participants = result.participants
+            updateData.battleLog = result.battleLog
             if (result.turnOrder) {
-              updateData.turnOrder = JSON.stringify(result.turnOrder)
+              updateData.turnOrder = result.turnOrder
             }
             if (result.nextTurnIndex !== undefined) updateData.currentTurnIndex = result.nextTurnIndex
             if (result.nextRound !== undefined) updateData.round = result.nextRound
@@ -284,7 +266,7 @@ export default defineEventHandler(async (event) => {
       }
     } else {
       // Not all skipped yet, but still save participant changes (opt-out)
-      updateData.participants = JSON.stringify(participants)
+      updateData.participants = participants
     }
   }
 
@@ -296,13 +278,5 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

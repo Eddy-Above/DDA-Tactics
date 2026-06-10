@@ -1,6 +1,5 @@
 import { eq } from 'drizzle-orm'
 import { db, tamers } from '../../db'
-import { parseTamerData } from '../../utils/parsers'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -12,6 +11,5 @@ export default defineEventHandler(async (event) => {
     queryBuilder = queryBuilder.where(eq(tamers.campaignId, campaignId)) as typeof queryBuilder
   }
 
-  const allTamers = await queryBuilder
-  return allTamers.map(parseTamerData)
+  return await queryBuilder
 })

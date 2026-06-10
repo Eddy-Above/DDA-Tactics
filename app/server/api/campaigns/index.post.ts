@@ -1,4 +1,4 @@
-import { db, campaigns } from '../../db'
+import { db, campaigns, type NewCampaign } from '../../db'
 import { generateId } from '../../utils/id'
 import { hashPassword } from '../../utils/password'
 
@@ -23,14 +23,14 @@ export default defineEventHandler(async (event) => {
   const id = generateId()
   const now = new Date()
 
-  const newCampaign: any = {
+  const newCampaign: NewCampaign = {
     id,
     name: body.name,
     description: body.description || '',
     level: body.level || 'standard',
     passwordHash: body.password ? hashPassword(body.password) : null,
     dmPasswordHash: body.dmPassword ? hashPassword(body.dmPassword) : null,
-    rulesSettings: JSON.stringify({}),
+    rulesSettings: {},
     createdAt: now,
     updatedAt: now,
   }

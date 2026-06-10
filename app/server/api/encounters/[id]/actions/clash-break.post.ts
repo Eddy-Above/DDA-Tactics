@@ -24,15 +24,8 @@ export default defineEventHandler(async (event) => {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') { try { return JSON.parse(field) } catch { return [] } }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  let battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  let battleLog = encounter.battleLog
 
   // Validate breaker exists and is not already in this clash
   const breaker = participants.find((p: any) => p.id === body.breakerId)
@@ -48,7 +41,7 @@ export default defineEventHandler(async (event) => {
 
   // Check it's breaker's turn (or partner tamer's turn)
   const currentIndex = encounter.currentTurnIndex || 0
-  const turnOrder = parseJsonField(encounter.turnOrder)
+  const turnOrder = encounter.turnOrder
   const currentTurnParticipantId = turnOrder[currentIndex]
   let canAct = breaker.id === currentTurnParticipantId
   if (!canAct && breaker.type === 'digimon') {
@@ -86,11 +79,11 @@ export default defineEventHandler(async (event) => {
     breakerBody = ds?.body ?? 0
     breakerSize = d?.size || 'medium'
     breakerIsGigantic = breakerSize === 'gigantic'
-    const qualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    const qualities = d?.qualities || []
     breakerHasBrawler = qualities.some((q: any) => q.choiceId === 'brawler')
   } else if (breaker.type === 'tamer') {
     const [t] = await db.select().from(tamers).where(eq(tamers.id, breaker.entityId))
-    const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+    const attrs = t?.attributes || {}
     breakerBody = attrs.body ?? 0
   }
 
@@ -113,12 +106,12 @@ export default defineEventHandler(async (event) => {
     controllerBody = ds?.body ?? 0
     controllerSize = d?.size || 'medium'
     controllerIsGigantic = controllerSize === 'gigantic'
-    controllerQualities = typeof d?.qualities === 'string' ? JSON.parse(d.qualities) : (d?.qualities || [])
+    controllerQualities = d?.qualities || []
     controllerHasBrawler = controllerQualities.some((q: any) => q.choiceId === 'brawler')
   } else if (controller.type === 'tamer') {
     const [t] = await db.select().from(tamers).where(eq(tamers.id, controller.entityId))
     controllerIsPlayer = true
-    const attrs = typeof t?.attributes === 'string' ? JSON.parse(t.attributes) : (t?.attributes || {})
+    const attrs = t?.attributes || {}
     controllerAgility = attrs.agility ?? 0
     controllerBody = attrs.body ?? 0
   }
@@ -231,19 +224,11 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.update(encounters).set({
-    participants: JSON.stringify(participants),
-    battleLog: JSON.stringify(battleLog),
+    participants,
+    battleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })

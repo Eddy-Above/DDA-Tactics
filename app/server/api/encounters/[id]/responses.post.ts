@@ -66,28 +66,13 @@ export default defineEventHandler(async (event) => {
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
-      const rulesSettings = typeof campaign.rulesSettings === 'string'
-        ? JSON.parse(campaign.rulesSettings) : (campaign.rulesSettings || {})
+      const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
     }
   }
 
-  // Parse existing requests and responses
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try {
-        return JSON.parse(field)
-      } catch {
-        return []
-      }
-    }
-    return []
-  }
-
-  const pendingRequests = parseJsonField(encounter.pendingRequests)
-  const currentResponses = parseJsonField(encounter.requestResponses)
+  const pendingRequests = encounter.pendingRequests
+  const currentResponses = encounter.requestResponses
 
   // Validate request exists and belongs to this tamer
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -207,20 +192,12 @@ export default defineEventHandler(async (event) => {
     filteredRequests.push(initiativeRequest)
 
     await db.update(encounters).set({
-      pendingRequests: JSON.stringify(filteredRequests),
+      pendingRequests: filteredRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // Create response
@@ -242,16 +219,15 @@ export default defineEventHandler(async (event) => {
 
   // If this is a dodge-roll response to a player attack, calculate damage and update battle log
   let updateData: any = {
-    requestResponses: JSON.stringify(currentResponses),
-    pendingRequests: JSON.stringify(pendingRequests),
+    requestResponses: currentResponses,
+    pendingRequests: pendingRequests,
     updatedAt: new Date(),
   }
 
   if (body.response.type === 'dodge-rolled' && request.data?.attackId) {
-    // Parse encounter data
-    let participants = parseJsonField(encounter.participants)
-    let battleLog = parseJsonField(encounter.battleLog)
-    const turnOrder = parseJsonField(encounter.turnOrder)
+    let participants = encounter.participants
+    let battleLog = encounter.battleLog
+    const turnOrder = encounter.turnOrder
     const currentTurnIndex = encounter.currentTurnIndex ?? 0
     // Determine if target has already gone this round.
     // Digimon are not in turnOrder — use their partner Tamer's position instead.
@@ -286,15 +262,15 @@ export default defineEventHandler(async (event) => {
       if (targetParticipantForDodge?.type === 'digimon') {
         const [targetDigimonForDodge] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
         if (targetDigimonForDodge) {
-          const baseStats = typeof targetDigimonForDodge.baseStats === 'string' ? JSON.parse(targetDigimonForDodge.baseStats) : targetDigimonForDodge.baseStats
-          const bonusStats = typeof (targetDigimonForDodge as any).bonusStats === 'string' ? JSON.parse((targetDigimonForDodge as any).bonusStats) : (targetDigimonForDodge as any).bonusStats
+          const baseStats = targetDigimonForDodge.baseStats
+          const bonusStats = (targetDigimonForDodge as any).bonusStats
           fullDodgePool = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0) || 3
         }
       } else if (targetParticipantForDodge?.type === 'tamer') {
         const [targetTamerForDodge] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
         if (targetTamerForDodge) {
-          const attrs = typeof targetTamerForDodge.attributes === 'string' ? JSON.parse(targetTamerForDodge.attributes) : targetTamerForDodge.attributes
-          const skills = typeof targetTamerForDodge.skills === 'string' ? JSON.parse(targetTamerForDodge.skills) : targetTamerForDodge.skills
+          const attrs = targetTamerForDodge.attributes
+          const skills = targetTamerForDodge.skills
           fullDodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
         }
       }
@@ -317,8 +293,7 @@ export default defineEventHandler(async (event) => {
     if (attackerParticipant?.type === 'digimon') {
       const [attackerDigimonForDef] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
       if (attackerDigimonForDef?.attacks) {
-        const attacksList = typeof attackerDigimonForDef.attacks === 'string'
-          ? JSON.parse(attackerDigimonForDef.attacks) : attackerDigimonForDef.attacks
+        const attacksList = attackerDigimonForDef.attacks
         attackDef = attacksList?.find((a: any) => a.id === request.data.attackId)
       }
     }
@@ -433,15 +408,15 @@ export default defineEventHandler(async (event) => {
       }
 
       battleLog = [...battleLog, dodgeLogEntry]
-      updateData.participants = JSON.stringify(participants)
-      updateData.battleLog = JSON.stringify(battleLog)
+      updateData.participants = participants
+      updateData.battleLog = battleLog
 
       // Check for Counterattack on miss (support branch)
       if (!hit && request.targetParticipantId) {
         const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
         if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
           const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
-          const tgtQ = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+          const tgtQ = tgtDig?.qualities || []
           if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
             const caResult = await triggerCounterattack({
               participants,
@@ -451,14 +426,14 @@ export default defineEventHandler(async (event) => {
               counterattackerParticipantId: request.targetParticipantId,
               originalAttackerParticipantId: request.data.attackerParticipantId,
               houseRules,
-              turnOrder: parseJsonField(encounter.turnOrder),
+              turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
-            updateData.participants = JSON.stringify(participants)
-            updateData.battleLog = JSON.stringify(battleLog)
-            updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+            updateData.participants = participants
+            updateData.battleLog = battleLog
+            updateData.pendingRequests = caResult.pendingRequests
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
@@ -474,19 +449,13 @@ export default defineEventHandler(async (event) => {
         const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
 
         if (attackerDigimon) {
-          const baseStats = typeof attackerDigimon.baseStats === 'string'
-            ? JSON.parse(attackerDigimon.baseStats)
-            : attackerDigimon.baseStats
-          const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-            ? JSON.parse((attackerDigimon as any).bonusStats)
-            : (attackerDigimon as any).bonusStats
+          const baseStats = attackerDigimon.baseStats
+          const bonusStats = (attackerDigimon as any).bonusStats
 
           attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
 
           if (attackerDigimon.attacks) {
-            const attacks = typeof attackerDigimon.attacks === 'string'
-              ? JSON.parse(attackerDigimon.attacks)
-              : attackerDigimon.attacks
+            const attacks = attackerDigimon.attacks
 
             const aDef = attacks?.find((a: any) => a.id === request.data.attackId)
 
@@ -525,17 +494,11 @@ export default defineEventHandler(async (event) => {
       if (attackerParticipant?.type === 'digimon') {
         const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
         if (attackerDigimon) {
-          const baseStats = typeof attackerDigimon.baseStats === 'string'
-            ? JSON.parse(attackerDigimon.baseStats)
-            : attackerDigimon.baseStats
-          const bonusStats = typeof (attackerDigimon as any).bonusStats === 'string'
-            ? JSON.parse((attackerDigimon as any).bonusStats)
-            : (attackerDigimon as any).bonusStats
+          const baseStats = attackerDigimon.baseStats
+          const bonusStats = (attackerDigimon as any).bonusStats
           attackerHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
-          const attackerQualities = typeof attackerDigimon.qualities === 'string'
-            ? JSON.parse(attackerDigimon.qualities)
-            : attackerDigimon.qualities
+          const attackerQualities = attackerDigimon.qualities
           attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
           attackerCombatMonsterBonus = attackerParticipant.combatMonsterBonus ?? 0
           attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
@@ -556,19 +519,13 @@ export default defineEventHandler(async (event) => {
         const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
         targetDigimonRef = targetDigimon
         if (targetDigimon) {
-          const targetBaseStats = typeof targetDigimon.baseStats === 'string'
-            ? JSON.parse(targetDigimon.baseStats)
-            : targetDigimon.baseStats
-          const targetBonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-            ? JSON.parse((targetDigimon as any).bonusStats)
-            : (targetDigimon as any).bonusStats
+          const targetBaseStats = targetDigimon.baseStats
+          const targetBonusStats = (targetDigimon as any).bonusStats
 
           targetArmor = (targetBaseStats?.armor ?? 0) + (targetBonusStats?.armor ?? 0)
           targetHealthStat = (targetBaseStats?.health ?? 0) + (targetBonusStats?.health ?? 0)
 
-          const targetQualities = typeof targetDigimon.qualities === 'string'
-            ? JSON.parse(targetDigimon.qualities)
-            : targetDigimon.qualities
+          const targetQualities = targetDigimon.qualities
           const targetDataOpt = targetQualities?.find((q: any) => q.id === 'data-optimization')
           if (targetDataOpt?.choiceId === 'guardian') {
             targetArmor += 2
@@ -580,8 +537,8 @@ export default defineEventHandler(async (event) => {
       } else if (targetParticipant?.type === 'tamer') {
         const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
         if (targetTamer) {
-          const attrs = typeof targetTamer.attributes === 'string' ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-          const skills = typeof targetTamer.skills === 'string' ? JSON.parse(targetTamer.skills) : targetTamer.skills
+          const attrs = targetTamer.attributes
+          const skills = targetTamer.skills
           targetArmor = (attrs?.body ?? 0) + (skills?.endurance ?? 0)
         }
       }
@@ -662,22 +619,14 @@ export default defineEventHandler(async (event) => {
           const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
           await db.update(encounters).set({
-            participants: JSON.stringify(updatedWithPending) as any,
-            pendingRequests: JSON.stringify([...filteredRequests, dpRequest]) as any,
-            requestResponses: JSON.stringify(currentResponses) as any,
+            participants: updatedWithPending,
+            pendingRequests: [...filteredRequests, dpRequest],
+            requestResponses: currentResponses,
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
 
           const [earlyUpdated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-          return {
-            ...earlyUpdated,
-            participants: parseJsonField(earlyUpdated.participants),
-            turnOrder: parseJsonField(earlyUpdated.turnOrder),
-            battleLog: parseJsonField(earlyUpdated.battleLog),
-            hazards: parseJsonField(earlyUpdated.hazards),
-            pendingRequests: parseJsonField(earlyUpdated.pendingRequests),
-            requestResponses: parseJsonField(earlyUpdated.requestResponses),
-          }
+          return earlyUpdated
         }
       }
 
@@ -837,8 +786,7 @@ export default defineEventHandler(async (event) => {
           const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
           const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
-          const devolvedQualities = typeof newDigimon?.qualities === 'string'
-            ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+          const devolvedQualities = newDigimon?.qualities || []
           const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
           damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
             ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
@@ -890,15 +838,15 @@ export default defineEventHandler(async (event) => {
 
       battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : [])]
 
-      updateData.participants = JSON.stringify(participants)
-      updateData.battleLog = JSON.stringify(battleLog)
+      updateData.participants = participants
+      updateData.battleLog = battleLog
 
       // Check for Counterattack on miss (damage branch)
       if (!hit && request.targetParticipantId) {
         const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
         if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
           const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
-          const tgtQ = typeof tgtDig?.qualities === 'string' ? JSON.parse(tgtDig.qualities) : (tgtDig?.qualities || [])
+          const tgtQ = tgtDig?.qualities || []
           if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
             const caResult = await triggerCounterattack({
               participants,
@@ -908,14 +856,14 @@ export default defineEventHandler(async (event) => {
               counterattackerParticipantId: request.targetParticipantId,
               originalAttackerParticipantId: request.data.attackerParticipantId,
               houseRules,
-              turnOrder: parseJsonField(encounter.turnOrder),
+              turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
-            updateData.participants = JSON.stringify(participants)
-            updateData.battleLog = JSON.stringify(battleLog)
-            updateData.pendingRequests = JSON.stringify(caResult.pendingRequests)
+            updateData.participants = participants
+            updateData.battleLog = battleLog
+            updateData.pendingRequests = caResult.pendingRequests
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
@@ -927,8 +875,8 @@ export default defineEventHandler(async (event) => {
 
   // === HEALTH-ROLLED: Positive [P] effect duration from Health roll ===
   if (body.response.type === 'health-rolled' && request.data?.attackId) {
-    let participants = parseJsonField(encounter.participants)
-    let battleLog = parseJsonField(encounter.battleLog)
+    let participants = encounter.participants
+    let battleLog = encounter.battleLog
 
     const accuracySuccesses = request.data.accuracySuccesses
     const healthSuccesses = body.response.healthSuccesses!
@@ -1006,14 +954,14 @@ export default defineEventHandler(async (event) => {
 
     battleLog = [...battleLog, healthLogEntry]
 
-    updateData.participants = JSON.stringify(participants)
-    updateData.battleLog = JSON.stringify(battleLog)
+    updateData.participants = participants
+    updateData.battleLog = battleLog
   }
 
   // === COUNTERATTACK-DECLINED: player declines the free retaliation ===
   if (body.response.type === 'counterattack-declined') {
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
-    const battleLog = parseJsonField(encounter.battleLog)
+    const battleLog = encounter.battleLog
 
     const declineLog = {
       id: `log-${Date.now()}-ca-decline`,
@@ -1029,27 +977,19 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      pendingRequests: JSON.stringify(filteredRequests),
-      battleLog: JSON.stringify([...battleLog, declineLog]),
+      pendingRequests: filteredRequests,
+      battleLog: [...battleLog, declineLog],
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // === COUNTERATTACK-TRIGGERED: player submits their chosen attack + accuracy roll ===
   if (body.response.type === 'counterattack-triggered') {
-    let participants = parseJsonField(encounter.participants)
-    let battleLog = parseJsonField(encounter.battleLog)
+    let participants = encounter.participants
+    let battleLog = encounter.battleLog
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     const counterattackerParticipantId = request.data?.counterattackerParticipantId
@@ -1106,22 +1046,14 @@ export default defineEventHandler(async (event) => {
       ]
 
       await db.update(encounters).set({
-        participants: JSON.stringify(participants),
-        battleLog: JSON.stringify(battleLog),
-        pendingRequests: JSON.stringify(filteredRequests),
+        participants,
+        battleLog,
+        pendingRequests: filteredRequests,
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
 
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-      return {
-        ...updated,
-        participants: parseJsonField(updated.participants),
-        turnOrder: parseJsonField(updated.turnOrder),
-        battleLog: parseJsonField(updated.battleLog),
-        hazards: parseJsonField(updated.hazards),
-        pendingRequests: parseJsonField(updated.pendingRequests),
-        requestResponses: parseJsonField(updated.requestResponses),
-      }
+      return updated
     }
 
     // accuracySuccesses > 0 — determine if original attacker is player or NPC
@@ -1147,7 +1079,7 @@ export default defineEventHandler(async (event) => {
     if (counterattacker?.type === 'digimon') {
       const [caDig] = await db.select().from(digimon).where(eq(digimon.id, counterattacker.entityId))
       if (caDig?.attacks) {
-        const attacks = typeof caDig.attacks === 'string' ? JSON.parse(caDig.attacks) : caDig.attacks
+        const attacks = caDig.attacks
         chosenAttack = (attacks as any[]).find((a: any) => a.id === attackId) || null
       }
     }
@@ -1188,9 +1120,9 @@ export default defineEventHandler(async (event) => {
       }
 
       await db.update(encounters).set({
-        participants: JSON.stringify(participants),
-        battleLog: JSON.stringify(battleLog),
-        pendingRequests: JSON.stringify([...filteredRequests, dodgeRequest]),
+        participants,
+        battleLog,
+        pendingRequests: [...filteredRequests, dodgeRequest],
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
     } else {
@@ -1206,17 +1138,17 @@ export default defineEventHandler(async (event) => {
         round: encounter.round || 0,
         attackerName: counterattackerName,
         targetName: originalAttackerName,
-        turnOrder: parseJsonField(encounter.turnOrder),
+        turnOrder: encounter.turnOrder,
         currentTurnIndex: encounter.currentTurnIndex ?? 0,
         houseRules,
         counterattack: true,
       })
 
       await db.update(encounters).set({
-        participants: JSON.stringify(result.participants),
-        battleLog: JSON.stringify(result.battleLog),
-        pendingRequests: JSON.stringify(filteredRequests),
-        ...(result.turnOrder ? { turnOrder: JSON.stringify(result.turnOrder) } : {}),
+        participants: result.participants,
+        battleLog: result.battleLog,
+        pendingRequests: filteredRequests,
+        ...(result.turnOrder ? { turnOrder: result.turnOrder } : {}),
         ...(result.nextTurnIndex !== undefined ? { currentTurnIndex: result.nextTurnIndex } : {}),
         ...(result.nextRound !== undefined ? { round: result.nextRound } : {}),
         updatedAt: new Date(),
@@ -1224,21 +1156,13 @@ export default defineEventHandler(async (event) => {
     }
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // === RECOVERY-ROLLED: post-combat wound recovery ===
   if (body.response.type === 'recovery-rolled') {
-    let participants = parseJsonField(encounter.participants)
-    const battleLog = parseJsonField(encounter.battleLog)
+    let participants = encounter.participants
+    const battleLog = encounter.battleLog
 
     const tamerSuccesses = body.response.tamerSuccesses ?? 0
     const digimonSuccesses = body.response.digimonSuccesses ?? 0
@@ -1297,28 +1221,20 @@ export default defineEventHandler(async (event) => {
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants),
-      battleLog: JSON.stringify([...battleLog, recoveryLog]),
-      pendingRequests: JSON.stringify(filteredRequests),
+      participants,
+      battleLog: [...battleLog, recoveryLog],
+      pendingRequests: filteredRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // === DIVINE-PROTECTION-USED: player negates the pending damage ===
   if (body.response.type === 'divine-protection-used') {
-    let participants = parseJsonField(encounter.participants)
-    const battleLog = parseJsonField(encounter.battleLog)
+    let participants = encounter.participants
+    const battleLog = encounter.battleLog
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     const targetParticipantId = request.data?.targetParticipantId
@@ -1374,28 +1290,20 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants) as any,
-      battleLog: JSON.stringify([...battleLog, dpLog]) as any,
-      pendingRequests: JSON.stringify(filteredRequests) as any,
+      participants,
+      battleLog: [...battleLog, dpLog],
+      pendingRequests: filteredRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // === DIVINE-PROTECTION-DECLINED: apply the pending damage ===
   if (body.response.type === 'divine-protection-declined') {
-    let participants = parseJsonField(encounter.participants)
-    const battleLog = parseJsonField(encounter.battleLog)
+    let participants = encounter.participants
+    const battleLog = encounter.battleLog
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     const targetParticipantId = request.data?.targetParticipantId
@@ -1422,22 +1330,14 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
-      participants: JSON.stringify(participants) as any,
-      battleLog: JSON.stringify([...battleLog, declineLog]) as any,
-      pendingRequests: JSON.stringify(filteredRequests) as any,
+      participants,
+      battleLog: [...battleLog, declineLog],
+      pendingRequests: filteredRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return {
-      ...updated,
-      participants: parseJsonField(updated.participants),
-      turnOrder: parseJsonField(updated.turnOrder),
-      battleLog: parseJsonField(updated.battleLog),
-      hazards: parseJsonField(updated.hazards),
-      pendingRequests: parseJsonField(updated.pendingRequests),
-      requestResponses: parseJsonField(updated.requestResponses),
-    }
+    return updated
   }
 
   // Update encounter
@@ -1448,13 +1348,5 @@ export default defineEventHandler(async (event) => {
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

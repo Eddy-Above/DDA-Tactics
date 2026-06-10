@@ -24,18 +24,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: `Encounter with ID ${encounterId} not found` })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  const participants = parseJsonField(encounter.participants) || []
-  const turnOrder = parseJsonField(encounter.turnOrder) || []
-  const battleLog = parseJsonField(encounter.battleLog) || []
+  const participants = encounter.participants || []
+  const turnOrder = encounter.turnOrder || []
+  const battleLog = encounter.battleLog || []
 
   // Find tamer participant
   const actor = participants.find((p: any) => p.id === body.participantId)
@@ -64,10 +55,8 @@ export default defineEventHandler(async (event) => {
   const [targetDigimonEntity] = await db.select().from(digimon).where(eq(digimon.id, targetParticipant.entityId))
   if (!targetDigimonEntity) throw createError({ statusCode: 404, message: 'Target digimon entity not found' })
 
-  const targetQualities = typeof targetDigimonEntity.qualities === 'string'
-    ? JSON.parse(targetDigimonEntity.qualities)
-    : targetDigimonEntity.qualities
-  const hasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')
+  const targetQualities = targetDigimonEntity.qualities || []
+  const hasPositiveReinforcement = targetQualities.some((q: any) => q.id === 'positive-reinforcement')
   if (!hasPositiveReinforcement) {
     throw createError({ statusCode: 400, message: 'Target digimon does not have Positive Reinforcement' })
   }
@@ -113,20 +102,12 @@ export default defineEventHandler(async (event) => {
   const updatedBattleLog = [...battleLog, logEntry]
 
   await db.update(encounters).set({
-    participants: JSON.stringify(updatedParticipants),
-    battleLog: JSON.stringify(updatedBattleLog),
+    participants: updatedParticipants,
+    battleLog: updatedBattleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    hazards: parseJsonField(updated.hazards),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-  }
+  return updated
 })

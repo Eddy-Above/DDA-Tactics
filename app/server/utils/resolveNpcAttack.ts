@@ -80,10 +80,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   if (target.type === 'digimon') {
     const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
     if (targetDigimon) {
-      const baseStats = typeof targetDigimon.baseStats === 'string'
-        ? JSON.parse(targetDigimon.baseStats) : targetDigimon.baseStats
-      const bonusStats = typeof (targetDigimon as any).bonusStats === 'string'
-        ? JSON.parse((targetDigimon as any).bonusStats) : (targetDigimon as any).bonusStats
+      const baseStats = targetDigimon.baseStats
+      const bonusStats = (targetDigimon as any).bonusStats
       const rawTargetStats = {
         accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
         damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
@@ -92,8 +90,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       }
       const dodgeSource = (target.statSwaps as Record<string, string> | undefined)?.dodge ?? 'dodge'
       dodgePool = (rawTargetStats[dodgeSource as keyof typeof rawTargetStats] ?? rawTargetStats.dodge) || 3
-      targetQualities = typeof targetDigimon.qualities === 'string'
-        ? JSON.parse(targetDigimon.qualities) : (targetDigimon.qualities || [])
+      targetQualities = targetDigimon.qualities || []
       targetHasPositiveReinforcement = targetQualities.some((q: any) => q.id === 'positive-reinforcement')
       targetHasCombatMonster = targetQualities.some((q: any) => q.id === 'combat-monster')
       const instinct = targetQualities.find((q: any) => q.id === 'instinct')
@@ -102,10 +99,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
     if (targetTamer) {
-      const attrs = typeof targetTamer.attributes === 'string'
-        ? JSON.parse(targetTamer.attributes) : targetTamer.attributes
-      const skills = typeof targetTamer.skills === 'string'
-        ? JSON.parse(targetTamer.skills) : targetTamer.skills
+      const attrs = targetTamer.attributes
+      const skills = targetTamer.skills
       dodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
     }
   }
@@ -327,9 +322,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.evolutionLineId &&
       damagedTarget.woundsHistory?.length > 0) {
-    const rawState = damagedTarget.woundsHistory.pop()
-    // Handle case where previousState might be serialized as JSON string
-    const previousState = typeof rawState === 'string' ? JSON.parse(rawState) : rawState
+    const previousState = damagedTarget.woundsHistory.pop()
     if (previousState) {
       const oldEntityId = damagedTarget.entityId
       damagedTarget.entityId = previousState.entityId
@@ -342,8 +335,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
       const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
-      const devolvedQualities = typeof newDigimon?.qualities === 'string'
-        ? JSON.parse(newDigimon.qualities) : (newDigimon?.qualities || [])
+      const devolvedQualities = newDigimon?.qualities || []
       const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
       damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
         ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)

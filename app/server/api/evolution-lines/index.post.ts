@@ -1,4 +1,4 @@
-import { db, evolutionLines } from '../../db'
+import { db, evolutionLines, type NewEvolutionLine } from '../../db'
 import { generateId } from '../../utils/id'
 
 interface CreateEvolutionLineBody {
@@ -41,11 +41,11 @@ export default defineEventHandler(async (event) => {
     isUnlocked: index === 0 || (entry.isUnlocked ?? false),
   }))
 
-  const newEvolutionLine = {
+  const newEvolutionLine: NewEvolutionLine = {
     id,
     name: body.name,
     description: body.description || '',
-    chain: JSON.stringify(chain), // Explicitly stringify to ensure proper JSON storage
+    chain,
     partnerId: body.partnerId || null,
     campaignId: body.campaignId || null,
     currentStageIndex: 0,
@@ -55,9 +55,5 @@ export default defineEventHandler(async (event) => {
 
   await db.insert(evolutionLines).values(newEvolutionLine)
 
-  // Return with parsed chain
-  return {
-    ...newEvolutionLine,
-    chain, // Return the array, not the stringified version
-  }
+  return newEvolutionLine
 })

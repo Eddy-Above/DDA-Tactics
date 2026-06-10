@@ -27,18 +27,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  const parseJsonField = (field: any) => {
-    if (!field) return []
-    if (Array.isArray(field)) return field
-    if (typeof field === 'string') {
-      try { return JSON.parse(field) } catch { return [] }
-    }
-    return []
-  }
-
-  let participants = parseJsonField(encounter.participants)
-  const turnOrder = parseJsonField(encounter.turnOrder)
-  const battleLog = parseJsonField(encounter.battleLog)
+  let participants = encounter.participants
+  const turnOrder = encounter.turnOrder
+  const battleLog = encounter.battleLog
 
   // Find tamer participant
   const participant = participants.find((p: any) => p.id === body.participantId)
@@ -63,15 +54,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Tamer not found' })
   }
 
-  let tamerAttributes
-  let tamerXpBonuses
-
-  try {
-    tamerAttributes = typeof tamer.attributes === 'string' ? JSON.parse(tamer.attributes) : tamer.attributes
-    tamerXpBonuses = typeof tamer.xpBonuses === 'string' ? JSON.parse(tamer.xpBonuses) : tamer.xpBonuses
-  } catch (e: any) {
-    throw createError({ statusCode: 400, message: `Failed to parse tamer data: ${e.message}` })
-  }
+  const tamerAttributes = tamer.attributes
+  const tamerXpBonuses = tamer.xpBonuses
 
   // Look up campaign level from the campaign
   let campaignLevel: string = 'standard'
@@ -109,9 +93,7 @@ export default defineEventHandler(async (event) => {
   // Check per-day usage limit
   const usageLimit = getOrderUsageLimit(order.type)
   if (usageLimit === 'per-day') {
-    const usedPerDayOrders: string[] = typeof tamer.usedPerDayOrders === 'string'
-      ? JSON.parse(tamer.usedPerDayOrders)
-      : (tamer.usedPerDayOrders || [])
+    const usedPerDayOrders = tamer.usedPerDayOrders || []
     if (usedPerDayOrders.includes(body.orderName)) {
       throw createError({ statusCode: 400, message: `Order "${body.orderName}" has already been used today` })
     }
@@ -264,31 +246,21 @@ export default defineEventHandler(async (event) => {
 
   // If per-day order, persist usage to tamer record
   if (usageLimit === 'per-day') {
-    const usedPerDayOrders: string[] = typeof tamer.usedPerDayOrders === 'string'
-      ? JSON.parse(tamer.usedPerDayOrders)
-      : (tamer.usedPerDayOrders || [])
+    const usedPerDayOrders = tamer.usedPerDayOrders || []
     await db.update(tamers).set({
-      usedPerDayOrders: JSON.stringify([...usedPerDayOrders, body.orderName]) as any,
+      usedPerDayOrders: [...usedPerDayOrders, body.orderName],
       updatedAt: new Date(),
     }).where(eq(tamers.id, tamer.id))
   }
 
   // Update encounter
   await db.update(encounters).set({
-    participants: JSON.stringify(participants) as any,
-    battleLog: JSON.stringify([...battleLog, logEntry]) as any,
+    participants,
+    battleLog: [...battleLog, logEntry],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-  return {
-    ...updated,
-    participants: parseJsonField(updated.participants),
-    turnOrder: parseJsonField(updated.turnOrder),
-    battleLog: parseJsonField(updated.battleLog),
-    pendingRequests: parseJsonField(updated.pendingRequests),
-    requestResponses: parseJsonField(updated.requestResponses),
-    hazards: parseJsonField(updated.hazards),
-  }
+  return updated
 })
