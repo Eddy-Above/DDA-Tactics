@@ -34,6 +34,7 @@
           :is-dm="isDm"
           :my-participant-ids="myParticipantIds"
           :active-participant-id="activeParticipantId"
+          :secondary-active-participant-id="secondaryActiveParticipantId"
           :selected-attack="mapSelectedAttack"
           :selectable-participant-ids="selectableParticipantIds"
           :attacker-range="attackerStats.range"
@@ -180,6 +181,7 @@ const props = defineProps<{
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     giganticDimensions?: { width: number; height: number; depth: number } | null
     isEnemy?: boolean
+    partnerId?: string | null
   }>
   selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
   playerPlacementMode?: boolean
@@ -267,6 +269,33 @@ const myParticipantIds = computed(() =>
 const activeParticipantId = computed(() =>
   props.encounter.turnOrder[props.encounter.currentTurnIndex] ?? null
 )
+
+// ── Partner of the active participant (tamer <-> partner digimon) ──────────
+// Both members of a player's tamer/partner-digimon pair are highlighted
+// together during that pair's combined turn.
+const secondaryActiveParticipantId = computed(() => {
+  const activeId = activeParticipantId.value
+  if (!activeId) return null
+  const participants = props.encounter.participants
+  const active = participants.find(p => p.id === activeId)
+  if (!active) return null
+
+  if (active.type === 'tamer') {
+    const partner = participants.find(p =>
+      p.type === 'digimon' && props.digimonMap[p.entityId]?.partnerId === active.entityId
+    )
+    return partner?.id ?? null
+  }
+
+  if (active.type === 'digimon') {
+    const partnerTamerId = props.digimonMap[active.entityId]?.partnerId
+    if (!partnerTamerId) return null
+    const tamerParticipant = participants.find(p => p.type === 'tamer' && p.entityId === partnerTamerId)
+    return tamerParticipant?.id ?? null
+  }
+
+  return null
+})
 
 // ── NPC entity ID set (for battle log redaction) ───────────────────────────
 const npcEntityIds = computed(() => {

@@ -102,13 +102,14 @@ const props = defineProps<{
   participantPositions: Record<string, Vec3>
   destructibleStates: DestructibleState[]
   tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
-  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null }>
+  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null }>
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   currentEditY: number
   isDm: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
+  secondaryActiveParticipantId: string | null  // partner of the active participant, also highlighted
   selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
   attackerRange: number
   attackerEffectiveLimit: number
@@ -771,8 +772,9 @@ function buildSprites() {
     group.add(hitboxMesh)
 
     // Occupied volume outline
+    const isHighlighted = p.id === props.activeParticipantId || p.id === props.secondaryActiveParticipantId
     const borderEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(footprint * 0.92, charHeight, footprint * 0.92))
-    const borderMat = new THREE.LineBasicMaterial({ color: p.id === props.activeParticipantId ? 0xff8800 : 0x334466, depthTest: false })
+    const borderMat = new THREE.LineBasicMaterial({ color: isHighlighted ? 0xff8800 : 0x334466, depthTest: false })
     const borderLines = new THREE.LineSegments(borderEdges, borderMat)
     borderLines.position.y = charHeight / 2
     group.add(borderLines)
@@ -1880,6 +1882,10 @@ watch(
 
 watch(() => props.digimonMap, () => { if (scene) buildSprites() }, { deep: true })
 watch(() => props.tamerMap, () => { if (scene) buildSprites() }, { deep: true })
+
+watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () => {
+  if (scene) buildSprites()
+})
 
 watch(() => props.activeTool, (tool) => {
   if (controls) controls.enabled = (tool === 'select')
