@@ -2134,7 +2134,7 @@ defineExpose({ movingParticipantId })
   transform: translateX(-50%);
   border-radius: 50%;
   overflow: hidden;
-  border: 2px solid;
+  border: 5px solid;
   box-shadow: 0 0 8px rgba(0,0,0,0.8);
 }
 .char-token-img {
