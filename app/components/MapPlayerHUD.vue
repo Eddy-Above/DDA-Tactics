@@ -30,6 +30,14 @@
             </div>
             <div class="hud-wound-label">{{ entry.woundBoxes - entry.currentWounds }} / {{ entry.woundBoxes }}</div>
           </div>
+          <div class="hud-actions" :title="`${entry.actionsRemaining.simple} action(s) remaining`">
+            <span
+              v-for="i in Math.max(2, entry.actionsRemaining.simple)"
+              :key="i"
+              class="action-dot"
+              :class="i <= entry.actionsRemaining.simple ? 'unspent' : 'spent'"
+            />
+          </div>
         </div>
       </template>
 
@@ -70,7 +78,7 @@ const props = defineProps<{
 
 const minimized = ref(false)
 
-interface HudEntry { id: string; name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }
+interface HudEntry { id: string; name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; actionsRemaining: { simple: number } }
 
 // Compute display names matching the encounter page's getDisplayName logic:
 // group by name, sort each group by participant ID, number if duplicates exist
@@ -103,6 +111,7 @@ function makeEntry(p: CombatParticipant): HudEntry | null {
     spriteUrl: info.spriteUrl,
     currentWounds: anyP.currentWounds ?? info.currentWounds,
     woundBoxes: anyP.maxWounds ?? info.woundBoxes,
+    actionsRemaining: anyP.actionsRemaining ?? { simple: 2 },
   }
 }
 
@@ -190,4 +199,8 @@ function woundClass(current: number, max: number) {
 .hud-bar-fill.orange { background: #f97316; }
 .hud-bar-fill.red    { background: #dd2222; }
 .hud-wound-label { font-size: 10px; color: #667; margin-top: 2px; }
+.hud-actions { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; align-self: center; }
+.action-dot { width: 8px; height: 8px; border-radius: 50%; }
+.action-dot.unspent { background: #eab308; }
+.action-dot.spent { background: #445; }
 </style>
