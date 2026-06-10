@@ -852,8 +852,9 @@ function updateCharacterOverlays() {
     const screenRadius = Math.hypot(se.x - sc.x, se.y - sc.y)
     const h = Math.max(16, screenRadius * 2)
 
-    const maxWounds = info?.woundBoxes ?? 0
-    const currentWounds = info?.currentWounds ?? 0
+    const anyP = p as any
+    const maxWounds = anyP.maxWounds ?? info?.woundBoxes ?? 0
+    const currentWounds = anyP.currentWounds ?? info?.currentWounds ?? 0
     const remainingPct = maxWounds > 0 ? Math.max(0, 1 - currentWounds / maxWounds) : 1
     const woundFilter: 'yellow' | 'red' | null =
       remainingPct <= 0.25 ? 'red' : remainingPct <= 0.5 ? 'yellow' : null
