@@ -3529,6 +3529,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @player-action="(id, action) => {
                 if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id
                 else if (action === 'direct')    openPlayerDirectTargetSelector(false)
+                else if (action === 'bolster-direct') openPlayerDirectTargetSelector(true)
                 else if (action === 'special-order') { showPlayerSpecialOrdersModal = true }
                 else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id

@@ -40,7 +40,7 @@
         v-for="(ov, pid) in characterOverlays"
         :key="pid"
         class="char-token"
-        :style="{ left: ov.x + 'px', top: ov.y + 'px', width: ov.w + 'px', height: ov.h + 'px' }"
+        :style="{ left: ov.x + 'px', top: ov.y + 'px', width: ov.w + 'px', height: ov.h + 'px', borderColor: STANCE_COLORS[ov.stance], zIndex: ov.zIndex }"
       >
         <img v-if="ov.spriteUrl" :src="ov.spriteUrl" class="char-token-img" />
         <div v-else class="char-token-fallback">{{ ov.initial }}</div>
@@ -71,8 +71,10 @@
     >
       <button class="npc-radial-btn player move" @click="playerRadialMove()">Move</button>
       <template v-if="playerRadialParticipantType === 'tamer'">
-        <button class="npc-radial-btn player direct"  @click="playerRadialAction('direct')">Direct</button>
-        <button class="npc-radial-btn player orders"  @click="playerRadialAction('special-order')">Orders</button>
+        <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
+        <button class="npc-radial-btn player bolster-direct" :disabled="bolsterDirectDisabled" @click="playerRadialAction('bolster-direct')">Bolster Direct</button>
+        <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
+        <button class="npc-radial-btn player stance" @click="playerRadialAction('stance')">Stance</button>
       </template>
       <template v-else-if="playerRadialParticipantType === 'digimon'">
         <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
@@ -88,12 +90,13 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {
   GameMap, Vec3, CombatParticipant, ElementType, MapTool, DigimonSize,
-  DestructibleState, WallFace,
+  DestructibleState, WallFace, Stance,
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
+import { STANCE_COLORS } from '~/utils/stanceModifiers'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -138,7 +141,7 @@ const emit = defineEmits<{
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -188,6 +191,19 @@ const playerRadialParticipantType = computed(() =>
     ? (props.participants.find(p => p.id === playerRadialId.value)?.type ?? null)
     : null
 )
+const radialTamerParticipant = computed(() =>
+  playerRadialParticipantType.value === 'tamer'
+    ? props.participants.find(p => p.id === playerRadialId.value) ?? null
+    : null
+)
+const directDisabled = computed(() => {
+  const t = radialTamerParticipant.value
+  return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 1
+})
+const bolsterDirectDisabled = computed(() => {
+  const t = radialTamerParticipant.value
+  return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 2
+})
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
@@ -732,7 +748,7 @@ function buildMap() {
 
 // ── Character footprints + HTML token overlays ───────────────────────────────
 
-const characterOverlays = ref<Record<string, { x: number; y: number; w: number; h: number; spriteUrl: string | null; initial: string }>>({})
+const characterOverlays = ref<Record<string, { x: number; y: number; w: number; h: number; spriteUrl: string | null; initial: string; stance: Stance; zIndex: number }>>({})
 const reticuleParticipantIds = ref<string[]>([])
 
 function buildSprites() {
@@ -805,12 +821,12 @@ function updateCharacterOverlays() {
     const charHeight = tileCount * TILE_SIZE
     const charMidY   = pos.y * TILE_SIZE + TILE_H + charHeight * 0.5
     const center     = new THREE.Vector3(cx, charMidY, cz)
+    const distToChar = camera.position.distanceTo(center)
 
     // Occlusion: raycast camera → character mid-body, skip if any wall blocks.
     // Ghost Walls mode disables occlusion so tokens show through walls.
     if (!ghostWalls.value) {
       const dir        = center.clone().sub(camera.position).normalize()
-      const distToChar = camera.position.distanceTo(center)
       const occRay     = new THREE.Raycaster(camera.position, dir, 0, distToChar - 0.1)
       const hits       = occRay.intersectObjects([...wallMeshes.map(w => w.mesh), ...voxelMeshes], false)
       const windowWallIds = new Set((props.map?.windows ?? []).map(w => w.wallId))
@@ -842,6 +858,8 @@ function updateCharacterOverlays() {
       h,
       spriteUrl: info?.spriteUrl ?? null,
       initial: (info?.name ?? '?')[0],
+      stance: p.currentStance,
+      zIndex: Math.round(1_000_000 - distToChar * 1000),
     }
   }
   characterOverlays.value = overlays
@@ -878,7 +896,7 @@ function playerRadialMove() {
   emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve') {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null
@@ -2116,7 +2134,7 @@ defineExpose({ movingParticipantId })
   transform: translateX(-50%);
   border-radius: 50%;
   overflow: hidden;
-  border: 2px solid rgba(80, 120, 220, 0.8);
+  border: 2px solid;
   box-shadow: 0 0 8px rgba(0,0,0,0.8);
 }
 .char-token-img {
@@ -2182,5 +2200,9 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
 .npc-radial-btn.player.move   { top: -38px; left: -45px; }
 .npc-radial-btn.player.attack { top: -38px; left: 45px; }
+.npc-radial-btn.player.direct         { top: -38px; left: -90px; }
+.npc-radial-btn.player.bolster-direct { top: -38px; left: 45px; }
+.npc-radial-btn.player.orders         { top: -68px; left: -45px; }
 .npc-radial-btn.player:hover  { background: #1a4a30; }
+.npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

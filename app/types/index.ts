@@ -504,6 +504,7 @@ export interface CombatParticipant {
   isActive: boolean       // Currently taking turn
   hasActed: boolean       // Has completed turn this round
   hasAttemptedDigivolve?: boolean  // Has attempted digivolution this turn (evolve only, not devolve)
+  hasDirectedThisTurn?: boolean  // Tamer-only: has used Direct/Bolster Direct this turn
   npcStageIndex?: number  // NPC-only: tracks current stage independently (allows multiple NPCs to share one evo line)
   combatMonsterBonus?: number  // Combat Monster: cumulative damage bonus for next successful attack
   totalHealth?: number         // Digimon-only: health stat without stage wound bonus; used as Combat Monster cap
