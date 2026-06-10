@@ -28,7 +28,7 @@
                 :style="{ width: woundPct(entry.currentWounds, entry.woundBoxes) + '%' }"
               />
             </div>
-            <div class="hud-wound-label">{{ entry.currentWounds }} / {{ entry.woundBoxes }}</div>
+            <div class="hud-wound-label">{{ entry.woundBoxes - entry.currentWounds }} / {{ entry.woundBoxes }}</div>
           </div>
         </div>
       </template>
