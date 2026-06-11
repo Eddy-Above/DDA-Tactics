@@ -138,7 +138,7 @@
 
       <!-- Floating charge attack picker (shown when a Charge Attack is selected) -->
       <div
-        v-if="isChargeAttack && chargeMode === null"
+        v-if="isChargeAttack && chargeMode === null && !chargeAttackInFlight"
         class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
         style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
       >
@@ -351,11 +351,12 @@ const npcMoveParticipantId = ref<string | null>(null)
 const chargeMode = ref<'before' | 'after' | null>(null)
 const chargeAfterAttackerId = ref<string | null>(null)
 const chargeMoveParticipantId = ref<string | null>(null)
+const chargeAttackInFlight = ref(false)
 
 const isChargeAttack = computed(() => props.selectedAttack?.tags?.includes('Charge Attack') ?? false)
 
 const mapSelectedAttack = computed(() =>
-  isChargeAttack.value && chargeMode.value === null ? null : props.selectedAttack
+  isChargeAttack.value && chargeMode.value === null && !chargeAttackInFlight.value ? null : props.selectedAttack
 )
 
 const showPanel = computed(() =>
@@ -478,13 +479,17 @@ async function onChargeTargetSelected(attackerId: string, destination: Vec3, tar
   }
   chargeMode.value = null
   movement.clearMovement()
-  if (targetId) emit('target-selected', targetId)
+  if (targetId) {
+    chargeAttackInFlight.value = true
+    emit('target-selected', targetId)
+  }
 }
 
 function onTargetSelected(targetId: string) {
   if (chargeMode.value === 'after') {
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
+    chargeAttackInFlight.value = true
   }
   emit('target-selected', targetId)
 }
@@ -493,12 +498,14 @@ function onAreaAttackConfirmed(targetIds: string[]) {
   if (chargeMode.value === 'after') {
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
+    chargeAttackInFlight.value = true
   }
   emit('area-attack-confirmed', targetIds)
 }
 
 watch(() => props.selectedAttack, (val) => {
   if (val !== null) return
+  chargeAttackInFlight.value = false
   if (chargeMode.value === 'before') {
     chargeMode.value = null
     movement.clearMovement()

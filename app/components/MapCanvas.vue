@@ -79,7 +79,7 @@
       </template>
       <template v-else-if="playerRadialParticipantType === 'digimon'">
         <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
-        <button class="npc-radial-btn player stance"    @click="playerRadialAction('stance')">Stance</button>
+        <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
         <button class="npc-radial-btn player digivolve" @click="playerRadialAction('digivolve')">Digivolve</button>
       </template>
     </div>
@@ -2218,6 +2218,7 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.bolster-direct { top: -75px; left: 107px; }
 .npc-radial-btn.player.orders         { top: -24px; left: 66px; }
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
+.npc-radial-btn.player.digimon-stance { top: -75px; left: 90px; }
 .npc-radial-btn.player:hover  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

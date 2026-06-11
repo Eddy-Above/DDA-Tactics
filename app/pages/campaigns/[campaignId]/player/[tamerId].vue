@@ -173,7 +173,7 @@ const hugePowerRank2Enabled = ref(false)
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
-const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration } = useEncounters()
+const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, error: encountersError } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const digimonMap = computed(() => {
@@ -1832,18 +1832,20 @@ async function confirmAttack(target: CombatParticipant) {
         }
       }
 
-      // Show feedback and close modal
-      showTargetSelector.value = false
-      selectedAttack.value = null
-      selectedTargetIds.value = []
-
       // Refresh to see updated state
       await loadData()
     } else {
       console.error('Failed to perform attack')
+      alert(encountersError.value || 'Failed to perform attack')
     }
   } catch (error) {
     console.error('Error performing attack:', error)
+    alert((error as any)?.data?.message || 'Failed to perform attack')
+  } finally {
+    // Show feedback and close modal
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
   }
 }
 
@@ -1945,14 +1947,18 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
       }
 
       if (accuracySuccesses === 0) showAttackResultModal.value = true
+      await loadData()
+    } else {
+      console.error('Failed to perform area attack')
+      alert(encountersError.value || 'Failed to perform area attack')
     }
-
+  } catch (error) {
+    console.error('Error performing area attack:', error)
+    alert((error as any)?.data?.message || 'Failed to perform area attack')
+  } finally {
     showTargetSelector.value = false
     selectedAttack.value = null
     selectedTargetIds.value = []
-    await loadData()
-  } catch (error) {
-    console.error('Error performing area attack:', error)
   }
 }
 
