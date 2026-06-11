@@ -140,6 +140,13 @@ export function useEncounters() {
     error.value = null
     try {
       const encounter = await $fetch<Encounter>(`/api/encounters/${id}`)
+      // Preserve locally-tracked positions on refresh polls. WebSocket
+      // (unit-moved + full-state) is authoritative for live position sync;
+      // a poll response can be a stale snapshot from before a concurrent
+      // position-PUT committed, which would otherwise snap a move back.
+      if (currentEncounter.value?.id === id && currentEncounter.value.participantPositions) {
+        encounter.participantPositions = currentEncounter.value.participantPositions
+      }
       currentEncounter.value = encounter
       encounters.value = encounters.value.map((e) => e.id === id ? encounter : e)
       return encounter
