@@ -97,6 +97,8 @@ import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
+import type { FootprintDims } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -279,40 +281,30 @@ function getSizeParams(size: DigimonSize, gig?: { width: number; height: number;
   }
 }
 
-// Footprint dimension (cells per side) for a participant; tamers and unknowns are 1×1.
-function getParticipantDim(participantId: string | null | undefined): number {
-  if (!participantId) return 1
+// Full 3D footprint dimensions for a participant; tamers and unknowns are 1×1×1.
+function getParticipantFootprintDims(participantId: string | null | undefined): FootprintDims {
+  if (!participantId) return { width: 1, height: 1, depth: 1 }
   const p = props.participants.find(pp => pp.id === participantId)
-  if (!p || p.type !== 'digimon') return 1
+  if (!p || p.type !== 'digimon') return { width: 1, height: 1, depth: 1 }
   const dg = props.digimonMap[p.entityId]
-  if (!dg) return 1
-  return getSizeParams(dg.size, dg.giganticDimensions).tileCount
+  if (!dg) return { width: 1, height: 1, depth: 1 }
+  return getFootprintDimensions(dg.size, dg.giganticDimensions)
 }
 
-// True if any cell of a dim×dim footprint anchored at `anchor` is in the area cell set.
-function footprintIntersectsArea(anchor: Vec3, dim: number, cellSet: Set<string>): boolean {
-  const d = Math.max(1, Math.round(dim))
-  for (let dx = 0; dx < d; dx++)
-    for (let dz = 0; dz < d; dz++)
-      if (cellSet.has(`${anchor.x + dx},${anchor.y},${anchor.z + dz}`)) return true
+// True if any cell of the full 3D box anchored at `anchor` is in the area cell set.
+function footprintIntersectsArea(anchor: Vec3, dims: FootprintDims, cellSet: Set<string>): boolean {
+  for (const c of getFootprintCells(anchor, dims))
+    if (cellSet.has(`${c.x},${c.y},${c.z}`)) return true
   return false
 }
 
-// True if a dim×dim attacker footprint anchored at `attackerAnchor` is within `maxDist`
-// (Chebyshev) of a dim×dim target footprint anchored at `targetAnchor`, for any pair of cells.
-function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDim: number, targetDim: number, maxDist: number): boolean {
-  for (let adx = 0; adx < attackerDim; adx++) {
-    for (let adz = 0; adz < attackerDim; adz++) {
-      for (let tdx = 0; tdx < targetDim; tdx++) {
-        for (let tdz = 0; tdz < targetDim; tdz++) {
-          const d = Math.max(
-            Math.abs((attackerAnchor.x + adx) - (targetAnchor.x + tdx)),
-            Math.abs(attackerAnchor.y - targetAnchor.y),
-            Math.abs((attackerAnchor.z + adz) - (targetAnchor.z + tdz)),
-          )
-          if (d <= maxDist) return true
-        }
-      }
+// True if an attacker's full 3D box anchored at `attackerAnchor` is within `maxDist`
+// (Chebyshev) of a target's full 3D box anchored at `targetAnchor`, for any pair of cells.
+function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDims: FootprintDims, targetDims: FootprintDims, maxDist: number): boolean {
+  for (const a of getFootprintCells(attackerAnchor, attackerDims)) {
+    for (const t of getFootprintCells(targetAnchor, targetDims)) {
+      const d = Math.max(Math.abs(a.x - t.x), Math.abs(a.y - t.y), Math.abs(a.z - t.z))
+      if (d <= maxDist) return true
     }
   }
   return false
@@ -1060,15 +1052,15 @@ function updateReticules() {
 
     if (aoeCellSet) {
       // Show reticule if ANY of the target's footprint cells is in the AOE (big targets count if partially covered)
-      if (!footprintIntersectsArea(pos, getParticipantDim(p.id), aoeCellSet)) continue
+      if (!footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), aoeCellSet)) continue
     } else if (isMelee) {
       // Melee: min Chebyshev distance across all footprint cell pairs (handles large digimon + diagonals)
-      const attackerDim = getParticipantDim(effectiveAttackerId.value)
-      const targetDim = getParticipantDim(p.id)
-      let inRange = meleeInRange(attackerPos, pos, attackerDim, targetDim, maxDist)
+      const attackerDims = getParticipantFootprintDims(effectiveAttackerId.value)
+      const targetDims = getParticipantFootprintDims(p.id)
+      let inRange = meleeInRange(attackerPos, pos, attackerDims, targetDims, maxDist)
       if (!inRange && props.chargeMode === 'before') {
         for (const k of props.reachableCells) {
-          if (meleeInRange(parseVec3Key(k), pos, attackerDim, targetDim, maxDist)) { inRange = true; break }
+          if (meleeInRange(parseVec3Key(k), pos, attackerDims, targetDims, maxDist)) { inRange = true; break }
         }
       }
       if (!inRange) continue
@@ -1207,7 +1199,7 @@ function renderBlastFromStoredCenter() {
   const cells = computeAreaCells(
     'blast', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
     attack.bit, attack.ram ?? 0, attack.movement ?? 0,
-    getParticipantDim(effectiveAttackerId.value), center,
+    getParticipantFootprintDims(effectiveAttackerId.value), center,
   )
   updateAoeHighlight(cells, { blocked: !los })
 }
@@ -1236,7 +1228,7 @@ function computeAndRenderAoe(event: MouseEvent) {
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attackerPos) return
 
-  const dim = getParticipantDim(effectiveAttackerId.value)
+  const dims = getParticipantFootprintDims(effectiveAttackerId.value)
 
   // Blast: mouse controls XZ center position; scroll wheel controls Y (blastCenterY)
   if (shape === 'blast') {
@@ -1254,7 +1246,7 @@ function computeAndRenderAoe(event: MouseEvent) {
 
     const cells = computeAreaCells(
       shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim, blastCenter,
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims, blastCenter,
     )
     updateAoeHighlight(cells, { blocked: !los })
     return
@@ -1264,7 +1256,7 @@ function computeAndRenderAoe(event: MouseEvent) {
   if (shape === 'burst') {
     const cells = computeAreaCells(
       shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim,
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims,
     )
     updateAoeHighlight(cells)
     return
@@ -1281,8 +1273,8 @@ function computeAndRenderAoe(event: MouseEvent) {
   if (!raycaster.ray.intersectPlane(plane, pt)) return
 
   // World-space footprint centre — used only for the direction vector (frame-independent).
-  const fcWorldX = attackerPos.x + dim / 2
-  const fcWorldZ = attackerPos.z + dim / 2
+  const fcWorldX = attackerPos.x + dims.width / 2
+  const fcWorldZ = attackerPos.z + dims.depth / 2
   let dir: Vec3 = { x: pt.x - fcWorldX, y: blastCenterY.value - attackerPos.y, z: pt.z - fcWorldZ }
   if (Math.sqrt(dir.x * dir.x + dir.z * dir.z) < 0.01 && Math.abs(dir.y) < 0.01) {
     dir = { x: 1, y: 0, z: 0 }
@@ -1290,8 +1282,8 @@ function computeAndRenderAoe(event: MouseEvent) {
 
   // LoS proxy: ray from the attacker toward the aim point, capped at the effective limit.
   // Tip is in cell-index space (hasLineOfSight adds the +0.5 cell-centre offset itself).
-  const cisX = attackerPos.x + (dim - 1) / 2
-  const cisZ = attackerPos.z + (dim - 1) / 2
+  const cisX = attackerPos.x + (dims.width - 1) / 2
+  const cisZ = attackerPos.z + (dims.depth - 1) / 2
   const dlen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
   const cap = Math.min(dlen, props.attackerEffectiveLimit || dlen)
   const losTip = {
@@ -1303,7 +1295,7 @@ function computeAndRenderAoe(event: MouseEvent) {
 
   const cells = computeAreaCells(
     shape, attack.range, attackerPos, dir,
-    attack.bit, attack.ram ?? 0, attack.movement ?? 0, dim,
+    attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims,
   )
   updateAoeHighlight(cells, { blocked: !los })
 }
@@ -1626,13 +1618,13 @@ function tryChargeMove(targetId: string): boolean {
   const attackerPos = attackerId ? props.participantPositions[attackerId] : null
   const targetPos = props.participantPositions[targetId]
   if (!attackerId || !attackerPos || !targetPos) return false
-  const attackerDim = getParticipantDim(attackerId)
-  const targetDim = getParticipantDim(targetId)
+  const attackerDims = getParticipantFootprintDims(attackerId)
+  const targetDims = getParticipantFootprintDims(targetId)
   const anchors: Vec3[] = [attackerPos, ...Array.from(props.reachableCells, parseVec3Key)]
   let best: Vec3 | null = null
   let bestDist = Infinity
   for (const anchor of anchors) {
-    if (!meleeInRange(anchor, targetPos, attackerDim, targetDim, props.attackerMeleeRange)) continue
+    if (!meleeInRange(anchor, targetPos, attackerDims, targetDims, props.attackerMeleeRange)) continue
     const dist = Math.max(Math.abs(anchor.x - attackerPos.x), Math.abs(anchor.y - attackerPos.y), Math.abs(anchor.z - attackerPos.z))
     if (dist < bestDist) { bestDist = dist; best = anchor }
   }
@@ -1706,7 +1698,7 @@ function onCanvasClick(event: MouseEvent) {
           if (p.id === effectiveAttackerId.value) return false
           const pos = props.participantPositions[p.id]
           // A target is hit if ANY of its footprint cells falls in the area
-          return pos && footprintIntersectsArea(pos, getParticipantDim(p.id), aoeCellSet)
+          return pos && footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), aoeCellSet)
         })
         .map(p => p.id)
       clearAoeState()
@@ -1784,7 +1776,7 @@ function onCanvasClick(event: MouseEvent) {
       const pos = props.participantPositions[p.id]
       if (!pos) return false
       if (!reticuleParticipantIds.value.includes(p.id)) return false
-      return footprintIntersectsArea(pos, getParticipantDim(p.id), cellSet)
+      return footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), cellSet)
     })
     if (targetParticipant) {
       if (tryReticuleTarget(targetParticipant.id)) return
@@ -1982,7 +1974,7 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
     if (!attackerPos) return
     const cells = computeAreaCells(
       'burst', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, getParticipantDim(effectiveAttackerId.value),
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, getParticipantFootprintDims(effectiveAttackerId.value),
     )
     updateAoeHighlight(cells)
   }

@@ -1,3 +1,6 @@
+import type { FootprintDims } from '~/utils/movementRules'
+import { getFootprintCells } from '~/utils/movementRules'
+
 export type AreaShape = 'blast' | 'burst' | 'close-blast' | 'cone' | 'line' | 'pass'
 
 export interface Vec3 { x: number; y: number; z: number }
@@ -30,7 +33,7 @@ export function getAreaShape(tags: string[]): AreaShape | null {
  * @param bit          Attacker BIT stat
  * @param ram          Attacker RAM stat
  * @param movement     Attacker movement in metres (pass)
- * @param attackerDim  Attacker footprint dimension (1 = Medium/Small, 2 = Large, 3 = Huge, N = Gigantic)
+ * @param attackerDims Attacker footprint dimensions (full 3D box: width x height x depth)
  * @param blastCenter  Free-aimed sphere centre (blast only)
  */
 export function computeAreaCells(
@@ -41,22 +44,22 @@ export function computeAreaCells(
   bit: number,
   ram: number,
   movement: number,
-  attackerDim: number,
+  attackerDims: FootprintDims,
   blastCenter?: Vec3,
 ): Vec3[] {
   switch (shape) {
     case 'burst':
-      return computeBurst(rangeType, attackerPos, bit, attackerDim)
+      return computeBurst(rangeType, attackerPos, bit, attackerDims)
     case 'blast':
       return computeBlast(bit, blastCenter)
     case 'close-blast':
-      return computeCloseBlast(rangeType, attackerPos, dir, bit, attackerDim)
+      return computeCloseBlast(rangeType, attackerPos, dir, bit, attackerDims)
     case 'cone':
-      return computeCone(rangeType, attackerPos, dir, bit, attackerDim)
+      return computeCone(rangeType, attackerPos, dir, bit, attackerDims)
     case 'line':
-      return computeLine(rangeType, attackerPos, dir, bit, attackerDim)
+      return computeLine(rangeType, attackerPos, dir, bit, attackerDims)
     case 'pass':
-      return computePass(attackerPos, dir, movement, ram, attackerDim)
+      return computePass(attackerPos, dir, movement, ram, attackerDims)
   }
 }
 
@@ -88,36 +91,32 @@ function sphereCells(center: Vec3, radius: number): Vec3[] {
   return cells
 }
 
-/** The dim×dim footprint cells anchored at the min corner (same convention as getFootprintCells). */
-function footprintCells(anchor: Vec3, dim: number): Vec3[] {
-  const cells: Vec3[] = []
-  const d = Math.max(1, Math.round(dim))
-  for (let dx = 0; dx < d; dx++)
-    for (let dz = 0; dz < d; dz++)
-      cells.push({ x: anchor.x + dx, y: anchor.y, z: anchor.z + dz })
-  return cells
-}
-
 /**
- * The attacker's footprint centre pushed out to the edge facing `dir` (XZ).
- * For dim=1 this is exactly the anchor cell; for larger footprints it lands on the
- * centre of the leading edge so directional shapes emanate from the body, not a corner.
+ * The attacker's body centre (vertically centred on its full height) pushed out to the
+ * edge facing `dir` (XZ). For a 1x1x1 footprint this is the anchor cell raised to its
+ * own centre; for larger footprints it lands on the centre of the leading edge, both
+ * horizontally and vertically, so directional shapes emanate from the body, not a corner.
  */
-function leadingEdgeOrigin(anchor: Vec3, dim: number, dir: Vec3): Vec3 {
-  const c = (Math.max(1, Math.round(dim)) - 1) / 2
+function leadingEdgeOrigin(anchor: Vec3, dims: FootprintDims, dir: Vec3): Vec3 {
+  const cx = (Math.max(1, Math.round(dims.width)) - 1) / 2
+  const cy = (Math.max(1, Math.round(dims.height)) - 1) / 2
+  const cz = (Math.max(1, Math.round(dims.depth)) - 1) / 2
   const len = Math.sqrt(dir.x * dir.x + dir.z * dir.z)
   const ux = len > 1e-6 ? dir.x / len : 0
   const uz = len > 1e-6 ? dir.z / len : 0
-  return { x: anchor.x + c + ux * c, y: anchor.y, z: anchor.z + c + uz * c }
+  return { x: anchor.x + cx + ux * cx, y: anchor.y + cy, z: anchor.z + cz + uz * cz }
 }
 
-/** Integer cells within a `totalWidth` x `totalWidth` pillar from `origin` along unit dir `nd`.
+/** Integer cells within a `totalWidth` x `totalHeight` pillar from `origin` along unit dir `nd`.
  *  Odd sizes are symmetric; even sizes extend one extra cell to the right of `nd` (XZ) and one
  *  extra cell above `nd` in the line's own pitched frame, so the height band stays perpendicular
- *  to the 3D line direction (rotates with pitch). */
-function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): Vec3[] {
+ *  to the 3D line direction (rotates with pitch). `totalHeight` defaults to `totalWidth`,
+ *  giving a square cross-section. */
+function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number, totalHeight: number = totalWidth): Vec3[] {
   const halfN = Math.floor((totalWidth - 1) / 2)
   const halfP = totalWidth - 1 - halfN
+  const halfUpN = Math.floor((totalHeight - 1) / 2)
+  const halfUpP = totalHeight - 1 - halfUpN
   const pLen = Math.sqrt(nd.x * nd.x + nd.z * nd.z)
   const pdx = pLen > 1e-6 ? nd.z / pLen : 0
   const pdz = pLen > 1e-6 ? -nd.x / pLen : 0
@@ -126,7 +125,7 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): 
   const vdy = nd.z * pdx - nd.x * pdz
   const vdz = -nd.y * pdx
   const cells: Vec3[] = []
-  const r = Math.ceil(length + halfP + 1)
+  const r = Math.ceil(length + Math.max(halfP, halfUpP) + 1)
   const ox = Math.round(origin.x), oy = Math.round(origin.y), oz = Math.round(origin.z)
   for (let x = ox - r; x <= ox + r; x++) {
     for (let y = oy - r; y <= oy + r; y++) {
@@ -138,7 +137,7 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number): 
         const signedPerp = ex * pdx + ez * pdz
         if (signedPerp < -halfN - 0.5 || signedPerp > halfP + 0.5) continue
         const signedUp = px * vdx + py * vdy + pz * vdz
-        if (signedUp < -halfN - 0.5 || signedUp > halfP + 0.5) continue
+        if (signedUp < -halfUpN - 0.5 || signedUp > halfUpP + 0.5) continue
         cells.push({ x, y, z })
       }
     }
@@ -152,12 +151,12 @@ function burst(rangeType: 'melee' | 'ranged', bit: number): number {
   return rangeType === 'ranged' ? 1 + bit : 1
 }
 
-// [Burst] — omnidirectional sphere from the attacker's whole perimeter (any footprint cell).
-function computeBurst(rangeType: 'melee' | 'ranged', attackerPos: Vec3, bit: number, attackerDim: number): Vec3[] {
+// [Burst] — omnidirectional sphere from the attacker's whole body (every 3D footprint cell).
+function computeBurst(rangeType: 'melee' | 'ranged', attackerPos: Vec3, bit: number, attackerDims: FootprintDims): Vec3[] {
   const radius = burst(rangeType, bit)
   const seen = new Set<string>()
   const out: Vec3[] = []
-  for (const origin of footprintCells(attackerPos, attackerDim)) {
+  for (const origin of getFootprintCells(attackerPos, attackerDims)) {
     for (const c of sphereCells(origin, radius)) {
       const k = `${c.x},${c.y},${c.z}`
       if (!seen.has(k)) { seen.add(k); out.push(c) }
@@ -175,11 +174,11 @@ function computeBlast(bit: number, blastCenter?: Vec3): Vec3[] {
 
 // [Close Blast] — sphere of radius 2 (melee) / 2 + BIT (ranged), placed adjacent to the
 // attacker's leading edge in the aim direction.
-function computeCloseBlast(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
+function computeCloseBlast(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDims: FootprintDims): Vec3[] {
   const radius = rangeType === 'ranged' ? 2 + bit : 2
   const nd = normalize3(dir)
   if (!nd) return []
-  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  const origin = leadingEdgeOrigin(attackerPos, attackerDims, dir)
   const center: Vec3 = {
     x: origin.x + nd.x * (radius + 1),
     y: origin.y + nd.y * (radius + 1),
@@ -189,11 +188,11 @@ function computeCloseBlast(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir
 }
 
 // [Cone] — 90° arc (45° half-angle) up to (3 / 3 + BIT) from the leading edge in `dir`.
-function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
+function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDims: FootprintDims): Vec3[] {
   const length = rangeType === 'ranged' ? 3 + bit : 3
   const nd = normalize3(dir)
   if (!nd) return []
-  const apex = leadingEdgeOrigin(attackerPos, attackerDim, dir)
+  const apex = leadingEdgeOrigin(attackerPos, attackerDims, dir)
   const cosHalf = Math.cos(Math.PI / 4)
   const r = Math.ceil(length + 1)
   const ax = Math.round(apex.x), ay = Math.round(apex.y), az = Math.round(apex.z)
@@ -212,22 +211,24 @@ function computeCone(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3
   return cells
 }
 
-// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, width = height = 1 + size
-// classes above Large. Scroll-wheel pitch raises/lowers the endpoint and the height band tilts with it.
-function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDim: number): Vec3[] {
+// [Line] — pillar from the leading edge along `dir`, length 5 / 5 + 2*BIT, square cross-section
+// (width == height = 1 + size classes above Large). Scroll-wheel pitch raises/lowers the
+// endpoint and the cross-section tilts with it.
+function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3, bit: number, attackerDims: FootprintDims): Vec3[] {
   const length = rangeType === 'ranged' ? 5 + bit * 2 : 5
   const nd = normalize3(dir)
   if (!nd) return []
-  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
-  return lineCells(origin, nd, length, Math.max(1, attackerDim - 1))
+  const origin = leadingEdgeOrigin(attackerPos, attackerDims, dir)
+  return lineCells(origin, nd, length, Math.max(1, attackerDims.width - 1))
 }
 
-// [Pass] — directional line from the leading edge along `dir`, length movement + RAM, width = height = 1 + size
-// classes above Large. Scroll-wheel pitch raises/lowers the endpoint and the height band tilts with it.
-function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDim: number): Vec3[] {
+// [Pass] — directional 3D beam from the leading edge along `dir`, length movement + RAM,
+// cross-section sized to the attacker's own body (width x height). Scroll-wheel pitch
+// raises/lowers the endpoint and the beam tilts with it.
+function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDims: FootprintDims): Vec3[] {
   const length = movement + ram
   const nd = normalize3(dir)
   if (!nd) return []
-  const origin = leadingEdgeOrigin(attackerPos, attackerDim, dir)
-  return lineCells(origin, nd, length, Math.max(1, attackerDim - 1))
+  const origin = leadingEdgeOrigin(attackerPos, attackerDims, dir)
+  return lineCells(origin, nd, length, attackerDims.width, attackerDims.height)
 }

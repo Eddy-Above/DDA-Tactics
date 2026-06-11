@@ -11,6 +11,35 @@ export interface MovementCapabilities {
   canDig: boolean
 }
 
+export interface FootprintDims { width: number; height: number; depth: number }
+
+// Full 3D box dimensions a unit occupies, based on size class (and gigantic's custom dimensions).
+export function getFootprintDimensions(
+  size: DigimonSize,
+  giganticDimensions?: { width: number; height: number; depth: number } | null,
+): FootprintDims {
+  if (size === 'gigantic') {
+    return {
+      width: giganticDimensions?.width ?? 4,
+      height: giganticDimensions?.height ?? 4,
+      depth: giganticDimensions?.depth ?? 4,
+    }
+  }
+  if (size === 'huge') return { width: 3, height: 3, depth: 3 }
+  if (size === 'large') return { width: 2, height: 2, depth: 2 }
+  return { width: 1, height: 1, depth: 1 }
+}
+
+// All cells of the 3D box anchored at `anchor` (min corner), extending +x, +y, +z.
+export function getFootprintCells(anchor: Vec3, dims: FootprintDims): Vec3[] {
+  const cells: Vec3[] = []
+  for (let dx = 0; dx < dims.width; dx++)
+    for (let dy = 0; dy < dims.height; dy++)
+      for (let dz = 0; dz < dims.depth; dz++)
+        cells.push({ x: anchor.x + dx, y: anchor.y + dy, z: anchor.z + dz })
+  return cells
+}
+
 function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 
 // True if a wall (without a door) blocks the cardinal move from→to.

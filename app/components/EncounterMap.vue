@@ -441,16 +441,18 @@ function npcMoveCaps(participantId: string) {
   const caps = movement.detectCapabilities(qualities, budget, 0, 0)
   // Tamers are always player-side; digimon carry isEnemy from their DB record
   const moverIsEnemy: boolean = p.type === 'digimon' && ((p as any).isEnemy === true)
-  const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean }>()
+  const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean; giganticDimensions?: { width: number; height: number; depth: number } | null }>()
   for (const part of props.encounter.participants) {
     if (part.id === participantId) continue
     const partPos = positions.value[part.id]
     if (!partPos) continue
     const partSize = (digimonMapForCanvas.value[part.entityId] as any)?.size ?? 'medium'
     const partIsEnemy: boolean = part.type === 'digimon' && ((part as any).isEnemy === true)
-    occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy })
+    const partGig = (digimonMapForCanvas.value[part.entityId] as any)?.giganticDimensions ?? null
+    occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy, giganticDimensions: partGig })
   }
-  return { p, pos, dInfo, budget, caps, occupied, moverIsEnemy }
+  const moverGig = dInfo?.giganticDimensions ?? null
+  return { p, pos, dInfo, budget, caps, occupied, moverIsEnemy, moverGig }
 }
 
 // ── Charge Attack handlers ───────────────────────────────────────────────────
@@ -463,7 +465,7 @@ function startChargeBefore() {
   if (!attackerId || !map.value) return
   const ctx = npcMoveCaps(attackerId)
   if (!ctx) return
-  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
   chargeMode.value = 'before'
 }
 
@@ -506,7 +508,7 @@ watch(() => props.selectedAttack, (val) => {
     chargeAfterAttackerId.value = null
     const ctx = npcMoveCaps(attackerId)
     if (ctx && map.value) {
-      movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+      movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
       chargeMoveParticipantId.value = attackerId
     }
   }
@@ -516,7 +518,7 @@ function onNpcMove(participantId: string) {
   if (!map.value) return
   const ctx = npcMoveCaps(participantId)
   if (!ctx) return
-  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
   npcMoveParticipantId.value = participantId
 }
 
@@ -527,7 +529,7 @@ function onCellHovered(cell: Vec3 | null) {
   }
   const ctx = npcMoveCaps(npcMoveParticipantId.value)
   if (!ctx) return
-  movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy)
+  movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
 }
 
 function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack') {
