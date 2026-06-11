@@ -67,6 +67,7 @@ export interface CombatParticipant {
   pendingDivineProtectionDamage?: number
   pendingSimpleActionPenalty?: number
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
+  modeChangeFreeSwapsUsed?: number
   quickReactionDiceBonus?: number
   stunActionReducedThisRound?: boolean
   dataAbsorbActive?: boolean

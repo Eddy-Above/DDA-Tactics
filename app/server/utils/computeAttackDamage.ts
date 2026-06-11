@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '../../data/attackConstants'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
+import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
@@ -37,18 +38,6 @@ export interface ComputeAttackDamageResult {
   targetHasPositiveReinforcement: boolean
   targetMoodValue: number
   targetHealthStat: number
-}
-
-type SwappableStat = 'accuracy' | 'damage' | 'dodge' | 'armor'
-type StatBlock = Record<SwappableStat, number>
-
-function applyStatSwaps(stats: StatBlock, swaps: Partial<Record<SwappableStat, SwappableStat>> | undefined): StatBlock {
-  if (!swaps || Object.keys(swaps).length === 0) return stats
-  const result = { ...stats }
-  for (const [slot, source] of Object.entries(swaps) as [SwappableStat, SwappableStat][]) {
-    result[slot] = stats[source]
-  }
-  return result
 }
 
 /**

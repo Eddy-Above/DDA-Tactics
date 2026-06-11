@@ -8,6 +8,8 @@ import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
+import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
+import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 
 definePageMeta({
   layout: 'player',
@@ -173,7 +175,7 @@ const hugePowerRank2Enabled = ref(false)
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
-const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, error: encountersError } = useEncounters()
+const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, modeChange, error: encountersError } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const digimonMap = computed(() => {
@@ -750,8 +752,16 @@ const dodgeDicePool = computed(() => {
   if (targetParticipant.type === 'digimon') {
     const digi = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
     if (digi) {
-      const stats = calcDigimonStats(digi)
-      pool = stats.dodge || 3
+      const darkEvoBonus = (digi as any).isDarkEvolution ? 2 : 0
+      const rawStats: StatBlock = {
+        accuracy: (digi.baseStats?.accuracy ?? 0) + ((digi as any).bonusStats?.accuracy ?? 0) + darkEvoBonus,
+        damage: (digi.baseStats?.damage ?? 0) + ((digi as any).bonusStats?.damage ?? 0) + darkEvoBonus,
+        dodge: (digi.baseStats?.dodge ?? 0) + ((digi as any).bonusStats?.dodge ?? 0) + darkEvoBonus,
+        armor: (digi.baseStats?.armor ?? 0) + ((digi as any).bonusStats?.armor ?? 0) + darkEvoBonus,
+      }
+      const resolvedStats = applyStatSwaps(rawStats, targetParticipant.statSwaps)
+      const qualityDodgeBonus = calcDigimonStats(digi).dodge - rawStats.dodge
+      pool = resolvedStats.dodge + qualityDodgeBonus || 3
     }
   } else if (targetParticipant.type === 'tamer') {
     const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
@@ -1072,11 +1082,17 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
     return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
   }
 
-  // Get base stats (baseStats + bonusStats + dark evo), then apply stance modifier
+  // Get base stats (baseStats + bonusStats + dark evo), apply Mode Change stat swaps, then apply stance modifier
   const darkEvoBonus = (digimon as any).isDarkEvolution ? 2 : 0
-  const rawAccuracy = (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0) + darkEvoBonus
-  const baseAccuracy = applyStanceToAccuracy(rawAccuracy, participant.currentStance)
-  const baseDamage = (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0) + darkEvoBonus
+  const rawStats: StatBlock = {
+    accuracy: (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0) + darkEvoBonus,
+    damage: (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0) + darkEvoBonus,
+    dodge: (digimon.baseStats?.dodge ?? 0) + ((digimon as any).bonusStats?.dodge ?? 0) + darkEvoBonus,
+    armor: (digimon.baseStats?.armor ?? 0) + ((digimon as any).bonusStats?.armor ?? 0) + darkEvoBonus,
+  }
+  const resolvedStats = applyStatSwaps(rawStats, participant.statSwaps)
+  const baseAccuracy = applyStanceToAccuracy(resolvedStats.accuracy, participant.currentStance)
+  const baseDamage = resolvedStats.damage
 
   let damageBonus = 0
   let accuracyBonus = 0
@@ -1575,6 +1591,39 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
     console.error('Devolve failed:', e)
     alert(e?.data?.message || 'Failed to devolve')
   }
+}
+
+async function handleModeChangeSwap(participant: CombatParticipant, statA: SwappableStat, statB: SwappableStat) {
+  if (!activeEncounter.value) return
+  const current = { ...(participant.statSwaps as StatSwaps ?? {}) }
+  const isActive = current[statA] === statB && current[statB] === statA
+  const { x0Rank } = getModeChangeQualities(participant, digimonMap.value)
+
+  let newSwaps: StatSwaps = {}
+  if (x0Rank === 1) {
+    if (!isActive) {
+      newSwaps = { [statA]: statB, [statB]: statA }
+    }
+  } else {
+    newSwaps = { ...current }
+    if (isActive) {
+      delete newSwaps[statA]
+      delete newSwaps[statB]
+    } else {
+      for (const k of Object.keys(newSwaps) as SwappableStat[]) {
+        const v = newSwaps[k]
+        if (k === statA || k === statB || v === statA || v === statB) {
+          delete newSwaps[k]
+          if (v) delete newSwaps[v]
+        }
+      }
+      newSwaps[statA] = statB
+      newSwaps[statB] = statA
+    }
+  }
+
+  await modeChange(activeEncounter.value.id, participant.id, newSwaps)
+  await fetchEncounter(activeEncounter.value.id)
 }
 
 function openAttributeRollModal(attr: string) {
@@ -3323,6 +3372,7 @@ const showMapView = ref(false)
 const playerAttackParticipantId = ref<string | null>(null)
 const mapStanceDigimonParticipantId = ref<string | null>(null)
 const mapDigivolveDigimonParticipantId = ref<string | null>(null)
+const mapModeChangeDigimonParticipantId = ref<string | null>(null)
 
 const playerPlacementMode = computed(() =>
   ['setup', 'initiative'].includes(activeEncounter.value?.phase ?? '') &&
@@ -3379,6 +3429,12 @@ const mapStanceParticipant = computed(() =>
 const mapDigivolveParticipant = computed(() =>
   mapDigivolveDigimonParticipantId.value
     ? (activeEncounter.value?.participants as CombatParticipant[])?.find(x => x.id === mapDigivolveDigimonParticipantId.value) ?? null
+    : null
+)
+
+const mapModeChangeParticipant = computed(() =>
+  mapModeChangeDigimonParticipantId.value
+    ? (activeEncounter.value?.participants as CombatParticipant[])?.find(x => x.id === mapModeChangeDigimonParticipantId.value) ?? null
     : null
 )
 
@@ -3573,6 +3629,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 else if (action === 'special-order') { showPlayerSpecialOrdersModal = true }
                 else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
+                else if (action === 'mode-change') mapModeChangeDigimonParticipantId = mapModeChangeDigimonParticipantId === id ? null : id
               }"
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"
@@ -3692,6 +3749,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 >No evolution options available.</div>
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="mapDigivolveDigimonParticipantId = null">Cancel</button>
+            </div>
+            <!-- Floating mode change picker (shown when player clicks Mode Change from map radial) -->
+            <div
+              v-if="mapModeChangeParticipant"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Mode Change</div>
+              <div v-if="getModeChangePairs(mapModeChangeParticipant!, digimonMap).length > 0" class="flex flex-wrap gap-2 justify-center">
+                <button
+                  v-for="pair in getModeChangePairs(mapModeChangeParticipant!, digimonMap)"
+                  :key="`mc-${pair.a}-${pair.b}`"
+                  :disabled="!canUseModeChangeSwap(mapModeChangeParticipant!, digimonMap, eddySoulRules)"
+                  :class="[
+                    'text-sm px-3 py-2 rounded font-medium border',
+                    isSwapActive(mapModeChangeParticipant!, pair)
+                      ? 'bg-blue-600 border-blue-400 text-white'
+                      : canUseModeChangeSwap(mapModeChangeParticipant!, digimonMap, eddySoulRules)
+                        ? 'bg-digimon-dark-700 border-blue-600 text-blue-300 hover:bg-blue-700 hover:text-white cursor-pointer'
+                        : 'bg-digimon-dark-700 border-digimon-dark-500 text-digimon-dark-500 cursor-not-allowed'
+                  ]"
+                  @click="handleModeChangeSwap(mapModeChangeParticipant!, pair.a, pair.b); mapModeChangeDigimonParticipantId = null"
+                >{{ pair.label }}</button>
+              </div>
+              <div v-else class="text-center text-digimon-dark-400 text-sm py-2">No Mode Change available.</div>
+              <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="mapModeChangeDigimonParticipantId = null">Cancel</button>
             </div>
           </div>
         </ClientOnly>
@@ -3939,6 +4022,32 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       @click="changePlayerStance(participant, stance)"
                     >
                       {{ stance }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Mode Change buttons -->
+                <div
+                  v-if="participant.type === 'digimon' && canParticipantAct(participant) && activeEncounter?.phase === 'combat' && getModeChangePairs(participant, digimonMap).length > 0"
+                  class="mb-3"
+                >
+                  <label class="block text-xs text-digimon-dark-400 mb-1">Mode Change</label>
+                  <div class="flex flex-wrap gap-1">
+                    <button
+                      v-for="pair in getModeChangePairs(participant, digimonMap)"
+                      :key="`mc-${pair.a}-${pair.b}`"
+                      :disabled="!canUseModeChangeSwap(participant, digimonMap, eddySoulRules)"
+                      :class="[
+                        'text-xs px-2 py-1 rounded font-medium border',
+                        isSwapActive(participant, pair)
+                          ? 'bg-blue-600 border-blue-400 text-white'
+                          : canUseModeChangeSwap(participant, digimonMap, eddySoulRules)
+                            ? 'bg-digimon-dark-700 border-blue-600 text-blue-300 hover:bg-blue-700 hover:text-white cursor-pointer'
+                            : 'bg-digimon-dark-700 border-digimon-dark-500 text-digimon-dark-500 cursor-not-allowed'
+                      ]"
+                      @click="handleModeChangeSwap(participant, pair.a, pair.b)"
+                    >
+                      {{ pair.label }}
                     </button>
                   </div>
                 </div>
@@ -5878,98 +5987,18 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </button>
         </div>
 
-        <!-- Bolster Attack Toggle -->
-        <div
-          v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack) && !lifestealComplexEnabled"
-          class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
-        >
-          <label class="flex items-center gap-2 cursor-pointer mb-2">
-            <input
-              type="checkbox"
-              v-model="bolsterAttackEnabled"
-              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-amber-500"
-            />
-            <span class="text-sm text-amber-400 font-medium">Bolster Attack (2 Simple Actions)</span>
-            <span class="text-xs text-digimon-dark-400 ml-auto">
-              {{ (selectedAttack.participant.digimonBolsterCount ?? 0) }}/2 used
-            </span>
-          </label>
-          <div v-if="bolsterAttackEnabled" class="flex gap-2 mt-2">
-            <button
-              @click="bolsterAttackType = 'damage-accuracy'"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                bolsterAttackType === 'damage-accuracy'
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-              ]"
-            >
-              +2 Damage & Accuracy
-            </button>
-            <button
-              @click="bolsterAttackType = 'bit-cpu'"
-              :disabled="selectedAttack.participant.lastBitCpuBolsterRound !== undefined &&
-                (activeEncounter?.round || 0) - selectedAttack.participant.lastBitCpuBolsterRound < 2"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                bolsterAttackType === 'bit-cpu'
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500',
-                'disabled:opacity-50 disabled:cursor-not-allowed'
-              ]"
-            >
-              +1 BIT/CPU (Effect)
-            </button>
-          </div>
-        </div>
-
-        <!-- Lifesteal Complex Action Toggle -->
-        <div
-          v-if="selectedAttack && selectedAttack.attack.effect === 'Lifesteal' && (selectedAttack.participant.actionsRemaining?.simple || 0) >= 2 && !bolsterAttackEnabled"
-          class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
-        >
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              v-model="lifestealComplexEnabled"
-              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-green-500"
-            />
-            <span class="text-sm text-green-400 font-medium">Lifesteal Complex Action (2 Simple Actions)</span>
-            <span class="text-xs text-digimon-dark-400 ml-auto">Double potency</span>
-          </label>
-        </div>
-
-        <!-- Huge Power Toggle -->
-        <div
-          v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && (canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1 || canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2)"
-          class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600 space-y-2"
-        >
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              v-model="hugePowerEnabled"
-              :disabled="!canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1"
-              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-cyan-500"
-            />
-            <span class="text-sm text-cyan-400 font-medium">Huge Power (Reroll 1s)</span>
-            <span v-if="eddySoulRules?.hugePowerOncePerTurn" class="text-xs text-digimon-dark-400 ml-auto">1/turn</span>
-            <span v-else-if="selectedAttack.attack.range === 'ranged'" class="text-xs text-digimon-dark-400 ml-auto">1/round</span>
-            <span v-else class="text-xs text-digimon-dark-400 ml-auto">Unlimited (Melee)</span>
-          </label>
-          <label
-            v-if="canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2"
-            class="flex items-center gap-2 cursor-pointer pl-6"
-          >
-            <input
-              type="checkbox"
-              v-model="hugePowerRank2Enabled"
-              :disabled="!hugePowerEnabled"
-              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-amber-500"
-            />
-            <span class="text-sm text-amber-400 font-medium">Rank 2 (Also reroll 2s)</span>
-            <span class="text-xs text-digimon-dark-400 ml-auto">1/round</span>
-          </label>
-        </div>
+        <AttackRiderOptions
+          :selected-attack="selectedAttack"
+          :round="activeEncounter?.round || 0"
+          :eddy-soul-rules="eddySoulRules"
+          :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+          :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+          v-model:bolster-attack-enabled="bolsterAttackEnabled"
+          v-model:bolster-attack-type="bolsterAttackType"
+          v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
+          v-model:huge-power-enabled="hugePowerEnabled"
+          v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+        />
 
         <!-- Action buttons -->
         <div class="flex gap-3">

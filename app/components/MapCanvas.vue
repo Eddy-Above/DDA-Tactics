@@ -81,6 +81,7 @@
         <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
         <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
         <button class="npc-radial-btn player digivolve" @click="playerRadialAction('digivolve')">Digivolve</button>
+        <button class="npc-radial-btn player mode-change" @click="playerRadialAction('mode-change')">Mode Change</button>
       </template>
     </div>
   </div>
@@ -144,7 +145,7 @@ const emit = defineEmits<{
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve'): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -909,7 +910,7 @@ function playerRadialMove() {
   emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change') {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null

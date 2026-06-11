@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon } from '../../../../db'
+import { db, encounters, digimon, campaigns } from '../../../../db'
 
 type SwappableStat = 'accuracy' | 'damage' | 'dodge' | 'armor'
 type StatSwaps = Partial<Record<SwappableStat, SwappableStat>>
@@ -54,6 +54,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }
 
+  let eddySoulRules: import('~/types').EddySoulRules | undefined
+  if (encounter.campaignId) {
+    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
+    if (campaign) {
+      eddySoulRules = (campaign.rulesSettings || {}).eddySoulRules
+    }
+  }
+
   const participants = encounter.participants
   const turnOrder = encounter.turnOrder
   const battleLog = encounter.battleLog
@@ -71,10 +79,6 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, message: 'It is not this participant\'s turn' })
   }
 
-  if ((actor.actionsRemaining?.simple || 0) < 1) {
-    throw createError({ statusCode: 403, message: 'Not enough Simple Actions remaining' })
-  }
-
   const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
   if (!digimonEntity) {
     throw createError({ statusCode: 404, message: 'Digimon not found' })
@@ -90,6 +94,13 @@ export default defineEventHandler(async (event) => {
 
   const x0Quality = qualities.find((q: any) => q.id === 'mode-change-x0')
   const x0Rank: number = x0Quality ? (x0Quality.ranks ?? 1) : 0
+
+  const freeSwapsActive = !!(eddySoulRules?.modeChangeFreeSwapsPerCombat && x0Rank >= 2)
+  const freeSwapAvailable = freeSwapsActive && (actor.modeChangeFreeSwapsUsed ?? 0) < 3
+
+  if (!freeSwapAvailable && (actor.actionsRemaining?.simple || 0) < 1) {
+    throw createError({ statusCode: 403, message: 'Not enough Simple Actions remaining' })
+  }
 
   const newSwaps = body.newSwaps as StatSwaps
 
@@ -140,6 +151,13 @@ export default defineEventHandler(async (event) => {
 
   const updatedParticipants = participants.map((p: any) => {
     if (p.id !== body.participantId) return p
+    if (freeSwapAvailable) {
+      return {
+        ...p,
+        modeChangeFreeSwapsUsed: (p.modeChangeFreeSwapsUsed ?? 0) + 1,
+        statSwaps: newSwaps,
+      }
+    }
     return {
       ...p,
       actionsRemaining: {

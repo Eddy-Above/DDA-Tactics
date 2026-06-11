@@ -5,6 +5,8 @@ import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
+import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
+import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG, type Vec3 } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
@@ -413,10 +415,16 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
     return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
   }
 
-  // Get base stats (baseStats + bonusStats), then apply stance modifier
-  const rawAccuracy = (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0)
-  const baseAccuracy = applyStanceToAccuracy(rawAccuracy, participant.currentStance)
-  const baseDamage = (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0)
+  // Get base stats (baseStats + bonusStats), apply Mode Change stat swaps, then apply stance modifier
+  const rawStats: StatBlock = {
+    accuracy: (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0),
+    damage: (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0),
+    dodge: (digimon.baseStats?.dodge ?? 0) + ((digimon as any).bonusStats?.dodge ?? 0),
+    armor: (digimon.baseStats?.armor ?? 0) + ((digimon as any).bonusStats?.armor ?? 0),
+  }
+  const resolvedStats = applyStatSwaps(rawStats, participant.statSwaps)
+  const baseAccuracy = applyStanceToAccuracy(resolvedStats.accuracy, participant.currentStance)
+  const baseDamage = resolvedStats.damage
 
   let damageBonus = 0
   let accuracyBonus = 0
@@ -2736,85 +2744,33 @@ function getStanceColor(stance: string) {
   return colors[stance] || 'bg-gray-600'
 }
 
-type SwappableStat = 'accuracy' | 'damage' | 'dodge' | 'armor'
-type StatSwaps = Partial<Record<SwappableStat, SwappableStat>>
-
-function getModeChangeQualities(participant: CombatParticipant) {
-  const digi = digimonMap.value.get(participant.entityId)
-  const qualities: any[] = digi?.qualities ?? []
-  const mc = qualities.find((q: any) => q.id === 'mode-change')
-  const x0 = qualities.find((q: any) => q.id === 'mode-change-x0')
-  return { mc, mcRank: mc?.ranks ?? 0, x0, x0Rank: x0?.ranks ?? 0 }
-}
-
-function getModeChangePairs(participant: CombatParticipant): Array<{ a: SwappableStat; b: SwappableStat; label: string }> {
-  const { mcRank, x0Rank } = getModeChangeQualities(participant)
-  if (mcRank === 0) return []
-  if (x0Rank >= 2) {
-    return [
-      { a: 'damage', b: 'armor', label: 'D↔A' },
-      { a: 'accuracy', b: 'dodge', label: 'Acc↔Dod' },
-      { a: 'damage', b: 'dodge', label: 'D↔Dod' },
-      { a: 'accuracy', b: 'armor', label: 'Acc↔A' },
-      { a: 'damage', b: 'accuracy', label: 'D↔Acc' },
-      { a: 'dodge', b: 'armor', label: 'Dod↔A' },
-    ]
-  }
-  if (x0Rank === 1) {
-    return [
-      { a: 'damage', b: 'armor', label: 'D↔A' },
-      { a: 'accuracy', b: 'dodge', label: 'Acc↔Dod' },
-      { a: 'damage', b: 'dodge', label: 'D↔Dod' },
-      { a: 'accuracy', b: 'armor', label: 'Acc↔A' },
-      { a: 'damage', b: 'accuracy', label: 'D↔Acc' },
-      { a: 'dodge', b: 'armor', label: 'Dod↔A' },
-    ]
-  }
-  const pairs: Array<{ a: SwappableStat; b: SwappableStat; label: string }> = [
-    { a: 'damage', b: 'armor', label: 'D↔A' },
-  ]
-  if (mcRank >= 2) pairs.push({ a: 'accuracy', b: 'dodge', label: 'Acc↔Dod' })
-  return pairs
-}
-
-function isSwapActive(participant: CombatParticipant, pair: { a: SwappableStat; b: SwappableStat }): boolean {
-  const swaps = participant.statSwaps as StatSwaps | undefined
-  return swaps?.[pair.a] === pair.b && swaps?.[pair.b] === pair.a
-}
-
-function getModeChangeLabel(swaps: StatSwaps | undefined): string {
-  if (!swaps || Object.keys(swaps).length === 0) return ''
-  const seen = new Set<string>()
-  const parts: string[] = []
-  const labels: Record<string, string> = { accuracy: 'Acc', damage: 'D', dodge: 'Dod', armor: 'A' }
-  for (const [k, v] of Object.entries(swaps) as [SwappableStat, SwappableStat][]) {
-    if (!seen.has(k) && !seen.has(v)) {
-      parts.push(`${labels[k] ?? k}↔${labels[v] ?? v}`)
-      seen.add(k); seen.add(v)
-    }
-  }
-  return parts.join(', ')
-}
-
 async function handleModeChangeSwap(participant: CombatParticipant, statA: SwappableStat, statB: SwappableStat) {
   if (!currentEncounter.value) return
   const current = { ...(participant.statSwaps as StatSwaps ?? {}) }
   const isActive = current[statA] === statB && current[statB] === statA
+  const { x0Rank } = getModeChangeQualities(participant, digimonMap.value)
 
-  let newSwaps: StatSwaps = { ...current }
-  if (isActive) {
-    delete newSwaps[statA]
-    delete newSwaps[statB]
-  } else {
-    for (const k of Object.keys(newSwaps) as SwappableStat[]) {
-      const v = newSwaps[k]
-      if (k === statA || k === statB || v === statA || v === statB) {
-        delete newSwaps[k]
-        if (v) delete newSwaps[v]
-      }
+  let newSwaps: StatSwaps = {}
+  if (x0Rank === 1) {
+    if (!isActive) {
+      newSwaps = { [statA]: statB, [statB]: statA }
     }
-    newSwaps[statA] = statB
-    newSwaps[statB] = statA
+  } else {
+    newSwaps = { ...current }
+    if (isActive) {
+      delete newSwaps[statA]
+      delete newSwaps[statB]
+    } else {
+      for (const k of Object.keys(newSwaps) as SwappableStat[]) {
+        const v = newSwaps[k]
+        if (k === statA || k === statB || v === statA || v === statB) {
+          delete newSwaps[k]
+          if (v) delete newSwaps[v]
+        }
+      }
+      newSwaps[statA] = statB
+      newSwaps[statB] = statA
+    }
   }
 
   await modeChange(currentEncounter.value.id, participant.id, newSwaps)
@@ -3647,18 +3603,18 @@ function onMapAttackCancelled() {
 
                     <!-- Mode Change buttons -->
                     <div
-                      v-if="item.participant.type === 'digimon' && canParticipantAct(item.participant) && currentEncounter.phase === 'combat' && getModeChangePairs(item.participant).length > 0"
+                      v-if="item.participant.type === 'digimon' && canParticipantAct(item.participant) && currentEncounter.phase === 'combat' && getModeChangePairs(item.participant, digimonMap).length > 0"
                       class="mb-2 flex flex-wrap gap-1"
                     >
                       <button
-                        v-for="pair in getModeChangePairs(item.participant)"
+                        v-for="pair in getModeChangePairs(item.participant, digimonMap)"
                         :key="`mc-${pair.a}-${pair.b}`"
-                        :disabled="(item.participant.actionsRemaining?.simple || 0) < 1"
+                        :disabled="!canUseModeChangeSwap(item.participant, digimonMap, eddySoulRules)"
                         :class="[
                           'text-xs px-2 py-1 rounded font-medium border',
                           isSwapActive(item.participant, pair)
                             ? 'bg-blue-600 border-blue-400 text-white'
-                            : (item.participant.actionsRemaining?.simple || 0) >= 1
+                            : canUseModeChangeSwap(item.participant, digimonMap, eddySoulRules)
                               ? 'bg-digimon-dark-600 border-blue-600 text-blue-300 hover:bg-blue-700 hover:text-white cursor-pointer'
                               : 'bg-digimon-dark-700 border-digimon-dark-500 text-digimon-dark-500 cursor-not-allowed'
                         ]"
@@ -3925,18 +3881,18 @@ function onMapAttackCancelled() {
 
                 <!-- Mode Change buttons (partner digimon) -->
                 <div
-                  v-if="canParticipantAct(item.partnerDigimon) && currentEncounter.phase === 'combat' && getModeChangePairs(item.partnerDigimon).length > 0"
+                  v-if="canParticipantAct(item.partnerDigimon) && currentEncounter.phase === 'combat' && getModeChangePairs(item.partnerDigimon, digimonMap).length > 0"
                   class="mt-2 flex flex-wrap gap-1"
                 >
                   <button
-                    v-for="pair in getModeChangePairs(item.partnerDigimon)"
+                    v-for="pair in getModeChangePairs(item.partnerDigimon, digimonMap)"
                     :key="`mc-partner-${pair.a}-${pair.b}`"
-                    :disabled="(item.partnerDigimon.actionsRemaining?.simple || 0) < 1"
+                    :disabled="!canUseModeChangeSwap(item.partnerDigimon, digimonMap, eddySoulRules)"
                     :class="[
                       'text-xs px-2 py-1 rounded font-medium border',
                       isSwapActive(item.partnerDigimon, pair)
                         ? 'bg-blue-600 border-blue-400 text-white'
-                        : (item.partnerDigimon.actionsRemaining?.simple || 0) >= 1
+                        : canUseModeChangeSwap(item.partnerDigimon, digimonMap, eddySoulRules)
                           ? 'bg-digimon-dark-600 border-blue-600 text-blue-300 hover:bg-blue-700 hover:text-white cursor-pointer'
                           : 'bg-digimon-dark-700 border-digimon-dark-500 text-digimon-dark-500 cursor-not-allowed'
                     ]"

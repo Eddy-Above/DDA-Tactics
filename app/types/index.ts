@@ -224,6 +224,7 @@ export interface EddySoulRules {
   bonusDPMinPerCategory?: boolean
   enemyDoubleWounds?: boolean
   directRangeOverrides?: { direct?: number; bolsterDirect?: number }
+  modeChangeFreeSwapsPerCombat?: boolean
 }
 
 export interface HouseRules {
@@ -519,6 +520,7 @@ export interface CombatParticipant {
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
+  modeChangeFreeSwapsUsed?: number  // Mode Change X.0 Rank 2 EddySoul rule: free swaps used this combat (0-3)
   currentInspiration?: number       // Tamer-only: live pool tracked during combat, initialized from DB totals
   divineProtectionUsesThisBattle?: number  // Tamer-only: 0 = first use free, 1+ = costs 2 inspiration
   pendingDivineProtectionDamage?: number   // Tamer-only: damage held while DP offer is awaiting player response

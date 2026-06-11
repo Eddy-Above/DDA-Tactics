@@ -60,6 +60,7 @@ const form = reactive({
     warpEvolution: false,
     bonusDPMinPerCategory: false,
     enemyDoubleWounds: false,
+    modeChangeFreeSwapsPerCombat: false,
     directRangeOverrides: { direct: null as number | null, bolsterDirect: null as number | null },
   },
 })
@@ -125,6 +126,7 @@ onMounted(async () => {
       form.eddySoulRules.warpEvolution = eddySoul.warpEvolution ?? false
       form.eddySoulRules.bonusDPMinPerCategory = eddySoul.bonusDPMinPerCategory ?? false
       form.eddySoulRules.enemyDoubleWounds = eddySoul.enemyDoubleWounds ?? false
+      form.eddySoulRules.modeChangeFreeSwapsPerCombat = eddySoul.modeChangeFreeSwapsPerCombat ?? false
       form.eddySoulRules.directRangeOverrides = {
         direct: eddySoul.directRangeOverrides?.direct ?? null,
         bolsterDirect: eddySoul.directRangeOverrides?.bolsterDirect ?? null,
@@ -208,6 +210,7 @@ async function handleSave() {
         ...(form.eddySoulRules.warpEvolution && { warpEvolution: true }),
         ...(form.eddySoulRules.bonusDPMinPerCategory && { bonusDPMinPerCategory: true }),
         ...(form.eddySoulRules.enemyDoubleWounds && { enemyDoubleWounds: true }),
+        ...(form.eddySoulRules.modeChangeFreeSwapsPerCombat && { modeChangeFreeSwapsPerCombat: true }),
         ...((form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect) && {
           directRangeOverrides: {
             ...(form.eddySoulRules.directRangeOverrides.direct && { direct: form.eddySoulRules.directRangeOverrides.direct }),
@@ -743,6 +746,13 @@ async function handleDelete() {
             <div>
               <span class="text-digimon-dark-300">Enemy Digimon Double Wounds</span>
               <p class="text-xs text-digimon-dark-500">Enemy digimon added to encounters have twice their normal wound boxes. Applies at the moment they join — existing participants are unaffected.</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input v-model="form.eddySoulRules.modeChangeFreeSwapsPerCombat" type="checkbox" class="w-4 h-4 rounded mt-1 shrink-0" />
+            <div>
+              <span class="text-digimon-dark-300">Mode Change X.0 Rank 2: 3 Free Swaps Per Combat</span>
+              <p class="text-xs text-digimon-dark-500">Default: every Mode Change use costs 1 Simple Action. With this rule, digimon with Mode Change X.0 Rank 2 get their first 3 swaps each combat for free (no action cost).</p>
             </div>
           </label>
           <!-- Direct / Bolster Direct Range Overrides -->
