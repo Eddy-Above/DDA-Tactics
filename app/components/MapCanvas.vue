@@ -792,6 +792,9 @@ function buildMap() {
     const fY = (obj as any).userData?.floorY
     if (fY !== undefined) obj.visible = fY <= clipY.value
   }
+  if (props.showSpawnIndicators === false) {
+    for (const m of spawnMeshes) m.visible = false
+  }
   if (ghostWalls.value) {
     for (const obj of buildMeshes) {
       const type = (obj as any).userData?.type
