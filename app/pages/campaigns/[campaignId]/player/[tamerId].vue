@@ -3659,19 +3659,27 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 {{ activeEncounter.name }} • Round {{ activeEncounter.round }}
               </p>
             </div>
-            <div v-if="isMyTurn && activeEncounter?.phase === 'combat'">
+            <div class="flex items-center gap-2">
               <button
-                :disabled="endingTurn"
-                class="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-lg font-orbitron text-sm transition-colors"
-                @click="handleEndTurn"
-              >
-                {{ endingTurn ? 'Ending...' : 'End Turn' }}
-              </button>
-            </div>
-            <div v-else-if="currentTurnParticipant" class="text-right">
-              <div class="text-sm text-digimon-dark-400">Current Turn:</div>
-              <div class="text-white font-semibold">
-                {{ getParticipantName(currentTurnParticipant) }}
+                v-if="(activeEncounter as any).mapId"
+                class="text-xs px-3 py-1.5 rounded-lg border font-semibold transition-colors"
+                :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
+                @click="showMapView = !showMapView"
+              >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
+              <div v-if="isMyTurn && activeEncounter?.phase === 'combat'">
+                <button
+                  :disabled="endingTurn"
+                  class="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-bold rounded-lg font-orbitron text-sm transition-colors"
+                  @click="handleEndTurn"
+                >
+                  {{ endingTurn ? 'Ending...' : 'End Turn' }}
+                </button>
+              </div>
+              <div v-else-if="currentTurnParticipant" class="text-right">
+                <div class="text-sm text-digimon-dark-400">Current Turn:</div>
+                <div class="text-white font-semibold">
+                  {{ getParticipantName(currentTurnParticipant) }}
+                </div>
               </div>
             </div>
           </div>
