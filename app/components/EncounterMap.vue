@@ -177,7 +177,7 @@ const props = defineProps<{
   encounter: Encounter & { participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[] }
   isDm: boolean
   myTamerId: string | null
-  tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; partnerId?: string | null }>
+  tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; partnerId?: string | null; speed?: number }>
   digimonMap: Record<string, {
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
@@ -441,9 +441,17 @@ function npcMoveCaps(participantId: string) {
   const pos = positions.value[participantId]
   if (!pos) return null
   const dInfo = digimonMapForCanvas.value[p.entityId] as any
-  const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
-  const budget: number = applyStanceToMovement(dInfo?.movement ?? 4, p.currentStance, stageBonus)
-  const qualities: any[] = dInfo?.qualities ?? []
+  let budget: number
+  let qualities: any[]
+  if (p.type === 'tamer') {
+    const tInfo = tamerMapForCanvas.value[p.entityId] as any
+    budget = applyStanceToMovement(tInfo?.speed ?? 4, p.currentStance, 0)
+    qualities = []
+  } else {
+    const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
+    budget = applyStanceToMovement(dInfo?.movement ?? 4, p.currentStance, stageBonus)
+    qualities = dInfo?.qualities ?? []
+  }
   const caps = movement.detectCapabilities(qualities, budget, 0, 0)
   // Tamers are always player-side; digimon carry isEnemy from their DB record
   const moverIsEnemy: boolean = p.type === 'digimon' && ((p as any).isEnemy === true)

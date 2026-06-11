@@ -3003,6 +3003,7 @@ const tamerMapForMap = computed(() => {
       spriteUrl: t.spriteUrl ?? null,
       currentWounds: participant ? participant.currentWounds : t.currentWounds,
       woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
+      speed: derived.speed,
     }
   })
   return out
