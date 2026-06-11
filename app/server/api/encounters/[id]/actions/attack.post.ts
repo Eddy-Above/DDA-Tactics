@@ -3,7 +3,7 @@ import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 import { chebyshev } from '../../../../utils/gridDistance'
-import { getSizeFootprintDimension, getFootprintCells } from '../../../../utils/mapMovement'
+import { getFootprintDimensions, getFootprintCells } from '../../../../utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 
 interface AttackActionBody {
@@ -140,10 +140,10 @@ export default defineEventHandler(async (event) => {
           const [targetDig] = target.type === 'digimon'
             ? await db.select().from(digimon).where(eq(digimon.id, target.entityId))
             : []
-          const attackerDim = getSizeFootprintDimension(attackerDig.size as any, (attackerDig as any).giganticDimensions)
-          const targetDim = targetDig ? getSizeFootprintDimension(targetDig.size as any, (targetDig as any).giganticDimensions) : 1
-          const attackerCells = getFootprintCells(attackerPos, attackerDim)
-          const targetCells = getFootprintCells(targetPos, targetDim)
+          const attackerDims = getFootprintDimensions(attackerDig.size as any, (attackerDig as any).giganticDimensions)
+          const targetDims = targetDig ? getFootprintDimensions(targetDig.size as any, (targetDig as any).giganticDimensions) : { width: 1, height: 1, depth: 1 }
+          const attackerCells = getFootprintCells(attackerPos, attackerDims)
+          const targetCells = getFootprintCells(targetPos, targetDims)
           const minMeleeDist = Math.min(...attackerCells.flatMap(a =>
             targetCells.map(t => Math.max(Math.abs(a.x - t.x), Math.abs(a.y - t.y), Math.abs(a.z - t.z)))
           ))

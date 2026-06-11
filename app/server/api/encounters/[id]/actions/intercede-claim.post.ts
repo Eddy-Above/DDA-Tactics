@@ -5,8 +5,9 @@ import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup 
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
 import { BASIC_ATTACKS } from '~/data/attackConstants'
 import {
+  type FootprintDims,
   detectCapabilitiesFromQualities,
-  getSizeFootprintDimension,
+  getFootprintDimensions,
   isValidLandingPosition,
   getFootprintCells,
   isFootprintValid,
@@ -239,13 +240,13 @@ export default defineEventHandler(async (event) => {
         interceptorDigRec.size as any,
       )
       const caps = detectCapabilitiesFromQualities(quals, derived.movement, derived.ram, derived.cpu)
-      const interceptorDim = getSizeFootprintDimension(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
+      const interceptorDims = getFootprintDimensions(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
       const occupied = new Set(
         Object.entries(participantPositions)
           .filter(([pid]) => pid !== body.interceptorParticipantId)
           .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
       )
-      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDim, claimMapRecord, occupied)
+      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDims, claimMapRecord, occupied)
       intercDePos = computed ?? undefined
     }
 
@@ -267,12 +268,12 @@ export default defineEventHandler(async (event) => {
 
       if (!isRangedIntercede && targetPos) {
         // Melee: displace the target away from the interceptor's new position
-        const interceptorDim = interceptorDigRec
-          ? getSizeFootprintDimension(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
-          : 1
-        const targetDim = targetDigRecForPos
-          ? getSizeFootprintDimension(targetDigRecForPos.size as any, (targetDigRecForPos as any).giganticDimensions)
-          : 1
+        const interceptorDims: FootprintDims = interceptorDigRec
+          ? getFootprintDimensions(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
+          : { width: 1, height: 1, depth: 1 }
+        const targetDims: FootprintDims = targetDigRecForPos
+          ? getFootprintDimensions(targetDigRecForPos.size as any, (targetDigRecForPos as any).giganticDimensions)
+          : { width: 1, height: 1, depth: 1 }
 
         const defaultCaps = { canFly: false, canJump: false, jumpRange: 0, jumpHeight: 0, canClimb: false, canSwim: false, canDig: false }
         const targetCaps = targetDigRecForPos ? (() => {
@@ -292,11 +293,11 @@ export default defineEventHandler(async (event) => {
             .filter(([pid]) => pid !== body.interceptorParticipantId && pid !== effectiveTargetId)
             .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
         )
-        getFootprintCells(intercDePos, interceptorDim).forEach((cell: { x: number; y: number; z: number }) => {
+        getFootprintCells(intercDePos, interceptorDims).forEach((cell: { x: number; y: number; z: number }) => {
           claimOccupied.add(`${cell.x},${cell.y},${cell.z}`)
         })
 
-        // Preferred displacement: interceptorDim tiles in the direction away from attacker
+        // Preferred displacement: interceptor's footprint width/height/depth in the direction away from attacker
         let displacedPos: { x: number; y: number; z: number } | null = null
         if (attackerPos) {
           const dir = {
@@ -306,11 +307,11 @@ export default defineEventHandler(async (event) => {
           }
           if (dir.x !== 0 || dir.y !== 0 || dir.z !== 0) {
             const preferred = {
-              x: targetPos.x + dir.x * interceptorDim,
-              y: targetPos.y + dir.y * interceptorDim,
-              z: targetPos.z + dir.z * interceptorDim,
+              x: targetPos.x + dir.x * interceptorDims.width,
+              y: targetPos.y + dir.y * interceptorDims.height,
+              z: targetPos.z + dir.z * interceptorDims.depth,
             }
-            if (isFootprintValid(preferred, targetDim, claimMapRecord, claimOccupied)) {
+            if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied)) {
               displacedPos = preferred
             }
           }
@@ -319,7 +320,7 @@ export default defineEventHandler(async (event) => {
         // BFS fallback if preferred direction is blocked
         if (!displacedPos) {
           displacedPos = findClosestValidDisplacementPosition(
-            targetPos, claimMapRecord, targetCaps, claimOccupied, targetDim,
+            targetPos, claimMapRecord, targetCaps, claimOccupied, targetDims,
           )
         }
 

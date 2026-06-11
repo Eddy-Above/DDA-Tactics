@@ -1,5 +1,10 @@
-import type { Vec3, GameMap, DigimonSize } from '../../types'
+import type { Vec3, GameMap } from '../../types'
 import { mapVoxelAt, mapVoxelBlocksMovement, voxelBlocksMovement } from '../../utils/mapVoxels'
+import type { FootprintDims } from '../../utils/movementRules'
+import { getFootprintDimensions, getFootprintCells } from '../../utils/movementRules'
+
+export type { FootprintDims }
+export { getFootprintDimensions, getFootprintCells }
 
 export interface MovementCapabilities {
   canFly: boolean
@@ -154,48 +159,30 @@ export function isPositionInAir(pos: Vec3, map: GameMap): boolean {
   return true
 }
 
-export function getSizeFootprintDimension(
-  size: DigimonSize,
-  giganticDimensions?: { width: number; height: number; depth: number } | null,
-): number {
-  if (size === 'gigantic') return giganticDimensions?.width ?? 4
-  if (size === 'huge') return 3
-  if (size === 'large') return 2
-  return 1
-}
-
-export function getFootprintCells(center: Vec3, dim: number): Vec3[] {
-  const cells: Vec3[] = []
-  for (let dx = 0; dx < dim; dx++)
-    for (let dz = 0; dz < dim; dz++)
-      cells.push({ x: center.x + dx, y: center.y, z: center.z + dz })
-  return cells
-}
-
 export function isFootprintValid(
   center: Vec3,
-  dim: number,
+  dims: FootprintDims,
   map: GameMap,
   occupiedSet: Set<string>,
 ): boolean {
-  return getFootprintCells(center, dim).every(cell => isValidLandingPosition(cell, map, occupiedSet))
+  return getFootprintCells(center, dims).every(cell => isValidLandingPosition(cell, map, occupiedSet))
 }
 
 // BFS from fromPos (skipping fromPos itself) respecting walls; returns the closest cell
-// where the target's footprint (targetDim × targetDim) fits on valid, unoccupied tiles.
+// where the target's footprint fits on valid, unoccupied tiles.
 export function findClosestValidDisplacementPosition(
   fromPos: Vec3,
   map: GameMap,
   caps: MovementCapabilities,
   occupiedSet: Set<string>,
-  targetDim: number = 1,
+  targetDims: FootprintDims = { width: 1, height: 1, depth: 1 },
   maxRadius: number = 6,
 ): Vec3 | null {
   const visited = new Map<string, number>([[key(fromPos), 0]])
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: fromPos, cost: 0 }]
   while (queue.length > 0) {
     const { pos, cost } = queue.shift()!
-    if (cost > 0 && isFootprintValid(pos, targetDim, map, occupiedSet)) return pos
+    if (cost > 0 && isFootprintValid(pos, targetDims, map, occupiedSet)) return pos
     if (cost >= maxRadius) continue
     for (const nb of neighbours(pos)) {
       const k = key(nb)
@@ -236,7 +223,7 @@ export function findRangedIntercedPosition(
   interceptorPos: Vec3,
   budget: number,
   caps: MovementCapabilities,
-  interceptorDim: number,
+  interceptorDims: FootprintDims,
   map: GameMap,
   occupiedSet: Set<string>,
 ): Vec3 | null {
@@ -245,7 +232,7 @@ export function findRangedIntercedPosition(
   const sorted = [...lineCells].reverse() // closest to target first
   const reachable = getReachableCells(interceptorPos, budget, caps, map)
   for (const cell of sorted) {
-    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDim, map, occupiedSet)) return cell
+    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet)) return cell
   }
   return null
 }

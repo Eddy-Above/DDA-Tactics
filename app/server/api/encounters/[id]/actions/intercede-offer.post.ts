@@ -2,11 +2,12 @@ import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import {
+  type FootprintDims,
   getReachableCells,
   detectCapabilitiesFromQualities,
   isValidLandingPosition,
   isPositionInAir,
-  getSizeFootprintDimension,
+  getFootprintDimensions,
   getFootprintCells,
   isFootprintValid,
   findClosestValidDisplacementPosition,
@@ -772,7 +773,7 @@ export default defineEventHandler(async (event) => {
 
   // For melee with map: verify the target can be displaced before creating any offers.
   // If there is no valid non-occupied landing spot for the target, intercede is impossible.
-  let targetDimForOffer = 1
+  let targetDimsForOffer: FootprintDims = { width: 1, height: 1, depth: 1 }
   let targetCanBeDisplaced = true
   if (!isRangedOnMap && mapRecord && targetPos_map && target.type === 'digimon') {
     const targetDigRec = digimonById.get(target.entityId)
@@ -784,14 +785,14 @@ export default defineEventHandler(async (event) => {
         targetDigRec.size as any,
       )
       const targetCaps = detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
-      targetDimForOffer = getSizeFootprintDimension(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
+      targetDimsForOffer = getFootprintDimensions(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
       // Occupied set excludes target (interceptor will take their tile)
       const preOccupied = new Set(
         Object.entries(participantPositions)
           .filter(([pid]) => pid !== body.targetId)
           .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
       )
-      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCaps, preOccupied, targetDimForOffer) !== null
+      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCaps, preOccupied, targetDimsForOffer) !== null
     }
   }
 
@@ -809,7 +810,7 @@ export default defineEventHandler(async (event) => {
   // Pre-compute the melee intercept cell — it depends only on target and attacker positions, not the interceptor
   let meleeInterceptCell: { x: number; y: number; z: number } | null = null
   if (!isRangedOnMap && mapRecord && targetPos_map) {
-    const targetFootprintCells = getFootprintCells(targetPos_map, targetDimForOffer)
+    const targetFootprintCells = getFootprintCells(targetPos_map, targetDimsForOffer)
     let cell = targetPos_map
     if (attackerPos_map && targetFootprintCells.length > 1) {
       const sorted = [...targetFootprintCells].sort((a, b) => {
@@ -869,7 +870,7 @@ export default defineEventHandler(async (event) => {
           )
           const caps = detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu)
           const budget = deriv.movement
-          const interceptorDim = getSizeFootprintDimension(digRec.size as any, (digRec as any).giganticDimensions)
+          const interceptorDims = getFootprintDimensions(digRec.size as any, (digRec as any).giganticDimensions)
 
           let foundPos: { x: number; y: number; z: number } | null = null
           let isRangedIntercede = false
@@ -882,7 +883,7 @@ export default defineEventHandler(async (event) => {
                 .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
             )
             foundPos = findRangedIntercedPosition(
-              attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDim, mapRecord, rangedOccupied,
+              attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDims, mapRecord, rangedOccupied,
             )
             isRangedIntercede = true
           } else if (meleeInterceptCell) {
@@ -895,7 +896,7 @@ export default defineEventHandler(async (event) => {
             const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, interceptorDim, mapRecord, meleeOccupied)
+              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied)
             ) {
               foundPos = meleeInterceptCell
             }
@@ -948,7 +949,7 @@ export default defineEventHandler(async (event) => {
                 .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
             )
             tamerFoundPos = findRangedIntercedPosition(
-              attackerPos_map, targetPos_map, tamerPos, tamerMovement, tamerCaps, 1, mapRecord, rangedOccupied,
+              attackerPos_map, targetPos_map, tamerPos, tamerMovement, tamerCaps, { width: 1, height: 1, depth: 1 }, mapRecord, rangedOccupied,
             )
           } else if (meleeInterceptCell) {
             const meleeOccupied = new Set(
@@ -959,7 +960,7 @@ export default defineEventHandler(async (event) => {
             const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, 1, mapRecord, meleeOccupied)
+              isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied)
             ) {
               tamerFoundPos = meleeInterceptCell
             }
