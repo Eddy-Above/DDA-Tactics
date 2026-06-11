@@ -3635,6 +3635,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
             <EncounterMap
               :encounter="activeEncounter as any"
               :is-dm="false"
+              :bottom-overlay-offset="66"
               :my-tamer-id="tamerId"
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"

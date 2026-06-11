@@ -1,5 +1,8 @@
 <template>
-  <div class="encounter-map-root">
+  <div
+    class="encounter-map-root"
+    :style="bottomOverlayOffset != null ? { '--overlay-bottom': bottomOverlayOffset + 'px' } : undefined"
+  >
     <!-- GM Toolbar (top) -->
     <MapToolbar
       v-if="isDm && map"
@@ -191,6 +194,7 @@ const props = defineProps<{
   editorMode?: boolean
   selectableParticipantIds?: string[]
   eddySoulRules?: EddySoulRules
+  bottomOverlayOffset?: number   // px from viewport bottom for bottom-anchored overlays; defaults to 10 via CSS fallback
 }>()
 
 const emit = defineEmits<{
@@ -700,9 +704,9 @@ function onStructureSave(id: string, type: string, woundBoxes: number | null, fa
 }
 .overlay-top-left   { top: 10px; left: 10px; }
 .overlay-left       { top: 60px; left: 10px; bottom: 10px; display: flex; flex-direction: column; justify-content: center; pointer-events: none; }
-.overlay-right      { top: 10px; right: 10px; bottom: 10px; display: flex; flex-direction: column; justify-content: flex-start; }
-.overlay-bottom-left  { bottom: 10px; left: 10px; }
-.overlay-bottom-right { bottom: 10px; right: 10px; }
+.overlay-right      { top: 10px; right: 10px; bottom: var(--overlay-bottom, 10px); display: flex; flex-direction: column; justify-content: flex-start; }
+.overlay-bottom-left  { bottom: var(--overlay-bottom, 10px); left: 10px; }
+.overlay-bottom-right { bottom: var(--overlay-bottom, 10px); right: 10px; }
 .overlay-property   { top: 50%; right: 10px; transform: translateY(-50%); }
 .placement-panel {
   pointer-events: auto;
