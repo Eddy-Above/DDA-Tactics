@@ -1522,8 +1522,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally movement.',
-    effect: `Apply [Vigilance] tag to a support attack. Ally gains movement bonus. Single-target: Ally rolls Health for duration.`,
+    description: '[P] Boost ally Dodge and Armor.',
+    effect: `Apply [Vigilance] tag to a support attack. Ally gains Dodge + Armor bonus equal to user's BIT. Single-target: Ally rolls Health for duration.`,
   },
   {
     id: 'effect-distract',

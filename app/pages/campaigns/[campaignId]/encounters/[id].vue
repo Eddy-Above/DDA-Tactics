@@ -3,7 +3,7 @@ import type { Encounter } from '~/server/db/schema'
 import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/useEncounters'
 import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
-import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
+import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
@@ -3012,7 +3012,8 @@ const digimonMapForMap = computed(() => {
   const out: Record<string, any> = {}
   const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
   digimonList.value.forEach(d => {
-    const derived = calcDigimonStats(d)
+    const hasStrikeFirst = hasPartnerStrikeFirst((d as any).partnerId, tamers.value, campaignLevel.value)
+    const derived = _calcDigimonStats(d, eddySoulRules.value, hasStrikeFirst)
     const parsedQualities = typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? [])
     const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
     out[d.id] = {

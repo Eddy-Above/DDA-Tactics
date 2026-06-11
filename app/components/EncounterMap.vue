@@ -169,7 +169,8 @@ import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
 import { useEncounters } from '~/composables/useEncounters'
-import { calculateDigimonDerivedStats } from '~/types'
+import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
+import { applyStanceToMovement } from '~/utils/stanceModifiers'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -180,6 +181,7 @@ const props = defineProps<{
   digimonMap: Record<string, {
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
+    movement?: number
     giganticDimensions?: { width: number; height: number; depth: number } | null
     isEnemy?: boolean
     partnerId?: string | null
@@ -439,7 +441,8 @@ function npcMoveCaps(participantId: string) {
   const pos = positions.value[participantId]
   if (!pos) return null
   const dInfo = digimonMapForCanvas.value[p.entityId] as any
-  const budget: number = dInfo?.movement ?? 4
+  const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
+  const budget: number = applyStanceToMovement(dInfo?.movement ?? 4, p.currentStance, stageBonus)
   const qualities: any[] = dInfo?.qualities ?? []
   const caps = movement.detectCapabilities(qualities, budget, 0, 0)
   // Tamers are always player-side; digimon carry isEnemy from their DB record

@@ -19,3 +19,8 @@ export function applyStanceToDodge(pool: number, stance: string): number {
   if (stance === 'offensive') return Math.ceil(pool / 2)
   return pool
 }
+
+export function applyStanceToMovement(movement: number, stance: string, stageBonus: number): number {
+  if (stance === 'brave') return Math.max(0, movement - stageBonus)
+  return movement
+}

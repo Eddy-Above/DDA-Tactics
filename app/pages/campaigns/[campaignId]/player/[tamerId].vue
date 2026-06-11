@@ -5,7 +5,7 @@ import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillL
 import type { DigimonStage, EddySoulRules } from '~/types'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
-import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
+import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
@@ -3398,6 +3398,8 @@ const digimonMapForMap = computed(() => {
   const participants: any[] = (activeEncounter.value?.participants as any[]) ?? []
   allDigimon.value.forEach(d => {
     const participant = participants.find((p: any) => p.type === 'digimon' && p.entityId === d.id)
+    const hasStrikeFirst = hasPartnerStrikeFirst((d as any).partnerId, allTamers.value, campaignLevel.value)
+    const derived = _calcDigimonStats(d, eddySoulRules.value, hasStrikeFirst)
     out[d.id] = {
       name: (d as any).nickname || d.name,
       spriteUrl: (d as any).spriteUrl ?? null,
@@ -3407,6 +3409,7 @@ const digimonMapForMap = computed(() => {
       stage: d.stage,
       baseStats: d.baseStats,
       qualities: typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? []),
+      movement: derived.movement ?? 4,
       giganticDimensions: (d as any).giganticDimensions ?? null,
       isEnemy: (d as any).isEnemy ?? false,
       partnerId: (d as any).partnerId ?? null,
