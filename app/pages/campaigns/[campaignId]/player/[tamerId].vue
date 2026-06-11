@@ -2745,18 +2745,14 @@ async function handleSaveIntercedeOptions() {
   if (!activeEncounter.value || !myTamerParticipant.value) return
   savingIntercedeOptions.value = true
   try {
-    const participants = [...((activeEncounter.value.participants as any[]) || [])]
-    const idx = participants.findIndex((p: any) => p.id === myTamerParticipant.value!.id)
+    const participants = (activeEncounter.value.participants as any[]) || []
     const allIds = participants
       .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant.value!.id)
       .map((p: any) => p.id)
     const optOuts = allIds.filter(id => !intercedeOptionsSelections.value.has(id))
-    if (idx !== -1) {
-      participants[idx] = { ...participants[idx], intercedeOptOuts: optOuts }
-    }
-    await $fetch(`/api/encounters/${activeEncounter.value.id}`, {
-      method: 'PUT',
-      body: { participants },
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
+      method: 'POST',
+      body: { participantId: myTamerParticipant.value.id, intercedeOptOuts: optOuts },
     })
     await loadData()
 

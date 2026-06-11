@@ -1230,17 +1230,10 @@ async function handleGmSaveCharacterOptOuts() {
 // Save GM intercede opt-outs (which targets the GM doesn't want to be queried about)
 async function handleSaveGmIntercedeOptOuts() {
   if (!currentEncounter.value) return
-  const participants = [...((currentEncounter.value.participants as any[]) || [])]
-  const gmIdx = participants.findIndex((p: any) => p.id === 'gm')
   const optOuts = Array.from(intercedeOptOutSelections.value)
-  if (gmIdx !== -1) {
-    participants[gmIdx] = { ...participants[gmIdx], intercedeOptOuts: optOuts }
-  } else {
-    participants.push({ id: 'gm', type: 'gm', intercedeOptOuts: optOuts })
-  }
-  await $fetch(`/api/encounters/${currentEncounter.value.id}`, {
-    method: 'PUT',
-    body: { participants },
+  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-optouts`, {
+    method: 'POST',
+    body: { participantId: 'gm', intercedeOptOuts: optOuts },
   })
   await fetchEncounter(currentEncounter.value.id)
   showIntercedeOptOuts.value = false
