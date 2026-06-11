@@ -1641,6 +1641,18 @@ function tryChargeMove(targetId: string): boolean {
   return true
 }
 
+// Selects `participantId` as the attack/intercede target if it currently has a reticule.
+// Returns true if the target was selected (caller should stop further click handling).
+function tryReticuleTarget(participantId: string): boolean {
+  if (!reticuleParticipantIds.value.includes(participantId)) return false
+  if (props.chargeMode === 'before') {
+    tryChargeMove(participantId)
+  } else {
+    emit('target-selected', participantId)
+  }
+  return true
+}
+
 function onCanvasClick(event: MouseEvent) {
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
@@ -1749,6 +1761,14 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
+  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
+
+  // Single-target attack or intercede target selection: a direct hit on a participant's
+  // character token (sprite hitbox) takes priority over the ground/shadow-tile fallback below
+  if (spriteHit && ((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || props.selectableParticipantIds?.length)) {
+    if (tryReticuleTarget(spriteHit.object.userData.participantId)) return
+  }
+
   // Single-target attack or intercede target selection: clicking a ground/voxel tile within a valid target's footprint
   // Allows targeting Large/Huge/Gigantic digimon by clicking any footprint tile, not just the anchor
   if (((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || (props.selectableParticipantIds?.length && !props.selectedAttack)) && placementSurfaceHit) {
@@ -1767,34 +1787,15 @@ function onCanvasClick(event: MouseEvent) {
       return footprintIntersectsArea(pos, getParticipantDim(p.id), cellSet)
     })
     if (targetParticipant) {
-      if (props.chargeMode === 'before') {
-        tryChargeMove(targetParticipant.id)
-      } else {
-        emit('target-selected', targetParticipant.id)
-      }
-      return
+      if (tryReticuleTarget(targetParticipant.id)) return
     }
   }
 
   // Check sprite click
-  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
   if (spriteHit) {
     const participantId: string = spriteHit.object.userData.participantId
     const p = props.participants.find(p => p.id === participantId)
     if (!p) return
-
-    // In single-target targeting mode or intercede selection mode, clicking a sprite with a reticule selects it
-    if ((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || props.selectableParticipantIds?.length) {
-      const hasReticule = reticuleParticipantIds.value.includes(participantId)
-      if (hasReticule) {
-        if (props.chargeMode === 'before') {
-          tryChargeMove(participantId)
-        } else {
-          emit('target-selected', participantId)
-        }
-        return
-      }
-    }
 
     // GM clicking an NPC — only show radial action menu when it's that NPC's active turn
     if (props.isDm && (p as any).isEnemy) {
