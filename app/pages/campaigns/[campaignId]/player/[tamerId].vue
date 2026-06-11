@@ -563,6 +563,24 @@ const currentTurnParticipant = computed(() => {
   return getCurrentParticipant(activeEncounter.value)
 })
 
+// Participants sorted by turn order (excludes partner digimon, shown alongside their tamer)
+const sortedParticipants = computed(() => {
+  if (!activeEncounter.value) return []
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const turnOrder = (activeEncounter.value.turnOrder as string[]) || []
+
+  const filteredTurnOrder = turnOrder.filter(id => {
+    const participant = participants.find(p => p.id === id)
+    if (!participant || participant.type === 'gm') return false
+    if (participant.type !== 'digimon') return true
+    return !hasPartnerTamerInEncounter(participant)
+  })
+
+  return filteredTurnOrder
+    .map((id) => participants.find((p) => p.id === id))
+    .filter(Boolean) as CombatParticipant[]
+})
+
 const isMyTurn = computed(() => {
   if (!currentTurnParticipant.value || !tamer.value) return false
   return myParticipants.value.some((p) => p.id === currentTurnParticipant.value!.id)
@@ -1055,6 +1073,17 @@ function getParticipantName(participant: CombatParticipant): string {
   }
 
   return baseName
+}
+
+// Check if a digimon participant has a partner tamer in this encounter
+function hasPartnerTamerInEncounter(digimonParticipant: CombatParticipant): boolean {
+  if (digimonParticipant.type !== 'digimon' || !activeEncounter.value) return false
+
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  const digimon = allDigimon.value.find(d => d.id === digimonParticipant.entityId)
+  if (!digimon?.partnerId) return false
+
+  return participants.some(p => p.type === 'tamer' && p.entityId === digimon.partnerId)
 }
 
 function getParticipantAttacks(participant: CombatParticipant): any[] {
@@ -3637,6 +3666,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @area-attack-confirmed="onMapAreaAttackConfirmed"
               @attack-cancelled="onMapAttackCancelled"
             >
+              <template #turn-order>
+                <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">
+                  <div class="text-xs font-semibold text-digimon-dark-400 mb-2">TURN ORDER</div>
+                  <div v-for="p in sortedParticipants" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
+                    :class="currentTurnParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
+                    {{ getParticipantName(p) }}
+                  </div>
+                </div>
+              </template>
               <template #combat-controls>
                 <div class="flex items-center gap-2">
                   <button
