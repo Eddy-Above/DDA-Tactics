@@ -60,6 +60,7 @@ const form = reactive({
     warpEvolution: false,
     bonusDPMinPerCategory: false,
     enemyDoubleWounds: false,
+    directRangeOverrides: { direct: null as number | null, bolsterDirect: null as number | null },
   },
 })
 
@@ -124,6 +125,10 @@ onMounted(async () => {
       form.eddySoulRules.warpEvolution = eddySoul.warpEvolution ?? false
       form.eddySoulRules.bonusDPMinPerCategory = eddySoul.bonusDPMinPerCategory ?? false
       form.eddySoulRules.enemyDoubleWounds = eddySoul.enemyDoubleWounds ?? false
+      form.eddySoulRules.directRangeOverrides = {
+        direct: eddySoul.directRangeOverrides?.direct ?? null,
+        bolsterDirect: eddySoul.directRangeOverrides?.bolsterDirect ?? null,
+      }
     }
 
   }
@@ -184,7 +189,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds || form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -203,6 +208,12 @@ async function handleSave() {
         ...(form.eddySoulRules.warpEvolution && { warpEvolution: true }),
         ...(form.eddySoulRules.bonusDPMinPerCategory && { bonusDPMinPerCategory: true }),
         ...(form.eddySoulRules.enemyDoubleWounds && { enemyDoubleWounds: true }),
+        ...((form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect) && {
+          directRangeOverrides: {
+            ...(form.eddySoulRules.directRangeOverrides.direct && { direct: form.eddySoulRules.directRangeOverrides.direct }),
+            ...(form.eddySoulRules.directRangeOverrides.bolsterDirect && { bolsterDirect: form.eddySoulRules.directRangeOverrides.bolsterDirect }),
+          },
+        }),
       },
     }),
   }
@@ -734,6 +745,35 @@ async function handleDelete() {
               <p class="text-xs text-digimon-dark-500">Enemy digimon added to encounters have twice their normal wound boxes. Applies at the moment they join — existing participants are unaffected.</p>
             </div>
           </label>
+          <!-- Direct / Bolster Direct Range Overrides -->
+          <div class="flex items-center gap-3 pt-2 border-t border-digimon-dark-700 mt-2">
+            <div class="flex-1">
+              <span class="text-digimon-dark-300 text-sm">Direct Range Overrides</span>
+              <p class="text-xs text-digimon-dark-500">Map-view range (in spaces) a tamer must be within to Direct or Bolster Direct a digimon. Leave empty for defaults (Direct: 15, Bolster Direct: 10).</p>
+            </div>
+            <div class="flex gap-2">
+              <div class="flex flex-col items-center gap-1">
+                <label class="text-xs text-digimon-dark-500 uppercase font-semibold">Direct</label>
+                <input
+                  v-model.number="form.eddySoulRules.directRangeOverrides.direct"
+                  type="number"
+                  min="1"
+                  placeholder="15"
+                  class="w-16 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-white text-sm text-center"
+                />
+              </div>
+              <div class="flex flex-col items-center gap-1">
+                <label class="text-xs text-digimon-dark-500 uppercase font-semibold">Bolster</label>
+                <input
+                  v-model.number="form.eddySoulRules.directRangeOverrides.bolsterDirect"
+                  type="number"
+                  min="1"
+                  placeholder="10"
+                  class="w-16 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-white text-sm text-center"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

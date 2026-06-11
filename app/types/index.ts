@@ -223,6 +223,7 @@ export interface EddySoulRules {
   warpEvolution?: boolean
   bonusDPMinPerCategory?: boolean
   enemyDoubleWounds?: boolean
+  directRangeOverrides?: { direct?: number; bolsterDirect?: number }
 }
 
 export interface HouseRules {

@@ -3395,6 +3395,30 @@ const intercedeMapTargetIds = computed((): string[] => {
   return (currentIntercedeRequest.value.data?.areaTargetIds as string[]) ?? []
 })
 
+// Map-click target selection for Direct / Bolster Direct
+const mapDirectMode = ref<{ bolstered: boolean } | null>(null)
+
+const directRanges = computed(() => ({
+  direct: eddySoulRules.value?.directRangeOverrides?.direct ?? 15,
+  bolsterDirect: eddySoulRules.value?.directRangeOverrides?.bolsterDirect ?? 10,
+}))
+
+const directMapTargetIds = computed((): string[] => {
+  if (!mapDirectMode.value || !activeEncounter.value || !myTamerParticipant.value) return []
+  const positions = (activeEncounter.value.participantPositions as Record<string, any>) || {}
+  const myPos = positions[myTamerParticipant.value.id]
+  if (!myPos) return []
+  const range = mapDirectMode.value.bolstered ? directRanges.value.bolsterDirect : directRanges.value.direct
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  return participants
+    .filter(p => p.type === 'digimon')
+    .filter(p => {
+      const pos = positions[p.id]
+      return pos && chebyshev(myPos, pos) <= range
+    })
+    .map(p => p.id)
+})
+
 const mapSelectedAttackProp = computed(() => {
   if (!selectedAttack.value || !showMapView.value) return null
   const p = selectedAttack.value.participant
@@ -3420,6 +3444,16 @@ const mapSelectedAttackProp = computed(() => {
 function onMapTargetSelected(targetId: string) {
   if (intercedeMapTargetIds.value.includes(targetId)) {
     playerIntercedeAreaChosenTarget.value = targetId
+    return
+  }
+  if (mapDirectMode.value) {
+    if (!directMapTargetIds.value.includes(targetId)) return
+    const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
+    const target = participants.find(p => p.id === targetId)
+    if (!target) return
+    pendingDirectBolstered.value = mapDirectMode.value.bolstered
+    mapDirectMode.value = null
+    confirmPlayerDirect(target)
     return
   }
   const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
@@ -3527,15 +3561,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"
               :selected-attack="mapSelectedAttackProp"
-              :selectable-participant-ids="intercedeMapTargetIds"
+              :selectable-participant-ids="intercedeMapTargetIds.length ? intercedeMapTargetIds : directMapTargetIds"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               @positions-updated="onPositionsUpdated"
               @encounter-updated="() => {}"
               @player-action="(id, action) => {
                 if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id
-                else if (action === 'direct')    openPlayerDirectTargetSelector(false)
-                else if (action === 'bolster-direct') openPlayerDirectTargetSelector(true)
+                else if (action === 'direct')    mapDirectMode = { bolstered: false }
+                else if (action === 'bolster-direct') mapDirectMode = { bolstered: true }
                 else if (action === 'special-order') { showPlayerSpecialOrdersModal = true }
                 else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
@@ -3556,7 +3590,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   </button>
                   <button
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                    @click="showMapView = false"
+                    @click="showMapView = false; mapDirectMode = null"
                   >✕ Close Map</button>
                 </div>
               </template>
@@ -3602,6 +3636,19 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
                 >{{ intercedeLoading ? 'Processing…' : 'Skip All' }}</button>
               </div>
+            </div>
+            <!-- Direct / Bolster Direct map target picker (shown when player clicks Direct from map radial) -->
+            <div
+              v-if="mapDirectMode"
+              class="fixed z-50 bg-digimon-dark-800 border border-amber-500 rounded-xl p-4 shadow-xl text-center"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-amber-400 font-semibold mb-1">
+                {{ mapDirectMode.bolstered ? 'Bolster Direct' : 'Direct' }} — select a Digimon (range {{ mapDirectMode.bolstered ? directRanges.bolsterDirect : directRanges.direct }})
+              </div>
+              <p v-if="directMapTargetIds.length === 0" class="text-xs text-digimon-dark-400 mb-2">No Digimon in range.</p>
+              <p v-else class="text-xs text-digimon-dark-400 mb-2">Click a highlighted Digimon on the map.</p>
+              <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="mapDirectMode = null">Cancel</button>
             </div>
             <!-- Floating stance picker (shown when player clicks Stance from map radial) -->
             <div
