@@ -4,7 +4,7 @@ import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 import { chebyshev } from '../../../../utils/gridDistance'
 import { getFootprintDimensions, getFootprintCells } from '../../../../utils/mapMovement'
-import { calculateDigimonDerivedStats } from '~/types'
+import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 
 interface AttackActionBody {
   participantId: string
@@ -122,8 +122,10 @@ export default defineEventHandler(async (event) => {
     if (attackerPos && targetPos) {
       const [attackerDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
       if (attackerDig) {
-        const baseStats = attackerDig.baseStats
-        const derived = calculateDigimonDerivedStats(baseStats, attackerDig.stage as any, attackerDig.size as any)
+        const derived = await getDigimonDerivedStats(actor.entityId)
+        if (!derived) {
+          throw createError({ statusCode: 500, message: 'Failed to compute attacker derived stats' })
+        }
         const qualities = attackerDig.qualities ?? []
         const reachRanks = (qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
         const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
