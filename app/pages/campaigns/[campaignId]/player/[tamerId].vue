@@ -3631,7 +3631,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
       <template v-else>
         <!-- Map overlay (available in any phase) -->
         <ClientOnly>
-          <div v-if="showMapView && activeEncounter" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
+          <div v-if="showMapView && activeEncounter" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:56px;left:0;right:0;bottom:0;">
             <EncounterMap
               :encounter="activeEncounter as any"
               :is-dm="false"
