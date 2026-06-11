@@ -60,9 +60,9 @@
       class="npc-radial-menu"
       :style="{ left: npcRadialScreen.x + 'px', top: npcRadialScreen.y + 'px' }"
     >
-      <button class="npc-radial-btn move"   @click="npcAction('move')">Move</button>
+      <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
       <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
-      <button class="npc-radial-btn attack" @click="npcAction('attack')">Attack</button>
+      <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
     </div>
     <!-- Player radial action menu -->
     <div
@@ -70,7 +70,7 @@
       class="npc-radial-menu"
       :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
     >
-      <button class="npc-radial-btn player move" @click="playerRadialMove()">Move</button>
+      <button class="npc-radial-btn player move" :disabled="radialPlayerOutOfActions" @click="playerRadialMove()">Move</button>
       <template v-if="playerRadialParticipantType === 'tamer'">
         <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
         <button class="npc-radial-btn player bolster-direct" :disabled="bolsterDirectDisabled" @click="playerRadialAction('bolster-direct')">Bolster Direct</button>
@@ -78,10 +78,10 @@
         <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
       </template>
       <template v-else-if="playerRadialParticipantType === 'digimon'">
-        <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
+        <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
         <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
         <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-        <button class="npc-radial-btn player mode-change" @click="playerRadialAction('mode-change')">Mode Change</button>
+        <button class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
       </template>
     </div>
   </div>
@@ -109,7 +109,7 @@ const props = defineProps<{
   participantPositions: Record<string, Vec3>
   destructibleStates: DestructibleState[]
   tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
-  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null }>
+  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null; qualities?: any[] }>
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   currentEditY: number
@@ -189,6 +189,13 @@ const pendingMovePath = ref<Vec3[]>([])
 const movingParticipantId = ref<string | null>(null)
 const npcRadialId = ref<string | null>(null)
 const npcRadialScreen = ref<{ x: number; y: number } | null>(null)
+const npcRadialParticipant = computed(() =>
+  npcRadialId.value ? (props.participants.find(p => p.id === npcRadialId.value) ?? null) : null
+)
+const npcOutOfActions = computed(() => {
+  const p = npcRadialParticipant.value
+  return !p || (p.actionsRemaining?.simple || 0) < 1
+})
 const playerRadialId = ref<string | null>(null)
 const playerRadialScreen = ref<{ x: number; y: number } | null>(null)
 const playerRadialParticipantType = computed(() =>
@@ -235,6 +242,24 @@ const digivolveDisabled = computed(() => {
 
   const dist = Math.max(Math.abs(dPos.x - tPos.x), Math.abs(dPos.y - tPos.y), Math.abs(dPos.z - tPos.z))
   return dist > digivolveRange.value
+})
+// Out of own actions: grays the shared player Move button (tamer or digimon) and the digimon Attack button.
+const radialPlayerOutOfActions = computed(() => {
+  const p = props.participants.find(pp => pp.id === playerRadialId.value)
+  return !p || (p.actionsRemaining?.simple || 0) < 1
+})
+// Mode Change costs the digimon's own action, but Mode Change X.0 Rank 2 grants up to 3 free swaps per combat.
+// Mirrors canUseModeChangeSwap (app/utils/modeChange.ts), inverted; reads qualities from the Record-shaped prop.
+const modeChangeDisabled = computed(() => {
+  const d = radialDigimonParticipant.value
+  if (!d) return true
+  if ((d.actionsRemaining?.simple || 0) >= 1) return false
+  const x0Rank = (props.digimonMap[d.entityId]?.qualities ?? [])
+    .find((q: any) => q.id === 'mode-change-x0')?.ranks ?? 0
+  if (props.eddySoulRules?.modeChangeFreeSwapsPerCombat && x0Rank >= 2) {
+    return ((d as any).modeChangeFreeSwapsUsed ?? 0) >= 3
+  }
+  return true
 })
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
@@ -2257,7 +2282,8 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.move   { top: -38px; left: -55px; }
 .npc-radial-btn.stance { top: -68px; left: 0; }
 .npc-radial-btn.attack { top: -38px; left: 55px; }
-.npc-radial-btn:hover  { background: #2a3480; }
+.npc-radial-btn:hover:not(:disabled)  { background: #2a3480; }
+.npc-radial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
 .npc-radial-btn.player.move   { top: -70px; left: 0; }
 .npc-radial-btn.player.attack { top: -38px; left: 45px; }
@@ -2267,6 +2293,6 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.orders         { top: -24px; left: 66px; }
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
 .npc-radial-btn.player.digimon-stance { top: -75px; left: 90px; }
-.npc-radial-btn.player:hover  { background: #1a4a30; }
+.npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
