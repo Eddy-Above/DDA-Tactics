@@ -5,7 +5,7 @@ import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
-import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG } from '~/types'
+import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG, type Vec3 } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
 definePageMeta({
@@ -123,6 +123,31 @@ const tamerMap = computed(() => {
   tamers.value.forEach((t) => map.set(t.id, t))
   return map
 })
+
+// True if two Vec3 positions are identical (handles undefined/null safely)
+function sameVec3(a?: Vec3, b?: Vec3): boolean {
+  if (!a || !b) return a === b
+  return a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+// Merge a server response's participantPositions with the client's current local positions.
+// For any participant whose position the server did NOT change relative to `before`
+// (the snapshot taken just before the request was sent), keep the client's current
+// (possibly more-recently-moved-locally) value instead of the server's possibly-stale one.
+// Participants the server DID change (e.g. intercede-claim repositioning an interceptor)
+// take the server's new value.
+function mergeParticipantPositions(before: Record<string, Vec3> | undefined, result: any): any {
+  const beforePositions = before ?? {}
+  const resultPositions = result?.participantPositions ?? {}
+  const currentPositions = currentEncounter.value?.participantPositions ?? {}
+  const merged: Record<string, Vec3> = { ...resultPositions }
+  for (const key of Object.keys(currentPositions)) {
+    if (sameVec3(beforePositions[key], resultPositions[key])) {
+      merged[key] = currentPositions[key]
+    }
+  }
+  return { ...result, participantPositions: merged }
+}
 
 // Participants sorted by turn order
 const sortedParticipants = computed(() => {
@@ -909,6 +934,7 @@ async function confirmAttack(target: CombatParticipant) {
     // ALL attacks route through intercede-offer
     // Server handles: intercede offers, dodge requests, or NPC auto-resolve
     try {
+      const positionsBefore = currentEncounter.value?.participantPositions
       const intercedResult = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
         method: 'POST',
         body: {
@@ -934,7 +960,7 @@ async function confirmAttack(target: CombatParticipant) {
         },
       })
       if (intercedResult) {
-        currentEncounter.value = intercedResult as any
+        currentEncounter.value = mergeParticipantPositions(positionsBefore, intercedResult) as any
       }
       // Add attack log entry
       const entity = getEntityDetails(participant)
@@ -1013,11 +1039,12 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
     }
 
     try {
+      const positionsBefore = currentEncounter.value?.participantPositions
       const result = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
         method: 'POST',
         body: { ...sharedBody, targetIds: targets.map(t => t.id) },
       })
-      if (result) currentEncounter.value = result as any
+      if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
     } catch (e: any) {
       console.error('Area attack failed:', e)
       alert(e?.data?.message || 'Area attack failed')
@@ -1074,11 +1101,12 @@ async function cancelIntercedeGroup(intercedeGroupId: string) {
 // Player tamer skips their own intercede-offer (properly routes through intercede-skip to create dodge-rolls)
 async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
   if (!currentEncounter.value) return
+  const positionsBefore = currentEncounter.value.participantPositions
   const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
     method: 'POST',
     body: { requestId, optOut },
   })
-  if (result) currentEncounter.value = result as any
+  if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
 }
 
 // GM intercede response functions
@@ -1088,6 +1116,7 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string) 
   const capturedRequest = gmIntercedeRequest.value
   gmIntercedeLoading.value = true
   try {
+    const positionsBefore = currentEncounter.value.participantPositions
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST', body: {
         requestId,
@@ -1096,7 +1125,7 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string) 
       }
     })
 
-    if (result) currentEncounter.value = result as any
+    if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
     showGmIntercedeModal.value = false
   } catch (e: any) {
     if (e?.statusCode === 409) {
@@ -1114,10 +1143,11 @@ async function handleGmIntercedeSkip(requestId: string, optOut = false) {
   if (!currentEncounter.value) return
   gmIntercedeLoading.value = true
   try {
+    const positionsBefore = currentEncounter.value.participantPositions
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST', body: { requestId, optOut }
     })
-    if (result) currentEncounter.value = result as any
+    if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
     showGmIntercedeModal.value = false
     gmIntercedeRequest.value = null
   } finally {
@@ -1133,11 +1163,12 @@ async function handleQuickReaction(request: any) {
   )
   if (!tamerParticipant) return
   try {
+    const positionsBefore = currentEncounter.value.participantPositions
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/quick-reaction`, {
       method: 'POST',
       body: { requestId: request.id, tamerParticipantId: tamerParticipant.id },
     })
-    if (result) currentEncounter.value = result as any
+    if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
   } catch (e: any) {
     alert(e?.data?.message || 'Quick Reaction failed')
   }
@@ -1153,13 +1184,14 @@ async function handleGmQuickReaction() {
   if (!tamerParticipant) return
   gmIntercedeLoading.value = true
   try {
+    const positionsBefore = currentEncounter.value.participantPositions
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/quick-reaction`, {
       method: 'POST',
       body: { requestId: qrRequest.id, tamerParticipantId: tamerParticipant.id },
     })
     showGmIntercedeModal.value = false
     gmIntercedeRequest.value = null
-    if (result) currentEncounter.value = result as any
+    if (result) currentEncounter.value = mergeParticipantPositions(positionsBefore, result) as any
   } catch (e: any) {
     alert(e?.data?.message || 'Quick Reaction failed')
   } finally {

@@ -310,6 +310,18 @@ function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDims: Fo
   return false
 }
 
+// True if a footprint of `dims` anchored at `anchor` would overlap any other participant's
+// footprint (excluding `excludeId`, the unit being moved).
+function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string): boolean {
+  return props.participants.some(p => {
+    if (p.id === excludeId) return false
+    const oPos = props.participantPositions[p.id]
+    if (!oPos) return false
+    const oCellSet = new Set(getFootprintCells(oPos, getParticipantFootprintDims(p.id)).map(c => `${c.x},${c.y},${c.z}`))
+    return footprintIntersectsArea(anchor, dims, oCellSet)
+  })
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
   initScene()
@@ -1625,6 +1637,7 @@ function tryChargeMove(targetId: string): boolean {
   let bestDist = Infinity
   for (const anchor of anchors) {
     if (!meleeInRange(anchor, targetPos, attackerDims, targetDims, props.attackerMeleeRange)) continue
+    if (footprintOccupied(anchor, attackerDims, attackerId)) continue
     const dist = Math.max(Math.abs(anchor.x - attackerPos.x), Math.abs(anchor.y - attackerPos.y), Math.abs(anchor.z - attackerPos.z))
     if (dist < bestDist) { bestDist = dist; best = anchor }
   }
@@ -1659,10 +1672,13 @@ function onCanvasClick(event: MouseEvent) {
       const cell: Vec3 = { x: Math.floor(mvTarget.x), y: npcMoveY.value, z: Math.floor(mvTarget.z) }
       if (props.reachableCells.has(vec3Key(cell))) {
         const pid = movingParticipantId.value
-        movingParticipantId.value = null
-        hoverGhostGroup.clear()
-        hoveredMoveScreen.value = null
-        emit('unit-moved', pid, cell, props.activePath)
+        const isChargeAfter = pid === props.chargeMoveParticipantId
+        if (!isChargeAfter || !footprintOccupied(cell, getParticipantFootprintDims(pid), pid)) {
+          movingParticipantId.value = null
+          hoverGhostGroup.clear()
+          hoveredMoveScreen.value = null
+          emit('unit-moved', pid, cell, props.activePath)
+        }
       }
     }
     return
@@ -1682,7 +1698,10 @@ function onCanvasClick(event: MouseEvent) {
         : { x: Math.floor(surfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(surfaceHit.point.z) }
       const attackerId = effectiveAttackerId.value
       if (attackerId && props.reachableCells.has(vec3Key(cell))) {
-        emit('charge-target-selected', attackerId, cell, null)
+        const attackerDims = getParticipantFootprintDims(attackerId)
+        if (!footprintOccupied(cell, attackerDims, attackerId)) {
+          emit('charge-target-selected', attackerId, cell, null)
+        }
       }
     }
     return
