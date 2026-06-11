@@ -80,7 +80,7 @@
       <template v-else-if="playerRadialParticipantType === 'digimon'">
         <button class="npc-radial-btn player attack"    @click="playerRadialAction('attack')">Attack</button>
         <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
-        <button class="npc-radial-btn player digivolve" @click="playerRadialAction('digivolve')">Digivolve</button>
+        <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
         <button class="npc-radial-btn player mode-change" @click="playerRadialAction('mode-change')">Mode Change</button>
       </template>
     </div>
@@ -92,7 +92,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {
   GameMap, Vec3, CombatParticipant, ElementType, MapTool, DigimonSize,
-  DestructibleState, WallFace, Stance,
+  DestructibleState, WallFace, Stance, EddySoulRules,
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
@@ -129,6 +129,7 @@ const props = defineProps<{
   chargeMoveParticipantId: string | null
   showSpawnIndicators?: boolean
   selectableParticipantIds?: string[]
+  eddySoulRules?: EddySoulRules
 }>()
 
 const emit = defineEmits<{
@@ -207,6 +208,33 @@ const directDisabled = computed(() => {
 const bolsterDirectDisabled = computed(() => {
   const t = radialTamerParticipant.value
   return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 2
+})
+const radialDigimonParticipant = computed(() =>
+  playerRadialParticipantType.value === 'digimon'
+    ? props.participants.find(p => p.id === playerRadialId.value) ?? null
+    : null
+)
+const radialDigimonPartnerTamer = computed(() => {
+  const d = radialDigimonParticipant.value
+  if (!d) return null
+  const partnerId = props.digimonMap[d.entityId]?.partnerId
+  if (!partnerId) return null
+  return props.participants.find(p => p.type === 'tamer' && p.entityId === partnerId) ?? null
+})
+const digivolveRange = computed(() => props.eddySoulRules?.directRangeOverrides?.digivolve ?? 15)
+const digivolveDisabled = computed(() => {
+  const d = radialDigimonParticipant.value
+  const t = radialDigimonPartnerTamer.value
+  if (!d || !t) return true
+
+  if ((t.actionsRemaining?.simple || 0) < 1) return true
+
+  const dPos = props.participantPositions[d.id]
+  const tPos = props.participantPositions[t.id]
+  if (!dPos || !tPos) return true
+
+  const dist = Math.max(Math.abs(dPos.x - tPos.x), Math.abs(dPos.y - tPos.y), Math.abs(dPos.z - tPos.z))
+  return dist > digivolveRange.value
 })
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)

@@ -7,6 +7,7 @@ import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
+import { getAttackBadges } from '~/utils/attackBadges'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG, type Vec3 } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 
@@ -3163,6 +3164,7 @@ function onMapAttackCancelled() {
           :digimon-map="digimonMapForMap"
           :selected-attack="mapSelectedAttackProp"
           :player-placement-mode="false"
+          :eddy-soul-rules="eddySoulRules"
           @positions-updated="onPositionsUpdated"
           @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
           @npc-action="onNpcAction"
@@ -3226,9 +3228,38 @@ function onMapAttackCancelled() {
             >
               <span class="font-semibold">{{ attack.name }}</span>
               <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
+              <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
+                <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
+                <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
+                <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
+                <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
+              </span>
             </button>
           </div>
           <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="npcAttackParticipantId = null">Cancel</button>
+        </div>
+        <!-- Floating attack rider-options panel — shown after an attack is selected in map view -->
+        <div
+          v-if="selectedAttack"
+          class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl max-h-[60vh] overflow-y-auto"
+          style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+        >
+          <div class="text-sm text-digimon-dark-400 mb-3 text-center">
+            {{ selectedAttack.attack.name }} — click a target on the map
+          </div>
+          <AttackRiderOptions
+            :selected-attack="selectedAttack"
+            :round="currentEncounter?.round || 0"
+            :eddy-soul-rules="eddySoulRules"
+            :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+            :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+            v-model:bolster-attack-enabled="bolsterAttackEnabled"
+            v-model:bolster-attack-type="bolsterAttackType"
+            v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
+            v-model:huge-power-enabled="hugePowerEnabled"
+            v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+          />
+          <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
         </div>
       </div>
 
@@ -5028,98 +5059,18 @@ function onMapAttackCancelled() {
               </div>
             </div>
 
-            <!-- Bolster Attack Toggle -->
-            <div
-              v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack) && !lifestealComplexEnabled"
-              class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
-            >
-              <label class="flex items-center gap-2 cursor-pointer mb-2">
-                <input
-                  type="checkbox"
-                  v-model="bolsterAttackEnabled"
-                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-amber-500"
-                />
-                <span class="text-sm text-amber-400 font-medium">Bolster Attack (2 Simple Actions)</span>
-                <span class="text-xs text-digimon-dark-400 ml-auto">
-                  {{ (selectedAttack.participant.digimonBolsterCount ?? 0) }}/2 used
-                </span>
-              </label>
-              <div v-if="bolsterAttackEnabled" class="flex gap-2 mt-2">
-                <button
-                  @click="bolsterAttackType = 'damage-accuracy'"
-                  :class="[
-                    'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                    bolsterAttackType === 'damage-accuracy'
-                      ? 'bg-amber-600 text-white'
-                      : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-                  ]"
-                >
-                  +2 Damage & Accuracy
-                </button>
-                <button
-                  @click="bolsterAttackType = 'bit-cpu'"
-                  :disabled="selectedAttack.participant.lastBitCpuBolsterRound !== undefined &&
-                    (currentEncounter?.round || 0) - selectedAttack.participant.lastBitCpuBolsterRound < 2"
-                  :class="[
-                    'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                    bolsterAttackType === 'bit-cpu'
-                      ? 'bg-amber-600 text-white'
-                      : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500',
-                    'disabled:opacity-50 disabled:cursor-not-allowed'
-                  ]"
-                >
-                  +1 BIT/CPU (Effect)
-                </button>
-              </div>
-            </div>
-
-            <!-- Lifesteal Complex Action Toggle -->
-            <div
-              v-if="selectedAttack && selectedAttack.attack.effect === 'Lifesteal' && (selectedAttack.participant.actionsRemaining?.simple || 0) >= 2 && !bolsterAttackEnabled"
-              class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600"
-            >
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  v-model="lifestealComplexEnabled"
-                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-green-500"
-                />
-                <span class="text-sm text-green-400 font-medium">Lifesteal Complex Action (2 Simple Actions)</span>
-                <span class="text-xs text-digimon-dark-400 ml-auto">Double potency</span>
-              </label>
-            </div>
-
-            <!-- Huge Power Toggle -->
-            <div
-              v-if="selectedAttack && selectedAttack.attack.type !== 'clash-initiate' && (canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1 || canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2)"
-              class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600 space-y-2"
-            >
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  v-model="hugePowerEnabled"
-                  :disabled="!canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank1"
-                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-cyan-500"
-                />
-                <span class="text-sm text-cyan-400 font-medium">Huge Power (Reroll 1s)</span>
-                <span v-if="eddySoulRules?.hugePowerOncePerTurn" class="text-xs text-digimon-dark-400 ml-auto">1/turn</span>
-                <span v-else-if="selectedAttack.attack.range === 'ranged'" class="text-xs text-digimon-dark-400 ml-auto">1/round</span>
-                <span v-else class="text-xs text-digimon-dark-400 ml-auto">Unlimited (Melee)</span>
-              </label>
-              <label
-                v-if="canUseHugePower(selectedAttack.participant, selectedAttack.attack).rank2"
-                class="flex items-center gap-2 cursor-pointer pl-6"
-              >
-                <input
-                  type="checkbox"
-                  v-model="hugePowerRank2Enabled"
-                  :disabled="!hugePowerEnabled"
-                  class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-amber-500"
-                />
-                <span class="text-sm text-amber-400 font-medium">Rank 2 (Also reroll 2s)</span>
-                <span class="text-xs text-digimon-dark-400 ml-auto">1/round</span>
-              </label>
-            </div>
+            <AttackRiderOptions
+              :selected-attack="selectedAttack"
+              :round="currentEncounter?.round || 0"
+              :eddy-soul-rules="eddySoulRules"
+              :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+              :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+              v-model:bolster-attack-enabled="bolsterAttackEnabled"
+              v-model:bolster-attack-type="bolsterAttackType"
+              v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
+              v-model:huge-power-enabled="hugePowerEnabled"
+              v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+            />
 
             <!-- Action buttons -->
             <div class="flex gap-3">

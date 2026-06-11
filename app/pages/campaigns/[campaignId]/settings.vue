@@ -61,7 +61,7 @@ const form = reactive({
     bonusDPMinPerCategory: false,
     enemyDoubleWounds: false,
     modeChangeFreeSwapsPerCombat: false,
-    directRangeOverrides: { direct: null as number | null, bolsterDirect: null as number | null },
+    directRangeOverrides: { direct: null as number | null, bolsterDirect: null as number | null, digivolve: null as number | null },
   },
 })
 
@@ -130,6 +130,7 @@ onMounted(async () => {
       form.eddySoulRules.directRangeOverrides = {
         direct: eddySoul.directRangeOverrides?.direct ?? null,
         bolsterDirect: eddySoul.directRangeOverrides?.bolsterDirect ?? null,
+        digivolve: eddySoul.directRangeOverrides?.digivolve ?? null,
       }
     }
 
@@ -191,7 +192,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds || form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds || form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect || form.eddySoulRules.directRangeOverrides.digivolve) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -211,10 +212,11 @@ async function handleSave() {
         ...(form.eddySoulRules.bonusDPMinPerCategory && { bonusDPMinPerCategory: true }),
         ...(form.eddySoulRules.enemyDoubleWounds && { enemyDoubleWounds: true }),
         ...(form.eddySoulRules.modeChangeFreeSwapsPerCombat && { modeChangeFreeSwapsPerCombat: true }),
-        ...((form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect) && {
+        ...((form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect || form.eddySoulRules.directRangeOverrides.digivolve) && {
           directRangeOverrides: {
             ...(form.eddySoulRules.directRangeOverrides.direct && { direct: form.eddySoulRules.directRangeOverrides.direct }),
             ...(form.eddySoulRules.directRangeOverrides.bolsterDirect && { bolsterDirect: form.eddySoulRules.directRangeOverrides.bolsterDirect }),
+            ...(form.eddySoulRules.directRangeOverrides.digivolve && { digivolve: form.eddySoulRules.directRangeOverrides.digivolve }),
           },
         }),
       },
@@ -755,11 +757,11 @@ async function handleDelete() {
               <p class="text-xs text-digimon-dark-500">Default: every Mode Change use costs 1 Simple Action. With this rule, digimon with Mode Change X.0 Rank 2 get their first 3 swaps each combat for free (no action cost).</p>
             </div>
           </label>
-          <!-- Direct / Bolster Direct Range Overrides -->
+          <!-- Direct / Bolster Direct / Digivolve Range Overrides -->
           <div class="flex items-center gap-3 pt-2 border-t border-digimon-dark-700 mt-2">
             <div class="flex-1">
-              <span class="text-digimon-dark-300 text-sm">Direct Range Overrides</span>
-              <p class="text-xs text-digimon-dark-500">Map-view range (in spaces) a tamer must be within to Direct or Bolster Direct a digimon. Leave empty for defaults (Direct: 15, Bolster Direct: 10).</p>
+              <span class="text-digimon-dark-300 text-sm">Direct / Digivolve Range Overrides</span>
+              <p class="text-xs text-digimon-dark-500">Map-view range (in spaces) a tamer must be within to Direct, Bolster Direct, or Digivolve a partner digimon. Leave empty for defaults (Direct: 15, Bolster Direct: 10, Digivolve: 15).</p>
             </div>
             <div class="flex gap-2">
               <div class="flex flex-col items-center gap-1">
@@ -779,6 +781,16 @@ async function handleDelete() {
                   type="number"
                   min="1"
                   placeholder="10"
+                  class="w-16 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-white text-sm text-center"
+                />
+              </div>
+              <div class="flex flex-col items-center gap-1">
+                <label class="text-xs text-digimon-dark-500 uppercase font-semibold">Digivolve</label>
+                <input
+                  v-model.number="form.eddySoulRules.directRangeOverrides.digivolve"
+                  type="number"
+                  min="1"
+                  placeholder="15"
                   class="w-16 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-white text-sm text-center"
                 />
               </div>

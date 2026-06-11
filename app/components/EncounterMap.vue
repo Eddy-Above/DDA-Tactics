@@ -46,6 +46,7 @@
           :charge-mode="chargeMode"
           :charge-move-participant-id="chargeMoveParticipantId"
           :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
+          :eddy-soul-rules="eddySoulRules"
           @unit-placed="onCanvasPlace"
           @unit-moved="onCombatMove"
           @cell-draw="onCellDraw"
@@ -161,7 +162,7 @@
 
 <script setup lang="ts">
 import type {
-  GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState,
+  GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules,
 } from '~/types'
 import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
@@ -188,6 +189,7 @@ const props = defineProps<{
   myParticipantIds?: string[]
   editorMode?: boolean
   selectableParticipantIds?: string[]
+  eddySoulRules?: EddySoulRules
 }>()
 
 const emit = defineEmits<{

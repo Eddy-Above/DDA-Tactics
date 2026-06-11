@@ -10,6 +10,7 @@ import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOr
 import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
+import { getAttackBadges } from '~/utils/attackBadges'
 
 definePageMeta({
   layout: 'player',
@@ -3620,6 +3621,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :selectable-participant-ids="intercedeMapTargetIds.length ? intercedeMapTargetIds : directMapTargetIds"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
+              :eddy-soul-rules="eddySoulRules"
               @positions-updated="onPositionsUpdated"
               @encounter-updated="() => {}"
               @player-action="(id, action) => {
@@ -3668,9 +3670,38 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 >
                   <span class="font-semibold">{{ attack.name }}</span>
                   <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
+                  <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
+                    <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
+                    <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
+                    <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
+                    <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
+                  </span>
                 </button>
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="playerAttackParticipantId = null">Cancel</button>
+            </div>
+            <!-- Floating attack rider-options panel — shown after an attack is selected in map view -->
+            <div
+              v-if="selectedAttack"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl max-h-[60vh] overflow-y-auto"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">
+                {{ selectedAttack.attack.name }} — click a target on the map
+              </div>
+              <AttackRiderOptions
+                :selected-attack="selectedAttack"
+                :round="activeEncounter?.round || 0"
+                :eddy-soul-rules="eddySoulRules"
+                :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
+                :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+                v-model:bolster-attack-enabled="bolsterAttackEnabled"
+                v-model:bolster-attack-type="bolsterAttackType"
+                v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
+                v-model:huge-power-enabled="hugePowerEnabled"
+                v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+              />
+              <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
             <!-- AOE intercede target picker — shown in place of full modal when map view is active -->
             <div

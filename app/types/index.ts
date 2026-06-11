@@ -223,7 +223,7 @@ export interface EddySoulRules {
   warpEvolution?: boolean
   bonusDPMinPerCategory?: boolean
   enemyDoubleWounds?: boolean
-  directRangeOverrides?: { direct?: number; bolsterDirect?: number }
+  directRangeOverrides?: { direct?: number; bolsterDirect?: number; digivolve?: number }
   modeChangeFreeSwapsPerCombat?: boolean
 }
 
