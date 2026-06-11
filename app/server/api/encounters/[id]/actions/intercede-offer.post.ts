@@ -20,6 +20,7 @@ import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc }
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
+import { getRoomPositions } from '~/server/utils/encounterRoom'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -101,7 +102,7 @@ export default defineEventHandler(async (event) => {
   const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
 
   // Spatial map state (for intercede reach check)
-  const participantPositions: Record<string, { x: number; y: number; z: number }> = (encounter as any).participantPositions || {}
+  const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
 
   let mapRecord: any = null
   if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {

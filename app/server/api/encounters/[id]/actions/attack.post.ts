@@ -5,6 +5,7 @@ import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 import { chebyshev } from '../../../../utils/gridDistance'
 import { getFootprintDimensions, getFootprintCells } from '../../../../utils/mapMovement'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
+import { getRoomPositions } from '../../../../utils/encounterRoom'
 
 interface AttackActionBody {
   participantId: string
@@ -116,7 +117,7 @@ export default defineEventHandler(async (event) => {
 
   // === Spatial range validation (skipped if no map attached) ===
   if ((encounter as any).mapId && body.targetId && target && actor.type === 'digimon') {
-    const positions: Record<string, { x: number; y: number; z: number }> = (encounter as any).participantPositions ?? {}
+    const positions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
     const attackerPos = positions[actor.id]
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {

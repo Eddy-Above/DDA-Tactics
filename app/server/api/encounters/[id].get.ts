@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../db'
+import { getRoomSnapshot } from '../../utils/encounterRoom'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -20,8 +21,12 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  const room = await getRoomSnapshot(id)
+
   return {
     ...encounter,
+    participantPositions: room.participantPositions,
+    destructibleStates: room.destructibleStates,
     participants: (encounter.participants as any[]).map((p: any) => ({
       ...p,
       // Migrate old format { simple: X, complex: Y } to new format { simple: X }

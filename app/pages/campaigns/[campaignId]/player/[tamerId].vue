@@ -3468,14 +3468,6 @@ const mapModeChangeParticipant = computed(() =>
     : null
 )
 
-function onPositionsUpdated(positions: Record<string, any>) {
-  if (!activeEncounter.value) return
-  const id = (activeEncounter.value as any).id
-  // Update locally so sprites appear immediately without waiting for the next poll
-  activeEncounter.value = { ...activeEncounter.value, participantPositions: positions } as any
-  updateEncounter(id, { participantPositions: positions } as any)
-}
-
 const intercedeMapTargetIds = computed((): string[] => {
   if (!hasIntercedeRequest.value || !currentIntercedeRequest.value?.data?.isAreaAttack || playerIntercedeAreaChosenTarget.value) return []
   return (currentIntercedeRequest.value.data?.areaTargetIds as string[]) ?? []
@@ -3651,7 +3643,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               :eddy-soul-rules="eddySoulRules"
-              @positions-updated="onPositionsUpdated"
               @encounter-updated="() => {}"
               @player-action="(id, action) => {
                 if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id

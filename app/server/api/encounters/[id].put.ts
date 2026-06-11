@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
+import { getRoomSnapshot } from '../../utils/encounterRoom'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -11,6 +12,13 @@ export default defineEventHandler(async (event) => {
     throw createError({
       statusCode: 400,
       message: 'Encounter ID is required',
+    })
+  }
+
+  if ('participantPositions' in body || 'destructibleStates' in body) {
+    throw createError({
+      statusCode: 400,
+      message: 'participantPositions and destructibleStates are managed via the encounter WebSocket and cannot be updated via PUT',
     })
   }
 
@@ -92,5 +100,11 @@ export default defineEventHandler(async (event) => {
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, id))
 
-  return updated
+  const room = await getRoomSnapshot(id)
+
+  return {
+    ...updated,
+    participantPositions: room.participantPositions,
+    destructibleStates: room.destructibleStates,
+  }
 })

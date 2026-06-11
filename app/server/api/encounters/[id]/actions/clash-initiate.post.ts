@@ -4,6 +4,7 @@ import { resolveParticipantName } from '../../../../utils/participantName'
 import { getClashSizeBonus, determineClashController } from '../../../../../data/attackConstants'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { chebyshev } from '../../../../utils/gridDistance'
+import { getRoomPositions } from '../../../../utils/encounterRoom'
 
 interface ClashInitiateBody {
   participantId: string
@@ -56,7 +57,7 @@ export default defineEventHandler(async (event) => {
 
   // Spatial range check for clash initiation
   if ((encounter as any).mapId && actor.type === 'digimon') {
-    const positions: Record<string, any> = (encounter as any).participantPositions ?? {}
+    const positions: Record<string, any> = await getRoomPositions(encounterId)
     const attackerPos = positions[actor.id]
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {

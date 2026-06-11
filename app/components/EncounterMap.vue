@@ -168,7 +168,6 @@ import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
-import { useEncounters } from '~/composables/useEncounters'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
 
@@ -195,7 +194,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'positions-updated', positions: Record<string, Vec3>): void
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
@@ -233,25 +231,27 @@ function toPositionsObj(v: any): Record<string, Vec3> {
 
 const positions = ref<Record<string, Vec3>>(toPositionsObj(props.encounter.participantPositions))
 
-// Sync from server polls
-watch(
-  () => props.encounter.participantPositions,
-  (incoming) => { positions.value = toPositionsObj(incoming) },
-  { deep: true }
-)
-
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const ws = useMapWebSocket(encounterId)
 
+// Tracks the last position version applied from the server, so out-of-order
+// or duplicate unit-moved/position-patch messages can't regress local state.
+let lastAppliedVersion = 0
+
 ws.onMessage((msg) => {
   if (msg.type === 'unit-moved') {
+    if (msg.version <= lastAppliedVersion) return
+    lastAppliedVersion = msg.version
     positions.value = { ...positions.value, [msg.participantId]: msg.position }
-    emit('positions-updated', positions.value)
+  } else if (msg.type === 'position-patch') {
+    if (msg.version <= lastAppliedVersion) return
+    lastAppliedVersion = msg.version
+    positions.value = { ...positions.value, ...msg.patch }
   } else if (msg.type === 'map-edited' || msg.type === 'element-painted' || msg.type === 'door-toggled') {
     if (props.encounter.mapId) mapStore.fetchMap(props.encounter.mapId).then(m => { map.value = m })
   } else if (msg.type === 'full-state') {
+    lastAppliedVersion = msg.version
     positions.value = toPositionsObj(msg.participantPositions)
-    emit('positions-updated', positions.value)
   }
 })
 
@@ -393,7 +393,6 @@ function selectParticipant(id: string) {
     const p = { ...positions.value }
     delete p[id]
     positions.value = p
-    emit('positions-updated', positions.value)
   }
   selectedId.value = id
 }
@@ -401,19 +400,16 @@ function selectParticipant(id: string) {
 function onCanvasPlace(participantId: string, cell: Vec3) {
   positions.value = { ...positions.value, [participantId]: cell }
   selectedId.value = null
-  emit('positions-updated', positions.value)
-  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position: cell, path: [] })
+  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position: cell, path: [], version: 0 })
 }
 
 function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
   positions.value = { ...positions.value, [participantId]: position }
-  emit('positions-updated', positions.value)
-  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path })
+  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path, version: 0 })
 
   if (chargeMoveParticipantId.value === participantId) {
     chargeMoveParticipantId.value = null
     movement.clearMovement()
-    useEncounters().updateEncounter(props.encounter.id, { participantPositions: positions.value } as any)
     return
   }
 
@@ -483,12 +479,10 @@ function startChargeBefore() {
   chargeMode.value = 'before'
 }
 
-async function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
+function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
   if (!sameVec3(positions.value[attackerId], destination)) {
     positions.value = { ...positions.value, [attackerId]: destination }
-    emit('positions-updated', positions.value)
-    ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [] })
-    await useEncounters().updateEncounter(props.encounter.id, { participantPositions: positions.value } as any)
+    ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [], version: 0 })
   }
   chargeMode.value = null
   movement.clearMovement()

@@ -15,6 +15,7 @@ import {
   findRangedIntercedPosition,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
+import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -54,7 +55,7 @@ export default defineEventHandler(async (event) => {
   let pendingRequests = encounter.pendingRequests || []
   let battleLog = encounter.battleLog || []
 
-  let participantPositions: Record<string, { x: number; y: number; z: number }> = encounter.participantPositions || {}
+  const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
 
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
@@ -501,14 +502,19 @@ export default defineEventHandler(async (event) => {
       turnOrder,
       ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
       ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
-      ...(updatedParticipantPositions ? { participantPositions: updatedParticipantPositions } : {}),
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
+
+    if (updatedParticipantPositions) {
+      const version = await applyPositionPatch(encounterId, updatedParticipantPositions)
+      broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch: updatedParticipantPositions, version })
+    }
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
     if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
 
-    return updated
+    const room = await getRoomSnapshot(encounterId)
+    return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
   }
 
   // --- Damage attack: existing flow ---
@@ -719,9 +725,13 @@ export default defineEventHandler(async (event) => {
     turnOrder,
     ...(claimNextTurnIndex !== undefined ? { currentTurnIndex: claimNextTurnIndex } : {}),
     ...(claimNextRound !== undefined ? { round: claimNextRound } : {}),
-    ...(updatedParticipantPositions ? { participantPositions: updatedParticipantPositions } : {}),
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
+
+  if (updatedParticipantPositions) {
+    const version = await applyPositionPatch(encounterId, updatedParticipantPositions)
+    broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch: updatedParticipantPositions, version })
+  }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
@@ -729,5 +739,6 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
   }
 
-  return updated
+  const room = await getRoomSnapshot(encounterId)
+  return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
 })

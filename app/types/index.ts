@@ -162,12 +162,13 @@ export interface DestructibleState {
 }
 
 export type WebSocketMapMessage =
-  | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[] }
+  | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[]; version: number }
   | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
   | { type: 'door-toggled';     encounterId: string; doorId: string; isOpen: boolean }
   | { type: 'element-painted';  encounterId: string; x: number; y: number; z: number; element: ElementType }
-  | { type: 'structure-damaged'; encounterId: string; structureId: string; woundsRemaining: number }
-  | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[] }
+  | { type: 'structure-damaged'; encounterId: string; structureId: string; woundsRemaining: number; version: number }
+  | { type: 'position-patch';   encounterId: string; patch: Record<string, Vec3>; version: number }
+  | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[]; version: number }
 
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 
