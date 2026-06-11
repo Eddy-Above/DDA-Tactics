@@ -3235,7 +3235,7 @@ function onMapAttackCancelled() {
         <div
           v-if="selectedAttack"
           class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl max-h-[60vh] overflow-y-auto"
-          style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+          style="bottom: 120px; left: 16px; min-width: 280px; max-width: 380px;"
         >
           <div class="text-sm text-digimon-dark-400 mb-3 text-center">
             {{ selectedAttack.attack.name }} — click a target on the map
