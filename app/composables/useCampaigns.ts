@@ -8,17 +8,39 @@ export interface CreateCampaignData {
   dmPassword?: string
 }
 
+export interface CampaignsEnvelope {
+  data: Campaign[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
 export function useCampaigns() {
   const campaigns = ref<Campaign[]>([])
   const currentCampaign = ref<Campaign | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const total = ref(0)
+  const page = ref(1)
+  const pageSize = ref(20)
+  const totalPages = ref(1)
 
-  async function fetchCampaigns() {
+  async function fetchCampaigns(options?: { page?: number; pageSize?: number; search?: string }) {
     loading.value = true
     error.value = null
     try {
-      campaigns.value = await $fetch<Campaign[]>('/api/campaigns')
+      const query = new URLSearchParams()
+      query.set('page', String(options?.page ?? page.value))
+      query.set('pageSize', String(options?.pageSize ?? pageSize.value))
+      if (options?.search) query.set('search', options.search)
+
+      const envelope = await $fetch<CampaignsEnvelope>(`/api/campaigns?${query}`)
+      campaigns.value = envelope.data
+      total.value = envelope.total
+      page.value = envelope.page
+      pageSize.value = envelope.pageSize
+      totalPages.value = envelope.totalPages
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch campaigns'
       console.error('Failed to fetch campaigns:', e)
@@ -130,6 +152,10 @@ export function useCampaigns() {
     currentCampaign,
     loading,
     error,
+    total,
+    page,
+    pageSize,
+    totalPages,
     fetchCampaigns,
     fetchCampaign,
     createCampaign,

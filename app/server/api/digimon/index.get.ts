@@ -1,4 +1,4 @@
-import { eq, or, inArray, and } from 'drizzle-orm'
+import { eq, or, inArray, and, count } from 'drizzle-orm'
 import { db, digimon, tamers } from '../../db'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
@@ -15,8 +15,9 @@ export default defineEventHandler(async (event) => {
 
   const conditions = []
 
+  let idList: string[] = []
   if (ids) {
-    const idList = ids.split(',').filter(Boolean)
+    idList = ids.split(',').filter(Boolean)
     if (idList.length > 0) {
       conditions.push(inArray(digimon.id, idList))
     }
@@ -42,5 +43,31 @@ export default defineEventHandler(async (event) => {
     conditions.push(eq(digimon.stage, stage))
   }
 
-  return await db.select().from(digimon).where(and(...conditions))
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined
+
+  const page = Math.max(1, parseInt(query.page as string) || 1)
+
+  let pageSize: number
+  if (idList.length > 0 && query.pageSize === undefined) {
+    pageSize = Math.min(500, idList.length)
+  } else {
+    pageSize = Math.min(500, Math.max(1, parseInt(query.pageSize as string) || 50))
+  }
+
+  const [{ value: total }] = await db.select({ value: count() }).from(digimon).where(whereClause)
+
+  const data = await db
+    .select()
+    .from(digimon)
+    .where(whereClause)
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+
+  return {
+    data,
+    total: Number(total),
+    page,
+    pageSize,
+    totalPages: Math.ceil(Number(total) / pageSize),
+  }
 })

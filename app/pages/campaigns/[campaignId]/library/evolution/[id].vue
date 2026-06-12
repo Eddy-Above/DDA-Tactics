@@ -139,7 +139,7 @@ const tamerMap = computed(() => {
 onMounted(async () => {
   await Promise.all([
     fetchTamers(campaignId.value),
-    fetchDigimon({ campaignId: campaignId.value }),
+    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
     (async () => {
       const line = await fetchEvolutionLine(route.params.id as string)
       evolutionLine.value = line

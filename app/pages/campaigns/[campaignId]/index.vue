@@ -6,7 +6,7 @@ definePageMeta({
 
 const { campaignId, campaign, campaignLevel, loadCampaign } = useCampaignContext()
 const { tamers, fetchTamers } = useTamers()
-const { digimonList, fetchDigimon } = useDigimon()
+const { total: digimonTotal, fetchDigimon } = useDigimon()
 const { encounters, fetchEncounters } = useEncounters()
 const { verifyDmPassword } = useCampaigns()
 
@@ -21,7 +21,7 @@ onMounted(async () => {
   await loadCampaign()
   await Promise.all([
     fetchTamers(campaignId.value),
-    fetchDigimon({ campaignId: campaignId.value }),
+    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
     fetchEncounters(campaignId.value),
   ])
   loading.value = false
@@ -29,7 +29,7 @@ onMounted(async () => {
 
 const stats = computed(() => [
   { label: 'Tamers', value: tamers.value.length, color: 'text-digimon-orange-400' },
-  { label: 'Digimon', value: digimonList.value.length, color: 'text-digimon-stage-champion' },
+  { label: 'Digimon', value: digimonTotal.value, color: 'text-digimon-stage-champion' },
   { label: 'Encounters', value: encounters.value.length, color: 'text-green-400' },
 ])
 

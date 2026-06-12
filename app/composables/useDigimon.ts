@@ -39,12 +39,32 @@ export interface CreateDigimonData {
   spriteUrl?: string
 }
 
+export interface DigimonEnvelope {
+  data: Digimon[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
 export function useDigimon() {
   const digimonList = ref<Digimon[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const total = ref(0)
+  const page = ref(1)
+  const pageSize = ref(50)
+  const totalPages = ref(1)
 
-  async function fetchDigimon(filters?: { partnerId?: string; isEnemy?: boolean; campaignId?: string }) {
+  async function fetchDigimon(filters?: {
+    partnerId?: string
+    isEnemy?: boolean
+    campaignId?: string
+    stage?: DigimonStage
+    ids?: string
+    page?: number
+    pageSize?: number
+  }) {
     loading.value = true
     error.value = null
     try {
@@ -52,9 +72,18 @@ export function useDigimon() {
       if (filters?.campaignId) query.set('campaignId', filters.campaignId)
       if (filters?.partnerId) query.set('partnerId', filters.partnerId)
       if (filters?.isEnemy !== undefined) query.set('isEnemy', String(filters.isEnemy))
+      if (filters?.stage) query.set('stage', filters.stage)
+      if (filters?.ids) query.set('ids', filters.ids)
+      if (filters?.page !== undefined) query.set('page', String(filters.page))
+      if (filters?.pageSize !== undefined) query.set('pageSize', String(filters.pageSize))
 
       const url = query.toString() ? `/api/digimon?${query}` : '/api/digimon'
-      digimonList.value = await $fetch<Digimon[]>(url)
+      const envelope = await $fetch<DigimonEnvelope>(url)
+      digimonList.value = envelope.data
+      total.value = envelope.total
+      page.value = envelope.page
+      pageSize.value = envelope.pageSize
+      totalPages.value = envelope.totalPages
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch digimon'
       console.error('Failed to fetch digimon:', e)
@@ -298,7 +327,8 @@ export function useDigimon() {
   // Fetch Digimon filtered by stage
   async function fetchDigimonByStage(stage: DigimonStage): Promise<Digimon[]> {
     try {
-      return await $fetch<Digimon[]>(`/api/digimon?stage=${stage}`)
+      const envelope = await $fetch<DigimonEnvelope>(`/api/digimon?stage=${stage}&pageSize=500`)
+      return envelope.data
     } catch (e) {
       console.error('Failed to fetch digimon by stage:', e)
       return []
@@ -372,6 +402,10 @@ export function useDigimon() {
     digimonList,
     loading,
     error,
+    total,
+    page,
+    pageSize,
+    totalPages,
     fetchDigimon,
     fetchDigimonById,
     fetchDigimonByStage,

@@ -31,10 +31,11 @@ const loading = ref(false)
 onMounted(async () => {
   loading.value = true
   try {
-    const query: Record<string, string> = {}
+    const query: Record<string, string> = { pageSize: '500' }
     if (props.campaignId) query.campaignId = props.campaignId
     if (props.excludeEnemies) query.isEnemy = 'false'
-    allDigimon.value = await $fetch<Digimon[]>('/api/digimon', { query })
+    const envelope = await $fetch<{ data: Digimon[] }>('/api/digimon', { query })
+    allDigimon.value = envelope.data
   } catch (e) {
     console.error('Failed to fetch Digimon:', e)
   } finally {

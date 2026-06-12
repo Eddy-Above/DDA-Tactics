@@ -27,6 +27,8 @@ const { exportDigimon, importDigimon } = useLibraryImportExport()
 const filter = ref<'all' | 'partners' | 'enemies'>('all')
 const selectedTamerIds = ref<string[]>([])
 const selectedStages = ref<string[]>([])
+const currentPage = ref(1)
+const PAGE_SIZE = 12
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
@@ -55,11 +57,27 @@ const filteredDigimon = computed(() => {
   return list
 })
 
+const totalFilteredPages = computed(() => Math.max(1, Math.ceil(filteredDigimon.value.length / PAGE_SIZE)))
+
+const paginatedDigimon = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return filteredDigimon.value.slice(start, start + PAGE_SIZE)
+})
+
 watch(filter, (val) => {
   if (val !== 'partners') {
     selectedTamerIds.value = []
   }
 })
+
+watch([filter, selectedTamerIds, selectedStages], () => {
+  currentPage.value = 1
+})
+
+function goToPage(newPage: number) {
+  if (newPage < 1 || newPage > totalFilteredPages.value) return
+  currentPage.value = newPage
+}
 
 const tamerMap = computed(() => {
   const map = new Map<string, string>()
@@ -68,7 +86,7 @@ const tamerMap = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([fetchDigimon({ campaignId: campaignId.value }), fetchTamers(campaignId.value)])
+  await Promise.all([fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }), fetchTamers(campaignId.value)])
 })
 
 async function handleDelete(id: string, name: string) {
@@ -110,7 +128,7 @@ async function handleImportFile(event: Event) {
   importResult.value = null
   const result = await importDigimon(file, campaignId.value)
   importResult.value = { show: true, ...result }
-  await fetchDigimon({ campaignId: campaignId.value })
+  await fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })
   importLoading.value = false
   ;(event.target as HTMLInputElement).value = ''
 }
@@ -242,7 +260,7 @@ async function handleImportFile(event: Event) {
 
     <div v-else class="grid gap-4">
       <div
-        v-for="digimon in filteredDigimon"
+        v-for="digimon in paginatedDigimon"
         :key="digimon.id"
         class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700
                hover:border-digimon-dark-600 transition-colors"
@@ -346,6 +364,28 @@ async function handleImportFile(event: Event) {
           </div>
         </div>
       </div>
+    </div>
+
+    <div v-if="!loading && !error && totalFilteredPages > 1" class="flex items-center justify-center gap-4 mt-6">
+      <button
+        class="bg-digimon-dark-800 hover:bg-digimon-dark-700 disabled:opacity-40 disabled:cursor-not-allowed
+               text-white px-4 py-2 rounded-lg border border-digimon-dark-700 transition-colors"
+        :disabled="currentPage <= 1"
+        @click="goToPage(currentPage - 1)"
+      >
+        &larr; Prev
+      </button>
+      <span class="text-digimon-dark-400 text-sm">
+        Page {{ currentPage }} of {{ totalFilteredPages }}
+      </span>
+      <button
+        class="bg-digimon-dark-800 hover:bg-digimon-dark-700 disabled:opacity-40 disabled:cursor-not-allowed
+               text-white px-4 py-2 rounded-lg border border-digimon-dark-700 transition-colors"
+        :disabled="currentPage >= totalFilteredPages"
+        @click="goToPage(currentPage + 1)"
+      >
+        Next &rarr;
+      </button>
     </div>
   </div>
 </template>

@@ -195,7 +195,7 @@ async function loadDigimon() {
   try {
     const [data] = await Promise.all([
       fetchDigimonById(recordId.value),
-      fetchDigimon({ campaignId: campaignId.value }),
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
     ])
     if (!data) {
       loadError.value = 'Digimon not found'

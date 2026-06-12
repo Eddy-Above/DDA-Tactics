@@ -15,7 +15,7 @@ const { tamers, fetchTamers } = useTamers()
 const { digimonList, fetchDigimon } = useDigimon()
 
 onMounted(async () => {
-  await Promise.all([fetchTamers(campaignId.value), fetchDigimon({ campaignId: campaignId.value })])
+  await Promise.all([fetchTamers(campaignId.value), fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })])
 })
 
 const form = reactive({
