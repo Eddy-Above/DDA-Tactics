@@ -2164,7 +2164,7 @@ defineExpose({ movingParticipantId })
 .move-confirm-btn.cancel  { background: #aa2222; color: #fff; }
 .map-view-controls {
   position: absolute;
-  bottom: 60px;
+  bottom: calc(50px + var(--overlay-bottom, 10px));
   right: 10px;
   background: rgba(10, 12, 25, 0.85);
   border: 1px solid #334;
