@@ -73,7 +73,6 @@
       <button class="npc-radial-btn player move" :disabled="radialPlayerOutOfActions" @click="playerRadialMove()">Move</button>
       <template v-if="playerRadialParticipantType === 'tamer'">
         <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
-        <button class="npc-radial-btn player bolster-direct" :disabled="bolsterDirectDisabled" @click="playerRadialAction('bolster-direct')">Bolster Direct</button>
         <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
         <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
       </template>
@@ -146,7 +145,7 @@ const emit = defineEmits<{
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -211,10 +210,6 @@ const radialTamerParticipant = computed(() =>
 const directDisabled = computed(() => {
   const t = radialTamerParticipant.value
   return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 1
-})
-const bolsterDirectDisabled = computed(() => {
-  const t = radialTamerParticipant.value
-  return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 2
 })
 const radialDigimonParticipant = computed(() =>
   playerRadialParticipantType.value === 'digimon'
@@ -972,7 +967,7 @@ function playerRadialMove() {
   emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change') {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null
@@ -2298,7 +2293,6 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.attack { top: -38px; left: 45px; }
 .npc-radial-btn.player.digivolve { top: -38px; left: -45px; }
 .npc-radial-btn.player.direct         { top: -24px; left: -66px; }
-.npc-radial-btn.player.bolster-direct { top: -75px; left: 107px; }
 .npc-radial-btn.player.orders         { top: -24px; left: 66px; }
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
 .npc-radial-btn.player.digimon-stance { top: 0; left: 0; }

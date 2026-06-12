@@ -201,7 +201,7 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'bolster-direct' | 'special-order' | 'stance' | 'digivolve'): void
+  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
   (e: 'attack-cancelled'): void
   // Note: 'move' is handled internally in EncounterMap

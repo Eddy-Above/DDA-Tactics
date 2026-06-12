@@ -3487,11 +3487,21 @@ const intercedeMapTargetIds = computed((): string[] => {
 
 // Map-click target selection for Direct / Bolster Direct
 const mapDirectMode = ref<{ bolstered: boolean } | null>(null)
+const showDirectChoicePicker = ref(false)
 
 const directRanges = computed(() => ({
   direct: eddySoulRules.value?.directRangeOverrides?.direct ?? 15,
   bolsterDirect: eddySoulRules.value?.directRangeOverrides?.bolsterDirect ?? 10,
 }))
+
+const directActionDisabled = computed(() => {
+  const t = myTamerParticipant.value
+  return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 1
+})
+const bolsterDirectActionDisabled = computed(() => {
+  const t = myTamerParticipant.value
+  return !t || t.hasDirectedThisTurn || (t.actionsRemaining?.simple || 0) < 2
+})
 
 const directMapTargetIds = computed((): string[] => {
   if (!mapDirectMode.value || !activeEncounter.value || !myTamerParticipant.value) return []
@@ -3659,8 +3669,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @encounter-updated="() => {}"
               @player-action="(id, action) => {
                 if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id
-                else if (action === 'direct')    mapDirectMode = { bolstered: false }
-                else if (action === 'bolster-direct') mapDirectMode = { bolstered: true }
+                else if (action === 'direct')    showDirectChoicePicker = !showDirectChoicePicker
                 else if (action === 'special-order') { showPlayerSpecialOrdersModal = true }
                 else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
@@ -3700,7 +3709,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   </button>
                   <button
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                    @click="showMapView = false; mapDirectMode = null"
+                    @click="showMapView = false; mapDirectMode = null; showDirectChoicePicker = false"
                   >✕ Close Map</button>
                 </div>
               </template>
@@ -3730,6 +3739,33 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 </button>
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="playerAttackParticipantId = null">Cancel</button>
+            </div>
+            <!-- Floating Direct choice picker (shown when player clicks Direct from map radial) -->
+            <div
+              v-if="showDirectChoicePicker"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Direct Type</div>
+              <div class="flex flex-col gap-2">
+                <button
+                  :disabled="directActionDisabled"
+                  class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  @click="mapDirectMode = { bolstered: false }; showDirectChoicePicker = false"
+                >
+                  <span class="font-semibold">Direct</span>
+                  <span class="ml-2 text-xs text-digimon-dark-400">1 Simple Action · Range {{ directRanges.direct }}</span>
+                </button>
+                <button
+                  :disabled="bolsterDirectActionDisabled"
+                  class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  @click="mapDirectMode = { bolstered: true }; showDirectChoicePicker = false"
+                >
+                  <span class="font-semibold">Bolster Direct</span>
+                  <span class="ml-2 text-xs text-digimon-dark-400">2 Simple Actions · Range {{ directRanges.bolsterDirect }}</span>
+                </button>
+              </div>
+              <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="showDirectChoicePicker = false">Cancel</button>
             </div>
             <!-- Floating attack rider-options panel — shown after an attack is selected in map view -->
             <div
