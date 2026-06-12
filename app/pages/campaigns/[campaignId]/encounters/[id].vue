@@ -162,6 +162,17 @@ const activeParticipant = computed(() => {
   return getCurrentParticipant(currentEncounter.value)
 })
 
+// Turn order panel can be minimized to show only the current + next 2 turns
+const turnOrderCollapsed = ref(false)
+const visibleTurnOrder = computed(() => {
+  const list = sortedParticipants.value
+  if (!turnOrderCollapsed.value || list.length <= 3) return list
+  const activeId = activeParticipant.value?.id
+  let startIdx = activeId ? list.findIndex((p) => p.id === activeId) : 0
+  if (startIdx === -1) startIdx = 0
+  return Array.from({ length: 3 }, (_, i) => list[(startIdx + i) % list.length])
+})
+
 // Get the participant whose turn it currently is
 const currentTurnParticipant = computed(() => {
   if (!currentEncounter.value) return null
@@ -1877,7 +1888,7 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
     })
     await Promise.all([
       fetchEncounter(currentEncounter.value.id),
-      fetchDigimon({ campaignId: campaignId.value }),
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
       fetchEvolutionLines(),
     ])
   } catch (e: any) {
@@ -1942,7 +1953,7 @@ async function submitWillpowerRollGM() {
   pendingWarpChoice.value = null
   await Promise.all([
     fetchEncounter(currentEncounter.value.id),
-    fetchDigimon({ campaignId: campaignId.value }),
+    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
     fetchEvolutionLines(),
     fetchTamers(campaignId.value),
   ])
@@ -2395,7 +2406,7 @@ async function forceDigivolve(participant: CombatParticipant, targetChainIndex: 
     })
     await Promise.all([
       fetchEncounter(currentEncounter.value.id),
-      fetchDigimon({ campaignId: campaignId.value }),
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
       fetchEvolutionLines(),
     ])
   } catch (e: any) {
@@ -2602,9 +2613,9 @@ async function syncEncounterDigimon() {
     .map(p => p.entityId)
   if (missingIds.length === 0) return
   try {
-    const fetched = await $fetch<any[]>(`/api/digimon?ids=${missingIds.join(',')}`)
-    if (fetched.length > 0) {
-      digimonList.value = [...digimonList.value, ...fetched]
+    const envelope = await $fetch<{ data: any[] }>(`/api/digimon?ids=${missingIds.join(',')}`)
+    if (envelope.data.length > 0) {
+      digimonList.value = [...digimonList.value, ...envelope.data]
     }
   } catch (e) {
     console.error('Failed to sync encounter digimon:', e)
@@ -2615,7 +2626,7 @@ onMounted(async () => {
   await Promise.all([
     loadCampaign(),
     fetchEncounter(route.params.id as string),
-    fetchDigimon({ campaignId: campaignId.value }),
+    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
     fetchTamers(campaignId.value),
     fetchEvolutionLines(),
   ])
@@ -3130,11 +3141,20 @@ function onMapAttackCancelled() {
           @attack-cancelled="onMapAttackCancelled"
         >
           <template #turn-order>
-            <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">
-              <div class="text-xs font-semibold text-digimon-dark-400 mb-2">TURN ORDER</div>
-              <div v-for="p in sortedParticipants" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
-                :class="activeParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
-                {{ digimonMap.get(p.entityId)?.name || tamerMap.get(p.entityId)?.name || '?' }}
+            <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl max-w-xs overflow-hidden">
+              <div
+                class="text-xs font-semibold text-digimon-dark-400 px-3 py-2 cursor-pointer flex items-center justify-between select-none"
+                :class="{ 'border-b border-digimon-dark-700': !turnOrderCollapsed }"
+                @click="turnOrderCollapsed = !turnOrderCollapsed"
+              >
+                <span>TURN ORDER</span>
+                <span class="text-digimon-dark-500 text-[10px]">{{ turnOrderCollapsed ? '▶' : '▼' }}</span>
+              </div>
+              <div class="p-3 max-h-64 overflow-y-auto">
+                <div v-for="p in visibleTurnOrder" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
+                  :class="activeParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
+                  {{ digimonMap.get(p.entityId)?.name || tamerMap.get(p.entityId)?.name || '?' }}
+                </div>
               </div>
             </div>
           </template>

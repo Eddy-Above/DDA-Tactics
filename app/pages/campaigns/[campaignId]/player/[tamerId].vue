@@ -231,7 +231,8 @@ async function loadData() {
 
         if (digimonEntityIds.length > 0) {
           try {
-            allDigimon.value = await $fetch<Digimon[]>(`/api/digimon?ids=${digimonEntityIds.join(',')}`)
+            const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${digimonEntityIds.join(',')}`)
+            allDigimon.value = envelope.data
           } catch (e) {
             console.warn('Failed to fetch encounter digimon:', e)
           }
@@ -579,6 +580,17 @@ const sortedParticipants = computed(() => {
   return filteredTurnOrder
     .map((id) => participants.find((p) => p.id === id))
     .filter(Boolean) as CombatParticipant[]
+})
+
+// Turn order panel can be minimized to show only the current + next 2 turns
+const turnOrderCollapsed = ref(false)
+const visibleTurnOrder = computed(() => {
+  const list = sortedParticipants.value
+  if (!turnOrderCollapsed.value || list.length <= 3) return list
+  const activeId = currentTurnParticipant.value?.id
+  let startIdx = activeId ? list.findIndex((p) => p.id === activeId) : 0
+  if (startIdx === -1) startIdx = 0
+  return Array.from({ length: 3 }, (_, i) => list[(startIdx + i) % list.length])
 })
 
 const isMyTurn = computed(() => {
@@ -3659,11 +3671,20 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @attack-cancelled="onMapAttackCancelled"
             >
               <template #turn-order>
-                <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl p-3 max-w-xs max-h-64 overflow-y-auto">
-                  <div class="text-xs font-semibold text-digimon-dark-400 mb-2">TURN ORDER</div>
-                  <div v-for="p in sortedParticipants" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
-                    :class="currentTurnParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
-                    {{ getParticipantName(p) }}
+                <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl max-w-xs overflow-hidden">
+                  <div
+                    class="text-xs font-semibold text-digimon-dark-400 px-3 py-2 cursor-pointer flex items-center justify-between select-none"
+                    :class="{ 'border-b border-digimon-dark-700': !turnOrderCollapsed }"
+                    @click="turnOrderCollapsed = !turnOrderCollapsed"
+                  >
+                    <span>TURN ORDER</span>
+                    <span class="text-digimon-dark-500 text-[10px]">{{ turnOrderCollapsed ? '▶' : '▼' }}</span>
+                  </div>
+                  <div class="p-3 max-h-64 overflow-y-auto">
+                    <div v-for="p in visibleTurnOrder" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
+                      :class="currentTurnParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
+                      {{ getParticipantName(p) }}
+                    </div>
                   </div>
                 </div>
               </template>
