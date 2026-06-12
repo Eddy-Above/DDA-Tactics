@@ -16,7 +16,7 @@ import {
 import { calculateDigimonDerivedStats } from '~/types'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
-import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
+import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
@@ -491,13 +491,42 @@ export default defineEventHandler(async (event) => {
         }
       }
 
-      const dodgeRequests = playerTargetIds.map(tid => {
+      const dodgeRequests: any[] = []
+      for (const tid of playerTargetIds) {
         const info = playerTargetInfo[tid]
         const target = participants.find((p: any) => p.id === tid)
+
+        const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, areaAttackDef)
+        if (positiveResolutionType) {
+          const supportParams = {
+            participants, battleLog, pendingRequests,
+            attackerParticipantId: body.attackerId,
+            targetParticipantId: tid,
+            attackDef: areaAttackDef,
+            accuracySuccesses: body.accuracySuccesses,
+            accuracyDice: body.accuracyDice,
+            round: encounter.round || 0,
+            attackerName,
+            targetName: info.name,
+            encounterId: encounterId!,
+            turnOrder, houseRules,
+            isSignatureMove: body.isSignatureMove || false,
+            batteryCount: body.batteryCount ?? 0,
+          }
+          const supportResult = positiveResolutionType === 'positive-auto'
+            ? await resolvePositiveAuto(supportParams)
+            : await resolvePositiveHealth(supportParams)
+          participants = supportResult.participants
+          battleLog = supportResult.battleLog
+          pendingRequests = supportResult.pendingRequests
+          if (supportResult.turnOrder) turnOrder = supportResult.turnOrder
+          continue
+        }
+
         let targetTamerId = 'GM'
         if (info.type === 'tamer') targetTamerId = info.entityId
         else if (info.partnerId) targetTamerId = info.partnerId
-        return {
+        dodgeRequests.push({
           id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           type: 'dodge-roll',
           targetTamerId,
@@ -526,8 +555,8 @@ export default defineEventHandler(async (event) => {
             clashAttack: body.clashAttack || false,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
           },
-        }
-      })
+        })
+      }
       await db.update(encounters).set({
         participants,
         battleLog,
@@ -1057,6 +1086,40 @@ export default defineEventHandler(async (event) => {
     }
 
     if (isPlayerTarget) {
+      const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, attackDef)
+      if (positiveResolutionType) {
+        const supportParams = {
+          participants, battleLog, pendingRequests,
+          attackerParticipantId: body.attackerId,
+          targetParticipantId: body.targetId!,
+          attackDef,
+          accuracySuccesses: body.accuracySuccesses,
+          accuracyDice: body.accuracyDice,
+          round: encounter.round || 0,
+          attackerName, targetName,
+          encounterId: encounterId!,
+          turnOrder, houseRules,
+          isSignatureMove: body.isSignatureMove || false,
+          batteryCount: body.batteryCount ?? 0,
+        }
+        const supportResult = positiveResolutionType === 'positive-auto'
+          ? await resolvePositiveAuto(supportParams)
+          : await resolvePositiveHealth(supportParams)
+
+        await db.update(encounters).set({
+          participants: supportResult.participants,
+          battleLog: supportResult.battleLog,
+          pendingRequests: supportResult.pendingRequests,
+          ...(supportResult.turnOrder ? { turnOrder: supportResult.turnOrder } : {}),
+          updatedAt: new Date(),
+        }).where(eq(encounters.id, encounterId))
+
+        const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+        if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
+
+        return updated
+      }
+
       // Player target — create dodge request
       let dodgeTargetTamerId = 'GM'
       if (target.type === 'tamer') {

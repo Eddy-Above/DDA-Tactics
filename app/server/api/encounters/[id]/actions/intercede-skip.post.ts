@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
-import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
+import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
 
 interface IntercedeSkipBody {
@@ -160,7 +160,39 @@ export default defineEventHandler(async (event) => {
           isPlayerTarget = !!dig?.partnerId
         }
 
+        const isSupportAttack = request.data.isSupportAttack || false
+        const attackDef = request.data.attackData || null
+
         if (isPlayerTarget) {
+          const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, attackDef)
+          if (positiveResolutionType) {
+            const supportParams = {
+              participants,
+              battleLog,
+              pendingRequests,
+              attackerParticipantId: request.data.attackerId,
+              targetParticipantId: request.data.targetId,
+              attackDef,
+              accuracySuccesses: request.data.accuracySuccesses,
+              accuracyDice: request.data.accuracyDice,
+              round: encounter.round || 0,
+              attackerName: request.data.attackerName,
+              targetName: request.data.targetName,
+              encounterId: encounterId!,
+              turnOrder,
+              houseRules,
+              isSignatureMove: request.data.isSignatureMove || false,
+              batteryCount: request.data.batteryCount ?? 0,
+            }
+            const supportResult = positiveResolutionType === 'positive-auto'
+              ? await resolvePositiveAuto(supportParams)
+              : await resolvePositiveHealth(supportParams)
+
+            updateData.participants = supportResult.participants
+            updateData.battleLog = supportResult.battleLog
+            updateData.pendingRequests = supportResult.pendingRequests
+            if (supportResult.turnOrder) updateData.turnOrder = supportResult.turnOrder
+          } else {
           // Player target — create dodge request
           let targetTamerId = 'GM'
           if (target.type === 'tamer') {
@@ -202,11 +234,9 @@ export default defineEventHandler(async (event) => {
           updateData.pendingRequests = updatedRequests
 
           updateData.participants = participants
+          }
         } else {
           // NPC target — auto-resolve based on attack type
-          const isSupportAttack = request.data.isSupportAttack || false
-          const attackDef = request.data.attackData || null
-
           if (isSupportAttack && attackDef) {
             const resolutionType = getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support')
             const supportParams = {

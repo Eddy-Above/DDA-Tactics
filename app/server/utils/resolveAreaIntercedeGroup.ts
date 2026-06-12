@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
 import { applyEffectToParticipant } from '~/server/utils/applyEffect'
-import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc } from '~/server/utils/resolveSupportAttack'
+import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
 
 export interface AreaAttackClaim {
@@ -228,7 +228,10 @@ export async function resolveAreaIntercedeGroup({
   // Targets that were not claimed by any interceptor
   const uncoveredIds = originalTargetIds.filter(id => !claimedTargetIds.has(id))
 
-  // Uncovered player targets → create dodge-roll requests
+  // Uncovered player targets → resolve positive support via Health roll, otherwise dodge-roll
+  const isSupportAttack = !!groupData.isSupportAttack
+  const attackDef = groupData.attackData || null
+
   for (const targetId of uncoveredIds) {
     if (npcTargetIds.includes(targetId)) continue
     const info = playerTargetInfo[targetId]
@@ -237,6 +240,37 @@ export async function resolveAreaIntercedeGroup({
     let targetTamerId = 'GM'
     if (info.type === 'tamer') targetTamerId = info.entityId
     else if (info.partnerId) targetTamerId = info.partnerId
+
+    const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, attackDef)
+    if (positiveResolutionType) {
+      const supportParams = {
+        participants: updatedParticipants,
+        battleLog: updatedBattleLog,
+        pendingRequests: updatedPendingRequests,
+        attackerParticipantId: groupData.attackerId,
+        targetParticipantId: targetId,
+        attackDef,
+        accuracySuccesses: groupData.accuracySuccesses,
+        accuracyDice: groupData.accuracyDice,
+        round,
+        attackerName: groupData.attackerName,
+        targetName: info.name,
+        encounterId,
+        turnOrder: updatedTurnOrder,
+        houseRules,
+        isSignatureMove: groupData.isSignatureMove || false,
+        batteryCount: groupData.batteryCount ?? 0,
+      }
+      const supportResult = positiveResolutionType === 'positive-auto'
+        ? await resolvePositiveAuto(supportParams)
+        : await resolvePositiveHealth(supportParams)
+
+      updatedParticipants = supportResult.participants
+      updatedBattleLog = supportResult.battleLog
+      updatedPendingRequests = supportResult.pendingRequests
+      if (supportResult.turnOrder) updatedTurnOrder = supportResult.turnOrder
+      continue
+    }
 
     updatedPendingRequests.push({
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -271,9 +305,6 @@ export async function resolveAreaIntercedeGroup({
   }
 
   // Uncovered NPC targets → auto-resolve
-  const isSupportAttack = !!groupData.isSupportAttack
-  const attackDef = groupData.attackData || null
-
   for (const targetId of uncoveredIds) {
     if (!npcTargetIds.includes(targetId)) continue
     const target = updatedParticipants.find((p: any) => p.id === targetId)

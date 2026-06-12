@@ -165,6 +165,21 @@ function buildEffectData(effectName: string, duration: number, source: string, a
 }
 
 /**
+ * For player-controlled targets of a support attack, determine whether the effect is a
+ * positive (buff) effect that must be resolved via resolvePositiveAuto/resolvePositiveHealth
+ * (Health roll) rather than the default dodge-roll path (which is correct only for
+ * negative/debuff support effects and damage attacks).
+ */
+export function getPositiveSupportResolutionType(
+  isSupportAttack: boolean,
+  attackDef: any
+): 'positive-auto' | 'positive-health' | null {
+  if (!isSupportAttack || !attackDef) return null
+  const resolutionType = getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support')
+  return resolutionType === 'positive-auto' || resolutionType === 'positive-health' ? resolutionType : null
+}
+
+/**
  * Resolve a positive support attack with auto-resolve (special P effects, single-target).
  * Shield, Haste, Purify, Revitalize — guaranteed duration 1, no health roll needed.
  */
