@@ -81,7 +81,7 @@
         <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
         <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
         <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-        <button class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
+        <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
       </template>
     </div>
   </div>
@@ -247,6 +247,12 @@ const digivolveDisabled = computed(() => {
 const radialPlayerOutOfActions = computed(() => {
   const p = props.participants.find(pp => pp.id === playerRadialId.value)
   return !p || (p.actionsRemaining?.simple || 0) < 1
+})
+const hasModeChangeQuality = computed(() => {
+  const d = radialDigimonParticipant.value
+  if (!d) return false
+  const qualities = props.digimonMap[d.entityId]?.qualities ?? []
+  return qualities.some((q: any) => (q.id === 'mode-change' || q.id === 'mode-change-x0') && (q.ranks ?? 0) > 0)
 })
 // Mode Change costs the digimon's own action, but Mode Change X.0 Rank 2 grants up to 3 free swaps per combat.
 // Mirrors canUseModeChangeSwap (app/utils/modeChange.ts), inverted; reads qualities from the Record-shaped prop.
@@ -2295,7 +2301,8 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.bolster-direct { top: -75px; left: 107px; }
 .npc-radial-btn.player.orders         { top: -24px; left: 66px; }
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
-.npc-radial-btn.player.digimon-stance { top: -75px; left: 90px; }
+.npc-radial-btn.player.digimon-stance { top: 0; left: 0; }
+.npc-radial-btn.player.mode-change    { top: -75px; left: 90px; }
 .npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
