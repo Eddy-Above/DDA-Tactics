@@ -3,13 +3,18 @@ import type { Encounter } from '~/server/db/schema'
 import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/useEncounters'
 import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
+import type { AreaShapeData } from '~/utils/areaShapes'
+import { computeAreaCellsFromData } from '~/utils/areaShapes'
+import { vec3Key } from '~/utils/mapGeometry'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
+import type { Vec3 } from '~/types'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
+import { useMapWebSocket } from '~/composables/useMapWebSocket'
 
 definePageMeta({
   title: 'Encounter',
@@ -990,7 +995,7 @@ async function confirmAttack(target: CombatParticipant) {
   }
 }
 
-async function confirmAreaAttack(targets: CombatParticipant[]) {
+async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: AreaShapeData | null) {
   if (!selectedAttack.value || !currentEncounter.value || targets.length === 0) return
   try {
     const { participant, attack } = selectedAttack.value
@@ -1035,7 +1040,7 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
     try {
       const result = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
         method: 'POST',
-        body: { ...sharedBody, targetIds: targets.map(t => t.id) },
+        body: { ...sharedBody, targetIds: targets.map(t => t.id), areaShapeData: areaShapeData ?? null },
       })
       if (result) currentEncounter.value = result as any
     } catch (e: any) {
@@ -1102,18 +1107,25 @@ async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
 }
 
 // GM intercede response functions
-async function handleGmIntercedeClaim(requestId: string, interceptorId: string) {
+async function handleGmIntercedeClaim(requestId: string, interceptorId: string, throwOptions?: { allyId: string; landingPos: Vec3 }) {
   if (!currentEncounter.value) return
 
   const capturedRequest = gmIntercedeRequest.value
   gmIntercedeLoading.value = true
   try {
-    const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-claim`, {
-      method: 'POST', body: {
-        requestId,
-        interceptorParticipantId: interceptorId,
-        ...(gmIntercedeRequest.value?.data?.isAreaAttack ? { chosenTargetId: gmIntercedeAreaChosenTarget.value } : {}),
+    const body: any = {
+      requestId,
+      interceptorParticipantId: interceptorId,
+    }
+    if (gmIntercedeRequest.value?.data?.isAreaAttack) {
+      body.chosenTargetId = throwOptions ? throwOptions.allyId : gmIntercedeAreaChosenTarget.value
+      if (throwOptions) {
+        body.isThrowClaim = true
+        body.throwAllyLandingPos = throwOptions.landingPos
       }
+    }
+    const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-claim`, {
+      method: 'POST', body
     })
 
     if (result) currentEncounter.value = result as any
@@ -2589,21 +2601,20 @@ const selectedParticipant = computed(() => {
 })
 
 let refreshInterval: ReturnType<typeof setInterval>
-let fastRefreshInterval: ReturnType<typeof setInterval> | null = null
 
-function startFastRefresh() {
-  if (fastRefreshInterval) return
-  fastRefreshInterval = setInterval(() => {
-    fetchEncounter(route.params.id as string)
-  }, 1000)
-}
-
-function stopFastRefresh() {
-  if (fastRefreshInterval) {
-    clearInterval(fastRefreshInterval)
-    fastRefreshInterval = null
-  }
-}
+// Realtime sync: push-based refresh via the encounter's WebSocket room.
+const currentEncounterIdForWs = computed(() => currentEncounter.value?.id ?? null)
+const encounterWs = useMapWebSocket(currentEncounterIdForWs)
+let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
+encounterWs.onMessage((msg) => {
+  if (msg.type !== 'encounter-updated') return
+  if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
+  encounterUpdateDebounce = setTimeout(async () => {
+    encounterUpdateDebounce = null
+    await fetchEncounter(route.params.id as string)
+    await syncEncounterDigimon()
+  }, 200)
+})
 
 async function syncEncounterDigimon() {
   const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
@@ -2638,28 +2649,20 @@ onMounted(async () => {
 
   await syncEncounterDigimon()
 
-  // Auto-refresh encounter every 5 seconds to see player responses
+  // Auto-refresh encounter as a low-frequency fallback; the WebSocket above
+  // handles near-instant updates while connected.
   refreshInterval = setInterval(async () => {
     await fetchEncounter(route.params.id as string)
     await syncEncounterDigimon()
-  }, 5000)
+  }, 30000)
 })
 
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
-  stopFastRefresh()
+  if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
 })
-
-// Speed up polling while a GM intercede offer is active (area attack target list must stay current)
-watch(gmIntercedeOffer, (offer) => {
-  if (offer?.data?.isAreaAttack) {
-    startFastRefresh()
-  } else {
-    stopFastRefresh()
-  }
-}, { immediate: true })
 
 // Get set of digimon IDs that are current forms for partners
 const currentPartnerDigimonIds = computed(() => {
@@ -2888,7 +2891,7 @@ async function handleClashCheck(participantId: string) {
   }
 }
 
-async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw') {
+async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw', options?: { landingPos?: Vec3 }) {
   if (!currentEncounter.value) return
   const participants = currentEncounter.value.participants as CombatParticipant[]
   const participant = participants.find(p => p.id === participantId)
@@ -2902,12 +2905,79 @@ async function executeClashAction(participantId: string, actionType: 'attack' | 
         participantId,
         tamerId,
         actionType,
+        landingPos: options?.landingPos,
       },
     })
     await fetchEncounter(currentEncounter.value.id)
   } catch (e: any) {
     alert(e?.data?.message || `Failed to execute clash ${actionType}`)
   }
+}
+
+async function handleThrowClick(participant: CombatParticipant) {
+  const thrownTargetId = (participant as any).clash?.opponentParticipantId
+  if (!thrownTargetId) return
+  if (!showMapView.value) {
+    showMapView.value = true
+    await nextTick()
+  }
+  throwAimControllerId.value = participant.id
+  encounterMapRef.value?.startThrowAim(participant.id, thrownTargetId)
+}
+
+function cancelThrowAim() {
+  if (!throwAimControllerId.value) return
+  encounterMapRef.value?.cancelThrowAim()
+  const controllerId = throwAimControllerId.value
+  throwAimControllerId.value = null
+  executeClashAction(controllerId, 'throw')
+}
+
+function onThrowLandingSelected(controllerId: string, _thrownTargetId: string, landingPos: Vec3) {
+  throwAimControllerId.value = null
+  executeClashAction(controllerId, 'throw', { landingPos })
+}
+
+// Whether a candidate interceptor is adjacent (within 1 cell) to the ally chosen to protect
+function isAdjacentToChosenAlly(participantId: string): boolean {
+  const allyId = gmIntercedeAreaChosenTarget.value
+  if (!allyId || !currentEncounter.value) return false
+  const positions = (currentEncounter.value.participantPositions as Record<string, any>) || {}
+  const allyPos = positions[allyId]
+  const participantPos = positions[participantId]
+  if (!allyPos || !participantPos) return false
+  if (participantId === allyId) return false
+  return chebyshev(allyPos, participantPos) <= 1
+}
+
+async function handleThrowAllyClick(interceptorParticipantId: string) {
+  const allyId = gmIntercedeAreaChosenTarget.value
+  if (!allyId || !gmIntercedeRequest.value) return
+  const areaShapeData = gmIntercedeRequest.value.data?.areaShapeData as AreaShapeData | undefined
+  const excludeCells = new Set<string>()
+  if (areaShapeData) {
+    for (const cell of computeAreaCellsFromData(areaShapeData)) {
+      excludeCells.add(vec3Key(cell))
+    }
+  }
+  if (!showMapView.value) {
+    showMapView.value = true
+    await nextTick()
+  }
+  throwAllyAimContext.value = { interceptorParticipantId, allyParticipantId: allyId }
+  encounterMapRef.value?.startThrowAllyAim(interceptorParticipantId, allyId, excludeCells)
+}
+
+function cancelThrowAllyAim() {
+  if (!throwAllyAimContext.value) return
+  encounterMapRef.value?.cancelThrowAllyAim()
+  throwAllyAimContext.value = null
+}
+
+function onThrowAllyLandingSelected(interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3) {
+  throwAllyAimContext.value = null
+  if (!gmIntercedeRequest.value) return
+  handleGmIntercedeClaim(gmIntercedeRequest.value.id, interceptorParticipantId, { allyId: allyParticipantId, landingPos })
 }
 
 async function handleBreakClash(participantId: string, clashId: string) {
@@ -2948,6 +3018,9 @@ const myTamerId = computed<string | null>(() => {
 })
 
 const showMapView = ref(false)
+const encounterMapRef = ref<any>(null)
+const throwAimControllerId = ref<string | null>(null)
+const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 const showMapPicker = ref(false)
 const { maps: availableMaps, fetchMaps } = useMap()
 
@@ -2983,6 +3056,7 @@ const tamerMapForMap = computed(() => {
       currentWounds: participant ? participant.currentWounds : t.currentWounds,
       woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
       speed: derived.speed,
+      body: t.attributes.body,
     }
   })
   return out
@@ -3042,11 +3116,11 @@ function onMapTargetSelected(targetId: string) {
   confirmAttack(target)
 }
 
-function onMapAreaAttackConfirmed(targetIds: string[]) {
+function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
   if (!selectedAttack.value) return
   const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
   const targets = participants.filter(p => targetIds.includes(p.id))
-  confirmAreaAttack(targets)
+  confirmAreaAttack(targets, areaShapeData)
 }
 
 function onMapAttackCancelled() {
@@ -3126,6 +3200,7 @@ function onMapAttackCancelled() {
       <!-- 3D Map View (full screen overlay when active) -->
       <div v-if="showMapView" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
         <EncounterMap
+          ref="encounterMapRef"
           :encounter="currentEncounter as any"
           :is-dm="true"
           :my-tamer-id="myTamerId"
@@ -3139,6 +3214,8 @@ function onMapAttackCancelled() {
           @target-selected="onMapTargetSelected"
           @area-attack-confirmed="onMapAreaAttackConfirmed"
           @attack-cancelled="onMapAttackCancelled"
+          @throw-landing-selected="onThrowLandingSelected"
+          @throw-ally-landing-selected="onThrowAllyLandingSelected"
         >
           <template #turn-order>
             <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl max-w-xs overflow-hidden">
@@ -3172,6 +3249,17 @@ function onMapAttackCancelled() {
             </div>
           </template>
         </EncounterMap>
+        <!-- Floating throw-ally aim banner (shown while aiming a "Throw Ally Out of the Blast" intercede) -->
+        <div
+          v-if="throwAllyAimContext"
+          class="fixed z-50 bg-digimon-dark-800 border border-amber-600 rounded-xl p-4 shadow-xl text-center"
+          style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+        >
+          <div class="text-sm text-amber-300 mb-3">
+            Click a highlighted cell to throw {{ getParticipantName(throwAllyAimContext.allyParticipantId) || throwAllyAimContext.allyParticipantId }} out of the blast
+          </div>
+          <button class="w-full text-xs text-digimon-dark-400 hover:text-white" @click="cancelThrowAllyAim">Cancel</button>
+        </div>
         <!-- Floating NPC stance picker (shown when GM clicks Stance from map radial) -->
         <div
           v-if="npcStanceParticipantId"
@@ -4039,9 +4127,16 @@ function onMapAttackCancelled() {
                     <button
                       :disabled="activeParticipant.actionsRemaining.simple < 2"
                       :class="['w-full px-3 py-2 rounded text-sm font-medium', activeParticipant.actionsRemaining.simple >= 2 ? 'bg-amber-700 hover:bg-amber-600 text-white' : 'bg-digimon-dark-700 text-digimon-dark-400 opacity-50 cursor-not-allowed']"
-                      @click="executeClashAction(activeParticipant.id, 'throw')"
+                      @click="handleThrowClick(activeParticipant)"
                     >
                       Throw (2 Simple, ends clash)
+                    </button>
+                    <button
+                      v-if="throwAimControllerId === activeParticipant.id"
+                      class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-3 py-2 rounded text-sm font-medium"
+                      @click="cancelThrowAim"
+                    >
+                      Cancel Aim
                     </button>
                     <button
                       class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-3 py-2 rounded text-sm font-medium"
@@ -5264,7 +5359,7 @@ function onMapAttackCancelled() {
     <!-- GM Intercede Modal -->
     <Teleport to="body">
       <div
-        v-if="showGmIntercedeModal && gmIntercedeRequest"
+        v-if="showGmIntercedeModal && gmIntercedeRequest && !throwAllyAimContext"
         class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
       >
         <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
@@ -5411,15 +5506,23 @@ function onMapAttackCancelled() {
             </div>
 
             <div class="flex flex-col gap-2">
-              <button
-                v-for="option in gmIntercedeOptionsWithNames"
-                :key="option.id"
-                :disabled="gmIntercedeLoading"
-                @click="handleGmIntercedeClaim(gmIntercedeRequest.id, option.id)"
-                class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-              >
-                {{ gmIntercedeLoading ? 'Processing...' : option.name }}
-              </button>
+              <template v-for="option in gmIntercedeOptionsWithNames" :key="option.id">
+                <button
+                  :disabled="gmIntercedeLoading"
+                  @click="handleGmIntercedeClaim(gmIntercedeRequest.id, option.id)"
+                  class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                >
+                  {{ gmIntercedeLoading ? 'Processing...' : option.name }}
+                </button>
+                <button
+                  v-if="gmIntercedeRequest.data?.isAreaAttack && gmIntercedeRequest.data?.areaShapeData && isAdjacentToChosenAlly(option.id)"
+                  :disabled="gmIntercedeLoading"
+                  @click="handleThrowAllyClick(option.id)"
+                  class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                >
+                  {{ gmIntercedeLoading ? 'Processing...' : `Throw ${getParticipantName(gmIntercedeAreaChosenTarget as string) || gmIntercedeAreaChosenTarget} Out of the Blast (${option.name})` }}
+                </button>
+              </template>
               <button
                 :disabled="gmIntercedeLoading"
                 @click="gmIntercedeView = 'main'"

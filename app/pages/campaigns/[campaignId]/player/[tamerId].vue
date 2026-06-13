@@ -2,7 +2,10 @@
 import type { Tamer, Digimon, Encounter } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
-import type { DigimonStage, EddySoulRules } from '~/types'
+import type { DigimonStage, EddySoulRules, Vec3 } from '~/types'
+import type { AreaShapeData } from '~/utils/areaShapes'
+import { computeAreaCellsFromData } from '~/utils/areaShapes'
+import { vec3Key } from '~/utils/mapGeometry'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
@@ -11,6 +14,7 @@ import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
+import { useMapWebSocket } from '~/composables/useMapWebSocket'
 
 definePageMeta({
   layout: 'player',
@@ -185,8 +189,22 @@ const digimonMap = computed(() => {
   return map
 })
 
-// Auto-refresh every 5 seconds
+// Auto-refresh as a low-frequency fallback; the WebSocket below handles
+// near-instant updates while connected.
 let refreshInterval: ReturnType<typeof setInterval>
+
+// Realtime sync: push-based refresh via the encounter's WebSocket room.
+const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
+const encounterWs = useMapWebSocket(activeEncounterIdForWs)
+let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
+encounterWs.onMessage((msg) => {
+  if (msg.type !== 'encounter-updated') return
+  if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
+  encounterUpdateDebounce = setTimeout(() => {
+    encounterUpdateDebounce = null
+    loadData()
+  }, 200)
+})
 
 async function loadData() {
   loading.value = true
@@ -312,11 +330,12 @@ async function loadData() {
 
 onMounted(async () => {
   await loadData()
-  refreshInterval = setInterval(loadData, 5000)
+  refreshInterval = setInterval(loadData, 30000)
 })
 
 onUnmounted(() => {
   clearInterval(refreshInterval)
+  if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
 })
 
 // Watch for new dodge responses (deep watch on nested array)
@@ -603,6 +622,7 @@ const hasDigimonRequest = computed(() => myRequests.value.some((r) => r.type ===
 const hasInitiativeRequest = computed(() => myRequests.value.some((r) => r.type === 'initiative-roll'))
 const hasDodgeRequest = computed(() => myRequests.value.some((r) => r.type === 'dodge-roll'))
 const hasHealthRequest = computed(() => myRequests.value.some((r) => r.type === 'health-roll'))
+const hasThrowImpactRequest = computed(() => myRequests.value.some((r) => r.type === 'throw-impact-attack'))
 const hasIntercedeRequest = computed(() => myRequests.value.some((r) => r.type === 'intercede-offer'))
 const hasDivineProtectionRequest = computed(() => myRequests.value.some((r) => r.type === 'divine-protection-offer'))
 const currentDivineProtectionRequest = computed(() => myRequests.value.find((r) => r.type === 'divine-protection-offer'))
@@ -654,6 +674,7 @@ const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
 const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
 const currentHealthRequest = computed(() => myRequests.value.find((r) => r.type === 'health-roll'))
+const currentThrowImpactRequest = computed(() => myRequests.value.find((r) => r.type === 'throw-impact-attack'))
 const currentIntercedeRequest = computed(() => myRequests.value.find((r) => r.type === 'intercede-offer'))
 const hasRecoveryCheckRequest = computed(() => myRequests.value.some((r) => r.type === 'recovery-check'))
 const currentRecoveryCheckRequest = computed(() => myRequests.value.find((r) => r.type === 'recovery-check'))
@@ -1940,7 +1961,7 @@ async function confirmAttack(target: CombatParticipant) {
   }
 }
 
-async function confirmAreaAttack(targets: CombatParticipant[]) {
+async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: AreaShapeData | null) {
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
   try {
     const { participant, attack } = selectedAttack.value
@@ -1979,7 +2000,7 @@ async function confirmAreaAttack(targets: CombatParticipant[]) {
       bolsterAttackEnabled.value ? { bolstered: true, bolsterType: bolsterAttackType.value } : undefined,
       hugePowerEnabled.value ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: hugePowerRank2Enabled.value ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
       lifestealComplexEnabled.value ? { lifestealed: true } : undefined,
-      { targetIds: targets.map(t => t.id) }
+      { targetIds: targets.map(t => t.id), areaShapeData }
     )
 
     if (result) {
@@ -2560,6 +2581,115 @@ async function submitHealthRoll() {
   }
 }
 
+async function confirmThrowImpactAttack() {
+  const request = currentThrowImpactRequest.value
+  if (!request || !activeEncounter.value || !tamer.value) return
+
+  try {
+    const participants = activeEncounter.value.participants as CombatParticipant[]
+    const controller = participants.find(p => p.id === request.targetParticipantId)
+    const attack = BASIC_ATTACKS.find(a => a.id === (request.data?.attackId ?? 'basic-ranged'))
+    const targetIds: string[] = request.data?.targetIds ?? []
+    const targets = participants.filter(p => targetIds.includes(p.id))
+    if (!controller || !attack || targets.length === 0) return
+
+    const accuracyBonus = request.data?.accuracyBonus ?? 0
+    const accuracyPool = getAttackStats(controller, attack).accuracy + accuracyBonus
+
+    const accuracyDiceResults: number[] = []
+    for (let i = 0; i < accuracyPool; i++) {
+      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
+    }
+    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
+
+    const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+
+    const result = await performAttack(
+      activeEncounter.value.id,
+      controller.id,
+      attack.id,
+      targets[0].id,
+      { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
+      tamer.value.id,
+      attack.name,
+      undefined,
+      undefined,
+      undefined,
+      { targetIds }
+    )
+
+    if (result) {
+      const returnedBattleLog = (result.battleLog as any[]) || []
+      const newEntries = returnedBattleLog.slice(preBattleLogLength)
+
+      for (const target of targets) {
+        if (accuracySuccesses === 0) {
+          attackResultQueue.value.push({
+            responseId: `miss-${Date.now()}-${target.id}`,
+            attackerName: getParticipantName(controller),
+            attackName: attack.name,
+            targetName: getParticipantName(target),
+            accuracyDicePool: accuracyPool,
+            accuracyDiceResults,
+            accuracySuccesses: 0,
+            dodgeDicePool: 0,
+            dodgeDiceResults: [],
+            dodgeSuccesses: 0,
+            netSuccesses: 0,
+            hit: false,
+            baseDamage: 0,
+            armorPiercing: 0,
+            targetArmor: 0,
+            finalDamage: 0,
+          })
+        } else {
+          const resolvedLogEntry = newEntries.find(
+            (entry: any) =>
+              (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
+              entry.actorId === target.id &&
+              entry.attackerParticipantId === controller.id &&
+              entry.hit !== undefined
+          )
+          if (resolvedLogEntry) {
+            showAttackResultFromBattleLog(
+              { attackName: attack.name, targetName: getParticipantName(target), accuracyDicePool: accuracyPool, accuracyDiceResults, accuracySuccesses, participantId: controller.id },
+              resolvedLogEntry
+            )
+          } else {
+            pendingAttacks.value.push({
+              trackingId: `pending-${Date.now()}-${target.id}`,
+              timestamp: Date.now(),
+              attackName: attack.name,
+              targetName: getParticipantName(target),
+              accuracyDicePool: accuracyPool,
+              accuracyDiceResults,
+              accuracySuccesses,
+              participantId: controller.id,
+              attackData: attack
+            })
+          }
+        }
+      }
+
+      if (accuracySuccesses === 0) showAttackResultModal.value = true
+
+      try {
+        await cancelRequest(activeEncounter.value.id, request.id)
+      } catch (e) {
+        // Request may already be cleaned up
+      }
+
+      await loadData()
+    } else {
+      console.error('Failed to perform throw impact attack')
+      alert(encountersError.value || 'Failed to perform throw impact attack')
+    }
+  } catch (error) {
+    console.error('Error performing throw impact attack:', error)
+    alert((error as any)?.data?.message || 'Failed to perform throw impact attack')
+  }
+}
+
 async function submitRecoveryRoll() {
   if (!activeEncounter.value || !currentRecoveryCheckRequest.value || !tamer.value || !recoveryRollResult.value) return
   const capturedRequest = currentRecoveryCheckRequest.value
@@ -2676,7 +2806,7 @@ const intercedeOptions = computed(() => {
 const intercedeLoading = ref(false)
 const playerIntercedeAreaChosenTarget = ref<string | null>(null)
 
-async function handleIntercedeClaim(interceptorParticipantId: string) {
+async function handleIntercedeClaim(interceptorParticipantId: string, throwOptions?: { allyId: string; landingPos: Vec3 }) {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
 
   // Capture context before API call (intercede offers are removed from pendingRequests)
@@ -2689,7 +2819,11 @@ async function handleIntercedeClaim(interceptorParticipantId: string) {
       interceptorParticipantId,
     }
     if (capturedRequest.data?.isAreaAttack) {
-      body.chosenTargetId = playerIntercedeAreaChosenTarget.value
+      body.chosenTargetId = throwOptions ? throwOptions.allyId : playerIntercedeAreaChosenTarget.value
+      if (throwOptions) {
+        body.isThrowClaim = true
+        body.throwAllyLandingPos = throwOptions.landingPos
+      }
     }
     const result = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST',
@@ -3378,7 +3512,7 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
   }
 }
 
-async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw') {
+async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw', options?: { landingPos?: Vec3 }) {
   if (!activeEncounter.value || !tamer.value) return
   const participants = activeEncounter.value.participants as CombatParticipant[]
   const participant = participants.find(p => p.id === participantId)
@@ -3387,11 +3521,76 @@ async function executeClashAction(participantId: string, actionType: 'attack' | 
     const actorTamerId = participant?.type === 'tamer' ? participant.entityId : undefined
     await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/clash-action`, {
       method: 'POST',
-      body: { clashId: (participant as any).clash.clashId, participantId, tamerId: actorTamerId, actionType },
+      body: { clashId: (participant as any).clash.clashId, participantId, tamerId: actorTamerId, actionType, landingPos: options?.landingPos },
     })
   } catch (e: any) {
     alert(e?.data?.message || `Failed to execute clash ${actionType}`)
   }
+}
+
+async function handleThrowClick(participant: CombatParticipant) {
+  const thrownTargetId = (participant as any).clash?.opponentParticipantId
+  if (!thrownTargetId) return
+  if (!showMapView.value) {
+    showMapView.value = true
+    await nextTick()
+  }
+  throwAimControllerId.value = participant.id
+  encounterMapRef.value?.startThrowAim(participant.id, thrownTargetId)
+}
+
+function cancelThrowAim() {
+  if (!throwAimControllerId.value) return
+  encounterMapRef.value?.cancelThrowAim()
+  const controllerId = throwAimControllerId.value
+  throwAimControllerId.value = null
+  executeClashAction(controllerId, 'throw')
+}
+
+function onThrowLandingSelected(controllerId: string, _thrownTargetId: string, landingPos: Vec3) {
+  throwAimControllerId.value = null
+  executeClashAction(controllerId, 'throw', { landingPos })
+}
+
+// Whether a candidate interceptor is adjacent (within 1 cell) to the ally chosen to protect
+function isAdjacentToChosenAlly(participantId: string): boolean {
+  const allyId = playerIntercedeAreaChosenTarget.value
+  if (!allyId || !activeEncounter.value) return false
+  const positions = (activeEncounter.value.participantPositions as Record<string, any>) || {}
+  const allyPos = positions[allyId]
+  const participantPos = positions[participantId]
+  if (!allyPos || !participantPos) return false
+  if (participantId === allyId) return false
+  return chebyshev(allyPos, participantPos) <= 1
+}
+
+async function handleThrowAllyClick(interceptorParticipantId: string) {
+  const allyId = playerIntercedeAreaChosenTarget.value
+  if (!allyId || !currentIntercedeRequest.value) return
+  const areaShapeData = currentIntercedeRequest.value.data?.areaShapeData as AreaShapeData | undefined
+  const excludeCells = new Set<string>()
+  if (areaShapeData) {
+    for (const cell of computeAreaCellsFromData(areaShapeData)) {
+      excludeCells.add(vec3Key(cell))
+    }
+  }
+  if (!showMapView.value) {
+    showMapView.value = true
+    await nextTick()
+  }
+  throwAllyAimContext.value = { interceptorParticipantId, allyParticipantId: allyId }
+  encounterMapRef.value?.startThrowAllyAim(interceptorParticipantId, allyId, excludeCells)
+}
+
+function cancelThrowAllyAim() {
+  if (!throwAllyAimContext.value) return
+  encounterMapRef.value?.cancelThrowAllyAim()
+  throwAllyAimContext.value = null
+}
+
+function onThrowAllyLandingSelected(interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3) {
+  throwAllyAimContext.value = null
+  handleIntercedeClaim(interceptorParticipantId, { allyId: allyParticipantId, landingPos })
 }
 
 async function handleEndTurn() {
@@ -3407,6 +3606,9 @@ async function handleEndTurn() {
 
 // ── Map integration ────────────────────────────────────────────────────────
 const showMapView = ref(false)
+const encounterMapRef = ref<any>(null)
+const throwAimControllerId = ref<string | null>(null)
+const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 const playerAttackParticipantId = ref<string | null>(null)
 const mapStanceDigimonParticipantId = ref<string | null>(null)
 const mapDigivolveDigimonParticipantId = ref<string | null>(null)
@@ -3430,6 +3632,7 @@ const tamerMapForMap = computed(() => {
       currentWounds: participant ? participant.currentWounds : t.currentWounds,
       woundBoxes: participant?.maxWounds ?? derived.woundBoxes,
       speed: derived.speed,
+      body: t.attributes.body,
     }
   })
   return out
@@ -3562,11 +3765,11 @@ function onMapTargetSelected(targetId: string) {
   confirmAttack(target)
 }
 
-function onMapAreaAttackConfirmed(targetIds: string[]) {
+function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
   if (!selectedAttack.value) return
   const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
   const targets = participants.filter(p => targetIds.includes(p.id))
-  confirmAreaAttack(targets)
+  confirmAreaAttack(targets, areaShapeData)
 }
 
 function onMapAttackCancelled() {
@@ -3655,6 +3858,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <ClientOnly>
           <div v-if="showMapView && activeEncounter" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:56px;left:0;right:0;bottom:0;">
             <EncounterMap
+              ref="encounterMapRef"
               :encounter="activeEncounter as any"
               :is-dm="false"
               :bottom-overlay-offset="66"
@@ -3678,6 +3882,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"
               @attack-cancelled="onMapAttackCancelled"
+              @throw-landing-selected="onThrowLandingSelected"
+              @throw-ally-landing-selected="onThrowAllyLandingSelected"
             >
               <template #turn-order>
                 <div class="bg-digimon-dark-800/90 border border-digimon-dark-700 rounded-xl max-w-xs overflow-hidden">
@@ -3714,6 +3920,17 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 </div>
               </template>
             </EncounterMap>
+            <!-- Floating throw-ally aim banner (shown while aiming a "Throw Ally Out of the Blast" intercede) -->
+            <div
+              v-if="throwAllyAimContext"
+              class="fixed z-50 bg-digimon-dark-800 border border-amber-600 rounded-xl p-4 shadow-xl text-center"
+              style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
+            >
+              <div class="text-sm text-amber-300 mb-3">
+                Click a highlighted cell to throw {{ resolveParticipantName(throwAllyAimContext.allyParticipantId) }} out of the blast
+              </div>
+              <button class="w-full text-xs text-digimon-dark-400 hover:text-white" @click="cancelThrowAllyAim">Cancel</button>
+            </div>
             <!-- Floating attack picker (shown when player clicks Attack from map radial) -->
             <div
               v-if="playerAttackParticipantId"
@@ -4088,9 +4305,16 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       <button
                         :disabled="participant.actionsRemaining.simple < 2"
                         class="text-xs px-2 py-1 rounded bg-amber-900/50 text-amber-300 hover:bg-amber-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
-                        @click="executeClashAction(participant.id, 'throw')"
+                        @click="handleThrowClick(participant)"
                       >
                         Throw (2)
+                      </button>
+                      <button
+                        v-if="throwAimControllerId === participant.id"
+                        class="text-xs px-2 py-1 rounded bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500"
+                        @click="cancelThrowAim"
+                      >
+                        Cancel Aim
                       </button>
                       <button
                         class="text-xs px-2 py-1 rounded bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500"
@@ -5591,6 +5815,33 @@ async function handleBreakClash(participantId: string, clashId: string) {
     </div>
   </Teleport>
 
+  <!-- Throw Impact Attack Modal (Clash Throw secondary attack) -->
+  <Teleport to="body">
+    <div
+      v-if="hasThrowImpactRequest && currentThrowImpactRequest"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-pulse"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-orange-500">
+        <h2 class="font-display text-xl font-semibold text-orange-400 mb-4">
+          Crashing Impact!
+        </h2>
+
+        <p class="text-white text-sm mb-4">
+          Your throw sent <span class="font-semibold">{{ currentThrowImpactRequest.data?.thrownName }}</span>
+          crashing into a group of enemies! Roll Accuracy for a Basic Ranged Attack
+          (+{{ currentThrowImpactRequest.data?.accuracyBonus ?? 0 }} bonus).
+        </p>
+
+        <button
+          @click="confirmThrowImpactAttack"
+          class="w-full bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+        >
+          Roll Accuracy & Attack
+        </button>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- Recovery Check Modal -->
   <Teleport to="body">
     <div
@@ -5814,7 +6065,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
   <!-- Intercede Offer Modal (hidden during map-view AOE step 1 — compact map picker shown instead) -->
   <Teleport to="body">
     <div
-      v-if="hasIntercedeRequest && currentIntercedeRequest && !(showMapView && currentIntercedeRequest.data?.isAreaAttack && !playerIntercedeAreaChosenTarget)"
+      v-if="hasIntercedeRequest && currentIntercedeRequest && !(showMapView && currentIntercedeRequest.data?.isAreaAttack && !playerIntercedeAreaChosenTarget) && !throwAllyAimContext"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-yellow-500">
@@ -5884,15 +6135,23 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
 
           <div class="flex flex-col gap-2">
-            <button
-              v-for="option in intercedeOptions"
-              :key="option.id"
-              :disabled="intercedeLoading"
-              @click="handleIntercedeClaim(option.id)"
-              class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            >
-              {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
-            </button>
+            <template v-for="option in intercedeOptions" :key="option.id">
+              <button
+                :disabled="intercedeLoading"
+                @click="handleIntercedeClaim(option.id)"
+                class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
+              </button>
+              <button
+                v-if="currentIntercedeRequest.data?.isAreaAttack && currentIntercedeRequest.data?.areaShapeData && isAdjacentToChosenAlly(option.id)"
+                :disabled="intercedeLoading"
+                @click="handleThrowAllyClick(option.id)"
+                class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+              >
+                {{ intercedeLoading ? 'Processing...' : `Throw ${resolveParticipantName(playerIntercedeAreaChosenTarget as string)} Out of the Blast (${option.name})` }}
+              </button>
+            </template>
             <button
               :disabled="intercedeLoading"
               @click="handleIntercedeSkip"

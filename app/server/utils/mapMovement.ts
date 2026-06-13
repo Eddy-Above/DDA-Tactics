@@ -237,6 +237,39 @@ export function findRangedIntercedPosition(
   return null
 }
 
+// Movement capabilities for a thrown body in flight (Clash Throw / Intercede Throw).
+const PROJECTILE_CAPS: MovementCapabilities = {
+  canFly: true,
+  canJump: true,
+  jumpHeight: 99,
+  jumpRange: 99,
+  canClimb: false,
+  canSwim: true,
+  canDig: false,
+}
+
+// Validates a player-aimed throw landing cell server-side: must be within maxDistance of
+// originPos (the thrown unit's current position), have a valid footprint, and (optionally)
+// not overlap excludeCells (e.g. an Area Attack's cells, for Intercede "Throw Ally Out of AoE").
+export function findThrowLandingCell(
+  originPos: Vec3,
+  landingPos: Vec3,
+  maxDistance: number,
+  targetDims: FootprintDims,
+  map: GameMap,
+  occupiedSet: Set<string>,
+  excludeCells?: Set<string>,
+): Vec3 | null {
+  const reachable = getReachableCells(originPos, maxDistance, PROJECTILE_CAPS, map)
+  if (!reachable.has(key(landingPos))) return null
+  if (!isFootprintValid(landingPos, targetDims, map, occupiedSet)) return null
+  if (excludeCells) {
+    const cells = getFootprintCells(landingPos, targetDims)
+    if (cells.some(cell => excludeCells.has(key(cell)))) return null
+  }
+  return landingPos
+}
+
 // Determines HOW a destination is reachable: by walking alone, jumping, or flying.
 // Runs up to 3 BFS passes to classify without caching assumptions.
 export function classifyReachability(

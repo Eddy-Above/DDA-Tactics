@@ -6,6 +6,7 @@ import { chebyshev } from '../../../../utils/gridDistance'
 import { getFootprintDimensions, getFootprintCells } from '../../../../utils/mapMovement'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
+import type { AreaShapeData } from '~/utils/areaShapes'
 
 interface AttackActionBody {
   participantId: string
@@ -22,6 +23,7 @@ interface AttackActionBody {
   lifestealed?: boolean
   hugePowerUsed?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
+  areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
 
 export default defineEventHandler(async (event) => {
@@ -417,6 +419,7 @@ export default defineEventHandler(async (event) => {
         batteryCount,
         skipActionDeduction: true,
         outsideClashCpuPenalty: 0,
+        areaShapeData: body.areaShapeData ?? null,
       },
     })
     return result

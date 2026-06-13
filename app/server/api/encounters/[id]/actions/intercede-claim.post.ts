@@ -11,16 +11,22 @@ import {
   isValidLandingPosition,
   getFootprintCells,
   isFootprintValid,
+  isPositionInAir,
   findClosestValidDisplacementPosition,
   findRangedIntercedPosition,
+  findThrowLandingCell,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
+import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
+import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 
 interface IntercedeClaimBody {
   requestId: string
   interceptorParticipantId: string
   chosenTargetId?: string // Required for area attacks
+  isThrowClaim?: boolean
+  throwAllyLandingPos?: Vec3
 }
 
 export default defineEventHandler(async (event) => {
@@ -66,9 +72,9 @@ export default defineEventHandler(async (event) => {
   const intercedeGroupId = request.data.intercedeGroupId
   const isAreaAttack = !!request.data.isAreaAttack
 
-  // Load map for spatial position validation (single-target only)
+  // Load map for spatial position validation (single-target intercede, or area-attack throw claims)
   let claimMapRecord: any = null
-  if (!isAreaAttack && (encounter as any).mapId) {
+  if ((!isAreaAttack || (isAreaAttack && body.isThrowClaim)) && (encounter as any).mapId) {
     const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
     if (m) {
       claimMapRecord = {
@@ -212,11 +218,108 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // --- Area-attack "Throw Ally Out of AoE" claim: validate adjacency + landing cell ---
+  let throwAllyFallDamage = 0
+  let throwAllyLandingCell: { x: number; y: number; z: number } | null = null
+
+  if (isAreaAttack && body.isThrowClaim) {
+    const interceptorPos = participantPositions[body.interceptorParticipantId]
+    const allyPos = participantPositions[effectiveTargetId]
+    if (!interceptorPos || !allyPos) {
+      throw createError({ statusCode: 400, message: 'Position data unavailable for throw' })
+    }
+
+    // Adjacency check (within 1 cell, Chebyshev distance)
+    const dx = Math.abs(interceptorPos.x - allyPos.x)
+    const dy = Math.abs(interceptorPos.y - allyPos.y)
+    const dz = Math.abs(interceptorPos.z - allyPos.z)
+    if (dx > 1 || dy > 1 || dz > 1) {
+      throw createError({ statusCode: 400, message: 'Ally must be adjacent to throw them out of the blast' })
+    }
+
+    if (!claimMapRecord) {
+      throw createError({ statusCode: 400, message: 'No map available for throw' })
+    }
+
+    // Recompute AoE cells from the persisted shape data
+    const groupStateForShape = pendingRequests.find(
+      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
+    )
+    const areaShapeData = groupStateForShape?.data?.areaShapeData
+    if (!areaShapeData) {
+      throw createError({ statusCode: 400, message: 'Area shape data unavailable for throw' })
+    }
+    const aoeCells = computeAreaCellsFromData(areaShapeData)
+    const excludeCells = new Set(aoeCells.map(c => `${c.x},${c.y},${c.z}`))
+
+    // Resolve interceptor's Body Stat for max throw distance
+    let actorBodyStat = 0
+    if (interceptor.type === 'digimon') {
+      const ds = await getDigimonDerivedStats(interceptor.entityId)
+      actorBodyStat = ds?.body ?? 0
+    } else if (interceptor.type === 'tamer') {
+      const [t] = await db.select().from(tamers).where(eq(tamers.id, interceptor.entityId))
+      actorBodyStat = t?.attributes?.body ?? 0
+    }
+    const maxDistance = actorBodyStat
+
+    const allyDims: FootprintDims = targetDigRecForPos
+      ? getFootprintDimensions(targetDigRecForPos.size as any, (targetDigRecForPos as any).giganticDimensions)
+      : { width: 1, height: 1, depth: 1 }
+
+    const throwOccupied = new Set(
+      Object.entries(participantPositions)
+        .filter(([pid]) => pid !== effectiveTargetId)
+        .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
+    )
+
+    if (!body.throwAllyLandingPos) {
+      throw createError({ statusCode: 400, message: 'Choose a valid landing cell outside the blast, or use a normal Intercede instead' })
+    }
+    const landingCell = findThrowLandingCell(allyPos, body.throwAllyLandingPos, maxDistance, allyDims, claimMapRecord, throwOccupied, excludeCells)
+    if (!landingCell) {
+      throw createError({ statusCode: 400, message: 'Choose a valid landing cell outside the blast, or use a normal Intercede instead' })
+    }
+
+    // Fall damage on landing
+    let fallHeight = 0
+    let groundY = landingCell.y
+    if (isPositionInAir(landingCell, claimMapRecord)) {
+      let checkY = landingCell.y
+      while (checkY > 0 && isPositionInAir({ x: landingCell.x, y: checkY - 1, z: landingCell.z }, claimMapRecord)) {
+        checkY -= 1
+      }
+      groundY = checkY - 1
+      fallHeight = landingCell.y - groundY
+    }
+    let fallDamage = Math.max(0, fallHeight - 1)
+    // Tumbler: RAM x2 fall/throw damage reduction; with Advanced Mobility: Jumper, negate entirely
+    if (fallDamage > 0 && targetDigRecForPos) {
+      const targetQualities = targetDigRecForPos.qualities || []
+      if (targetQualities.some((q: any) => q.id === 'tumbler')) {
+        const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+        if (hasAdvJumper) {
+          fallDamage = 0
+        } else {
+          const td = await getDigimonDerivedStats(targetParticipantForPos!.entityId)
+          fallDamage = Math.max(0, fallDamage - (td?.ram ?? 0) * 2)
+        }
+      }
+    }
+
+    throwAllyLandingCell = landingCell
+    throwAllyFallDamage = fallDamage
+  }
+
   // Single-target position swap with spatial validation.
   // For melee: interceptor moves to target's tile; target is displaced to nearest valid spot.
   // For ranged: interceptor moves to a line-of-fire cell stored in the offer; target stays put.
   let updatedParticipantPositions: Record<string, { x: number; y: number; z: number }> | null = null
   let fallDamageToApply = 0  // wounds applied to interceptor if they jumped to intercede
+
+  if (isAreaAttack && body.isThrowClaim && throwAllyLandingCell) {
+    updatedParticipantPositions = { ...participantPositions, [effectiveTargetId]: throwAllyLandingCell }
+  }
 
   if (!isAreaAttack && claimMapRecord) {
     const interceptorPos = participantPositions[body.interceptorParticipantId]
@@ -407,6 +510,10 @@ export default defineEventHandler(async (event) => {
       if (!isAreaAttack && p.id === effectiveTargetId) {
         return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
       }
+      // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
+      if (isAreaAttack && body.isThrowClaim && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
+        return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
+      }
       return p
     })
 
@@ -429,6 +536,7 @@ export default defineEventHandler(async (event) => {
         attackBaseDamage: 0,
         netSuccesses,
         isSupportAttack: true,
+        isThrowClaim: !!body.isThrowClaim,
       }
 
       // Strip claimed target from ALL group offers (this offer included); remove empty ones
@@ -577,6 +685,10 @@ export default defineEventHandler(async (event) => {
     if (!isAreaAttack && p.id === effectiveTargetId) {
       return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
     }
+    // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
+    if (isAreaAttack && body.isThrowClaim && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
+      return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
+    }
     return p
   })
 
@@ -601,6 +713,7 @@ export default defineEventHandler(async (event) => {
       isSupportAttack: false,
       interceptorHasCombatMonster: damageCalc.targetHasCombatMonster,
       interceptorHealthStat: damageCalc.targetHealthStat,
+      isThrowClaim: !!body.isThrowClaim,
     }
 
     // Strip claimed target from ALL group offers (this offer included); remove empty ones

@@ -22,6 +22,7 @@ export interface AreaAttackClaim {
   isSupportAttack: boolean
   interceptorHasCombatMonster?: boolean
   interceptorHealthStat?: number
+  isThrowClaim?: boolean
 }
 
 /**
@@ -123,6 +124,8 @@ export async function resolveAreaIntercedeGroup({
     }
     // Intercepted targets receive a dodge penalty (they were "hit" even though the interceptor took the damage)
     if (claimedTargetIds.has(p.id)) {
+      const targetClaim = claims.find(c => c.targetId === p.id)
+      if (targetClaim?.isThrowClaim) return p
       return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
     }
     return p

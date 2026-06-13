@@ -97,6 +97,7 @@ import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
+import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
@@ -141,7 +142,7 @@ const emit = defineEmits<{
   (e: 'wall-place', startTile: Vec3, endTile: Vec3, face: WallFace): void
   (e: 'voxel-edit', cell: Vec3, mode?: 'window' | 'spawn'): void
   (e: 'target-selected', participantId: string): void
-  (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
+  (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
@@ -272,6 +273,8 @@ let lastAoeKey = ''
 const blastCenterY = ref<number>(0)
 const blastLosBlocked = ref<boolean>(false)
 const lastBlastCenter = ref<Vec3 | null>(null)
+// Snapshot of the params last used to compute areaHighlightCells, for re-deriving the AoE later.
+const lastAreaShapeData = ref<AreaShapeData | null>(null)
 // Any area shape is being aimed (blast + the directional shapes that share the blast aimer).
 const isAreaTargeting = computed(() =>
   !!props.selectedAttack && getAreaShape(props.selectedAttack.tags) !== null
@@ -1167,6 +1170,7 @@ function updateReticules() {
 function clearAoeState() {
   areaHighlightCells.value = []
   lastAoeKey = ''
+  lastAreaShapeData.value = null
   if (aoeGroup) aoeGroup.clear()
   lastAttackKey = ''  // force reticule rebuild next frame
 }
@@ -1266,11 +1270,17 @@ function renderBlastFromStoredCenter() {
   lastBlastCenter.value = center
   const los = hasLineOfSight(attackerPos, center)
   blastLosBlocked.value = !los
+  const dims = getParticipantFootprintDims(effectiveAttackerId.value)
   const cells = computeAreaCells(
     'blast', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
     attack.bit, attack.ram ?? 0, attack.movement ?? 0,
-    getParticipantFootprintDims(effectiveAttackerId.value), center,
+    dims, center,
   )
+  lastAreaShapeData.value = {
+    shape: 'blast', rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
+    bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
+    attackerDims: dims, blastCenter: center,
+  }
   updateAoeHighlight(cells, { blocked: !los })
 }
 
@@ -1318,6 +1328,11 @@ function computeAndRenderAoe(event: MouseEvent) {
       shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
       attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims, blastCenter,
     )
+    lastAreaShapeData.value = {
+      shape, rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
+      bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
+      attackerDims: dims, blastCenter,
+    }
     updateAoeHighlight(cells, { blocked: !los })
     return
   }
@@ -1328,6 +1343,11 @@ function computeAndRenderAoe(event: MouseEvent) {
       shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
       attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims,
     )
+    lastAreaShapeData.value = {
+      shape, rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
+      bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
+      attackerDims: dims,
+    }
     updateAoeHighlight(cells)
     return
   }
@@ -1367,6 +1387,11 @@ function computeAndRenderAoe(event: MouseEvent) {
     shape, attack.range, attackerPos, dir,
     attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims,
   )
+  lastAreaShapeData.value = {
+    shape, rangeType: attack.range, attackerPos, dir,
+    bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
+    attackerDims: dims,
+  }
   updateAoeHighlight(cells, { blocked: !los })
 }
 
@@ -1778,8 +1803,9 @@ function onCanvasClick(event: MouseEvent) {
           return pos && footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), aoeCellSet)
         })
         .map(p => p.id)
+      const areaShapeData = lastAreaShapeData.value
       clearAoeState()
-      emit('area-attack-confirmed', targetIds)
+      emit('area-attack-confirmed', targetIds, areaShapeData)
       return
     }
   }

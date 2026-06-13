@@ -63,6 +63,38 @@ export function computeAreaCells(
   }
 }
 
+/**
+ * Snapshot of every parameter used for a single `computeAreaCells` call, captured at
+ * confirm-click time so the AoE can be recomputed later (e.g. by `intercede-claim.post.ts`
+ * to derive `excludeCells` for a "Throw Ally Out of the Blast" landing-cell search).
+ */
+export interface AreaShapeData {
+  shape: AreaShape
+  rangeType: 'melee' | 'ranged'
+  attackerPos: Vec3
+  dir: Vec3
+  bit: number
+  ram: number
+  movement: number
+  attackerDims: FootprintDims
+  blastCenter?: Vec3
+}
+
+/** Recompute the AoE cells from a stored `AreaShapeData` snapshot. */
+export function computeAreaCellsFromData(data: AreaShapeData): Vec3[] {
+  return computeAreaCells(
+    data.shape,
+    data.rangeType,
+    data.attackerPos,
+    data.dir,
+    data.bit,
+    data.ram,
+    data.movement,
+    data.attackerDims,
+    data.blastCenter,
+  )
+}
+
 // --- geometry helpers ---
 
 function dist3d(a: Vec3, b: Vec3): number {

@@ -104,6 +104,10 @@ export function leaveRoom(encounterId: string, peer: any): void {
   }
 }
 
+export function notifyEncounterUpdated(encounterId: string): void {
+  broadcast(encounterId, { type: 'encounter-updated', encounterId })
+}
+
 export function broadcast(encounterId: string, message: unknown, exclude?: any): void {
   const room = rooms.get(encounterId)
   if (!room) return

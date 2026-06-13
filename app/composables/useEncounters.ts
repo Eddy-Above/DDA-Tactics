@@ -1,6 +1,7 @@
 import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
+import type { AreaShapeData } from '../utils/areaShapes'
 import { PERMANENT_EFFECTS } from '../data/attackConstants'
 
 export interface CombatParticipant {
@@ -743,6 +744,7 @@ export function useEncounters() {
     },
     areaData?: {
       targetIds: string[]
+      areaShapeData?: AreaShapeData | null
     }
   ): Promise<Encounter | null> {
     loading.value = true
@@ -767,6 +769,7 @@ export function useEncounters() {
           hugePowerRank: hugePowerData?.hugePowerRank,
           hugePowerTrackAll: hugePowerData?.hugePowerTrackAll,
           lifestealed: lifestealData?.lifestealed || false,
+          areaShapeData: areaData?.areaShapeData ?? null,
         },
       })
       // Update local state

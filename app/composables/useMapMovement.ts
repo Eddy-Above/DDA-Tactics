@@ -8,6 +8,18 @@ type GiganticDims = { width: number; height: number; depth: number } | null
 
 interface QualityLike { id: string; choiceId?: string; ranks?: number }
 
+// Movement capabilities for a thrown body in flight (Clash Throw / Intercede Throw).
+// Mirrors PROJECTILE_CAPS in app/server/utils/mapMovement.ts.
+export const PROJECTILE_CAPS: MovementCapabilities = {
+  canFly: true,
+  canJump: true,
+  jumpHeight: 99,
+  jumpRange: 99,
+  canClimb: false,
+  canSwim: true,
+  canDig: false,
+}
+
 export function detectCapabilities(qualities: QualityLike[], movement: number, ram: number, cpu: number): MovementCapabilities {
   const has = (id: string) => qualities.some(q => q.id === id)
   const hasFlight = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'flight')

@@ -1,7 +1,16 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers } from '../../../../db'
+import { db, encounters, digimon, tamers, maps } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
+import {
+  type FootprintDims,
+  getFootprintDimensions,
+  getFootprintCells,
+  isPositionInAir,
+  findThrowLandingCell,
+} from '~/server/utils/mapMovement'
+import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import type { Vec3 } from '~/types'
 
 interface ClashActionBody {
   clashId: string
@@ -14,6 +23,8 @@ interface ClashActionBody {
   accuracySuccesses?: number
   accuracyDiceResults?: number[]
   accuracyDicePool?: number
+  // For throw: player-aimed landing cell, server-validated
+  landingPos?: Vec3
 }
 
 export default defineEventHandler(async (event) => {
@@ -230,7 +241,148 @@ export default defineEventHandler(async (event) => {
       actorDamage = Math.floor(actorDamage / 2)
     }
 
-    const damageDealt = Math.max(1, actorDamage - targetArmor)
+    let damageDealt = Math.max(1, actorDamage - targetArmor)
+
+    // Positioning & displacement: resolve a player-aimed landing cell, with fall damage
+    let updatedTargetPosition: Vec3 | null = null
+    let fallDamageApplied = 0
+    let wasDisplaced = false
+    let landingParticipantPositions: Record<string, Vec3> | null = null
+
+    if (body.landingPos && (encounter as any).mapId) {
+      const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
+      if (m) {
+        const throwMapRecord: any = {
+          ...m,
+          groundTiles: m.groundTiles ?? [],
+          spaceTiles: m.spaceTiles ?? [],
+          voxels: (m as any).voxels ?? [],
+          walls: m.walls ?? [],
+          ceilings: m.ceilings ?? [],
+          stairs: m.stairs ?? [],
+          windows: m.windows ?? [],
+          doors: m.doors ?? [],
+        }
+
+        const participantPositions = await getRoomPositions(encounterId)
+        landingParticipantPositions = participantPositions
+        const targetPos = participantPositions[target.id]
+
+        if (targetPos) {
+          // Resolve the Controller's Body Stat -> max throw distance
+          let actorBodyStat = 0
+          if (actorDigimonEntity) {
+            const ds = await getDigimonDerivedStats(actor.entityId)
+            actorBodyStat = ds?.body ?? 0
+          } else if (actor.type === 'tamer') {
+            const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
+            actorBodyStat = t?.attributes?.body ?? 0
+          }
+
+          const targetDims: FootprintDims = targetDigimonEntity
+            ? getFootprintDimensions(targetDigimonEntity.size as any, (targetDigimonEntity as any).giganticDimensions)
+            : { width: 1, height: 1, depth: 1 }
+
+          const occupiedSet = new Set(
+            Object.entries(participantPositions)
+              .filter(([pid]) => pid !== target.id)
+              .map(([, pos]: any) => `${pos.x},${pos.y},${pos.z}`)
+          )
+
+          const landingCell = findThrowLandingCell(targetPos, body.landingPos, actorBodyStat, targetDims, throwMapRecord, occupiedSet)
+
+          if (landingCell) {
+            // Fall damage: scan down from the landing cell to find the ground
+            let fallHeight = 0
+            let groundY = landingCell.y
+            if (isPositionInAir(landingCell, throwMapRecord)) {
+              let checkY = landingCell.y
+              while (checkY > 0 && isPositionInAir({ x: landingCell.x, y: checkY - 1, z: landingCell.z }, throwMapRecord)) {
+                checkY -= 1
+              }
+              groundY = checkY - 1
+              fallHeight = landingCell.y - groundY
+            }
+
+            let fallDamage = Math.max(0, fallHeight - 1)
+
+            // Tumbler: RAM x2 fall/throw damage reduction; with Advanced Mobility: Jumper, negate entirely
+            if (fallDamage > 0 && targetDigimonEntity) {
+              const targetQualities = targetDigimonEntity.qualities || []
+              if (targetQualities.some((q: any) => q.id === 'tumbler')) {
+                const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+                if (hasAdvJumper) {
+                  fallDamage = 0
+                } else {
+                  const td = await getDigimonDerivedStats(target.entityId)
+                  fallDamage = Math.max(0, fallDamage - (td?.ram ?? 0) * 2)
+                }
+              }
+            }
+
+            fallDamageApplied = fallDamage
+            damageDealt += fallDamage
+            wasDisplaced = true
+            updatedTargetPosition = fallHeight > 0
+              ? { x: landingCell.x, y: groundY, z: landingCell.z }
+              : landingCell
+          }
+        }
+      }
+    }
+
+    // Secondary impact: if the thrown target lands near a group of opposing participants,
+    // queue a basic-ranged area attack for the Controller (Design Decision 4/5)
+    let throwImpactRequest: any = null
+    if (wasDisplaced && updatedTargetPosition && landingParticipantPositions) {
+      const targetDims: FootprintDims = targetDigimonEntity
+        ? getFootprintDimensions(targetDigimonEntity.size as any, (targetDigimonEntity as any).giganticDimensions)
+        : { width: 1, height: 1, depth: 1 }
+      const landingCells = getFootprintCells(updatedTargetPosition, targetDims)
+      const targetIsEnemy = target.isEnemy ?? false
+
+      const impactedIds = participants
+        .filter((p: any) => {
+          if (p.id === target.id) return false
+          if ((p.isEnemy ?? false) === targetIsEnemy) return false
+          const pos = landingParticipantPositions![p.id]
+          if (!pos) return false
+          return landingCells.some(cell =>
+            Math.max(Math.abs(cell.x - pos.x), Math.abs(cell.y - pos.y), Math.abs(cell.z - pos.z)) <= 1
+          )
+        })
+        .map((p: any) => p.id)
+
+      if (impactedIds.length >= 2) {
+        let controllerTamerId = 'GM'
+        let controllerCpu = 0
+        if (actorDigimonEntity) {
+          controllerTamerId = actorDigimonEntity.partnerId ?? 'GM'
+          const ds = await getDigimonDerivedStats(actor.entityId)
+          controllerCpu = ds?.cpu ?? 0
+        } else if (actor.type === 'tamer') {
+          const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
+          controllerTamerId = actor.entityId
+          controllerCpu = t?.attributes?.body ?? 0
+        }
+
+        throwImpactRequest = {
+          id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: 'throw-impact-attack',
+          targetTamerId: controllerTamerId,
+          targetParticipantId: body.participantId,
+          timestamp: new Date().toISOString(),
+          data: {
+            thrownParticipantId: target.id,
+            thrownName: targetName,
+            landingPos: updatedTargetPosition,
+            targetIds: impactedIds,
+            attackId: 'basic-ranged',
+            accuracyBonus: controllerCpu,
+          },
+        }
+      }
+    }
 
     participants = participants.map((p: any) => {
       if (p.id === body.participantId) {
@@ -252,6 +404,10 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
+    const throwResult = wasDisplaced
+      ? `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`
+      : `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1). Clash ends.`
+
     battleLog = [...battleLog, {
       id: `log-${Date.now()}-clashthrow`,
       timestamp: new Date().toISOString(),
@@ -260,7 +416,7 @@ export default defineEventHandler(async (event) => {
       actorName,
       action: 'Clash Throw',
       target: targetName,
-      result: `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1). Clash ends.`,
+      result: throwResult,
       damage: damageDealt,
       effects: ['Clash Throw', 'Clash Ended'],
     }]
@@ -268,8 +424,15 @@ export default defineEventHandler(async (event) => {
     await db.update(encounters).set({
       participants,
       battleLog,
+      pendingRequests: throwImpactRequest ? [...encounter.pendingRequests, throwImpactRequest] : encounter.pendingRequests,
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
+
+    if (updatedTargetPosition) {
+      const patch = { [target.id]: updatedTargetPosition }
+      const version = await applyPositionPatch(encounterId, patch)
+      broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch, version })
+    }
 
   } else if (body.actionType === 'attack') {
     // Complex action (2 simple) — delegate to intercede-offer with clashAttack flag
@@ -336,5 +499,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return updated
+  const room = await getRoomSnapshot(encounterId)
+  return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
 })

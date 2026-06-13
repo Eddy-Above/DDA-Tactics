@@ -21,6 +21,7 @@ import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions } from '~/server/utils/encounterRoom'
+import type { AreaShapeData } from '~/utils/areaShapes'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -41,6 +42,7 @@ interface IntercedeOfferBody {
   batteryCount?: number
   clashAttack?: boolean         // If true, target's dodge pool is halved (clash controller attack)
   outsideClashCpuPenalty?: number  // Damage penalty when attacker is outside target's active clash
+  areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
 
 export default defineEventHandler(async (event) => {
@@ -383,6 +385,7 @@ export default defineEventHandler(async (event) => {
           quickReactionDiceCount: qrDiceCount,
           tamerCanReach: tamerSpatiallyEligible,
           digimonCanReach: digimonSpatiallyEligible,
+          areaShapeData: body.areaShapeData ?? null,
         },
       })
     }
@@ -422,6 +425,7 @@ export default defineEventHandler(async (event) => {
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
           clashAttack: body.clashAttack || false,
           outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+          areaShapeData: body.areaShapeData ?? null,
         },
       })
     }
@@ -600,6 +604,7 @@ export default defineEventHandler(async (event) => {
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+        areaShapeData: body.areaShapeData ?? null,
         claims: [],
       },
     })

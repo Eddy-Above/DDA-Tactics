@@ -169,6 +169,7 @@ export type WebSocketMapMessage =
   | { type: 'structure-damaged'; encounterId: string; structureId: string; woundsRemaining: number; version: number }
   | { type: 'position-patch';   encounterId: string; patch: Record<string, Vec3>; version: number }
   | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[]; version: number }
+  | { type: 'encounter-updated'; encounterId: string }
 
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 

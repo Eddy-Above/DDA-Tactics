@@ -167,9 +167,10 @@
 import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules,
 } from '~/types'
+import type { AreaShapeData } from '~/utils/areaShapes'
 import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
-import { useMapMovement, detectCapabilities } from '~/composables/useMapMovement'
+import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
@@ -179,7 +180,7 @@ const props = defineProps<{
   encounter: Encounter & { participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[] }
   isDm: boolean
   myTamerId: string | null
-  tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; partnerId?: string | null; speed?: number }>
+  tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; partnerId?: string | null; speed?: number; body?: number }>
   digimonMap: Record<string, {
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
@@ -201,9 +202,11 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve'): void
-  (e: 'area-attack-confirmed', targetParticipantIds: string[]): void
+  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
+  (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void
+  (e: 'throw-landing-selected', controllerId: string, thrownTargetId: string, landingPos: Vec3): void
+  (e: 'throw-ally-landing-selected', interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3): void
   // Note: 'move' is handled internally in EncounterMap
 }>()
 
@@ -354,6 +357,8 @@ const digimonMapForCanvas = computed(() => {
 // ── Placement panel ─────────────────────────────────────────────────────────
 const selectedId = ref<string | null>(null)
 const npcMoveParticipantId = ref<string | null>(null)
+const throwAimContext = ref<{ controllerId: string; thrownTargetId: string } | null>(null)
+const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 
 // ── Charge Attack ────────────────────────────────────────────────────────────
 const chargeMode = ref<'before' | 'after' | null>(null)
@@ -408,6 +413,24 @@ function onCanvasPlace(participantId: string, cell: Vec3) {
 }
 
 function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
+  if (throwAimContext.value && participantId === throwAimContext.value.thrownTargetId) {
+    const { controllerId, thrownTargetId } = throwAimContext.value
+    throwAimContext.value = null
+    npcMoveParticipantId.value = null
+    movement.clearMovement()
+    emit('throw-landing-selected', controllerId, thrownTargetId, position)
+    return
+  }
+
+  if (throwAllyAimContext.value && participantId === throwAllyAimContext.value.allyParticipantId) {
+    const { interceptorParticipantId, allyParticipantId } = throwAllyAimContext.value
+    throwAllyAimContext.value = null
+    npcMoveParticipantId.value = null
+    movement.clearMovement()
+    emit('throw-ally-landing-selected', interceptorParticipantId, allyParticipantId, position)
+    return
+  }
+
   positions.value = { ...positions.value, [participantId]: position }
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path, version: 0 })
 
@@ -469,6 +492,42 @@ function npcMoveCaps(participantId: string) {
   return { p, pos, dInfo, budget, caps, occupied, moverIsEnemy, moverGig }
 }
 
+function throwCaps(thrownParticipantId: string, controllerId: string) {
+  const thrown = props.encounter.participants.find(x => x.id === thrownParticipantId)
+  if (!thrown) return null
+  const pos = positions.value[thrownParticipantId]
+  if (!pos) return null
+  const controller = props.encounter.participants.find(x => x.id === controllerId)
+  if (!controller) return null
+
+  let budget: number
+  if (controller.type === 'tamer') {
+    const tInfo = tamerMapForCanvas.value[controller.entityId] as any
+    budget = tInfo?.body ?? 0
+  } else {
+    const cInfo = digimonMapForCanvas.value[controller.entityId] as any
+    budget = cInfo ? calculateDigimonDerivedStats(cInfo.baseStats, cInfo.stage, cInfo.size).body : 0
+  }
+
+  const thrownInfo = digimonMapForCanvas.value[thrown.entityId] as any
+  const moverSize = thrownInfo?.size ?? 'medium'
+  const moverGig = thrownInfo?.giganticDimensions ?? null
+  const moverIsEnemy = thrown.type === 'digimon' && ((thrown as any).isEnemy === true)
+
+  const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean; giganticDimensions?: { width: number; height: number; depth: number } | null }>()
+  for (const part of props.encounter.participants) {
+    if (part.id === thrownParticipantId) continue
+    const partPos = positions.value[part.id]
+    if (!partPos) continue
+    const partSize = (digimonMapForCanvas.value[part.entityId] as any)?.size ?? 'medium'
+    const partIsEnemy = part.type === 'digimon' && ((part as any).isEnemy === true)
+    const partGig = (digimonMapForCanvas.value[part.entityId] as any)?.giganticDimensions ?? null
+    occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy, giganticDimensions: partGig })
+  }
+
+  return { pos, budget, caps: PROJECTILE_CAPS, occupied, moverSize, moverIsEnemy, moverGig }
+}
+
 // ── Charge Attack handlers ───────────────────────────────────────────────────
 function sameVec3(a: Vec3 | undefined, b: Vec3): boolean {
   return !!a && a.x === b.x && a.y === b.y && a.z === b.z
@@ -505,13 +564,13 @@ function onTargetSelected(targetId: string) {
   emit('target-selected', targetId)
 }
 
-function onAreaAttackConfirmed(targetIds: string[]) {
+function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
   if (chargeMode.value === 'after') {
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
     chargeAttackInFlight.value = true
   }
-  emit('area-attack-confirmed', targetIds)
+  emit('area-attack-confirmed', targetIds, areaShapeData)
 }
 
 watch(() => props.selectedAttack, (val) => {
@@ -540,9 +599,58 @@ function onNpcMove(participantId: string) {
   npcMoveParticipantId.value = participantId
 }
 
+function startThrowAim(controllerId: string, thrownTargetId: string) {
+  if (!map.value) return
+  const ctx = throwCaps(thrownTargetId, controllerId)
+  if (!ctx) return
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.moverSize, ctx.moverIsEnemy, ctx.moverGig)
+  npcMoveParticipantId.value = thrownTargetId
+  throwAimContext.value = { controllerId, thrownTargetId }
+}
+
+function cancelThrowAim() {
+  throwAimContext.value = null
+  npcMoveParticipantId.value = null
+  movement.clearMovement()
+}
+
+function startThrowAllyAim(interceptorParticipantId: string, allyParticipantId: string, excludeCells: Set<string>) {
+  if (!map.value) return
+  const ctx = throwCaps(allyParticipantId, interceptorParticipantId)
+  if (!ctx) return
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.moverSize, ctx.moverIsEnemy, ctx.moverGig)
+  if (excludeCells.size > 0) {
+    const filtered = new Set<string>()
+    for (const k of movement.reachableCells.value) {
+      if (!excludeCells.has(k)) filtered.add(k)
+    }
+    movement.reachableCells.value = filtered
+  }
+  npcMoveParticipantId.value = allyParticipantId
+  throwAllyAimContext.value = { interceptorParticipantId, allyParticipantId }
+}
+
+function cancelThrowAllyAim() {
+  throwAllyAimContext.value = null
+  npcMoveParticipantId.value = null
+  movement.clearMovement()
+}
+
 function onCellHovered(cell: Vec3 | null) {
   if (!cell || !npcMoveParticipantId.value || !map.value) {
     movement.activePath.value = []
+    return
+  }
+  if (throwAimContext.value) {
+    const ctx = throwCaps(throwAimContext.value.thrownTargetId, throwAimContext.value.controllerId)
+    if (!ctx) return
+    movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.moverSize, ctx.moverIsEnemy, ctx.moverGig)
+    return
+  }
+  if (throwAllyAimContext.value) {
+    const ctx = throwCaps(throwAllyAimContext.value.allyParticipantId, throwAllyAimContext.value.interceptorParticipantId)
+    if (!ctx) return
+    movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.moverSize, ctx.moverIsEnemy, ctx.moverGig)
     return
   }
   const ctx = npcMoveCaps(npcMoveParticipantId.value)
@@ -669,6 +777,8 @@ function onStructureSave(id: string, type: string, woundBoxes: number | null, fa
   }
   selectedStructure.value = null
 }
+
+defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim })
 </script>
 
 <style scoped>
