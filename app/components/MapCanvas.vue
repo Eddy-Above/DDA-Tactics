@@ -2006,6 +2006,14 @@ watch(
 watch(() => props.digimonMap, () => { if (scene) buildSprites() }, { deep: true })
 watch(() => props.tamerMap, () => { if (scene) buildSprites() }, { deep: true })
 
+// Rebuild sprites when a participant's underlying entity changes (e.g.
+// digivolve swaps entityId to a different Digimon record's sprite/stage),
+// or when participants are added/removed.
+watch(
+  () => props.participants.map(p => `${p.id}:${p.entityId}`).join(','),
+  () => { if (scene) buildSprites() }
+)
+
 watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () => {
   if (scene) buildSprites()
 })

@@ -218,6 +218,7 @@ encounterWs.onMessage((msg) => {
     if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
     lastEncounterStateVersion = msg.version
     activeEncounter.value = msg.encounter as any
+    syncEncounterDigimon()
     if (tamer.value) {
       myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
       reconstructAttackResults(activeEncounter.value!, tamer.value)
@@ -290,6 +291,26 @@ function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
   }
 }
 
+// Fetch any digimon referenced by the active encounter's participants that
+// aren't yet in allDigimon (e.g. a digivolve swapped a participant's entityId
+// to a new Digimon record on another player's client).
+async function syncEncounterDigimon() {
+  const participants: any[] = (activeEncounter.value?.participants as any[]) ?? []
+  const knownIds = new Set(allDigimon.value.map((d) => d.id))
+  const missingIds = participants
+    .filter((p) => p.type === 'digimon' && p.entityId && !knownIds.has(p.entityId))
+    .map((p) => p.entityId)
+  if (missingIds.length === 0) return
+  try {
+    const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${missingIds.join(',')}`)
+    if (envelope.data.length > 0) {
+      allDigimon.value = [...allDigimon.value, ...envelope.data]
+    }
+  } catch (e) {
+    console.error('Failed to sync encounter digimon:', e)
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -343,6 +364,7 @@ async function loadData() {
         // Fetch full encounter to ensure all JSON fields (e.g. mapId) are present
         const fullEncounter = await fetchEncounter(active.id)
         activeEncounter.value = (fullEncounter ?? active) as any
+        await syncEncounterDigimon()
         // Extract my pending requests
         myRequests.value = getMyPendingRequests(activeEncounter.value!, fetchedTamer.id)
 
