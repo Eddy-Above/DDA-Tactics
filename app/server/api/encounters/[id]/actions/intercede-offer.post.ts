@@ -644,6 +644,7 @@ export default defineEventHandler(async (event) => {
             batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
             clashAttack: body.clashAttack || false,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+            intercedeGroupId,
           },
         })
       }
