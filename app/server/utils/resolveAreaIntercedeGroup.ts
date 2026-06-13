@@ -22,7 +22,20 @@ export interface AreaAttackClaim {
   isSupportAttack: boolean
   interceptorHasCombatMonster?: boolean
   interceptorHealthStat?: number
-  isThrowClaim?: boolean
+}
+
+/**
+ * Returns true if the given intercede-offer's data still lists the target as one its
+ * recipient (tamer, partner digimon, or any NPC under GM control) is eligible to protect.
+ */
+export function isAreaTargetCovered(offerData: any, targetId: string): boolean {
+  const d = offerData || {}
+  if ((d.tamerAreaTargetIds || []).includes(targetId)) return true
+  if ((d.digimonAreaTargetIds || []).includes(targetId)) return true
+  if (d.npcAreaEligibility) {
+    return Object.values(d.npcAreaEligibility as Record<string, string[]>).some((arr) => arr.includes(targetId))
+  }
+  return false
 }
 
 /**
@@ -39,14 +52,13 @@ export function allAreaTargetsDecided(
   const claims: any[] = groupState.data?.claims || []
   const claimedTargets = new Set(claims.map((c: any) => c.targetId))
 
+  const groupOffers = pendingRequests.filter(
+    (r: any) => r.type === 'intercede-offer' && r.data?.intercedeGroupId === intercedeGroupId
+  )
+
   for (const targetId of originalTargets) {
     if (claimedTargets.has(targetId)) continue
-    const isCovered = pendingRequests.some(
-      (r: any) =>
-        r.type === 'intercede-offer' &&
-        r.data?.intercedeGroupId === intercedeGroupId &&
-        (r.data?.areaTargetIds || []).includes(targetId)
-    )
+    const isCovered = groupOffers.some((r: any) => isAreaTargetCovered(r.data, targetId))
     if (isCovered) return false
   }
   return true
@@ -122,11 +134,9 @@ export async function resolveAreaIntercedeGroup({
       }
       return updated
     }
-    // Intercepted targets receive a dodge penalty (they were "hit" even though the interceptor took the damage)
+    // Claimed targets are physically thrown out of the AoE, so they take no dodge penalty
     if (claimedTargetIds.has(p.id)) {
-      const targetClaim = claims.find(c => c.targetId === p.id)
-      if (targetClaim?.isThrowClaim) return p
-      return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
+      return p
     }
     return p
   })

@@ -748,6 +748,24 @@ watch(() => currentIntercedeRequest.value?.id, (newId) => {
   }
 })
 
+// If the chosen area-attack target is claimed by someone else and drops out of our
+// reach, reset the selection (and cancel any in-progress throw-aim) so the player
+// isn't left aiming at a target they can no longer protect.
+watch(() => currentIntercedeRequest.value?.data, (data) => {
+  if (!data?.isAreaAttack) return
+  const chosen = playerIntercedeAreaChosenTarget.value
+  if (!chosen) return
+  const tamerAreaTargetIds: string[] = data.tamerAreaTargetIds || []
+  const digimonAreaTargetIds: string[] = data.digimonAreaTargetIds || []
+  if (!tamerAreaTargetIds.includes(chosen) && !digimonAreaTargetIds.includes(chosen)) {
+    if (throwAllyAimContext.value) {
+      encounterMapRef.value?.cancelThrowAllyAim()
+      throwAllyAimContext.value = null
+    }
+    playerIntercedeAreaChosenTarget.value = null
+  }
+})
+
 watch(() => currentClashCheckRequest.value?.id, (newId) => {
   if (!newId) return
   clashCheckRollResult.value = null
@@ -2745,6 +2763,11 @@ function closeIntercedeResultModal() {
   intercedeResultData.value = null
 }
 
+// Targets this player (tamer + partner digimon) is eligible to protect for an area-attack offer
+function getAreaProtectTargetIds(data: any): string[] {
+  return [...new Set([...(data?.tamerAreaTargetIds || []), ...(data?.digimonAreaTargetIds || [])])]
+}
+
 // Resolve a participant ID to a display name
 function resolveParticipantName(participantId: string): string {
   const participants = (activeEncounter.value?.participants as any[]) || []
@@ -2766,12 +2789,10 @@ const intercedeOptions = computed(() => {
   const currentTurnIndex: number = (activeEncounter.value as any).currentTurnIndex || 0
   const isAreaAttack = !!currentIntercedeRequest.value.data?.isAreaAttack
   const attackerId = currentIntercedeRequest.value.data?.attackerId
-  // For area attacks, all area targets are ineligible interceptors (not just the chosen one)
   const excludedIds = new Set<string>(isAreaAttack
-    ? (currentIntercedeRequest.value.data?.areaTargetIds || [])
-    : [currentIntercedeRequest.value.data?.targetId]
+    ? [attackerId]
+    : [currentIntercedeRequest.value.data?.targetId, attackerId]
   )
-  excludedIds.add(attackerId)
   const options: { id: string; name: string; type: string }[] = []
 
   // Check whether a participant is eligible to intercede based on action availability
@@ -2805,21 +2826,27 @@ const intercedeOptions = computed(() => {
     return digi?.partnerId === tamer.value?.id
   })
 
-  // Offer tamer as interceptor (if tamer is not excluded, has actions, and can reach)
+  // For area attacks, an interceptor can only protect a target it's eligible to reach,
+  // so options are only offered once the player has chosen which ally to protect.
+  const chosenTarget = playerIntercedeAreaChosenTarget.value
+  const tamerAreaTargetIds: string[] = currentIntercedeRequest.value.data?.tamerAreaTargetIds || []
+  const digimonAreaTargetIds: string[] = currentIntercedeRequest.value.data?.digimonAreaTargetIds || []
+
+  // Offer tamer as interceptor (if tamer is not excluded, has actions, and can reach the chosen target)
   if (
     myTamerParticipant &&
     !excludedIds.has(myTamerParticipant.id) &&
     canIntercede(myTamerParticipant) &&
-    currentIntercedeRequest.value.data?.tamerCanReach !== false
+    (!isAreaAttack || (chosenTarget !== null && tamerAreaTargetIds.includes(chosenTarget)))
   ) {
     options.push({ id: myTamerParticipant.id, name: tamer.value?.name || 'Tamer', type: 'tamer' })
   }
-  // Offer partner digimon as interceptor (if digimon is not excluded, has actions, and can reach)
+  // Offer partner digimon as interceptor (if digimon is not excluded, has actions, and can reach the chosen target)
   if (
     myDigimonParticipant &&
     !excludedIds.has(myDigimonParticipant.id) &&
     canIntercede(myDigimonParticipant) &&
-    currentIntercedeRequest.value.data?.digimonCanReach !== false
+    (!isAreaAttack || (chosenTarget !== null && digimonAreaTargetIds.includes(chosenTarget)))
   ) {
     const digi = allDigimon.value.find((d) => d.id === myDigimonParticipant.entityId)
     options.push({ id: myDigimonParticipant.id, name: digi?.name || 'Digimon', type: 'digimon' })
@@ -2834,6 +2861,7 @@ const playerIntercedeAreaChosenTarget = ref<string | null>(null)
 
 async function handleIntercedeClaim(interceptorParticipantId: string, throwOptions?: { allyId: string; landingPos: Vec3 }) {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
+  if (currentIntercedeRequest.value.data?.isAreaAttack && !throwOptions) return
 
   // Capture context before API call (intercede offers are removed from pendingRequests)
   const capturedRequest = currentIntercedeRequest.value
@@ -2844,12 +2872,9 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
       requestId: capturedRequest.id,
       interceptorParticipantId,
     }
-    if (capturedRequest.data?.isAreaAttack) {
-      body.chosenTargetId = throwOptions ? throwOptions.allyId : playerIntercedeAreaChosenTarget.value
-      if (throwOptions) {
-        body.isThrowClaim = true
-        body.throwAllyLandingPos = throwOptions.landingPos
-      }
+    if (throwOptions) {
+      body.chosenTargetId = throwOptions.allyId
+      body.throwAllyLandingPos = throwOptions.landingPos
     }
     const result = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST',
@@ -2962,7 +2987,7 @@ async function handleSaveIntercedeOptions() {
     let skippedAny = false
     for (const request of pendingIntercedes) {
       const targetIds: string[] = request.data?.isAreaAttack
-        ? (request.data?.areaTargetIds || [])
+        ? getAreaProtectTargetIds(request.data)
         : [request.data?.targetId].filter(Boolean)
       const allOptedOut = targetIds.length > 0 && targetIds.every((id: string) => optOuts.includes(id))
       if (allOptedOut) {
@@ -3578,18 +3603,6 @@ function onThrowLandingSelected(controllerId: string, _thrownTargetId: string, l
   executeClashAction(controllerId, 'throw', { landingPos })
 }
 
-// Whether a candidate interceptor is adjacent (within 1 cell) to the ally chosen to protect
-function isAdjacentToChosenAlly(participantId: string): boolean {
-  const allyId = playerIntercedeAreaChosenTarget.value
-  if (!allyId || !activeEncounter.value) return false
-  const positions = (activeEncounter.value.participantPositions as Record<string, any>) || {}
-  const allyPos = positions[allyId]
-  const participantPos = positions[participantId]
-  if (!allyPos || !participantPos) return false
-  if (participantId === allyId) return false
-  return chebyshev(allyPos, participantPos) <= 1
-}
-
 async function handleThrowAllyClick(interceptorParticipantId: string) {
   const allyId = playerIntercedeAreaChosenTarget.value
   if (!allyId || !currentIntercedeRequest.value) return
@@ -3711,7 +3724,7 @@ const mapModeChangeParticipant = computed(() =>
 
 const intercedeMapTargetIds = computed((): string[] => {
   if (!hasIntercedeRequest.value || !currentIntercedeRequest.value?.data?.isAreaAttack || playerIntercedeAreaChosenTarget.value) return []
-  return (currentIntercedeRequest.value.data?.areaTargetIds as string[]) ?? []
+  return getAreaProtectTargetIds(currentIntercedeRequest.value.data)
 })
 
 // Map-click target selection for Direct / Bolster Direct
@@ -4042,7 +4055,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <p class="text-digimon-dark-300 text-xs mb-3">Click a highlighted target on the map, or use the buttons below.</p>
               <div class="flex flex-col gap-2">
                 <button
-                  v-for="tid in currentIntercedeRequest.data?.areaTargetIds || []"
+                  v-for="tid in getAreaProtectTargetIds(currentIntercedeRequest.data)"
                   :key="tid"
                   :disabled="intercedeLoading"
                   @click="playerIntercedeAreaChosenTarget = tid"
@@ -6112,7 +6125,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
           <div class="flex flex-col gap-2">
             <button
-              v-for="tid in currentIntercedeRequest.data?.areaTargetIds || []"
+              v-for="tid in getAreaProtectTargetIds(currentIntercedeRequest.data)"
               :key="tid"
               :disabled="intercedeLoading"
               @click="playerIntercedeAreaChosenTarget = tid"
@@ -6164,18 +6177,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
             <template v-for="option in intercedeOptions" :key="option.id">
               <button
                 :disabled="intercedeLoading"
-                @click="handleIntercedeClaim(option.id)"
+                @click="currentIntercedeRequest.data?.isAreaAttack ? handleThrowAllyClick(option.id) : handleIntercedeClaim(option.id)"
                 class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
               >
                 {{ intercedeLoading ? 'Processing...' : `Intercede with ${option.name}` }}
-              </button>
-              <button
-                v-if="currentIntercedeRequest.data?.isAreaAttack && currentIntercedeRequest.data?.areaShapeData && isAdjacentToChosenAlly(option.id)"
-                :disabled="intercedeLoading"
-                @click="handleThrowAllyClick(option.id)"
-                class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-              >
-                {{ intercedeLoading ? 'Processing...' : `Throw ${resolveParticipantName(playerIntercedeAreaChosenTarget as string)} Out of the Blast (${option.name})` }}
               </button>
             </template>
             <button

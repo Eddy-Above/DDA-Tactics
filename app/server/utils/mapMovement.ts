@@ -292,6 +292,110 @@ export function classifyReachability(
   return { canWalk: false, canJump, canFly }
 }
 
+// Resolves a participant's footprint dimensions: 1x1x1 for tamers, size-derived for digimon.
+export function getFootprintDimsForParticipant(
+  participant: { type: 'tamer' | 'digimon'; entityId: string },
+  digimonById: Map<string, { size: string; giganticDimensions?: any }>,
+): FootprintDims {
+  if (participant.type !== 'digimon') return { width: 1, height: 1, depth: 1 }
+  const rec = digimonById.get(participant.entityId)
+  if (!rec) return { width: 1, height: 1, depth: 1 }
+  return getFootprintDimensions(rec.size as any, rec.giganticDimensions)
+}
+
+// Builds a set of occupied cell keys covering every participant's FULL footprint
+// (not just their anchor cell), excluding the given participant ids.
+export function buildFootprintOccupiedSet(
+  participantPositions: Record<string, Vec3>,
+  participants: Array<{ id: string; type: 'tamer' | 'digimon'; entityId: string }>,
+  digimonById: Map<string, { size: string; giganticDimensions?: any }>,
+  excludeIds: Set<string>,
+): Set<string> {
+  const occupied = new Set<string>()
+  for (const p of participants) {
+    if (excludeIds.has(p.id)) continue
+    const pos = participantPositions[p.id]
+    if (!pos) continue
+    const dims = getFootprintDimsForParticipant(p, digimonById)
+    for (const cell of getFootprintCells(pos, dims)) occupied.add(key(cell))
+  }
+  return occupied
+}
+
+// For area-attack intercede: finds a cell adjacent to the target's footprint that is
+// itself part of the Area Attack (the interceder throws themselves into the blast),
+// reachable by the interceptor within budget, and fits their footprint. Returns the
+// candidate closest to interceptorPos, or null if none exists.
+export function findAreaIntercedePosition(
+  targetPos: Vec3,
+  targetDims: FootprintDims,
+  interceptorPos: Vec3,
+  budget: number,
+  caps: MovementCapabilities,
+  interceptorDims: FootprintDims,
+  map: GameMap,
+  occupied: Set<string>,
+  areaCells: Set<string>,
+): Vec3 | null {
+  const footprintCells = getFootprintCells(targetPos, targetDims)
+  const footprintKeys = new Set(footprintCells.map(key))
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity
+  for (const c of footprintCells) {
+    minX = Math.min(minX, c.x); maxX = Math.max(maxX, c.x)
+    minY = Math.min(minY, c.y); maxY = Math.max(maxY, c.y)
+    minZ = Math.min(minZ, c.z); maxZ = Math.max(maxZ, c.z)
+  }
+
+  const reachable = getReachableCells(interceptorPos, budget, caps, map)
+
+  let best: Vec3 | null = null
+  let bestDist = Infinity
+  for (let x = minX - 1; x <= maxX + 1; x++) {
+    for (let y = minY - 1; y <= maxY + 1; y++) {
+      for (let z = minZ - 1; z <= maxZ + 1; z++) {
+        const cell = { x, y, z }
+        const k = key(cell)
+        if (footprintKeys.has(k)) continue
+        if (!areaCells.has(k)) continue
+        if (!reachable.has(k)) continue
+        if (!isFootprintValid(cell, interceptorDims, map, occupied)) continue
+        const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
+        if (dist < bestDist) {
+          bestDist = dist
+          best = cell
+        }
+      }
+    }
+  }
+  return best
+}
+
+// Rule 3 / throw-out-of-blast existence check: from `targetPos` (the protected ally's
+// current position, matching EncounterMap.vue's throwCaps — throw range is anchored to
+// the thrown unit's current position, not the interceptor's), is there at least one cell
+// reachable within `maxDistance` (the interceding actor's Body stat) using the same
+// PROJECTILE_CAPS as findThrowLandingCell, that fits `targetDims`, doesn't overlap
+// `occupied`, and lies entirely outside `areaCells`?
+export function hasValidThrowOutOfAreaCell(
+  targetPos: Vec3,
+  maxDistance: number,
+  targetDims: FootprintDims,
+  map: GameMap,
+  occupied: Set<string>,
+  areaCells: Set<string>,
+): boolean {
+  const reachable = getReachableCells(targetPos, maxDistance, PROJECTILE_CAPS, map)
+  for (const k of reachable) {
+    const [x, y, z] = k.split(',').map(Number)
+    const cell = { x, y, z }
+    if (!isFootprintValid(cell, targetDims, map, occupied)) continue
+    if (getFootprintCells(cell, targetDims).some(c => areaCells.has(key(c)))) continue
+    return true
+  }
+  return false
+}
+
 export function detectCapabilitiesFromQualities(qualities: Array<{ id: string; choiceId?: string; ranks?: number }>, movement: number, ram: number, cpu: number): MovementCapabilities {
   const hasFlight = qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'flight')
   const hasAdvFlight = qualities.some(q => q.id === 'advanced-mobility' && q.choiceId === 'adv-flight')

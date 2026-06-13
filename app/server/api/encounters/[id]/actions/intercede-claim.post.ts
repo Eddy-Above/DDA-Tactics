@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, evolutionLines, maps } from '../../../../db'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
-import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
+import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup, isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
 import { BASIC_ATTACKS } from '~/data/attackConstants'
 import {
@@ -15,6 +15,10 @@ import {
   findClosestValidDisplacementPosition,
   findRangedIntercedPosition,
   findThrowLandingCell,
+  getFootprintDimsForParticipant,
+  buildFootprintOccupiedSet,
+  findAreaIntercedePosition,
+  hasValidThrowOutOfAreaCell,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -25,7 +29,6 @@ interface IntercedeClaimBody {
   requestId: string
   interceptorParticipantId: string
   chosenTargetId?: string // Required for area attacks
-  isThrowClaim?: boolean
   throwAllyLandingPos?: Vec3
 }
 
@@ -63,6 +66,15 @@ export default defineEventHandler(async (event) => {
 
   const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
 
+  const participantDigimonIds = participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId as string)
+  const participantTamerIds = participants.filter((p: any) => p.type === 'tamer').map((p: any) => p.entityId as string)
+  const [allParticipantDigimon, allParticipantTamers] = await Promise.all([
+    participantDigimonIds.length > 0 ? db.select().from(digimon).where(inArray(digimon.id, participantDigimonIds)) : Promise.resolve([]),
+    participantTamerIds.length > 0 ? db.select().from(tamers).where(inArray(tamers.id, participantTamerIds)) : Promise.resolve([]),
+  ])
+  const digimonById = new Map(allParticipantDigimon.map((d: any) => [d.id, d]))
+  const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
+
   // Find the request
   const request = pendingRequests.find((r: any) => r.id === body.requestId)
   if (!request || request.type !== 'intercede-offer') {
@@ -74,7 +86,7 @@ export default defineEventHandler(async (event) => {
 
   // Load map for spatial position validation (single-target intercede, or area-attack throw claims)
   let claimMapRecord: any = null
-  if ((!isAreaAttack || (isAreaAttack && body.isThrowClaim)) && (encounter as any).mapId) {
+  if ((encounter as any).mapId) {
     const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
     if (m) {
       claimMapRecord = {
@@ -99,26 +111,25 @@ export default defineEventHandler(async (event) => {
     if (!body.chosenTargetId) {
       throw createError({ statusCode: 400, message: 'chosenTargetId is required for area attacks' })
     }
-    if (!request.data.areaTargetIds?.includes(body.chosenTargetId)) {
+    const chosenTargetId: string = body.chosenTargetId
+    if (!isAreaTargetCovered(request.data, chosenTargetId)) {
       throw createError({ statusCode: 400, message: 'chosenTargetId is not a valid target for this request' })
     }
     // 409 check: is chosen target still available (not already claimed by another interceptor)?
     const stillAvailable = pendingRequests.some(
-      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(body.chosenTargetId)
+      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && isAreaTargetCovered(r.data, chosenTargetId)
     )
     if (!stillAvailable) {
       throw createError({ statusCode: 409, message: 'Target already claimed by another interceptor' })
     }
-    effectiveTargetId = body.chosenTargetId
-    const chosenParticipant = participants.find((p: any) => p.id === body.chosenTargetId)
+    effectiveTargetId = chosenTargetId
+    const chosenParticipant = participants.find((p: any) => p.id === chosenTargetId)
     if (chosenParticipant?.type === 'digimon') {
-      const [dig] = await db.select().from(digimon).where(eq(digimon.id, chosenParticipant.entityId))
-      effectiveTargetName = dig?.name || body.chosenTargetId
+      effectiveTargetName = digimonById.get(chosenParticipant.entityId)?.name || chosenTargetId
     } else if (chosenParticipant?.type === 'tamer') {
-      const [tam] = await db.select().from(tamers).where(eq(tamers.id, chosenParticipant.entityId))
-      effectiveTargetName = tam?.name || body.chosenTargetId
+      effectiveTargetName = tamerById.get(chosenParticipant.entityId)?.name || chosenTargetId
     } else {
-      effectiveTargetName = body.chosenTargetId
+      effectiveTargetName = chosenTargetId
     }
   } else {
     // Single-target 409 check: if no group requests left, someone already claimed
@@ -156,7 +167,7 @@ export default defineEventHandler(async (event) => {
     turnHasGone = idx >= 0 && idx < currentTurnIndex
   } else if (interceptor.type === 'digimon') {
     // Partner digimon use the hasActed flag set at tamer turn-end
-    const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, interceptor.entityId))
+    const digimonEntity = digimonById.get(interceptor.entityId)
     if (digimonEntity?.partnerId) {
       // Player digimon: use hasActed flag (set when partner tamer's turn ends)
       turnHasGone = !!interceptor.hasActed
@@ -187,17 +198,15 @@ export default defineEventHandler(async (event) => {
   let interceptorName = 'Unknown'
   let interceptorDigRec: any = null
   if (interceptor.type === 'digimon') {
-    const [dig] = await db.select().from(digimon).where(eq(digimon.id, interceptor.entityId))
-    interceptorDigRec = dig ?? null
-    interceptorName = dig?.name || 'Digimon'
+    interceptorDigRec = digimonById.get(interceptor.entityId) ?? null
+    interceptorName = interceptorDigRec?.name || 'Digimon'
   }
 
   // Load target's digimon record for size/caps (used in displacement logic)
   let targetDigRecForPos: any = null
   const targetParticipantForPos = participants.find((p: any) => p.id === effectiveTargetId)
   if (targetParticipantForPos?.type === 'digimon') {
-    const [tDig] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForPos.entityId))
-    targetDigRecForPos = tDig ?? null
+    targetDigRecForPos = digimonById.get(targetParticipantForPos.entityId) ?? null
   }
 
   const { accuracySuccesses, attackerId, attackData } = request.data
@@ -210,7 +219,7 @@ export default defineEventHandler(async (event) => {
   // stored attack definition. The stored isRangedIntercede flag alone can be wrong.
   let claimAttackRange: string | null = BASIC_ATTACKS.find(a => a.id === request.data.attackId)?.range ?? null
   if (!claimAttackRange && !isAreaAttack && attacker?.type === 'digimon') {
-    const [attackerDigForRange] = await db.select().from(digimon).where(eq(digimon.id, attacker.entityId))
+    const attackerDigForRange = digimonById.get(attacker.entityId)
     if (attackerDigForRange?.attacks) {
       const attacks = attackerDigForRange.attacks
       const foundAttack = (attacks as any[])?.find((a: any) => a.id === request.data.attackId)
@@ -218,27 +227,20 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // --- Area-attack "Throw Ally Out of AoE" claim: validate adjacency + landing cell ---
   let throwAllyFallDamage = 0
   let throwAllyLandingCell: { x: number; y: number; z: number } | null = null
 
-  if (isAreaAttack && body.isThrowClaim) {
-    const interceptorPos = participantPositions[body.interceptorParticipantId]
-    const allyPos = participantPositions[effectiveTargetId]
-    if (!interceptorPos || !allyPos) {
-      throw createError({ statusCode: 400, message: 'Position data unavailable for throw' })
-    }
+  // Single-target position swap with spatial validation.
+  // For melee: interceptor moves to target's tile; target is displaced to nearest valid spot.
+  // For ranged: interceptor moves to a line-of-fire cell stored in the offer; target stays put.
+  let updatedParticipantPositions: Record<string, { x: number; y: number; z: number }> | null = null
+  let fallDamageToApply = 0  // wounds applied to interceptor if they jumped to intercede
 
-    // Adjacency check (within 1 cell, Chebyshev distance)
-    const dx = Math.abs(interceptorPos.x - allyPos.x)
-    const dy = Math.abs(interceptorPos.y - allyPos.y)
-    const dz = Math.abs(interceptorPos.z - allyPos.z)
-    if (dx > 1 || dy > 1 || dz > 1) {
-      throw createError({ statusCode: 400, message: 'Ally must be adjacent to throw them out of the blast' })
-    }
-
-    if (!claimMapRecord) {
-      throw createError({ statusCode: 400, message: 'No map available for throw' })
+  // --- Area-attack intercede claim: reposition interceptor into the AoE adjacent to the
+  // target, then throw the target out of the AoE to the chosen landing cell ---
+  if (isAreaAttack && claimMapRecord) {
+    if (!body.throwAllyLandingPos) {
+      throw createError({ statusCode: 400, message: 'Choose a valid landing cell outside the blast, or use a normal Intercede instead' })
     }
 
     // Recompute AoE cells from the persisted shape data
@@ -247,78 +249,104 @@ export default defineEventHandler(async (event) => {
     )
     const areaShapeData = groupStateForShape?.data?.areaShapeData
     if (!areaShapeData) {
-      throw createError({ statusCode: 400, message: 'Area shape data unavailable for throw' })
+      throw createError({ statusCode: 409, message: 'Area shape data missing from group state' })
     }
-    const aoeCells = computeAreaCellsFromData(areaShapeData)
-    const excludeCells = new Set(aoeCells.map(c => `${c.x},${c.y},${c.z}`))
+    const areaCells = new Set(computeAreaCellsFromData(areaShapeData).map(c => `${c.x},${c.y},${c.z}`))
 
-    // Resolve interceptor's Body Stat for max throw distance
-    let actorBodyStat = 0
-    if (interceptor.type === 'digimon') {
-      const ds = await getDigimonDerivedStats(interceptor.entityId)
-      actorBodyStat = ds?.body ?? 0
+    const interceptorPos = participantPositions[body.interceptorParticipantId]
+    const targetPos = participantPositions[effectiveTargetId]
+    if (!interceptorPos || !targetPos) {
+      throw createError({ statusCode: 400, message: 'Position data unavailable for intercede' })
+    }
+
+    const interceptorDims = getFootprintDimsForParticipant(interceptor, digimonById)
+    const targetDims = getFootprintDimsForParticipant(targetParticipantForPos!, digimonById)
+
+    // Interceptor's movement/throw profile: budget+caps drive repositioning into the AoE,
+    // bodyStat drives how far the target can then be thrown out of the AoE
+    let budget = 0
+    let caps = detectCapabilitiesFromQualities([], 0, 0, 0)
+    let bodyStat = 0
+    if (interceptor.type === 'digimon' && interceptorDigRec) {
+      const quals = interceptorDigRec.qualities ?? []
+      const deriv = calculateDigimonDerivedStats(interceptorDigRec.baseStats, interceptorDigRec.stage as any, interceptorDigRec.size as any)
+      budget = deriv.movement
+      caps = detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu)
+      bodyStat = deriv.body
     } else if (interceptor.type === 'tamer') {
-      const [t] = await db.select().from(tamers).where(eq(tamers.id, interceptor.entityId))
-      actorBodyStat = t?.attributes?.body ?? 0
+      const tamerRecord = tamerById.get(interceptor.entityId)
+      const attrs = tamerRecord?.attributes || {}
+      const skills = tamerRecord?.skills || {}
+      budget = (attrs.agility || 0) + (skills.survival || 0)
+      bodyStat = attrs.body || 0
     }
-    const maxDistance = actorBodyStat
 
-    const allyDims: FootprintDims = targetDigRecForPos
-      ? getFootprintDimensions(targetDigRecForPos.size as any, (targetDigRecForPos as any).giganticDimensions)
-      : { width: 1, height: 1, depth: 1 }
-
-    const throwOccupied = new Set(
-      Object.entries(participantPositions)
-        .filter(([pid]) => pid !== effectiveTargetId)
-        .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
-    )
-
-    if (!body.throwAllyLandingPos) {
-      throw createError({ statusCode: 400, message: 'Choose a valid landing cell outside the blast, or use a normal Intercede instead' })
+    // Step 1: reposition the interceptor into the AoE, adjacent to the target
+    const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]))
+    const interceptePos = findAreaIntercedePosition(targetPos, targetDims, interceptorPos, budget, caps, interceptorDims, claimMapRecord, repositionOccupied, areaCells)
+    if (!interceptePos) {
+      throw createError({ statusCode: 409, message: 'No valid intercede position available — board state changed' })
     }
-    const landingCell = findThrowLandingCell(allyPos, body.throwAllyLandingPos, maxDistance, allyDims, claimMapRecord, throwOccupied, excludeCells)
+
+    // Fall damage on landing for the interceptor
+    let interceptorFallHeight = 0
+    if (isPositionInAir(interceptePos, claimMapRecord)) {
+      let checkY = interceptePos.y
+      while (checkY > 0 && isPositionInAir({ x: interceptePos.x, y: checkY - 1, z: interceptePos.z }, claimMapRecord)) {
+        checkY -= 1
+      }
+      interceptorFallHeight = interceptePos.y - (checkY - 1)
+    }
+    fallDamageToApply = Math.max(0, interceptorFallHeight - 1)
+    // Tumbler: RAM x2 fall damage reduction; with Advanced Mobility: Jumper, negate entirely
+    if (fallDamageToApply > 0 && interceptorDigRec) {
+      const interceptorQualities = interceptorDigRec.qualities || []
+      if (interceptorQualities.some((q: any) => q.id === 'tumbler')) {
+        const hasAdvJumper = interceptorQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+        if (hasAdvJumper) {
+          fallDamageToApply = 0
+        } else {
+          const id = await getDigimonDerivedStats(interceptor.entityId)
+          fallDamageToApply = Math.max(0, fallDamageToApply - (id?.ram ?? 0) * 2)
+        }
+      }
+    }
+
+    updatedParticipantPositions = { ...participantPositions, [body.interceptorParticipantId]: interceptePos }
+
+    // Step 2: throw the target out of the AoE to the chosen landing cell
+    const throwOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([effectiveTargetId]))
+    const landingCell = findThrowLandingCell(targetPos, body.throwAllyLandingPos, bodyStat, targetDims, claimMapRecord, throwOccupied, areaCells)
     if (!landingCell) {
-      throw createError({ statusCode: 400, message: 'Choose a valid landing cell outside the blast, or use a normal Intercede instead' })
+      throw createError({ statusCode: 409, message: 'Invalid throw landing position — board state changed' })
     }
 
-    // Fall damage on landing
-    let fallHeight = 0
-    let groundY = landingCell.y
+    // Fall damage on landing for the thrown target
+    let targetFallHeight = 0
     if (isPositionInAir(landingCell, claimMapRecord)) {
       let checkY = landingCell.y
       while (checkY > 0 && isPositionInAir({ x: landingCell.x, y: checkY - 1, z: landingCell.z }, claimMapRecord)) {
         checkY -= 1
       }
-      groundY = checkY - 1
-      fallHeight = landingCell.y - groundY
+      targetFallHeight = landingCell.y - (checkY - 1)
     }
-    let fallDamage = Math.max(0, fallHeight - 1)
+    throwAllyFallDamage = Math.max(0, targetFallHeight - 1)
     // Tumbler: RAM x2 fall/throw damage reduction; with Advanced Mobility: Jumper, negate entirely
-    if (fallDamage > 0 && targetDigRecForPos) {
+    if (throwAllyFallDamage > 0 && targetDigRecForPos) {
       const targetQualities = targetDigRecForPos.qualities || []
       if (targetQualities.some((q: any) => q.id === 'tumbler')) {
         const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
         if (hasAdvJumper) {
-          fallDamage = 0
+          throwAllyFallDamage = 0
         } else {
           const td = await getDigimonDerivedStats(targetParticipantForPos!.entityId)
-          fallDamage = Math.max(0, fallDamage - (td?.ram ?? 0) * 2)
+          throwAllyFallDamage = Math.max(0, throwAllyFallDamage - (td?.ram ?? 0) * 2)
         }
       }
     }
 
     throwAllyLandingCell = landingCell
-    throwAllyFallDamage = fallDamage
-  }
-
-  // Single-target position swap with spatial validation.
-  // For melee: interceptor moves to target's tile; target is displaced to nearest valid spot.
-  // For ranged: interceptor moves to a line-of-fire cell stored in the offer; target stays put.
-  let updatedParticipantPositions: Record<string, { x: number; y: number; z: number }> | null = null
-  let fallDamageToApply = 0  // wounds applied to interceptor if they jumped to intercede
-
-  if (isAreaAttack && body.isThrowClaim && throwAllyLandingCell) {
-    updatedParticipantPositions = { ...participantPositions, [effectiveTargetId]: throwAllyLandingCell }
+    updatedParticipantPositions[effectiveTargetId] = landingCell
   }
 
   if (!isAreaAttack && claimMapRecord) {
@@ -345,11 +373,7 @@ export default defineEventHandler(async (event) => {
       )
       const caps = detectCapabilitiesFromQualities(quals, derived.movement, derived.ram, derived.cpu)
       const interceptorDims = getFootprintDimensions(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
-      const occupied = new Set(
-        Object.entries(participantPositions)
-          .filter(([pid]) => pid !== body.interceptorParticipantId)
-          .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
-      )
+      const occupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId]))
       const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDims, claimMapRecord, occupied)
       intercDePos = computed ?? undefined
     }
@@ -392,11 +416,7 @@ export default defineEventHandler(async (event) => {
 
         // Occupied set: exclude interceptor (at target's tile) and target (leaving),
         // then add the interceptor's full footprint so target can't land in their space
-        const claimOccupied = new Set(
-          Object.entries(updatedParticipantPositions)
-            .filter(([pid]) => pid !== body.interceptorParticipantId && pid !== effectiveTargetId)
-            .map(([, pos]: [string, any]) => `${pos.x},${pos.y},${pos.z}`)
-        )
+        const claimOccupied = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]))
         getFootprintCells(intercDePos, interceptorDims).forEach((cell: { x: number; y: number; z: number }) => {
           claimOccupied.add(`${cell.x},${cell.y},${cell.z}`)
         })
@@ -511,7 +531,7 @@ export default defineEventHandler(async (event) => {
         return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
       }
       // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
-      if (isAreaAttack && body.isThrowClaim && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
+      if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
         return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
       }
       return p
@@ -536,18 +556,35 @@ export default defineEventHandler(async (event) => {
         attackBaseDamage: 0,
         netSuccesses,
         isSupportAttack: true,
-        isThrowClaim: !!body.isThrowClaim,
       }
 
       // Strip claimed target from ALL group offers (this offer included); remove empty ones
       pendingRequests = pendingRequests.map((r: any) => {
         if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
-        const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
-        return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+        const d = r.data
+        if (r.targetTamerId === 'GM') {
+          const npcAreaEligibility: Record<string, string[]> = {}
+          for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
+            const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
+            if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
+          }
+          return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
+        }
+        return {
+          ...r,
+          data: {
+            ...d,
+            tamerAreaTargetIds: (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+            digimonAreaTargetIds: (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+          },
+        }
       })
+
+      // Remove offers that no longer have any eligible targets
       pendingRequests = pendingRequests.filter((r: any) => {
         if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
-        return (r.data.areaTargetIds || []).length > 0
+        if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
+        return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
       })
 
       // Record claim in intercede-group-state
@@ -686,7 +723,7 @@ export default defineEventHandler(async (event) => {
       return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
     }
     // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
-    if (isAreaAttack && body.isThrowClaim && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
+    if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
       return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
     }
     return p
@@ -713,18 +750,35 @@ export default defineEventHandler(async (event) => {
       isSupportAttack: false,
       interceptorHasCombatMonster: damageCalc.targetHasCombatMonster,
       interceptorHealthStat: damageCalc.targetHealthStat,
-      isThrowClaim: !!body.isThrowClaim,
     }
 
     // Strip claimed target from ALL group offers (this offer included); remove empty ones
     pendingRequests = pendingRequests.map((r: any) => {
       if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
-      const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
-      return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+      const d = r.data
+      if (r.targetTamerId === 'GM') {
+        const npcAreaEligibility: Record<string, string[]> = {}
+        for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
+          const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
+          if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
+        }
+        return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
+      }
+      return {
+        ...r,
+        data: {
+          ...d,
+          tamerAreaTargetIds: (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+          digimonAreaTargetIds: (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+        },
+      }
     })
+
+    // Remove offers that no longer have any eligible targets
     pendingRequests = pendingRequests.filter((r: any) => {
       if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
-      return (r.data.areaTargetIds || []).length > 0
+      if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
+      return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
     })
 
     // Record claim in intercede-group-state

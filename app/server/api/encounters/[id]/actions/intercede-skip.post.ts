@@ -83,7 +83,9 @@ export default defineEventHandler(async (event) => {
   // Handle opt-out: save target(s) to tamer's or GM's intercedeOptOuts
   if (body.optOut) {
     const optOutTargets: string[] = isAreaAttack
-      ? (request.data.areaTargetIds || [])
+      ? request.targetTamerId === 'GM'
+        ? (request.data.gmAreaTargetIds || [])
+        : [...(request.data.tamerAreaTargetIds || []), ...(request.data.digimonAreaTargetIds || [])]
       : [request.data.targetId]
 
     if (request.targetTamerId === 'GM') {

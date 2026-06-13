@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
+import { isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { STAGE_CONFIG } from '~/types'
 
 interface QuickReactionBody {
@@ -51,13 +52,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Tamer participant not found' })
   }
 
-  // For area attacks, find the tamer's partner among areaTargetIds
+  // For area attacks, find the tamer's partner among the tamer's eligible area targets
   let effectiveTargetId: string
   if (isAreaAttack) {
-    const areaTargetIds: string[] = request.data.areaTargetIds || []
-    // Find which area target is this tamer's partner digimon
+    const tamerAreaTargetIds: string[] = request.data.tamerAreaTargetIds || []
     let partnerTargetId: string | null = null
-    for (const tid of areaTargetIds) {
+    for (const tid of tamerAreaTargetIds) {
       const p = participants.find((pp: any) => pp.id === tid)
       if (p?.type === 'digimon') {
         const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
@@ -69,13 +69,6 @@ export default defineEventHandler(async (event) => {
     }
     if (!partnerTargetId) {
       throw createError({ statusCode: 400, message: 'Quick Reaction requires your partner digimon to be among the area attack targets' })
-    }
-    // Also check if this target is still available (not claimed yet)
-    const stillAvailable = pendingRequests.some(
-      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(partnerTargetId)
-    )
-    if (!stillAvailable) {
-      throw createError({ statusCode: 409, message: 'Your partner digimon target was already claimed by another interceptor' })
     }
     effectiveTargetId = partnerTargetId
   } else {
@@ -143,20 +136,41 @@ export default defineEventHandler(async (event) => {
   })
 
   if (isAreaAttack) {
+    // Group-state holds the full original target list, used below to find newly-uncovered targets
+    const groupState = pendingRequests.find(
+      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
+    )
+
     // Remove this request
     pendingRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
-    // Strip QR target from areaTargetIds of all remaining group requests
+    // Strip the QR target from the eligibility fields of all remaining group offers
     pendingRequests = pendingRequests.map((r: any) => {
       if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
-      const remaining = (r.data.areaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
-      return { ...r, data: { ...r.data, areaTargetIds: remaining } }
+      const d = r.data
+      if (r.targetTamerId === 'GM') {
+        const npcAreaEligibility: Record<string, string[]> = {}
+        for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
+          const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
+          if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
+        }
+        return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
+      }
+      return {
+        ...r,
+        data: {
+          ...d,
+          tamerAreaTargetIds: (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+          digimonAreaTargetIds: (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
+        },
+      }
     })
 
-    // Remove requests whose areaTargetIds is now empty
+    // Remove offers that no longer have any eligible targets
     pendingRequests = pendingRequests.filter((r: any) => {
       if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
-      return (r.data.areaTargetIds || []).length > 0
+      if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
+      return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
     })
 
     // Create a dodge-roll (with QR bonus) for the QR target
@@ -195,11 +209,14 @@ export default defineEventHandler(async (event) => {
     pendingRequests.push(qrDodgeRequest)
 
     // For remaining area targets (not the QR target), check coverage
-    const originalAreaTargets: string[] = request.data.areaTargetIds || []
+    const claimedTargets = new Set((groupState?.data?.claims || []).map((c: any) => c.targetId))
+    const originalAreaTargets: string[] = (groupState?.data?.originalTargetIds || []).filter(
+      (id: string) => !claimedTargets.has(id)
+    )
     for (const uncoveredId of originalAreaTargets) {
       if (uncoveredId === effectiveTargetId) continue
       const isCovered = pendingRequests.some(
-        (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.areaTargetIds?.includes(uncoveredId)
+        (r: any) => r.data?.intercedeGroupId === intercedeGroupId && r.data?.isAreaAttack && isAreaTargetCovered(r.data, uncoveredId)
       )
       if (!isCovered) {
         const uncoveredParticipant = participants.find((p: any) => p.id === uncoveredId)

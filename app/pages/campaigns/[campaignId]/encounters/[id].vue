@@ -671,19 +671,28 @@ function getParticipantName(participantId: string): string | null {
   return null
 }
 
+// Targets a player's intercede-offer data is eligible to protect, regardless of whether
+// it's the GM's own offer (gmAreaTargetIds) or a player's offer (tamer/digimon area target ids)
+function getAreaProtectTargetIds(data: any): string[] {
+  if (data?.gmAreaTargetIds) return data.gmAreaTargetIds
+  return [...new Set([...(data?.tamerAreaTargetIds || []), ...(data?.digimonAreaTargetIds || [])])]
+}
+
 function getGmIntercedeOptions(request: any): any[] {
   const participants = (currentEncounter.value?.participants as any[]) || []
   const turnOrder: string[] = (currentEncounter.value as any)?.turnOrder || []
   const currentTurnIndex: number = (currentEncounter.value as any)?.currentTurnIndex || 0
-  const areaTargetIds: string[] = request.data?.areaTargetIds || []
-  const excluded = new Set<string>([
-    request.data?.attackerId,
-    request.data?.targetId,
-    ...areaTargetIds,
-  ].filter(Boolean))
+  const isAreaAttack = !!request.data?.isAreaAttack
+  const npcAreaEligibility: Record<string, string[]> = request.data?.npcAreaEligibility || {}
+  const chosenTarget = gmIntercedeAreaChosenTarget.value
+  const excluded = new Set<string>(isAreaAttack
+    ? [request.data?.attackerId].filter(Boolean)
+    : [request.data?.attackerId, request.data?.targetId].filter(Boolean)
+  )
   return participants.filter((p: any) => {
     if (p.type !== 'tamer' && p.type !== 'digimon') return false
     if (excluded.has(p.id)) return false
+    if (isAreaAttack && !(chosenTarget && (npcAreaEligibility[p.id] || []).includes(chosenTarget))) return false
     // Check action availability (mirrors server-side validation)
     if (p.type === 'digimon') {
       // Partner digimon are not in turnOrder; use hasActed flag
@@ -763,6 +772,18 @@ watch(gmIntercedeOffer, (newVal) => {
   } else if (newVal && showGmIntercedeModal.value) {
     // Offer was modified (e.g., a player claimed one target in an area attack) — update stale modal data
     gmIntercedeRequest.value = newVal
+    // If the chosen area-attack target is no longer coverable by any NPC, reset the
+    // selection (and cancel any in-progress throw-aim) so the GM isn't left aiming at
+    // a target that's already been protected.
+    if (gmIntercedeAreaChosenTarget.value && newVal.data?.isAreaAttack &&
+        !getAreaProtectTargetIds(newVal.data).includes(gmIntercedeAreaChosenTarget.value)) {
+      if (throwAllyAimContext.value) {
+        encounterMapRef.value?.cancelThrowAllyAim()
+        throwAllyAimContext.value = null
+      }
+      gmIntercedeAreaChosenTarget.value = null
+      gmIntercedeView.value = 'select-area-target'
+    }
   }
   // Close modal if the offer was claimed by someone else
   if (!newVal && showGmIntercedeModal.value) {
@@ -1109,20 +1130,17 @@ async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
 // GM intercede response functions
 async function handleGmIntercedeClaim(requestId: string, interceptorId: string, throwOptions?: { allyId: string; landingPos: Vec3 }) {
   if (!currentEncounter.value) return
+  if (gmIntercedeRequest.value?.data?.isAreaAttack && !throwOptions) return
 
-  const capturedRequest = gmIntercedeRequest.value
   gmIntercedeLoading.value = true
   try {
     const body: any = {
       requestId,
       interceptorParticipantId: interceptorId,
     }
-    if (gmIntercedeRequest.value?.data?.isAreaAttack) {
-      body.chosenTargetId = throwOptions ? throwOptions.allyId : gmIntercedeAreaChosenTarget.value
-      if (throwOptions) {
-        body.isThrowClaim = true
-        body.throwAllyLandingPos = throwOptions.landingPos
-      }
+    if (throwOptions) {
+      body.chosenTargetId = throwOptions.allyId
+      body.throwAllyLandingPos = throwOptions.landingPos
     }
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-claim`, {
       method: 'POST', body
@@ -2951,18 +2969,6 @@ function onThrowLandingSelected(controllerId: string, _thrownTargetId: string, l
   executeClashAction(controllerId, 'throw', { landingPos })
 }
 
-// Whether a candidate interceptor is adjacent (within 1 cell) to the ally chosen to protect
-function isAdjacentToChosenAlly(participantId: string): boolean {
-  const allyId = gmIntercedeAreaChosenTarget.value
-  if (!allyId || !currentEncounter.value) return false
-  const positions = (currentEncounter.value.participantPositions as Record<string, any>) || {}
-  const allyPos = positions[allyId]
-  const participantPos = positions[participantId]
-  if (!allyPos || !participantPos) return false
-  if (participantId === allyId) return false
-  return chebyshev(allyPos, participantPos) <= 1
-}
-
 async function handleThrowAllyClick(interceptorParticipantId: string) {
   const allyId = gmIntercedeAreaChosenTarget.value
   if (!allyId || !gmIntercedeRequest.value) return
@@ -4379,7 +4385,7 @@ function onMapAttackCancelled() {
                   </span>
                   <span v-else-if="request.type === 'intercede-offer' && request.targetTamerId !== 'GM'" class="text-yellow-400 text-sm ml-2">
                     <template v-if="request.data?.isAreaAttack">
-                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ (request.data?.areaTargetIds || []).length }} targets)
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ getAreaProtectTargetIds(request.data).length }} targets)
                     </template>
                     <template v-else>
                       Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
@@ -4387,7 +4393,7 @@ function onMapAttackCancelled() {
                   </span>
                   <span v-else-if="request.type === 'intercede-offer' && request.targetTamerId === 'GM'" class="text-yellow-400 text-sm ml-2">
                     <template v-if="request.data?.isAreaAttack">
-                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ (request.data?.areaTargetIds || []).length }} targets)
+                      Intercede? {{ request.data?.attackerName || 'Unknown' }} → Area Attack ({{ getAreaProtectTargetIds(request.data).length }} targets)
                     </template>
                     <template v-else>
                       Intercede? {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
@@ -4442,7 +4448,7 @@ function onMapAttackCancelled() {
                     <!-- Player intercede: area attack shows targets, Quick Reaction + cancel buttons -->
                     <div v-if="request.data?.isAreaAttack" class="text-yellow-300 text-xs mr-2">
                       Area attack on:
-                      {{ (request.data?.areaTargetIds || []).map((tid: string) => {
+                      {{ getAreaProtectTargetIds(request.data).map((tid: string) => {
                         const p = (currentEncounter.participants as any[]).find((pp: any) => pp.id === tid)
                         return p?.name || tid
                       }).join(', ') }}
@@ -5395,7 +5401,7 @@ function onMapAttackCancelled() {
 
             <div class="flex flex-col gap-2">
               <button
-                v-for="tid in gmIntercedeRequest.data?.areaTargetIds || []"
+                v-for="tid in getAreaProtectTargetIds(gmIntercedeRequest.data)"
                 :key="tid"
                 :disabled="gmIntercedeLoading"
                 @click="() => { gmIntercedeAreaChosenTarget = tid; gmIntercedeView = 'main' }"
@@ -5403,7 +5409,7 @@ function onMapAttackCancelled() {
               >
                 {{ getParticipantName(tid) || tid }}
                 <span
-                  v-if="gmIntercedeQuickReactionRequest && gmIntercedeQuickReactionRequest.data?.areaTargetIds?.includes(tid)"
+                  v-if="gmIntercedeQuickReactionRequest && getAreaProtectTargetIds(gmIntercedeQuickReactionRequest.data).includes(tid)"
                   class="ml-2 text-blue-200 text-xs"
                 >(QR available)</span>
               </button>
@@ -5462,7 +5468,7 @@ function onMapAttackCancelled() {
                 {{ gmIntercedeOptionsWithNames.length === 0 ? 'No eligible interceptors' : 'Intercede' }}
               </button>
               <button
-                v-if="gmIntercedeQuickReactionRequest && (!gmIntercedeRequest.data?.isAreaAttack || gmIntercedeQuickReactionRequest.data?.areaTargetIds?.includes(gmIntercedeAreaChosenTarget))"
+                v-if="gmIntercedeQuickReactionRequest && (!gmIntercedeRequest.data?.isAreaAttack || getAreaProtectTargetIds(gmIntercedeQuickReactionRequest.data).includes(gmIntercedeAreaChosenTarget as string))"
                 :disabled="gmIntercedeLoading"
                 @click="handleGmQuickReaction"
                 class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
@@ -5522,18 +5528,10 @@ function onMapAttackCancelled() {
               <template v-for="option in gmIntercedeOptionsWithNames" :key="option.id">
                 <button
                   :disabled="gmIntercedeLoading"
-                  @click="handleGmIntercedeClaim(gmIntercedeRequest.id, option.id)"
+                  @click="gmIntercedeRequest.data?.isAreaAttack ? handleThrowAllyClick(option.id) : handleGmIntercedeClaim(gmIntercedeRequest.id, option.id)"
                   class="w-full bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 >
                   {{ gmIntercedeLoading ? 'Processing...' : option.name }}
-                </button>
-                <button
-                  v-if="gmIntercedeRequest.data?.isAreaAttack && gmIntercedeRequest.data?.areaShapeData && isAdjacentToChosenAlly(option.id)"
-                  :disabled="gmIntercedeLoading"
-                  @click="handleThrowAllyClick(option.id)"
-                  class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                >
-                  {{ gmIntercedeLoading ? 'Processing...' : `Throw ${getParticipantName(gmIntercedeAreaChosenTarget as string) || gmIntercedeAreaChosenTarget} Out of the Blast (${option.name})` }}
                 </button>
               </template>
               <button
