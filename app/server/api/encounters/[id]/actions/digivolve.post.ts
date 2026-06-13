@@ -246,13 +246,14 @@ export default defineEventHandler(async (event) => {
         const woundsHistory = [...(p.woundsHistory || [])]
         const previousState = woundsHistory.pop()
         const devolvedMaxWounds = previousState?.maxWounds || newMaxWounds
+        const devolvedTotalHealth = previousState?.totalHealth ?? newTotalHealth
         evoChanges = {
           entityId: previousState?.entityId || newDigimon.id,
           maxWounds: devolvedMaxWounds,
-          totalHealth: newTotalHealth,
+          totalHealth: devolvedTotalHealth,
           currentWounds: previousState?.wounds ?? 0,
           woundsHistory,
-          combatMonsterBonus: newHasCombatMonster ? Math.min(p.combatMonsterBonus ?? 0, newTotalHealth) : 0,
+          combatMonsterBonus: newHasCombatMonster ? Math.min(p.combatMonsterBonus ?? 0, devolvedTotalHealth) : 0,
           ...(isNpc ? { npcStageIndex: previousState?.stageIndex ?? body.targetChainIndex } : {}),
         }
       }

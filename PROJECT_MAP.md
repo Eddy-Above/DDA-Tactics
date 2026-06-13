@@ -827,6 +827,6 @@ npm run db:studio
 | Special Order | Tamer combat ability unlocked by attribute scores |
 | Battery | Signature Move resource (charges per stage) |
 | Positive Reinforcement | Quality giving tamer a mood meter (1–6) for digimon |
-| Combat Monster | Quality that accumulates bonus damage each round |
+| Combat Monster | Quality that accumulates bonus damage each round, capped at `totalHealth` (= Base Health + Bonus DP Health); cap is restored from the pre-evolve snapshot on devolve |
 | Counterattack | Quality that lets digimon auto-attack when opponent misses |
 | Data Optimization | Quality that boosts one specific stat |

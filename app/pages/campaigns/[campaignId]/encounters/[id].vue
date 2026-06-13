@@ -12,7 +12,7 @@ import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } fr
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
 import type { Vec3 } from '~/types'
-import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, STAGE_CONFIG } from '~/types'
+import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 
@@ -1287,7 +1287,7 @@ async function handleAddParticipant() {
         initiativeRoll = result.roll
         const derived = calcDigimonStats(digimon)
         maxWounds = derived.woundBoxes
-        digimonTotalHealth = derived.woundBoxes - (STAGE_CONFIG[digimon.stage]?.woundBonus ?? 0)
+        digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
         if (digimon.isEnemy && eddySoulRules.value?.enemyDoubleWounds) {
           maxWounds = maxWounds * 2
         }
@@ -1515,7 +1515,7 @@ async function processResponse(response: any) {
         // Create BOTH participants with the same initiative
         // Persist wounds for partner digimon at rookie and below
         const digimonPersistWounds = digimon.stage === 'fresh' || digimon.stage === 'in-training' || digimon.stage === 'rookie'
-        const digimonTotalHealth = digimonDerived.woundBoxes - (STAGE_CONFIG[digimon.stage]?.woundBonus ?? 0)
+        const digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
         const digimonParticipant = createParticipant(
           'digimon',
           digimon.id,

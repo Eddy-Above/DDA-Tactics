@@ -512,7 +512,7 @@ export interface CombatParticipant {
   hasDirectedThisTurn?: boolean  // Tamer-only: has used Direct/Bolster Direct this turn
   npcStageIndex?: number  // NPC-only: tracks current stage independently (allows multiple NPCs to share one evo line)
   combatMonsterBonus?: number  // Combat Monster: cumulative damage bonus for next successful attack
-  totalHealth?: number         // Digimon-only: health stat without stage wound bonus; used as Combat Monster cap
+  totalHealth?: number         // Digimon-only: Base Health + Bonus DP Health (no quality modifiers, no stage wound bonus); used as Combat Monster cap
   battery?: number              // Signature Move Battery: current charge
   usedSignatureMoveThisTurn?: boolean  // Signature Move Battery: spent this turn
   clash?: ClashState            // Active clash state (if currently clashing)
