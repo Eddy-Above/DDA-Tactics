@@ -1915,6 +1915,12 @@ async function confirmAttack(target: CombatParticipant) {
   try {
     const { participant, attack } = selectedAttack.value
 
+    // Clear targeting UI immediately so the player sees their click registered
+    // before the server responds (map reticules/range rings react to selectedAttack)
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
+
     // Calculate accuracy with bolster bonus
     let accuracyPool = getAttackStats(participant, attack).accuracy
     if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
@@ -2042,11 +2048,6 @@ async function confirmAttack(target: CombatParticipant) {
   } catch (error) {
     console.error('Error performing attack:', error)
     alert((error as any)?.data?.message || 'Failed to perform attack')
-  } finally {
-    // Show feedback and close modal
-    showTargetSelector.value = false
-    selectedAttack.value = null
-    selectedTargetIds.value = []
   }
 }
 
@@ -2057,6 +2058,12 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   attackResultGroupTotals.value[areaGroupId] = targets.length
   try {
     const { participant, attack } = selectedAttack.value
+
+    // Clear targeting UI immediately so the player sees their click registered
+    // before the server responds (map reticules/range rings react to selectedAttack)
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
 
     let accuracyPool = getAttackStats(participant, attack).accuracy
     if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
@@ -2163,10 +2170,6 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   } catch (error) {
     console.error('Error performing area attack:', error)
     alert((error as any)?.data?.message || 'Failed to perform area attack')
-  } finally {
-    showTargetSelector.value = false
-    selectedAttack.value = null
-    selectedTargetIds.value = []
   }
 }
 

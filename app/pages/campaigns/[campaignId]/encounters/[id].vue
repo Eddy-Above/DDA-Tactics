@@ -926,6 +926,12 @@ async function confirmAttack(target: CombatParticipant) {
   try {
     const { participant, attack } = selectedAttack.value
 
+    // Clear targeting UI immediately so the GM sees their click registered
+    // before the server responds (map reticules/range rings react to selectedAttack)
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
+
     // Calculate accuracy with bolster bonus
     const attackStats = getAttackStats(participant, attack)
     let accuracyPool = attackStats.accuracy
@@ -1004,9 +1010,6 @@ async function confirmAttack(target: CombatParticipant) {
         accuracyDiceResults,
         accuracySuccesses,
       })
-      showTargetSelector.value = false
-      selectedAttack.value = null
-      selectedTargetIds.value = []
     } catch (e: any) {
       console.error('Attack failed:', e)
       alert(e?.data?.message || 'Failed to execute attack')
@@ -1020,6 +1023,13 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   if (!selectedAttack.value || !currentEncounter.value || targets.length === 0) return
   try {
     const { participant, attack } = selectedAttack.value
+
+    // Clear targeting UI immediately so the GM sees their click registered
+    // before the server responds (map reticules/range rings react to selectedAttack)
+    showTargetSelector.value = false
+    selectedAttack.value = null
+    selectedTargetIds.value = []
+
     const attackStats = getAttackStats(participant, attack)
     let accuracyPool = attackStats.accuracy
     if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
@@ -1090,10 +1100,6 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       accuracyDiceResults,
       accuracySuccesses,
     })
-
-    showTargetSelector.value = false
-    selectedAttack.value = null
-    selectedTargetIds.value = []
   } catch (error) {
     console.error('Error performing area attack:', error)
   }
