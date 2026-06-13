@@ -134,9 +134,9 @@ export async function resolveAreaIntercedeGroup({
       }
       return updated
     }
-    // Claimed targets are physically thrown out of the AoE, so they take no dodge penalty
+    // The original target always takes a dodge penalty, even when claimed/thrown out of the AoE
     if (claimedTargetIds.has(p.id)) {
-      return p
+      return { ...p, dodgePenalty: (p.dodgePenalty ?? 0) + 1 }
     }
     return p
   })

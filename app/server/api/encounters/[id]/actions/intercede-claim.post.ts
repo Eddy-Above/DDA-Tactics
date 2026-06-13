@@ -288,30 +288,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 409, message: 'No valid intercede position available — board state changed' })
     }
 
-    // Fall damage on landing for the interceptor
-    let interceptorFallHeight = 0
-    if (isPositionInAir(interceptePos, claimMapRecord)) {
-      let checkY = interceptePos.y
-      while (checkY > 0 && isPositionInAir({ x: interceptePos.x, y: checkY - 1, z: interceptePos.z }, claimMapRecord)) {
-        checkY -= 1
-      }
-      interceptorFallHeight = interceptePos.y - (checkY - 1)
-    }
-    fallDamageToApply = Math.max(0, interceptorFallHeight - 1)
-    // Tumbler: RAM x2 fall damage reduction; with Advanced Mobility: Jumper, negate entirely
-    if (fallDamageToApply > 0 && interceptorDigRec) {
-      const interceptorQualities = interceptorDigRec.qualities || []
-      if (interceptorQualities.some((q: any) => q.id === 'tumbler')) {
-        const hasAdvJumper = interceptorQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-        if (hasAdvJumper) {
-          fallDamageToApply = 0
-        } else {
-          const id = await getDigimonDerivedStats(interceptor.entityId)
-          fallDamageToApply = Math.max(0, fallDamageToApply - (id?.ram ?? 0) * 2)
-        }
-      }
-    }
-
+    // Interceptors take no fall damage for repositioning into the AoE while interceding
     updatedParticipantPositions = { ...participantPositions, [body.interceptorParticipantId]: interceptePos }
 
     // Step 2: throw the target out of the AoE to the chosen landing cell
