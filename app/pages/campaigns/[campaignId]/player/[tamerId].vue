@@ -74,6 +74,7 @@ const pendingAttacks = ref<Array<{
   accuracyDiceResults: number[];
   accuracySuccesses: number;
   participantId: string;
+  targetParticipantId: string;
   attackData: any;
   groupId?: string;
 }>>([])
@@ -104,6 +105,10 @@ const attackResultQueue = ref<Array<{
   defeated?: boolean
   groupId?: string
 }>>([])
+
+// Tracks the expected number of attackResultQueue entries for an AoE groupId,
+// so the result modal stays hidden until every target in the group has resolved
+const attackResultGroupTotals = ref<Record<string, number>>({})
 
 // Computed property to get all results sharing the same groupId as the first queue entry,
 // so a single AoE attack's results for all targets show in one popup
@@ -255,7 +260,7 @@ function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
     // Skip if already in queue
     if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
     // Skip if already being tracked as pending
-    if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId)) continue
+    if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId && pa.targetParticipantId === resp.participantId)) continue
 
     // Find matching request
     const matchingRequest = pendingRequests.find((req: any) => req.id === resp.requestId)
@@ -271,6 +276,7 @@ function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
       accuracyDiceResults: matchingRequest.data?.accuracyDiceResults || [],
       accuracySuccesses: matchingRequest.data?.accuracySuccesses || 0,
       participantId: resp.attackerParticipantId,
+      targetParticipantId: resp.participantId,
       attackData: { id: matchingRequest.data?.attackId, name: matchingRequest.data?.attackName, tags: [] }
     }
 
@@ -428,6 +434,7 @@ watch(
       const matchingResponse = responses.find((resp: any) =>
         resp.response?.type === 'dodge-rolled' &&
         resp.attackerParticipantId === pendingAttack.participantId &&
+        resp.participantId === pendingAttack.targetParticipantId &&
         Math.abs(new Date(resp.response?.timestamp || 0).getTime() - pendingAttack.timestamp) < 120000
       )
 
@@ -438,6 +445,10 @@ watch(
         if (now - pendingAttack.timestamp > 300000) {
           console.log('[ATTACK RESULT] Removing expired attack:', pendingAttack.attackName)
           pendingAttacks.value.splice(i, 1)
+          if (pendingAttack.groupId && attackResultGroupTotals.value[pendingAttack.groupId] != null) {
+            attackResultGroupTotals.value[pendingAttack.groupId]--
+            maybeShowGroupModal(pendingAttack.groupId)
+          }
         }
         continue
       }
@@ -484,6 +495,7 @@ watch(
         (entry: any) =>
           (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
           entry.attackerParticipantId === pendingAttack.participantId &&
+          entry.actorId === pendingAttack.targetParticipantId &&
           entry.hit !== undefined &&
           new Date(entry.timestamp).getTime() > pendingAttack.timestamp - 5000
       )
@@ -2015,6 +2027,7 @@ async function confirmAttack(target: CombatParticipant) {
             accuracyDiceResults: accuracyDiceResults,
             accuracySuccesses: accuracySuccesses,
             participantId: participant.id,
+            targetParticipantId: target.id,
             attackData: attack
           })
         }
@@ -2041,6 +2054,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
   // Shared groupId so all targets' results from this AoE cast show in a single popup
   const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  attackResultGroupTotals.value[areaGroupId] = targets.length
   try {
     const { participant, attack } = selectedAttack.value
 
@@ -2132,6 +2146,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
               accuracyDiceResults,
               accuracySuccesses,
               participantId: participant.id,
+              targetParticipantId: target.id,
               attackData: attack,
               groupId: areaGroupId,
             })
@@ -2139,7 +2154,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
         }
       }
 
-      if (accuracySuccesses === 0) showAttackResultModal.value = true
+      if (accuracySuccesses === 0) maybeShowGroupModal(areaGroupId)
       await loadData()
     } else {
       console.error('Failed to perform area attack')
@@ -2234,6 +2249,7 @@ function showAttackResult(
     (entry: any) =>
       (entry.action === 'Dodge' || entry.action === 'Dodge (Support)') &&
       entry.attackerParticipantId === pendingAttack.participantId &&
+      entry.actorId === dodgeRequest.targetParticipantId &&
       entry.hit !== undefined
   )
 
@@ -2302,6 +2318,8 @@ function showAttackResult(
 
   console.log('[ATTACK RESULT] About to add to queue, current length:', attackResultQueue.value.length)
 
+  const resolvedGroupId = groupId ?? dodgeResponse.id
+
   // Add to queue to handle multiple attacks in one turn
   attackResultQueue.value.push({
     responseId: dodgeResponse.id,
@@ -2320,15 +2338,15 @@ function showAttackResult(
     armorPiercing: armorPiercing,
     targetArmor: targetArmor,
     finalDamage: finalDamage,
-    groupId: groupId ?? dodgeResponse.id
+    groupId: resolvedGroupId
   })
 
   console.log('[ATTACK RESULT] Added to queue, new length:', attackResultQueue.value.length)
   console.log('[ATTACK RESULT] attackResultData computed value:', attackResultData.value ? 'HAS DATA' : 'NULL')
 
-  // Show modal (will display the first item in the queue)
-  showAttackResultModal.value = true
-  console.log('[ATTACK RESULT] Modal flag set to true')
+  // Show modal only once every target in the group has resolved
+  maybeShowGroupModal(resolvedGroupId)
+  console.log('[ATTACK RESULT] Modal flag now:', showAttackResultModal.value)
 }
 
 function showAttackResultFromBattleLog(
@@ -2342,6 +2360,8 @@ function showAttackResultFromBattleLog(
   const defeatedEntry = logIndex >= 0
     ? battleLog.slice(logIndex + 1).find((e: any) => e.actorId === logEntry.actorId && e.effects?.includes('Defeated'))
     : undefined
+
+  const resolvedGroupId = groupId ?? `log-${logEntry.id}`
 
   // Battle log entries already have all calculated damage values from the server
   attackResultQueue.value.push({
@@ -2362,9 +2382,25 @@ function showAttackResultFromBattleLog(
     targetArmor: logEntry.targetArmor,
     finalDamage: logEntry.finalDamage,
     defeated: !!defeatedEntry,
-    groupId: groupId ?? `log-${logEntry.id}`,
+    groupId: resolvedGroupId,
   })
-  showAttackResultModal.value = true
+
+  // Show modal only once every target in the group has resolved
+  maybeShowGroupModal(resolvedGroupId)
+}
+
+// Flips the result modal on once every target in the AoE group has a queued
+// result. Single-target attacks have no tracked total and show immediately.
+function maybeShowGroupModal(groupId?: string) {
+  if (!groupId) {
+    showAttackResultModal.value = true
+    return
+  }
+  const total = attackResultGroupTotals.value[groupId]
+  const count = attackResultQueue.value.filter(r => r.groupId === groupId).length
+  if (total == null || count >= total) {
+    showAttackResultModal.value = true
+  }
 }
 
 async function closeAttackResultModal() {
@@ -2387,6 +2423,10 @@ async function closeAttackResultModal() {
 
   // Remove all results in the closed group from the queue
   attackResultQueue.value = attackResultQueue.value.filter(r => r.groupId !== closedGroupId)
+
+  if (closedGroupId) {
+    delete attackResultGroupTotals.value[closedGroupId]
+  }
 
   // Keep modal open if there are more results to show, close otherwise
   if (attackResultQueue.value.length === 0) {
@@ -6552,7 +6592,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
       v-if="showAttackResultModal && attackResultData"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
     >
-      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-orange-500">
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-orange-500 max-h-[85vh] overflow-y-auto">
         <h2 class="text-2xl font-bold text-orange-500 mb-4">
           Attack Result: {{ attackResultData.attackName }}
         </h2>
@@ -6601,19 +6641,16 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <div
           v-for="result in attackResultGroup"
           :key="result.responseId"
-          class="mb-4 p-4 bg-digimon-dark-700 rounded-lg border-2"
+          class="mb-2 p-3 bg-digimon-dark-700 rounded-lg border-2"
           :class="[
             result.hit ? 'border-green-500' : 'border-red-500'
           ]"
         >
-          <h4 v-if="attackResultGroup.length > 1" class="text-red-400 font-semibold mb-2">
-            {{ result.targetName }}
-          </h4>
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-lg font-semibold" :class="[
               result.hit ? 'text-green-400' : 'text-red-400'
             ]">
-              {{ result.hit ? 'HIT!' : 'MISS!' }}
+              {{ result.hit ? 'HIT!' : 'MISS!' }}<template v-if="attackResultGroup.length > 1"> vs {{ result.targetName }}</template>
             </h3>
             <div class="text-digimon-dark-400">
               Net Successes:
@@ -6630,13 +6667,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
           <div v-if="result.hit && result.finalDamage != null" class="mt-4 pt-4 border-t border-digimon-dark-600">
             <div class="flex items-center justify-between">
               <span class="text-orange-400 font-semibold text-lg">Damage Dealt:</span>
-              <span class="text-red-400 font-bold text-3xl">{{ result.finalDamage }}</span>
+              <span class="text-red-400 font-bold text-xl">{{ result.finalDamage }}</span>
             </div>
           </div>
 
           <!-- Defeated banner -->
           <div v-if="result.defeated" class="mt-4 pt-4 border-t border-digimon-dark-600 text-center">
-            <span class="text-yellow-400 font-bold text-2xl tracking-widest">DEFEATED!</span>
+            <span class="text-yellow-400 font-bold text-base tracking-wide">DEFEATED!</span>
             <p class="text-digimon-dark-300 text-sm mt-1">{{ result.targetName }} was removed from the encounter.</p>
           </div>
         </div>
