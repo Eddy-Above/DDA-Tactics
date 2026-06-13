@@ -460,7 +460,7 @@ export default defineEventHandler(async (event) => {
               y: targetPos.y + dir.y * interceptorDims.height,
               z: targetPos.z + dir.z * interceptorDims.depth,
             }
-            if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied)) {
+            if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied, targetCaps)) {
               displacedPos = preferred
             }
           }

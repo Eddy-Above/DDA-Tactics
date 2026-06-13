@@ -1,7 +1,7 @@
 import type { Vec3, GameMap } from '../../types'
 import { mapVoxelAt, mapVoxelBlocksMovement, voxelBlocksMovement } from '../../utils/mapVoxels'
 import type { FootprintDims } from '../../utils/movementRules'
-import { getFootprintDimensions, getFootprintCells } from '../../utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, isWithinMapFootprint } from '../../utils/movementRules'
 
 export type { FootprintDims }
 export { getFootprintDimensions, getFootprintCells }
@@ -103,6 +103,7 @@ function canPassThrough(from: Vec3, to: Vec3, caps: MovementCapabilities, map: G
 
   if (canMoveOntoSupportedVoxelTop(from, to, caps, map)) return true
   if (canMoveOntoSupportedStairTop(from, to, caps, map)) return true
+  if (caps.canFly && isWithinMapFootprint(map, to)) return true // fliers traverse open (unpainted) air
   return caps.canDig
 }
 
@@ -143,12 +144,14 @@ export function isValidLandingPosition(
   pos: Vec3,
   map: GameMap,
   occupiedSet: Set<string>,
+  caps?: MovementCapabilities,
 ): boolean {
   if (occupiedSet.has(key(pos))) return false
   if (map.groundTiles.some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
   if (map.spaceTiles.some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
   if (hasSolidVoxelSupport(map, pos)) return true
   if (hasSolidStairSupport(map, pos)) return true
+  if (caps?.canFly && isWithinMapFootprint(map, pos)) return true
   return false
 }
 
@@ -164,8 +167,10 @@ export function isFootprintValid(
   dims: FootprintDims,
   map: GameMap,
   occupiedSet: Set<string>,
+  caps?: MovementCapabilities,
 ): boolean {
-  return getFootprintCells(center, dims).every(cell => isValidLandingPosition(cell, map, occupiedSet))
+  if (!isValidLandingPosition(center, map, occupiedSet, caps)) return false
+  return getFootprintCells(center, dims).every(cell => !occupiedSet.has(key(cell)))
 }
 
 // BFS from fromPos (skipping fromPos itself) respecting walls; returns the closest cell
@@ -182,7 +187,7 @@ export function findClosestValidDisplacementPosition(
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: fromPos, cost: 0 }]
   while (queue.length > 0) {
     const { pos, cost } = queue.shift()!
-    if (cost > 0 && isFootprintValid(pos, targetDims, map, occupiedSet)) return pos
+    if (cost > 0 && isFootprintValid(pos, targetDims, map, occupiedSet, caps)) return pos
     if (cost >= maxRadius) continue
     for (const nb of neighbours(pos)) {
       const k = key(nb)
@@ -232,7 +237,7 @@ export function findRangedIntercedPosition(
   const sorted = [...lineCells].reverse() // closest to target first
   const reachable = getReachableCells(interceptorPos, budget, caps, map)
   for (const cell of sorted) {
-    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet)) return cell
+    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps)) return cell
   }
   return null
 }
@@ -262,7 +267,7 @@ export function findThrowLandingCell(
 ): Vec3 | null {
   const reachable = getReachableCells(originPos, maxDistance, PROJECTILE_CAPS, map)
   if (!reachable.has(key(landingPos))) return null
-  if (!isFootprintValid(landingPos, targetDims, map, occupiedSet)) return null
+  if (!isFootprintValid(landingPos, targetDims, map, occupiedSet, PROJECTILE_CAPS)) return null
   if (excludeCells) {
     const cells = getFootprintCells(landingPos, targetDims)
     if (cells.some(cell => excludeCells.has(key(cell)))) return null
@@ -359,7 +364,7 @@ export function findAreaIntercedePosition(
         if (footprintKeys.has(k)) continue
         if (!areaCells.has(k)) continue
         if (!reachable.has(k)) continue
-        if (!isFootprintValid(cell, interceptorDims, map, occupied)) continue
+        if (!isFootprintValid(cell, interceptorDims, map, occupied, caps)) continue
         const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
         if (dist < bestDist) {
           bestDist = dist
@@ -389,7 +394,7 @@ export function hasValidThrowOutOfAreaCell(
   for (const k of reachable) {
     const [x, y, z] = k.split(',').map(Number)
     const cell = { x, y, z }
-    if (!isFootprintValid(cell, targetDims, map, occupied)) continue
+    if (!isFootprintValid(cell, targetDims, map, occupied, PROJECTILE_CAPS)) continue
     if (getFootprintCells(cell, targetDims).some(c => areaCells.has(key(c)))) continue
     return true
   }

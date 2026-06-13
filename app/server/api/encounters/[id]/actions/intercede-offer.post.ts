@@ -1007,7 +1007,7 @@ export default defineEventHandler(async (event) => {
             const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied)
+              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
               const occupiedWithInterceptor = new Set(meleeOccupied)
@@ -1068,7 +1068,7 @@ export default defineEventHandler(async (event) => {
             const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied)
+              isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied, tamerCaps)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
               const occupiedWithInterceptor = new Set(meleeOccupied)

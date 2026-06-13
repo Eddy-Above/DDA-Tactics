@@ -42,6 +42,15 @@ export function getFootprintCells(anchor: Vec3, dims: FootprintDims): Vec3[] {
 
 function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 
+// True if `pos` lies within the map's horizontal footprint (x/z bounds). Vertical (y) is
+// intentionally unbounded. Used to keep open-air flight from drifting off the map edge.
+export function isWithinMapFootprint(map: GameMap, pos: Vec3): boolean {
+  const w = map.dimensions?.width
+  const d = map.dimensions?.depth
+  if (w == null || d == null) return true // no footprint defined → don't restrict
+  return pos.x >= 0 && pos.x < w && pos.z >= 0 && pos.z < d
+}
+
 // True if a wall (without a door) blocks the cardinal move from→to.
 // Only call for cardinal moves (exactly one of dx/dz is non-zero, dy=0).
 // A wall on the boundary between two tiles is stored at EITHER tile with the
@@ -226,6 +235,7 @@ export function canPassThrough(
   // No tile at destination: allow standing/moving on top of solid voxels or stairs.
   if (canMoveOntoSupportedVoxelTop(from, to, caps, map)) return true
   if (canMoveOntoSupportedStairTop(from, to, caps, map)) return true
+  if (caps.canFly && isWithinMapFootprint(map, to)) return true  // fliers traverse open (unpainted) air
   if (caps.canDig) return true  // diggers can go through solid cells too
   return false
 }
@@ -259,6 +269,9 @@ export function canLandOn(
   // Empty cell directly above a solid voxel or stair is a valid landing surface.
   if (hasSolidVoxelSupport(map, pos)) return true
   if (hasSolidStairSupport(map, pos)) return true
+
+  // Open (unpainted) air — fliers can hover/land within the map footprint.
+  if (caps.canFly && isWithinMapFootprint(map, pos)) return true
 
   return false
 }
