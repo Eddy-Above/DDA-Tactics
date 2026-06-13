@@ -197,7 +197,23 @@ let refreshInterval: ReturnType<typeof setInterval>
 const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(activeEncounterIdForWs)
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
+let lastEncounterStateVersion = -1
+let lastEncounterStateId: string | null = null
 encounterWs.onMessage((msg) => {
+  if (msg.type === 'encounter-state') {
+    if (msg.encounterId !== lastEncounterStateId) {
+      lastEncounterStateId = msg.encounterId
+      lastEncounterStateVersion = -1
+    }
+    if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
+    lastEncounterStateVersion = msg.version
+    activeEncounter.value = msg.encounter as any
+    if (tamer.value) {
+      myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
+      reconstructAttackResults(activeEncounter.value!, tamer.value)
+    }
+    return
+  }
   if (msg.type !== 'encounter-updated') return
   if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
   encounterUpdateDebounce = setTimeout(() => {
@@ -205,6 +221,64 @@ encounterWs.onMessage((msg) => {
     loadData()
   }, 200)
 })
+
+// Reconstruct attack results from persisted responses (handles page refresh
+// and live pushes) — finds dodge-rolled responses to my pending attacks that
+// don't have a result shown yet and surfaces them via showAttackResult.
+function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
+  const participants = (encounter.participants as CombatParticipant[]) || []
+  const responses = ((encounter as any).requestResponses as any[]) || []
+  const pendingRequests = ((encounter as any).pendingRequests as any[]) || []
+  const myPartIds = new Set(
+    participants
+      .filter((p) =>
+        (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
+        (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
+      )
+      .map((p) => p.id)
+  )
+
+  for (const resp of responses) {
+    if (resp.response?.type !== 'dodge-rolled') continue
+    if (!myPartIds.has(resp.attackerParticipantId)) continue
+    // Skip if already in queue
+    if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
+    // Skip if already being tracked as pending
+    if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId)) continue
+
+    // Find matching request
+    const matchingRequest = pendingRequests.find((req: any) => req.id === resp.requestId)
+    if (!matchingRequest) continue
+
+    // Reconstruct synthetic pending attack from request data
+    const syntheticPendingAttack = {
+      trackingId: `reconstructed-${resp.id}`,
+      timestamp: new Date(resp.response.timestamp).getTime(),
+      attackName: matchingRequest.data?.attackName || 'Unknown',
+      targetName: matchingRequest.data?.targetName || 'Unknown',
+      accuracyDicePool: matchingRequest.data?.accuracyDicePool || 0,
+      accuracyDiceResults: matchingRequest.data?.accuracyDiceResults || [],
+      accuracySuccesses: matchingRequest.data?.accuracySuccesses || 0,
+      participantId: resp.attackerParticipantId,
+      attackData: { id: matchingRequest.data?.attackId, name: matchingRequest.data?.attackName, tags: [] }
+    }
+
+    // Find the attack definition with tags from the digimon's attacks for proper damage calc
+    const attackerParticipant = participants.find((p: any) => p.id === resp.attackerParticipantId)
+    if (attackerParticipant?.type === 'digimon') {
+      const attackerDigi = allDigimon.value.find((d) => d.id === attackerParticipant.entityId)
+      if (attackerDigi?.attacks) {
+        const attacks = typeof attackerDigi.attacks === 'string' ? JSON.parse(attackerDigi.attacks) : attackerDigi.attacks
+        const attackDef = attacks?.find((a: any) => a.id === matchingRequest.data?.attackId)
+        if (attackDef) {
+          syntheticPendingAttack.attackData = attackDef
+        }
+      }
+    }
+
+    showAttackResult(syntheticPendingAttack, matchingRequest, resp)
+  }
+}
 
 async function loadData() {
   loading.value = true
@@ -263,57 +337,7 @@ async function loadData() {
         myRequests.value = getMyPendingRequests(activeEncounter.value!, fetchedTamer.id)
 
         // Reconstruct attack results from persisted responses (handles page refresh)
-        const responses = (active.requestResponses as any[]) || []
-        const pendingRequests = (active.pendingRequests as any[]) || []
-        const myPartIds = new Set(
-          participants
-            .filter((p) =>
-              (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
-              (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
-            )
-            .map((p) => p.id)
-        )
-
-        for (const resp of responses) {
-          if (resp.response?.type !== 'dodge-rolled') continue
-          if (!myPartIds.has(resp.attackerParticipantId)) continue
-          // Skip if already in queue
-          if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
-          // Skip if already being tracked as pending
-          if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId)) continue
-
-          // Find matching request
-          const matchingRequest = pendingRequests.find((req: any) => req.id === resp.requestId)
-          if (!matchingRequest) continue
-
-          // Reconstruct synthetic pending attack from request data
-          const syntheticPendingAttack = {
-            trackingId: `reconstructed-${resp.id}`,
-            timestamp: new Date(resp.response.timestamp).getTime(),
-            attackName: matchingRequest.data?.attackName || 'Unknown',
-            targetName: matchingRequest.data?.targetName || 'Unknown',
-            accuracyDicePool: matchingRequest.data?.accuracyDicePool || 0,
-            accuracyDiceResults: matchingRequest.data?.accuracyDiceResults || [],
-            accuracySuccesses: matchingRequest.data?.accuracySuccesses || 0,
-            participantId: resp.attackerParticipantId,
-            attackData: { id: matchingRequest.data?.attackId, name: matchingRequest.data?.attackName, tags: [] }
-          }
-
-          // Find the attack definition with tags from the digimon's attacks for proper damage calc
-          const attackerParticipant = participants.find((p: any) => p.id === resp.attackerParticipantId)
-          if (attackerParticipant?.type === 'digimon') {
-            const attackerDigi = allDigimon.value.find((d) => d.id === attackerParticipant.entityId)
-            if (attackerDigi?.attacks) {
-              const attacks = typeof attackerDigi.attacks === 'string' ? JSON.parse(attackerDigi.attacks) : attackerDigi.attacks
-              const attackDef = attacks?.find((a: any) => a.id === matchingRequest.data?.attackId)
-              if (attackDef) {
-                syntheticPendingAttack.attackData = attackDef
-              }
-            }
-          }
-
-          showAttackResult(syntheticPendingAttack, matchingRequest, resp)
-        }
+        reconstructAttackResults(activeEncounter.value!, fetchedTamer)
       } else {
         activeEncounter.value = null
         myRequests.value = []
@@ -330,7 +354,9 @@ async function loadData() {
 
 onMounted(async () => {
   await loadData()
-  refreshInterval = setInterval(loadData, 30000)
+  // Low-frequency fallback; the WebSocket above handles near-instant updates
+  // while connected.
+  refreshInterval = setInterval(loadData, 120000)
 })
 
 onUnmounted(() => {

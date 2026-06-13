@@ -2606,7 +2606,20 @@ let refreshInterval: ReturnType<typeof setInterval>
 const currentEncounterIdForWs = computed(() => currentEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(currentEncounterIdForWs)
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
+let lastEncounterStateVersion = -1
+let lastEncounterStateId: string | null = null
 encounterWs.onMessage((msg) => {
+  if (msg.type === 'encounter-state') {
+    if (msg.encounterId !== lastEncounterStateId) {
+      lastEncounterStateId = msg.encounterId
+      lastEncounterStateVersion = -1
+    }
+    if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
+    lastEncounterStateVersion = msg.version
+    currentEncounter.value = msg.encounter as any
+    syncEncounterDigimon()
+    return
+  }
   if (msg.type !== 'encounter-updated') return
   if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
   encounterUpdateDebounce = setTimeout(async () => {
@@ -2654,7 +2667,7 @@ onMounted(async () => {
   refreshInterval = setInterval(async () => {
     await fetchEncounter(route.params.id as string)
     await syncEncounterDigimon()
-  }, 30000)
+  }, 120000)
 })
 
 onUnmounted(() => {

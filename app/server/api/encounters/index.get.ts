@@ -15,6 +15,10 @@ export default defineEventHandler(async (event) => {
 
   return allEncounters.map((encounter) => ({
     ...encounter,
+    // The list view doesn't need the full combat history — trim the heavy
+    // fields here; callers needing them should fetch the single encounter.
+    battleLog: [],
+    requestResponses: [],
     participants: (encounter.participants as any[]).map((p: any) => ({
       ...p,
       // Migrate old format { simple: X, complex: Y } to new format { simple: X }

@@ -170,6 +170,7 @@ export type WebSocketMapMessage =
   | { type: 'position-patch';   encounterId: string; patch: Record<string, Vec3>; version: number }
   | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[]; version: number }
   | { type: 'encounter-updated'; encounterId: string }
+  | { type: 'encounter-state';  encounterId: string; encounter: Encounter; version: number }
 
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 
@@ -568,6 +569,9 @@ export interface Encounter {
   destructibleStates: DestructibleState[]
   createdAt: Date
   updatedAt: Date
+  version?: number               // room sync version (present on pushed/detail payloads)
+  _battleLogTotal?: number       // total battle log entries before trimming
+  _battleLogWasTrimmed?: boolean // true if battleLog was truncated to the most recent entries
 }
 
 export interface BattleLogEntry {

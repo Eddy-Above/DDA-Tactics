@@ -1,6 +1,4 @@
-import { eq } from 'drizzle-orm'
-import { db, encounters } from '../../db'
-import { getRoomSnapshot } from '../../utils/encounterRoom'
+import { buildEncounterPayload } from '../../utils/encounterPayload'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -12,27 +10,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id))
+  const payload = await buildEncounterPayload(id)
 
-  if (!encounter) {
+  if (!payload) {
     throw createError({
       statusCode: 404,
       message: `Encounter with ID ${id} not found`,
     })
   }
 
-  const room = await getRoomSnapshot(id)
-
-  return {
-    ...encounter,
-    participantPositions: room.participantPositions,
-    destructibleStates: room.destructibleStates,
-    participants: (encounter.participants as any[]).map((p: any) => ({
-      ...p,
-      // Migrate old format { simple: X, complex: Y } to new format { simple: X }
-      actionsRemaining: p.actionsRemaining?.complex !== undefined
-        ? { simple: p.actionsRemaining.simple || 0 }
-        : p.actionsRemaining || { simple: 2 }
-    })),
-  }
+  return payload
 })

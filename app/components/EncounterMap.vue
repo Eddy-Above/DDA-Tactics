@@ -106,6 +106,8 @@
           :battle-log="encounter.battleLog"
           :is-dm="isDm"
           :npc-entity-ids="npcEntityIds"
+          :battle-log-total="encounter._battleLogTotal"
+          :battle-log-was-trimmed="encounter._battleLogWasTrimmed"
         />
       </div>
 

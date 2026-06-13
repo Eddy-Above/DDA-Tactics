@@ -6,6 +6,9 @@
     </div>
 
     <div v-if="!collapsed" ref="logBody" class="log-body">
+      <div v-if="props.battleLogWasTrimmed" class="log-trimmed-note">
+        Showing last {{ entries.length }} of {{ props.battleLogTotal }}
+      </div>
       <div
         v-for="entry in filteredLog"
         :key="entry.id"
@@ -38,6 +41,8 @@ const props = defineProps<{
   battleLog: BattleLogEntry[]
   isDm: boolean
   npcEntityIds: Set<string>  // set of entity IDs that belong to NPCs
+  battleLogTotal?: number
+  battleLogWasTrimmed?: boolean
 }>()
 
 const collapsed = ref(false)
@@ -118,5 +123,6 @@ const filteredLog = computed(() => {
 .entry-detail { margin-top: 4px; font-size: 11px; color: #778; }
 .entry-effect { color: #aabb88; }
 .log-empty { text-align: center; font-size: 12px; color: #556; padding: 16px; }
+.log-trimmed-note { text-align: center; font-size: 10px; color: #556; padding: 4px 0 6px; }
 .battle-log-panel.collapsed { max-height: none; }
 </style>

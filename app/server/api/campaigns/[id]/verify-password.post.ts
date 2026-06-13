@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Campaign ID is required' })
   }
 
-  if (!body.password) {
+  if (!body.password || typeof body.password !== 'string' || body.password.length > 500) {
     throw createError({ statusCode: 400, message: 'Password is required' })
   }
 
