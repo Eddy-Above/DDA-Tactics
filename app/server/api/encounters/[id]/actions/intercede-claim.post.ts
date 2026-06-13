@@ -32,6 +32,54 @@ interface IntercedeClaimBody {
   throwAllyLandingPos?: Vec3
 }
 
+/**
+ * Strips the claimed target from all group offers, and also removes the claiming
+ * interceptor as an option for every other target in the group (they've already
+ * spent their intercede action on this area attack). Removes offers left with no
+ * eligible targets.
+ */
+function stripClaimantFromGroupOffers(
+  pendingRequests: any[],
+  intercedeGroupId: string,
+  interceptorParticipantId: string,
+  effectiveTargetId: string,
+  participants: any[],
+  digimonById: Map<string, any>
+): any[] {
+  let updated = pendingRequests.map((r: any) => {
+    if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
+    const d = r.data
+    if (r.targetTamerId === 'GM') {
+      const npcAreaEligibility: Record<string, string[]> = {}
+      for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
+        if (npcId === interceptorParticipantId) continue
+        const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
+        if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
+      }
+      return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
+    }
+
+    const tamerParticipantId = participants.find((p: any) => p.type === 'tamer' && p.entityId === r.targetTamerId)?.id
+    const digimonParticipantId = participants.find((p: any) => p.type === 'digimon' && digimonById.get(p.entityId)?.partnerId === r.targetTamerId)?.id
+
+    let tamerAreaTargetIds = (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
+    if (interceptorParticipantId === tamerParticipantId) tamerAreaTargetIds = []
+
+    let digimonAreaTargetIds = (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId)
+    if (interceptorParticipantId === digimonParticipantId) digimonAreaTargetIds = []
+
+    return { ...r, data: { ...d, tamerAreaTargetIds, digimonAreaTargetIds } }
+  })
+
+  updated = updated.filter((r: any) => {
+    if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
+    if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
+    return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
+  })
+
+  return updated
+}
+
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeClaimBody>(event)
@@ -535,34 +583,15 @@ export default defineEventHandler(async (event) => {
         isSupportAttack: true,
       }
 
-      // Strip claimed target from ALL group offers (this offer included); remove empty ones
-      pendingRequests = pendingRequests.map((r: any) => {
-        if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
-        const d = r.data
-        if (r.targetTamerId === 'GM') {
-          const npcAreaEligibility: Record<string, string[]> = {}
-          for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
-            const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
-            if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
-          }
-          return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
-        }
-        return {
-          ...r,
-          data: {
-            ...d,
-            tamerAreaTargetIds: (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
-            digimonAreaTargetIds: (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
-          },
-        }
-      })
-
-      // Remove offers that no longer have any eligible targets
-      pendingRequests = pendingRequests.filter((r: any) => {
-        if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
-        if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
-        return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
-      })
+      // Strip claimed target and claiming interceptor from ALL group offers; remove empty ones
+      pendingRequests = stripClaimantFromGroupOffers(
+        pendingRequests,
+        intercedeGroupId,
+        body.interceptorParticipantId,
+        effectiveTargetId,
+        participants,
+        digimonById
+      )
 
       // Record claim in intercede-group-state
       const groupState = pendingRequests.find(
@@ -729,34 +758,15 @@ export default defineEventHandler(async (event) => {
       interceptorHealthStat: damageCalc.targetHealthStat,
     }
 
-    // Strip claimed target from ALL group offers (this offer included); remove empty ones
-    pendingRequests = pendingRequests.map((r: any) => {
-      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return r
-      const d = r.data
-      if (r.targetTamerId === 'GM') {
-        const npcAreaEligibility: Record<string, string[]> = {}
-        for (const [npcId, targets] of Object.entries(d.npcAreaEligibility || {})) {
-          const remaining = (targets as string[]).filter((tid: string) => tid !== effectiveTargetId)
-          if (remaining.length > 0) npcAreaEligibility[npcId] = remaining
-        }
-        return { ...r, data: { ...d, npcAreaEligibility, gmAreaTargetIds: [...new Set(Object.values(npcAreaEligibility).flat())] } }
-      }
-      return {
-        ...r,
-        data: {
-          ...d,
-          tamerAreaTargetIds: (d.tamerAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
-          digimonAreaTargetIds: (d.digimonAreaTargetIds || []).filter((tid: string) => tid !== effectiveTargetId),
-        },
-      }
-    })
-
-    // Remove offers that no longer have any eligible targets
-    pendingRequests = pendingRequests.filter((r: any) => {
-      if (r.data?.intercedeGroupId !== intercedeGroupId || !r.data?.isAreaAttack) return true
-      if (r.targetTamerId === 'GM') return Object.keys(r.data.npcAreaEligibility || {}).length > 0
-      return (r.data.tamerAreaTargetIds || []).length > 0 || (r.data.digimonAreaTargetIds || []).length > 0
-    })
+    // Strip claimed target and claiming interceptor from ALL group offers; remove empty ones
+    pendingRequests = stripClaimantFromGroupOffers(
+      pendingRequests,
+      intercedeGroupId,
+      body.interceptorParticipantId,
+      effectiveTargetId,
+      participants,
+      digimonById
+    )
 
     // Record claim in intercede-group-state
     const groupState = pendingRequests.find(
