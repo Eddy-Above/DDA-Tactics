@@ -189,6 +189,30 @@ const lifestealComplexEnabled = ref(false)
 const hugePowerEnabled = ref(false)
 const hugePowerRank2Enabled = ref(false)
 
+// Act of Inspiration (pre-roll ±5 dice) state
+const actOfInspirationEnabled = ref(false)
+const actOfInspirationDirection = ref<'add' | 'subtract'>('add')
+const dodgeActOfInspirationEnabled = ref(false)
+const dodgeActOfInspirationDirection = ref<'add' | 'subtract'>('add')
+const counterattackActOfInspirationEnabled = ref(false)
+const counterattackActOfInspirationDirection = ref<'add' | 'subtract'>('add')
+
+// Accuracy Roll Review state
+const showAccuracyReview = ref(false)
+const accuracyReview = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
+const accuracyReviewContext = ref<{
+  participant: CombatParticipant
+  attack: any
+  target: CombatParticipant
+  areaTargets?: CombatParticipant[]
+  areaShapeData?: AreaShapeData | null
+  bolster: boolean
+  bolsterType: 'damage-accuracy' | 'bit-cpu'
+  lifesteal: boolean
+  hugePower: boolean
+  hugePowerRank2: boolean
+} | null>(null)
+
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
 // Composables
@@ -780,6 +804,8 @@ watch(() => currentInitiativeRequest.value?.id, () => {
 watch(() => currentDodgeRequest.value?.id, () => {
   hasRolledDodge.value = false
   dodgeRollResult.value = null
+  dodgeActOfInspirationEnabled.value = false
+  dodgeActOfInspirationDirection.value = 'add'
 })
 
 watch(() => currentIntercedeRequest.value?.id, (newId) => {
@@ -836,6 +862,8 @@ watch(() => currentCounterattackRequest.value?.id, () => {
   hasRolledCounterattack.value = false
   counterattackRollResult.value = null
   counterattackSelectedAttack.value = null
+  counterattackActOfInspirationEnabled.value = false
+  counterattackActOfInspirationDirection.value = 'add'
 })
 
 watch(() => currentDigimonRequest.value?.id, () => {
@@ -1905,6 +1933,8 @@ async function selectAttackAndShowTargets(participant: CombatParticipant, attack
   lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
+  actOfInspirationEnabled.value = false
+  actOfInspirationDirection.value = 'add'
   if (showMapView.value) return
   showTargetSelector.value = true
 }
@@ -1927,6 +1957,13 @@ async function confirmAttack(target: CombatParticipant) {
       accuracyPool += 2
     }
 
+    // Act of Inspiration: ±5 to the accuracy pool before rolling
+    if (actOfInspirationEnabled.value) {
+      accuracyPool += actOfInspirationDirection.value === 'add' ? 5 : -5
+      accuracyPool = Math.max(1, accuracyPool)
+      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+    }
+
     // Roll accuracy (count successes: 5+ = 1 success)
     const accuracyDiceResults: number[] = []
     for (let i = 0; i < accuracyPool; i++) {
@@ -1943,108 +1980,24 @@ async function confirmAttack(target: CombatParticipant) {
       }
     }
 
-    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
-
-    // Capture battle log length before attack so we only check NEW entries for immediate resolution
-    const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
-
-    // Submit attack to server
-    const result = await performAttack(
-      activeEncounter.value.id,
-      participant.id,
-      attack.id,
-      target.id,
-      {
-        dicePool: accuracyPool,
-        successes: accuracySuccesses,
-        diceResults: accuracyDiceResults,
-      },
-      tamer.value.id,
-      attack.name,
-      bolsterAttackEnabled.value ? {
-        bolstered: true,
-        bolsterType: bolsterAttackType.value,
-      } : undefined,
-      hugePowerEnabled.value ? {
-        hugePowerUsed: true,
-        attackRange: attack.range,
-        hugePowerRank: hugePowerRank2Enabled.value ? 2 : 1,
-        hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn,
-      } : undefined,
-      lifestealComplexEnabled.value ? { lifestealed: true } : undefined
-    )
-
-    if (result) {
-      if (accuracySuccesses === 0) {
-        // Auto-miss: show miss result directly, no dodge request will come
-        attackResultQueue.value.push({
-          responseId: `miss-${Date.now()}`,
-          attackerName: tamer.value?.name || 'You',
-          attackName: attack.name,
-          targetName: getParticipantName(target),
-          accuracyDicePool: accuracyPool,
-          accuracyDiceResults: accuracyDiceResults,
-          accuracySuccesses: 0,
-          dodgeDicePool: 0,
-          dodgeDiceResults: [],
-          dodgeSuccesses: 0,
-          netSuccesses: 0,
-          hit: false,
-          baseDamage: 0,
-          armorPiercing: 0,
-          targetArmor: 0,
-          finalDamage: 0,
-        })
-        showAttackResultModal.value = true
-      } else {
-        // Check if the attack was immediately resolved (NPC auto-resolve, no interceptors)
-        // Only search NEW entries (added during this request) to avoid matching previous attacks
-        const returnedBattleLog = (result.battleLog as any[]) || []
-        const newEntries = returnedBattleLog.slice(preBattleLogLength)
-        const resolvedLogEntry = [...newEntries].reverse().find(
-          (entry: any) =>
-            (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
-            entry.attackerParticipantId === participant.id &&
-            entry.hit !== undefined
-        )
-
-        if (resolvedLogEntry) {
-          // Attack was immediately resolved -- show result from battle log
-          showAttackResultFromBattleLog(
-            {
-              attackName: attack.name,
-              targetName: getParticipantName(target),
-              accuracyDicePool: accuracyPool,
-              accuracyDiceResults: accuracyDiceResults,
-              accuracySuccesses: accuracySuccesses,
-              participantId: participant.id,
-            },
-            resolvedLogEntry
-          )
-        } else {
-          // Attack is pending (waiting for dodge or intercede decisions)
-          const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-          pendingAttacks.value.push({
-            trackingId: trackingId,
-            timestamp: Date.now(),
-            attackName: attack.name,
-            targetName: getParticipantName(target),
-            accuracyDicePool: accuracyPool,
-            accuracyDiceResults: accuracyDiceResults,
-            accuracySuccesses: accuracySuccesses,
-            participantId: participant.id,
-            targetParticipantId: target.id,
-            attackData: attack
-          })
-        }
-      }
-
-      // Refresh to see updated state
-      await loadData()
-    } else {
-      console.error('Failed to perform attack')
-      alert(encountersError.value || 'Failed to perform attack')
+    // Show the Accuracy Roll Review step so the player can spend Inspiration
+    // (re-roll / ±1 die) before the attack is submitted to the server
+    accuracyReview.value = {
+      rolls: accuracyDiceResults,
+      dicePool: accuracyPool,
+      successes: accuracyDiceResults.filter(d => d >= 5).length,
     }
+    accuracyReviewContext.value = {
+      participant,
+      attack,
+      target,
+      bolster: bolsterAttackEnabled.value,
+      bolsterType: bolsterAttackType.value,
+      lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value,
+      hugePowerRank2: hugePowerRank2Enabled.value,
+    }
+    showAccuracyReview.value = true
   } catch (error) {
     console.error('Error performing attack:', error)
     alert((error as any)?.data?.message || 'Failed to perform attack')
@@ -2053,9 +2006,6 @@ async function confirmAttack(target: CombatParticipant) {
 
 async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: AreaShapeData | null) {
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
-  // Shared groupId so all targets' results from this AoE cast show in a single popup
-  const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-  attackResultGroupTotals.value[areaGroupId] = targets.length
   try {
     const { participant, attack } = selectedAttack.value
 
@@ -2068,6 +2018,13 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     let accuracyPool = getAttackStats(participant, attack).accuracy
     if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
       accuracyPool += 2
+    }
+
+    // Act of Inspiration: ±5 to the shared accuracy pool before rolling
+    if (actOfInspirationEnabled.value) {
+      accuracyPool += actOfInspirationDirection.value === 'add' ? 5 : -5
+      accuracyPool = Math.max(1, accuracyPool)
+      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
     }
 
     const accuracyDiceResults: number[] = []
@@ -2084,32 +2041,162 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       }
     }
 
-    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
-    const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+    // Show the Accuracy Roll Review step so the player can spend Inspiration
+    // (re-roll / ±1 die) before the attack is submitted to the server
+    accuracyReview.value = {
+      rolls: accuracyDiceResults,
+      dicePool: accuracyPool,
+      successes: accuracyDiceResults.filter(d => d >= 5).length,
+    }
+    accuracyReviewContext.value = {
+      participant,
+      attack,
+      target: targets[0],
+      areaTargets: targets,
+      areaShapeData,
+      bolster: bolsterAttackEnabled.value,
+      bolsterType: bolsterAttackType.value,
+      lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value,
+      hugePowerRank2: hugePowerRank2Enabled.value,
+    }
+    showAccuracyReview.value = true
+  } catch (error) {
+    console.error('Error performing area attack:', error)
+    alert((error as any)?.data?.message || 'Failed to perform area attack')
+  }
+}
 
-    // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
-    const result = await performAttack(
-      activeEncounter.value.id,
-      participant.id,
-      attack.id,
-      targets[0].id,
-      { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
-      tamer.value.id,
-      attack.name,
-      bolsterAttackEnabled.value ? { bolstered: true, bolsterType: bolsterAttackType.value } : undefined,
-      hugePowerEnabled.value ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: hugePowerRank2Enabled.value ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
-      lifestealComplexEnabled.value ? { lifestealed: true } : undefined,
-      { targetIds: targets.map(t => t.id), areaShapeData }
-    )
+async function confirmAccuracyReview() {
+  if (!accuracyReview.value || !accuracyReviewContext.value || !activeEncounter.value || !tamer.value) return
 
-    if (result) {
-      const returnedBattleLog = (result.battleLog as any[]) || []
-      const newEntries = returnedBattleLog.slice(preBattleLogLength)
+  const ctx = accuracyReviewContext.value
+  const { participant, attack } = ctx
+  const { rolls: accuracyDiceResults, successes: accuracySuccesses, dicePool: accuracyPool } = accuracyReview.value
 
-      for (const target of targets) {
+  try {
+    if (ctx.areaTargets) {
+      const targets = ctx.areaTargets
+      // Shared groupId so all targets' results from this AoE cast show in a single popup
+      const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      attackResultGroupTotals.value[areaGroupId] = targets.length
+      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+
+      // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
+      const result = await performAttack(
+        activeEncounter.value.id,
+        participant.id,
+        attack.id,
+        targets[0].id,
+        { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
+        tamer.value.id,
+        attack.name,
+        ctx.bolster ? { bolstered: true, bolsterType: ctx.bolsterType } : undefined,
+        ctx.hugePower ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: ctx.hugePowerRank2 ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
+        ctx.lifesteal ? { lifestealed: true } : undefined,
+        { targetIds: targets.map(t => t.id), areaShapeData: ctx.areaShapeData }
+      )
+
+      if (result) {
+        const returnedBattleLog = (result.battleLog as any[]) || []
+        const newEntries = returnedBattleLog.slice(preBattleLogLength)
+
+        for (const target of targets) {
+          if (accuracySuccesses === 0) {
+            attackResultQueue.value.push({
+              responseId: `miss-${Date.now()}-${target.id}`,
+              attackerName: tamer.value?.name || 'You',
+              attackName: attack.name,
+              targetName: getParticipantName(target),
+              accuracyDicePool: accuracyPool,
+              accuracyDiceResults: accuracyDiceResults,
+              accuracySuccesses: 0,
+              dodgeDicePool: 0,
+              dodgeDiceResults: [],
+              dodgeSuccesses: 0,
+              netSuccesses: 0,
+              hit: false,
+              baseDamage: 0,
+              armorPiercing: 0,
+              targetArmor: 0,
+              finalDamage: 0,
+              groupId: areaGroupId,
+            })
+          } else {
+            // Find the NPC auto-resolve Dodge log entry for this specific target
+            const resolvedLogEntry = newEntries.find(
+              (entry: any) =>
+                (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
+                entry.actorId === target.id &&
+                entry.attackerParticipantId === participant.id &&
+                entry.hit !== undefined
+            )
+            if (resolvedLogEntry) {
+              showAttackResultFromBattleLog(
+                { attackName: attack.name, targetName: getParticipantName(target), accuracyDicePool: accuracyPool, accuracyDiceResults, accuracySuccesses, participantId: participant.id },
+                resolvedLogEntry,
+                areaGroupId
+              )
+            } else {
+              // Player target: goes through intercede flow, track as pending
+              pendingAttacks.value.push({
+                trackingId: `pending-${Date.now()}-${target.id}`,
+                timestamp: Date.now(),
+                attackName: attack.name,
+                targetName: getParticipantName(target),
+                accuracyDicePool: accuracyPool,
+                accuracyDiceResults,
+                accuracySuccesses,
+                participantId: participant.id,
+                targetParticipantId: target.id,
+                attackData: attack,
+                groupId: areaGroupId,
+              })
+            }
+          }
+        }
+
+        if (accuracySuccesses === 0) maybeShowGroupModal(areaGroupId)
+        await loadData()
+      } else {
+        console.error('Failed to perform area attack')
+        alert(encountersError.value || 'Failed to perform area attack')
+      }
+    } else {
+      const target = ctx.target
+      // Capture battle log length before attack so we only check NEW entries for immediate resolution
+      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+
+      const result = await performAttack(
+        activeEncounter.value.id,
+        participant.id,
+        attack.id,
+        target.id,
+        {
+          dicePool: accuracyPool,
+          successes: accuracySuccesses,
+          diceResults: accuracyDiceResults,
+        },
+        tamer.value.id,
+        attack.name,
+        ctx.bolster ? {
+          bolstered: true,
+          bolsterType: ctx.bolsterType,
+        } : undefined,
+        ctx.hugePower ? {
+          hugePowerUsed: true,
+          attackRange: attack.range,
+          hugePowerRank: ctx.hugePowerRank2 ? 2 : 1,
+          hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn,
+        } : undefined,
+        ctx.lifesteal ? { lifestealed: true } : undefined
+      )
+
+      if (result) {
         if (accuracySuccesses === 0) {
+          // Auto-miss: show miss result directly, no dodge request will come
           attackResultQueue.value.push({
-            responseId: `miss-${Date.now()}-${target.id}`,
+            responseId: `miss-${Date.now()}`,
             attackerName: tamer.value?.name || 'You',
             attackName: attack.name,
             targetName: getParticipantName(target),
@@ -2125,52 +2212,79 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
             armorPiercing: 0,
             targetArmor: 0,
             finalDamage: 0,
-            groupId: areaGroupId,
           })
+          showAttackResultModal.value = true
         } else {
-          // Find the NPC auto-resolve Dodge log entry for this specific target
-          const resolvedLogEntry = newEntries.find(
+          // Check if the attack was immediately resolved (NPC auto-resolve, no interceptors)
+          // Only search NEW entries (added during this request) to avoid matching previous attacks
+          const returnedBattleLog = (result.battleLog as any[]) || []
+          const newEntries = returnedBattleLog.slice(preBattleLogLength)
+          const resolvedLogEntry = [...newEntries].reverse().find(
             (entry: any) =>
               (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
-              entry.actorId === target.id &&
               entry.attackerParticipantId === participant.id &&
               entry.hit !== undefined
           )
+
           if (resolvedLogEntry) {
+            // Attack was immediately resolved -- show result from battle log
             showAttackResultFromBattleLog(
-              { attackName: attack.name, targetName: getParticipantName(target), accuracyDicePool: accuracyPool, accuracyDiceResults, accuracySuccesses, participantId: participant.id },
-              resolvedLogEntry,
-              areaGroupId
+              {
+                attackName: attack.name,
+                targetName: getParticipantName(target),
+                accuracyDicePool: accuracyPool,
+                accuracyDiceResults: accuracyDiceResults,
+                accuracySuccesses: accuracySuccesses,
+                participantId: participant.id,
+              },
+              resolvedLogEntry
             )
           } else {
-            // Player target: goes through intercede flow, track as pending
+            // Attack is pending (waiting for dodge or intercede decisions)
+            const trackingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
             pendingAttacks.value.push({
-              trackingId: `pending-${Date.now()}-${target.id}`,
+              trackingId: trackingId,
               timestamp: Date.now(),
               attackName: attack.name,
               targetName: getParticipantName(target),
               accuracyDicePool: accuracyPool,
-              accuracyDiceResults,
-              accuracySuccesses,
+              accuracyDiceResults: accuracyDiceResults,
+              accuracySuccesses: accuracySuccesses,
               participantId: participant.id,
               targetParticipantId: target.id,
-              attackData: attack,
-              groupId: areaGroupId,
+              attackData: attack
             })
           }
         }
-      }
 
-      if (accuracySuccesses === 0) maybeShowGroupModal(areaGroupId)
-      await loadData()
-    } else {
-      console.error('Failed to perform area attack')
-      alert(encountersError.value || 'Failed to perform area attack')
+        // Refresh to see updated state
+        await loadData()
+      } else {
+        console.error('Failed to perform attack')
+        alert(encountersError.value || 'Failed to perform attack')
+      }
     }
   } catch (error) {
-    console.error('Error performing area attack:', error)
-    alert((error as any)?.data?.message || 'Failed to perform area attack')
+    console.error('Error performing attack:', error)
+    alert((error as any)?.data?.message || 'Failed to perform attack')
+  } finally {
+    showAccuracyReview.value = false
+    accuracyReview.value = null
+    accuracyReviewContext.value = null
   }
+}
+
+function cancelAccuracyReview() {
+  showAccuracyReview.value = false
+  accuracyReview.value = null
+  accuracyReviewContext.value = null
+  bolsterAttackEnabled.value = false
+  bolsterAttackType.value = 'damage-accuracy'
+  lifestealComplexEnabled.value = false
+  hugePowerEnabled.value = false
+  hugePowerRank2Enabled.value = false
+  actOfInspirationEnabled.value = false
+  actOfInspirationDirection.value = 'add'
 }
 
 function showAttackResult(
@@ -2537,6 +2651,34 @@ async function submitInitiativeRoll() {
   } catch (error) {
     console.error('Error submitting initiative roll:', error)
   }
+}
+
+async function rollDodgeDice() {
+  if (hasRolledDodge.value) return
+  let pool = dodgeDicePool.value
+  if (dodgeActOfInspirationEnabled.value) {
+    pool += dodgeActOfInspirationDirection.value === 'add' ? 5 : -5
+    pool = Math.max(1, pool)
+    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+  }
+  const rolls: number[] = []
+  for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
+  dodgeRollResult.value = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: pool }
+  hasRolledDodge.value = true
+}
+
+async function rollCounterattackDice() {
+  if (hasRolledCounterattack.value || !counterattackSelectedAttack.value) return
+  let pool = counterattackAccuracyPool.value
+  if (counterattackActOfInspirationEnabled.value) {
+    pool += counterattackActOfInspirationDirection.value === 'add' ? 5 : -5
+    pool = Math.max(1, pool)
+    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+  }
+  const rolls: number[] = []
+  for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
+  counterattackRollResult.value = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: pool }
+  hasRolledCounterattack.value = true
 }
 
 async function submitDodgeRoll() {
@@ -4128,14 +4270,31 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 :eddy-soul-rules="eddySoulRules"
                 :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
                 :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+                :act-of-inspiration-cost="actOfInspirationCost"
+                :current-inspiration="currentCombatInspiration"
                 v-model:bolster-attack-enabled="bolsterAttackEnabled"
                 v-model:bolster-attack-type="bolsterAttackType"
                 v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
                 v-model:huge-power-enabled="hugePowerEnabled"
                 v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+                v-model:act-of-inspiration-enabled="actOfInspirationEnabled"
+                v-model:act-of-inspiration-direction="actOfInspirationDirection"
               />
               <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
+            <!-- Floating Inspiration panel — always available during combat in map view -->
+            <InspirationPanel
+              v-if="activeEncounter?.phase === 'combat' && myTamerParticipant"
+              v-model:modifier-amount="modifierSpendAmount"
+              class="fixed z-50 shadow-xl max-h-[60vh] overflow-y-auto"
+              style="bottom: 120px; right: 16px; min-width: 280px; max-width: 380px;"
+              :current-inspiration="currentCombatInspiration"
+              :max-inspiration="maxCombatInspiration"
+              :act-of-inspiration-cost="actOfInspirationCost"
+              :fateful-intervention-cost="fatefulInterventionCost"
+              :loading="inspirationSpendLoading"
+              @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+            />
             <!-- AOE intercede target picker — shown in place of full modal when map view is active -->
             <div
               v-if="hasIntercedeRequest && currentIntercedeRequest?.data?.isAreaAttack && !playerIntercedeAreaChosenTarget"
@@ -4726,62 +4885,17 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </div>
 
         <!-- Inspiration Spend Panel (available throughout combat) -->
-        <div
+        <InspirationPanel
           v-if="activeEncounter && activeEncounter.phase === 'combat' && myTamerParticipant"
-          class="mb-6 rounded-xl p-4 border-2 border-yellow-600/50 bg-yellow-900/10"
-        >
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="font-display text-lg font-semibold text-yellow-400">✦ Inspiration</h3>
-            <span class="text-yellow-300 font-semibold text-sm">
-              {{ currentCombatInspiration }}/{{ maxCombatInspiration }}
-            </span>
-          </div>
-          <p class="text-xs text-digimon-dark-400 mb-3">
-            Spend freely on any roll. The GM applies the effect to your in-progress roll.
-          </p>
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              :disabled="inspirationSpendLoading || currentCombatInspiration < 1"
-              class="text-sm px-3 py-2 rounded bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
-              @click="handleSpendInspiration('reroll', 1)"
-            >
-              🎲 Re-roll
-              <span class="block text-xs text-yellow-200/70">Spend 1 — take the new result</span>
-            </button>
-            <button
-              :disabled="inspirationSpendLoading || currentCombatInspiration < actOfInspirationCost"
-              class="text-sm px-3 py-2 rounded bg-yellow-800 hover:bg-yellow-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
-              @click="handleSpendInspiration('act-of-inspiration', actOfInspirationCost)"
-            >
-              ⚡ Act of Inspiration
-              <span class="block text-xs text-yellow-200/70">Spend {{ actOfInspirationCost }} — ±5 to a check / dice pool</span>
-            </button>
-            <button
-              :disabled="inspirationSpendLoading || currentCombatInspiration < fatefulInterventionCost"
-              class="text-sm px-3 py-2 rounded bg-amber-800 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-left"
-              @click="handleSpendInspiration('fateful-intervention', fatefulInterventionCost)"
-            >
-              🌟 Fateful Intervention
-              <span class="block text-xs text-yellow-200/70">Spend {{ fatefulInterventionCost }} — set every die + ±5 + Willpower</span>
-            </button>
-            <div class="flex items-center gap-1 bg-digimon-dark-800 rounded px-2 py-1">
-              <input
-                v-model.number="modifierSpendAmount"
-                type="number"
-                min="1"
-                :max="currentCombatInspiration"
-                class="w-12 text-sm bg-digimon-dark-700 border border-digimon-dark-500 rounded px-1 py-0.5 text-white"
-              />
-              <button
-                :disabled="inspirationSpendLoading || currentCombatInspiration < modifierSpendAmount || modifierSpendAmount < 1"
-                class="flex-1 text-sm px-2 py-1 rounded bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium"
-                @click="handleSpendInspiration('modifier', modifierSpendAmount)"
-              >
-                +/− Modify
-              </button>
-            </div>
-          </div>
-        </div>
+          v-model:modifier-amount="modifierSpendAmount"
+          class="mb-6"
+          :current-inspiration="currentCombatInspiration"
+          :max-inspiration="maxCombatInspiration"
+          :act-of-inspiration-cost="actOfInspirationCost"
+          :fateful-intervention-cost="fatefulInterventionCost"
+          :loading="inspirationSpendLoading"
+          @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+        />
 
         <!-- Turn Tracker (Redesigned) -->
         <div v-if="activeEncounter && myParticipants.length > 0 && (activeEncounter.phase === 'combat' || activeEncounter.phase === 'setup')" class="mb-8">
@@ -5710,6 +5824,44 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </span>
         </p>
 
+        <!-- Act of Inspiration Toggle (pre-roll) -->
+        <div v-if="!hasRolledDodge" class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
+          <label class="flex items-center gap-2 cursor-pointer mb-2">
+            <input
+              type="checkbox"
+              v-model="dodgeActOfInspirationEnabled"
+              :disabled="currentCombatInspiration < actOfInspirationCost"
+              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-yellow-500"
+            />
+            <span class="text-sm text-yellow-400 font-medium">⚡ Act of Inspiration (Spend {{ actOfInspirationCost }})</span>
+            <span class="text-xs text-digimon-dark-400 ml-auto">±5 Dice</span>
+          </label>
+          <div v-if="dodgeActOfInspirationEnabled" class="flex gap-2 mt-2">
+            <button
+              @click="dodgeActOfInspirationDirection = 'add'"
+              :class="[
+                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                dodgeActOfInspirationDirection === 'add'
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
+              ]"
+            >
+              +5 Dice
+            </button>
+            <button
+              @click="dodgeActOfInspirationDirection = 'subtract'"
+              :class="[
+                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                dodgeActOfInspirationDirection === 'subtract'
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
+              ]"
+            >
+              -5 Dice
+            </button>
+          </div>
+        </div>
+
         <!-- Embedded Dice Roller -->
         <div class="mb-4">
           <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
@@ -5720,7 +5872,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
             <button
               :disabled="hasRolledDodge"
-              @click="(() => { const rolls: number[] = []; for (let i = 0; i < dodgeDicePool; i++) rolls.push(Math.floor(Math.random() * 6) + 1); dodgeRollResult = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: dodgeDicePool }; hasRolledDodge = true; })()"
+              @click="rollDodgeDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
                 hasRolledDodge ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
@@ -5751,6 +5903,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
               {{ dodgeRollResult.successes }} <span class="text-sm text-digimon-dark-400">successes</span>
             </div>
           </div>
+
+          <RollInterceptPanel
+            v-if="dodgeRollResult"
+            v-model:roll-result="dodgeRollResult"
+            :current-inspiration="currentCombatInspiration"
+            :max-inspiration="maxCombatInspiration"
+            :loading="inspirationSpendLoading"
+            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+          />
         </div>
 
         <button
@@ -5804,6 +5965,44 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
         </div>
 
+        <!-- Act of Inspiration Toggle (pre-roll) -->
+        <div v-if="!hasRolledCounterattack" class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
+          <label class="flex items-center gap-2 cursor-pointer mb-2">
+            <input
+              type="checkbox"
+              v-model="counterattackActOfInspirationEnabled"
+              :disabled="currentCombatInspiration < actOfInspirationCost"
+              class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-yellow-500"
+            />
+            <span class="text-sm text-yellow-400 font-medium">⚡ Act of Inspiration (Spend {{ actOfInspirationCost }})</span>
+            <span class="text-xs text-digimon-dark-400 ml-auto">±5 Dice</span>
+          </label>
+          <div v-if="counterattackActOfInspirationEnabled" class="flex gap-2 mt-2">
+            <button
+              @click="counterattackActOfInspirationDirection = 'add'"
+              :class="[
+                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                counterattackActOfInspirationDirection === 'add'
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
+              ]"
+            >
+              +5 Dice
+            </button>
+            <button
+              @click="counterattackActOfInspirationDirection = 'subtract'"
+              :class="[
+                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                counterattackActOfInspirationDirection === 'subtract'
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
+              ]"
+            >
+              -5 Dice
+            </button>
+          </div>
+        </div>
+
         <!-- Accuracy Dice Roller -->
         <div class="mb-4">
           <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
@@ -5814,7 +6013,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
             <button
               :disabled="hasRolledCounterattack || !counterattackSelectedAttack"
-              @click="(() => { const rolls: number[] = []; for (let i = 0; i < counterattackAccuracyPool; i++) rolls.push(Math.floor(Math.random() * 6) + 1); counterattackRollResult = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: counterattackAccuracyPool }; hasRolledCounterattack = true; })()"
+              @click="rollCounterattackDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
                 (hasRolledCounterattack || !counterattackSelectedAttack) ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-yellow-600 hover:bg-yellow-700'
@@ -5843,6 +6042,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
               {{ counterattackRollResult.successes }} <span class="text-sm text-digimon-dark-400">successes</span>
             </div>
           </div>
+
+          <RollInterceptPanel
+            v-if="counterattackRollResult"
+            v-model:roll-result="counterattackRollResult"
+            :current-inspiration="currentCombatInspiration"
+            :max-inspiration="maxCombatInspiration"
+            :loading="inspirationSpendLoading"
+            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+          />
         </div>
 
         <div class="flex gap-2">
@@ -5858,6 +6066,61 @@ async function handleBreakClash(participantId: string, clashId: string) {
             class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
           >
             Decline
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Accuracy Roll Review Modal -->
+  <Teleport to="body">
+    <div
+      v-if="showAccuracyReview && accuracyReview && accuracyReviewContext"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-orange-500">
+        <h2 class="font-display text-xl font-semibold text-orange-400 mb-1">
+          🎲 Accuracy Roll
+        </h2>
+        <p class="text-digimon-dark-400 text-xs mb-4">{{ accuracyReviewContext.attack.name }}</p>
+
+        <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center">
+          <div class="text-sm text-digimon-dark-400 mb-2">{{ accuracyReview.dicePool }}d6 — count 5+ as successes</div>
+          <div class="flex justify-center gap-1 mb-2 flex-wrap">
+            <span
+              v-for="(die, idx) in accuracyReview.rolls"
+              :key="idx"
+              :class="[
+                'w-8 h-8 flex items-center justify-center rounded font-bold text-sm',
+                die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
+              ]"
+            >{{ die }}</span>
+          </div>
+          <div class="text-3xl font-bold text-orange-400">
+            {{ accuracyReview.successes }} <span class="text-sm text-digimon-dark-400">successes</span>
+          </div>
+        </div>
+
+        <RollInterceptPanel
+          v-model:roll-result="accuracyReview"
+          :current-inspiration="currentCombatInspiration"
+          :max-inspiration="maxCombatInspiration"
+          :loading="inspirationSpendLoading"
+          @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+        />
+
+        <div class="flex gap-2">
+          <button
+            @click="confirmAccuracyReview"
+            class="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Confirm Attack
+          </button>
+          <button
+            @click="cancelAccuracyReview"
+            class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            Cancel
           </button>
         </div>
       </div>
@@ -6491,11 +6754,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
           :eddy-soul-rules="eddySoulRules"
           :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
           :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
+          :act-of-inspiration-cost="actOfInspirationCost"
+          :current-inspiration="currentCombatInspiration"
           v-model:bolster-attack-enabled="bolsterAttackEnabled"
           v-model:bolster-attack-type="bolsterAttackType"
           v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
           v-model:huge-power-enabled="hugePowerEnabled"
           v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
+          v-model:act-of-inspiration-enabled="actOfInspirationEnabled"
+          v-model:act-of-inspiration-direction="actOfInspirationDirection"
         />
 
         <!-- Action buttons -->
