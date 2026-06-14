@@ -2151,12 +2151,14 @@ async function useAction(type: 'simple' | 'complex', description: string) {
 }
 
 // Handle NPC radial menu actions from the map
-function onNpcAction(participantId: string, action: 'stance' | 'attack') {
+function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash') {
   if (!currentEncounter.value) return
   const p = (currentEncounter.value.participants as CombatParticipant[]).find(x => x.id === participantId)
   if (!p) return
   if (action === 'attack') {
     npcAttackParticipantId.value = npcAttackParticipantId.value === participantId ? null : participantId
+  } else if (action === 'clash') {
+    openClashTargetSelector(participantId)
   } else {
     npcStanceParticipantId.value = npcStanceParticipantId.value === participantId ? null : participantId
   }

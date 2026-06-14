@@ -203,8 +203,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
-  (e: 'npc-action', participantId: string, action: 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
+  (e: 'npc-action', participantId: string, action: 'stance' | 'attack' | 'clash'): void
+  (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash'): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void
   (e: 'throw-landing-selected', controllerId: string, thrownTargetId: string, landingPos: Vec3): void
@@ -660,9 +660,9 @@ function onCellHovered(cell: Vec3 | null) {
   movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
 }
 
-function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack') {
+function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack' | 'clash') {
   if (action === 'move') { onNpcMove(participantId); return }
-  emit('npc-action', participantId, action as 'stance' | 'attack')
+  emit('npc-action', participantId, action as 'stance' | 'attack' | 'clash')
 }
 
 // ── Map editor handlers ────────────────────────────────────────────────────

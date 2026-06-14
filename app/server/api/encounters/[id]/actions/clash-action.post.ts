@@ -139,17 +139,13 @@ export default defineEventHandler(async (event) => {
       const ds = await getDigimonDerivedStats(actor.entityId)
       actorCpu = ds?.cpu ?? 0
     } else if (actor.type === 'tamer') {
-      const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
-      const attrs = t?.attributes || {}
-      actorCpu = attrs.body ?? 0
+      actorCpu = 1
     }
     if (targetDigimonEntity) {
       const ds = await getDigimonDerivedStats(target.entityId)
       targetCpu = ds?.cpu ?? 0
     } else if (target.type === 'tamer') {
-      const [t] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-      const attrs = t?.attributes || {}
-      targetCpu = attrs.body ?? 0
+      targetCpu = 1
     }
 
     const maxPins = Math.max(1, actorCpu - targetCpu)
@@ -361,9 +357,8 @@ export default defineEventHandler(async (event) => {
           const ds = await getDigimonDerivedStats(actor.entityId)
           controllerCpu = ds?.cpu ?? 0
         } else if (actor.type === 'tamer') {
-          const [t] = await db.select().from(tamers).where(eq(tamers.id, actor.entityId))
           controllerTamerId = actor.entityId
-          controllerCpu = t?.attributes?.body ?? 0
+          controllerCpu = 1
         }
 
         throwImpactRequest = {

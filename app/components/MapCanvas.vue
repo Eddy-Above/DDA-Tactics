@@ -63,6 +63,7 @@
       <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
       <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
       <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
+      <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
     </div>
     <!-- Player radial action menu -->
     <div
@@ -75,12 +76,14 @@
         <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
         <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
         <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
+        <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
       </template>
       <template v-else-if="playerRadialParticipantType === 'digimon'">
         <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
         <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
         <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
         <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
+        <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
       </template>
     </div>
   </div>
@@ -145,8 +148,8 @@ const emit = defineEmits<{
   (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
-  (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack'): void
-  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change'): void
+  (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack' | 'clash'): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash'): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -970,7 +973,7 @@ function playerRadialMove() {
   emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash') {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null
@@ -1972,7 +1975,7 @@ function cancelMove() {
   pendingMovePath.value = []
 }
 
-function npcAction(action: 'move' | 'stance' | 'attack') {
+function npcAction(action: 'move' | 'stance' | 'attack' | 'clash') {
   const id = npcRadialId.value
   if (!id) return
   npcRadialId.value = null
@@ -2320,6 +2323,7 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.move   { top: -38px; left: -55px; }
 .npc-radial-btn.stance { top: -68px; left: 0; }
 .npc-radial-btn.attack { top: -38px; left: 55px; }
+.npc-radial-btn.clash  { top: 30px; left: 0; }
 .npc-radial-btn:hover:not(:disabled)  { background: #2a3480; }
 .npc-radial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
@@ -2331,6 +2335,7 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
 .npc-radial-btn.player.digimon-stance { top: 0; left: 0; }
 .npc-radial-btn.player.mode-change    { top: -75px; left: 90px; }
+.npc-radial-btn.player.clash          { top: 30px; left: 0; }
 .npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

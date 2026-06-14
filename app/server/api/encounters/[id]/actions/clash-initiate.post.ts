@@ -56,14 +56,17 @@ export default defineEventHandler(async (event) => {
   if (!target) throw createError({ statusCode: 404, message: 'Target not found' })
 
   // Spatial range check for clash initiation
-  if ((encounter as any).mapId && actor.type === 'digimon') {
+  if ((encounter as any).mapId) {
     const positions: Record<string, any> = await getRoomPositions(encounterId)
     const attackerPos = positions[actor.id]
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {
-      const [actDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-      const qs = actDig?.qualities ?? []
-      const reachRanks = (qs as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
+      let reachRanks = 0
+      if (actor.type === 'digimon') {
+        const [actDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+        const qs = actDig?.qualities ?? []
+        reachRanks = (qs as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
+      }
       const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
       const dist = chebyshev(attackerPos, targetPos)
       if (dist > meleeRange) {

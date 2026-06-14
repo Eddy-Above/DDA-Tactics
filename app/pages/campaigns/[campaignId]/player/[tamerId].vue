@@ -4005,6 +4005,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 else if (action === 'stance')    mapStanceDigimonParticipantId    = mapStanceDigimonParticipantId    === id ? null : id
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
                 else if (action === 'mode-change') mapModeChangeDigimonParticipantId = mapModeChangeDigimonParticipantId === id ? null : id
+                else if (action === 'clash')      openClashTargetSelector(id)
               }"
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"
