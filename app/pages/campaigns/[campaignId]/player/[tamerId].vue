@@ -189,13 +189,10 @@ const lifestealComplexEnabled = ref(false)
 const hugePowerEnabled = ref(false)
 const hugePowerRank2Enabled = ref(false)
 
-// Act of Inspiration (pre-roll ±5 dice) state
+// Act of Inspiration (pre-roll +5 dice) state
 const actOfInspirationEnabled = ref(false)
-const actOfInspirationDirection = ref<'add' | 'subtract'>('add')
 const dodgeActOfInspirationEnabled = ref(false)
-const dodgeActOfInspirationDirection = ref<'add' | 'subtract'>('add')
 const counterattackActOfInspirationEnabled = ref(false)
-const counterattackActOfInspirationDirection = ref<'add' | 'subtract'>('add')
 
 // Accuracy Roll Review state
 const showAccuracyReview = ref(false)
@@ -670,8 +667,6 @@ const maxCombatInspiration = computed(() =>
 const actOfInspirationCost = computed(() => INSPIRATION_ACT_COST[campaignLevel.value ?? 'standard'])
 const fatefulInterventionCost = computed(() => INSPIRATION_FATEFUL_COST[campaignLevel.value ?? 'standard'])
 
-const modifierSpendAmount = ref(1)
-
 const currentTurnParticipant = computed(() => {
   if (!activeEncounter.value) return null
   return getCurrentParticipant(activeEncounter.value)
@@ -805,7 +800,6 @@ watch(() => currentDodgeRequest.value?.id, () => {
   hasRolledDodge.value = false
   dodgeRollResult.value = null
   dodgeActOfInspirationEnabled.value = false
-  dodgeActOfInspirationDirection.value = 'add'
 })
 
 watch(() => currentIntercedeRequest.value?.id, (newId) => {
@@ -863,7 +857,6 @@ watch(() => currentCounterattackRequest.value?.id, () => {
   counterattackRollResult.value = null
   counterattackSelectedAttack.value = null
   counterattackActOfInspirationEnabled.value = false
-  counterattackActOfInspirationDirection.value = 'add'
 })
 
 watch(() => currentDigimonRequest.value?.id, () => {
@@ -1934,7 +1927,6 @@ async function selectAttackAndShowTargets(participant: CombatParticipant, attack
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
   actOfInspirationEnabled.value = false
-  actOfInspirationDirection.value = 'add'
   if (showMapView.value) return
   showTargetSelector.value = true
 }
@@ -1957,10 +1949,9 @@ async function confirmAttack(target: CombatParticipant) {
       accuracyPool += 2
     }
 
-    // Act of Inspiration: ±5 to the accuracy pool before rolling
+    // Act of Inspiration: +5 to the accuracy pool before rolling
     if (actOfInspirationEnabled.value) {
-      accuracyPool += actOfInspirationDirection.value === 'add' ? 5 : -5
-      accuracyPool = Math.max(1, accuracyPool)
+      accuracyPool += 5
       await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
     }
 
@@ -2020,10 +2011,9 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       accuracyPool += 2
     }
 
-    // Act of Inspiration: ±5 to the shared accuracy pool before rolling
+    // Act of Inspiration: +5 to the shared accuracy pool before rolling
     if (actOfInspirationEnabled.value) {
-      accuracyPool += actOfInspirationDirection.value === 'add' ? 5 : -5
-      accuracyPool = Math.max(1, accuracyPool)
+      accuracyPool += 5
       await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
     }
 
@@ -2284,7 +2274,6 @@ function cancelAccuracyReview() {
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
   actOfInspirationEnabled.value = false
-  actOfInspirationDirection.value = 'add'
 }
 
 function showAttackResult(
@@ -2657,8 +2646,7 @@ async function rollDodgeDice() {
   if (hasRolledDodge.value) return
   let pool = dodgeDicePool.value
   if (dodgeActOfInspirationEnabled.value) {
-    pool += dodgeActOfInspirationDirection.value === 'add' ? 5 : -5
-    pool = Math.max(1, pool)
+    pool += 5
     await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
@@ -2671,8 +2659,7 @@ async function rollCounterattackDice() {
   if (hasRolledCounterattack.value || !counterattackSelectedAttack.value) return
   let pool = counterattackAccuracyPool.value
   if (counterattackActOfInspirationEnabled.value) {
-    pool += counterattackActOfInspirationDirection.value === 'add' ? 5 : -5
-    pool = Math.max(1, pool)
+    pool += 5
     await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
@@ -4278,14 +4265,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 v-model:huge-power-enabled="hugePowerEnabled"
                 v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
                 v-model:act-of-inspiration-enabled="actOfInspirationEnabled"
-                v-model:act-of-inspiration-direction="actOfInspirationDirection"
               />
               <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
             <!-- Floating Inspiration panel — always available during combat in map view -->
             <InspirationPanel
               v-if="activeEncounter?.phase === 'combat' && myTamerParticipant"
-              v-model:modifier-amount="modifierSpendAmount"
               class="fixed z-50 shadow-xl max-h-[60vh] overflow-y-auto"
               style="bottom: 120px; right: 16px; min-width: 280px; max-width: 380px;"
               :current-inspiration="currentCombatInspiration"
@@ -4887,7 +4872,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Inspiration Spend Panel (available throughout combat) -->
         <InspirationPanel
           v-if="activeEncounter && activeEncounter.phase === 'combat' && myTamerParticipant"
-          v-model:modifier-amount="modifierSpendAmount"
           class="mb-6"
           :current-inspiration="currentCombatInspiration"
           :max-inspiration="maxCombatInspiration"
@@ -5834,32 +5818,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
               class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-yellow-500"
             />
             <span class="text-sm text-yellow-400 font-medium">⚡ Act of Inspiration (Spend {{ actOfInspirationCost }})</span>
-            <span class="text-xs text-digimon-dark-400 ml-auto">±5 Dice</span>
+            <span class="text-xs text-digimon-dark-400 ml-auto">+5 Dice</span>
           </label>
-          <div v-if="dodgeActOfInspirationEnabled" class="flex gap-2 mt-2">
-            <button
-              @click="dodgeActOfInspirationDirection = 'add'"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                dodgeActOfInspirationDirection === 'add'
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-              ]"
-            >
-              +5 Dice
-            </button>
-            <button
-              @click="dodgeActOfInspirationDirection = 'subtract'"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                dodgeActOfInspirationDirection === 'subtract'
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-              ]"
-            >
-              -5 Dice
-            </button>
-          </div>
         </div>
 
         <!-- Embedded Dice Roller -->
@@ -5975,32 +5935,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
               class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-yellow-500"
             />
             <span class="text-sm text-yellow-400 font-medium">⚡ Act of Inspiration (Spend {{ actOfInspirationCost }})</span>
-            <span class="text-xs text-digimon-dark-400 ml-auto">±5 Dice</span>
+            <span class="text-xs text-digimon-dark-400 ml-auto">+5 Dice</span>
           </label>
-          <div v-if="counterattackActOfInspirationEnabled" class="flex gap-2 mt-2">
-            <button
-              @click="counterattackActOfInspirationDirection = 'add'"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                counterattackActOfInspirationDirection === 'add'
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-              ]"
-            >
-              +5 Dice
-            </button>
-            <button
-              @click="counterattackActOfInspirationDirection = 'subtract'"
-              :class="[
-                'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
-                counterattackActOfInspirationDirection === 'subtract'
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-digimon-dark-600 text-digimon-dark-300 hover:bg-digimon-dark-500'
-              ]"
-            >
-              -5 Dice
-            </button>
-          </div>
         </div>
 
         <!-- Accuracy Dice Roller -->
@@ -6762,7 +6698,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
           v-model:huge-power-enabled="hugePowerEnabled"
           v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
           v-model:act-of-inspiration-enabled="actOfInspirationEnabled"
-          v-model:act-of-inspiration-direction="actOfInspirationDirection"
         />
 
         <!-- Action buttons -->
