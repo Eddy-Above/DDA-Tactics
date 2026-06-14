@@ -3126,6 +3126,7 @@ const mapSelectedAttackProp = computed(() => {
   return {
     tags: selectedAttack.value.attack.tags ?? [],
     range: selectedAttack.value.attack.range ?? 'melee',
+    type: selectedAttack.value.attack.type,
     bit: stats.bit,
     movement: stats.movement,
     ram: stats.ram,

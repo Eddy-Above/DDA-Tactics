@@ -120,7 +120,7 @@ const props = defineProps<{
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
   secondaryActiveParticipantId: string | null  // partner of the active participant, also highlighted
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
+  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; type?: string; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2
@@ -1114,6 +1114,8 @@ function updateReticules() {
 
   const isMelee = props.selectedAttack.range === 'melee'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
+  const isAreaAttack = props.selectedAttack.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+  const isMeleeSupportSingle = props.selectedAttack.type === 'support' && isMelee && !isAreaAttack
 
   // When AOE is active or an area shape is being aimed, only show reticules on participants inside the highlighted area.
   // For area shapes (even when LoS-blocked), never fall back to single-target range check so no stray reticules appear.
@@ -1124,7 +1126,7 @@ function updateReticules() {
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
     if (!pos) continue
-    if (p.id === effectiveAttackerId.value) continue
+    if (p.id === effectiveAttackerId.value && !isMeleeSupportSingle) continue
 
     if (aoeCellSet) {
       // Show reticule if ANY of the target's footprint cells is in the AOE (big targets count if partially covered)
