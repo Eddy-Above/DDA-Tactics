@@ -2264,18 +2264,6 @@ async function confirmAccuracyReview() {
   }
 }
 
-function cancelAccuracyReview() {
-  showAccuracyReview.value = false
-  accuracyReview.value = null
-  accuracyReviewContext.value = null
-  bolsterAttackEnabled.value = false
-  bolsterAttackType.value = 'damage-accuracy'
-  lifestealComplexEnabled.value = false
-  hugePowerEnabled.value = false
-  hugePowerRank2Enabled.value = false
-  actOfInspirationEnabled.value = false
-}
-
 function showAttackResult(
   pendingAttack: any,
   dodgeRequest: any,
@@ -6045,20 +6033,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
           @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
         />
 
-        <div class="flex gap-2">
-          <button
-            @click="confirmAccuracyReview"
-            class="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-          >
-            Confirm Attack
-          </button>
-          <button
-            @click="cancelAccuracyReview"
-            class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
+        <button
+          @click="confirmAccuracyReview"
+          class="w-full bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+        >
+          Confirm Attack
+        </button>
       </div>
     </div>
   </Teleport>
