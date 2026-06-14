@@ -99,7 +99,7 @@ import type {
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
-import { getAreaShape, computeAreaCells, normalize3 } from '~/utils/areaShapes'
+import { getAreaShape, computeAreaCells, computePassBeam, normalize3 } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
@@ -1226,8 +1226,8 @@ function renderPassRangeBand() {
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attack || !attackerPos || !passLockedDir) return
   const dims = getParticipantFootprintDims(effectiveAttackerId.value)
-  const minCells = computeAreaCells('pass', attack.range, attackerPos, passLockedDir, attack.bit, 0, passMovementLength, dims)
-  const maxCells = computeAreaCells('pass', attack.range, attackerPos, passLockedDir, attack.bit, attack.ram ?? 0, passMovementLength, dims)
+  const minCells = computePassBeam(attackerPos, passLockedDir, passMovementLength, dims)
+  const maxCells = computePassBeam(attackerPos, passLockedDir, passMovementLength + (attack.ram ?? 0), dims)
   const minSet = new Set(minCells.map(c => `${c.x},${c.y},${c.z}`))
   for (const c of maxCells) {
     if (minSet.has(`${c.x},${c.y},${c.z}`)) continue

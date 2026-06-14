@@ -254,13 +254,19 @@ function computeLine(rangeType: 'melee' | 'ranged', attackerPos: Vec3, dir: Vec3
   return lineCells(origin, nd, length, Math.max(1, attackerDims.width - 1))
 }
 
-// [Pass] — directional 3D beam from the leading edge along `dir`, length movement + RAM,
-// cross-section sized to the attacker's own body (width x height). Scroll-wheel pitch
-// raises/lowers the endpoint and the beam tilts with it.
-function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDims: FootprintDims): Vec3[] {
-  const length = movement + ram
+/** Directional 3D beam of `length` from the leading edge along `dir`, cross-section sized
+ *  to the attacker's own body (width x height). Used both for the [Pass] hit area and for
+ *  previewing its extra-movement (RAM) extent. */
+export function computePassBeam(attackerPos: Vec3, dir: Vec3, length: number, attackerDims: FootprintDims): Vec3[] {
   const nd = normalize3(dir)
   if (!nd) return []
   const origin = leadingEdgeOrigin(attackerPos, attackerDims, dir)
   return lineCells(origin, nd, length, attackerDims.width, attackerDims.height)
+}
+
+// [Pass] — directional 3D beam from the leading edge along `dir`, length `movement`.
+// RAM is post-attack repositioning only and does not extend the hit area. Scroll-wheel
+// pitch raises/lowers the endpoint and the beam tilts with it.
+function computePass(attackerPos: Vec3, dir: Vec3, movement: number, ram: number, attackerDims: FootprintDims): Vec3[] {
+  return computePassBeam(attackerPos, dir, movement, attackerDims)
 }
