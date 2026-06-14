@@ -7,6 +7,7 @@ import { getFootprintDimensions, getFootprintCells } from '../../../../utils/map
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
 import type { AreaShapeData } from '~/utils/areaShapes'
+import { getAreaShape } from '~/utils/areaShapes'
 
 interface AttackActionBody {
   participantId: string
@@ -257,6 +258,20 @@ export default defineEventHandler(async (event) => {
         }
       }
     }
+  }
+
+  // [Pass] area attacks require movement, so they cost 2 Simple Actions unless the
+  // [Charge Attack] tag is also present (cost 1).
+  let isPassWithoutCharge = false
+  if (actor.type === 'digimon') {
+    const [actorDigimonForPass] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+    const attackDef = actorDigimonForPass?.attacks?.find((a: any) => a.id === body.attackId)
+    if (attackDef && getAreaShape(attackDef.tags ?? []) === 'pass' && !attackDef.tags?.includes('Charge Attack')) {
+      isPassWithoutCharge = true
+    }
+  }
+  if (isPassWithoutCharge) {
+    actionCostSimple = Math.max(actionCostSimple, 2)
   }
 
   // Validate participant has enough actions

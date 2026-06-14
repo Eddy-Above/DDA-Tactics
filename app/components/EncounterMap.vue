@@ -170,6 +170,7 @@ import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules,
 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
+import { getAreaShape } from '~/utils/areaShapes'
 import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composables/useMapMovement'
@@ -368,7 +369,10 @@ const chargeAfterAttackerId = ref<string | null>(null)
 const chargeMoveParticipantId = ref<string | null>(null)
 const chargeAttackInFlight = ref(false)
 
-const isChargeAttack = computed(() => props.selectedAttack?.tags?.includes('Charge Attack') ?? false)
+const isChargeAttack = computed(() => {
+  if (!props.selectedAttack?.tags?.includes('Charge Attack')) return false
+  return getAreaShape(props.selectedAttack.tags) !== 'pass'
+})
 
 const mapSelectedAttack = computed(() =>
   isChargeAttack.value && chargeMode.value === null && !chargeAttackInFlight.value ? null : props.selectedAttack

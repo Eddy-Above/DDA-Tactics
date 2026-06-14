@@ -99,7 +99,7 @@ import type {
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
-import { getAreaShape, computeAreaCells } from '~/utils/areaShapes'
+import { getAreaShape, computeAreaCells, normalize3 } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
@@ -290,6 +290,12 @@ const usesVerticalAim = computed(() => {
 // Last mouse event used to aim a directional area shape — replayed on scroll to re-pitch.
 let lastAreaAimEvent: MouseEvent | null = null
 
+// [Pass] two-step aiming: step 1 picks direction + movement length (up to Movement stat),
+// step 2 extends along the now-locked direction by extra movement (up to RAM stat).
+const passStep = ref<'movement' | 'extra' | null>(null)
+let passLockedDir: Vec3 | null = null
+let passMovementLength = 0
+
 
 // ── Three.js internals ─────────────────────────────────────────────────────
 let renderer: THREE.WebGLRenderer
@@ -307,6 +313,7 @@ let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
 let voxelMeshes: THREE.Mesh[] = []
 let reticuleGroup: THREE.Group
 let aoeGroup: THREE.Group
+let passRangeGroup: THREE.Group
 let movementHighlightGroup: THREE.Group
 let pathHighlightGroup: THREE.Group
 let hoverGhostGroup: THREE.Group
@@ -467,10 +474,11 @@ function initScene() {
   // Groups
   reticuleGroup = new THREE.Group()
   aoeGroup = new THREE.Group()
+  passRangeGroup = new THREE.Group()
   movementHighlightGroup = new THREE.Group()
   pathHighlightGroup = new THREE.Group()
   hoverGhostGroup = new THREE.Group()
-  scene.add(reticuleGroup, aoeGroup, movementHighlightGroup, pathHighlightGroup, hoverGhostGroup)
+  scene.add(reticuleGroup, aoeGroup, passRangeGroup, movementHighlightGroup, pathHighlightGroup, hoverGhostGroup)
 
   spriteGroups = new Map()
   tileMeshes = []
@@ -1172,12 +1180,21 @@ function updateReticules() {
 }
 
 // ── AOE highlight ──────────────────────────────────────────────────────────
+// Resets the [Pass] two-step aiming state and clears its extra-movement range band.
+function resetPassState() {
+  passStep.value = null
+  passLockedDir = null
+  passMovementLength = 0
+  if (passRangeGroup) passRangeGroup.clear()
+}
+
 function clearAoeState() {
   areaHighlightCells.value = []
   lastAoeKey = ''
   lastAreaShapeData.value = null
   if (aoeGroup) aoeGroup.clear()
   lastAttackKey = ''  // force reticule rebuild next frame
+  resetPassState()
 }
 
 function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>, opts?: { blocked?: boolean }) {
@@ -1199,6 +1216,27 @@ function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>, o
   }
 
   lastAttackKey = ''  // force reticule rebuild
+}
+
+// [Pass] step 2: highlight the band of cells reachable by extra movement (0..RAM) beyond the
+// locked movement length, along the locked direction — a static preview of the max extension.
+function renderPassRangeBand() {
+  passRangeGroup.clear()
+  const attack = props.selectedAttack
+  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
+  if (!attack || !attackerPos || !passLockedDir) return
+  const dims = getParticipantFootprintDims(effectiveAttackerId.value)
+  const minCells = computeAreaCells('pass', attack.range, attackerPos, passLockedDir, attack.bit, 0, passMovementLength, dims)
+  const maxCells = computeAreaCells('pass', attack.range, attackerPos, passLockedDir, attack.bit, attack.ram ?? 0, passMovementLength, dims)
+  const minSet = new Set(minCells.map(c => `${c.x},${c.y},${c.z}`))
+  for (const c of maxCells) {
+    if (minSet.has(`${c.x},${c.y},${c.z}`)) continue
+    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
+    const mat = new THREE.MeshBasicMaterial({ color: 0x2255ff, transparent: true, opacity: 0.35 })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.02, c.z + 0.5)
+    passRangeGroup.add(mesh)
+  }
 }
 
 /**
@@ -1258,6 +1296,8 @@ function adjustBlastY(step: number) {
 function adjustAimY(step: number) {
   const shape = props.selectedAttack ? getAreaShape(props.selectedAttack.tags) : null
   if (shape === 'blast') { adjustBlastY(step); return }
+  // [Pass] step 2: direction (including pitch) is locked — scroll wheel has no effect.
+  if (shape === 'pass' && passStep.value === 'extra') return
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   const lim = props.attackerEffectiveLimit
   const base = attackerPos?.y ?? 0
@@ -1387,6 +1427,35 @@ function computeAndRenderAoe(event: MouseEvent) {
     z: Math.round(cisZ + (dir.z / dlen) * cap),
   }
   const los = hasLineOfSight(attackerPos, losTip)
+
+  // [Pass]: two-step aim. Step 1 picks direction + movement length (clamped to Movement);
+  // step 2 locks the direction and only extends along it by extra movement (clamped to RAM).
+  if (shape === 'pass') {
+    if (passStep.value !== 'extra') {
+      if (passStep.value === null) passStep.value = 'movement'
+      const movementLen = Math.min(dlen, attack.movement ?? 0)
+      const cells = computeAreaCells(shape, attack.range, attackerPos, dir, attack.bit, 0, movementLen, dims)
+      lastAreaShapeData.value = {
+        shape, rangeType: attack.range, attackerPos, dir,
+        bit: attack.bit, ram: 0, movement: movementLen,
+        attackerDims: dims,
+      }
+      updateAoeHighlight(cells, { blocked: !los })
+      return
+    } else {
+      const nd = passLockedDir!
+      const proj = dir.x * nd.x + dir.y * nd.y + dir.z * nd.z
+      const extra = Math.max(0, Math.min(proj - passMovementLength, attack.ram ?? 0))
+      const cells = computeAreaCells(shape, attack.range, attackerPos, nd, attack.bit, extra, passMovementLength, dims)
+      lastAreaShapeData.value = {
+        shape, rangeType: attack.range, attackerPos, dir: nd,
+        bit: attack.bit, ram: extra, movement: passMovementLength,
+        attackerDims: dims,
+      }
+      updateAoeHighlight(cells, { blocked: !los })
+      return
+    }
+  }
 
   const cells = computeAreaCells(
     shape, attack.range, attackerPos, dir,
@@ -1799,6 +1868,18 @@ function onCanvasClick(event: MouseEvent) {
   if (props.selectedAttack && areaHighlightCells.value.length > 0) {
     const shape = getAreaShape(props.selectedAttack.tags)
     if (shape) {
+      // [Pass] step 1: lock direction + movement length. Either move to step 2 (extra-movement
+      // aiming) or, if the attacker has no RAM to spend, fall through and confirm immediately.
+      if (shape === 'pass' && passStep.value !== 'extra' && lastAreaShapeData.value) {
+        passLockedDir = normalize3(lastAreaShapeData.value.dir)
+        passMovementLength = lastAreaShapeData.value.movement
+        if ((props.selectedAttack.ram ?? 0) > 0) {
+          passStep.value = 'extra'
+          renderPassRangeBand()
+          return
+        }
+      }
+
       const aoeCellSet = new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
       const targetIds = props.participants
         .filter(p => {
@@ -2083,6 +2164,7 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
     blastLosBlocked.value = false
     lastBlastCenter.value = null
     lastAreaAimEvent = null
+    resetPassState()
   }
   if (shape === 'burst') {
     // Burst has no direction — render immediately from the whole footprint.

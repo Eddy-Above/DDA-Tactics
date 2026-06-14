@@ -102,7 +102,7 @@ function dist3d(a: Vec3, b: Vec3): number {
   return Math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 
-function normalize3(d: Vec3): Vec3 | null {
+export function normalize3(d: Vec3): Vec3 | null {
   const len = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
   if (len < 1e-6) return null
   return { x: d.x / len, y: d.y / len, z: d.z / len }
