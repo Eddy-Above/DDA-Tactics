@@ -3864,6 +3864,17 @@ const mapStanceDigimonParticipantId = ref<string | null>(null)
 const mapDigivolveDigimonParticipantId = ref<string | null>(null)
 const mapModeChangeDigimonParticipantId = ref<string | null>(null)
 
+// Auto-open map view when combat starts/resumes with a map (mirrors GM's
+// auto-open on Start Combat and on page load during active combat).
+watch(
+  () => activeEncounter.value?.phase,
+  (newPhase, oldPhase) => {
+    if (newPhase === 'combat' && oldPhase !== 'combat' && (activeEncounter.value as any)?.mapId) {
+      showMapView.value = true
+    }
+  }
+)
+
 const playerPlacementMode = computed(() =>
   ['setup', 'initiative'].includes(activeEncounter.value?.phase ?? '') &&
   !!(activeEncounter.value as any)?.mapId
