@@ -1350,7 +1350,7 @@ async function handleAddParticipant() {
 async function handleRemoveParticipant(participantId: string) {
   if (!currentEncounter.value) return
   if (confirm('Remove this participant from the encounter?')) {
-    await removeParticipant(currentEncounter.value.id, participantId)
+    await removeParticipant(currentEncounter.value.id, participantId, digimonMap.value, houseRules.value)
   }
 }
 
@@ -2332,7 +2332,7 @@ async function updateWounds(participantId: string, wounds: number) {
   // Auto-remove NPC if defeated
   const updated = (currentEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
   if (updated?.isEnemy && wounds >= updated.maxWounds) {
-    await removeParticipant(currentEncounter.value.id, participantId)
+    await removeParticipant(currentEncounter.value.id, participantId, digimonMap.value, houseRules.value)
   }
 }
 

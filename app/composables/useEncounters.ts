@@ -117,6 +117,109 @@ export interface Hazard {
   duration: number | null
 }
 
+// Resets per-round state (actions, hasActed, Stun/Haste/Clash, Signature Move Battery)
+// for all participants. Shared by nextTurn's round-wrap and removeParticipant's
+// round-wrap-on-removal case.
+function applyRoundReset(
+  participants: CombatParticipant[],
+  houseRules?: { signatureMoveBattery?: boolean } | null,
+  digimonMap?: Map<string, any>
+) {
+  participants.forEach((p) => {
+    // Capture Haste state BEFORE reset: potency=1 means applied after turn passed;
+    // actionsRemaining > 0 means the immediate Haste action wasn't spent on intercede.
+    const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
+    const hasteGrantsNextRound = !!(hasteEffect && (hasteEffect as any).potency === 1
+      && (p.actionsRemaining?.simple ?? 0) > 0)
+
+    p.actionsRemaining = { simple: 2 }
+    p.hasActed = false
+    p.usedAttackIds = []
+    p.hasAttemptedDigivolve = false
+    // Apply Stun action penalty (skip if already reduced mid-round when Stun was applied)
+    if (!p.stunActionReducedThisRound) {
+      const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
+      if (stunEffect) {
+        p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
+      }
+    }
+    p.stunActionReducedThisRound = false
+    if (hasteGrantsNextRound) {
+      p.actionsRemaining.simple += 1
+    }
+    // Clash round resets
+    if (p.clash) {
+      const opponent = participants.find((o) => o.id === (p.clash as any).opponentParticipantId)
+      const eitherPinned = (p.clash as any).isPinned || (opponent?.clash as any)?.isPinned
+      p.clash.clashCheckNeeded = !eitherPinned  // pinned side skips the check; controller retains
+      p.clash.isPinned = false                  // pins expire after one turn
+    }
+    p.usedFreeClashThisRound = false  // Wrestlemania free clash resets each round
+  })
+
+  // Signature Move Battery: grant +1 Battery at end of round to digimon who did not use Signature Move
+  if (houseRules?.signatureMoveBattery && digimonMap) {
+    participants.forEach((p) => {
+      if (p.type !== 'digimon') return
+      const digimon = digimonMap.get(p.entityId)
+      const stage = digimon?.stage as string | undefined
+      const stageBatteryCapacity: Record<string, number> = {
+        'champion': 2, 'ultimate': 3, 'mega': 4, 'ultra': 5,
+      }
+      const cap = stage ? (stageBatteryCapacity[stage] ?? 0) : 0
+      if (cap > 0) {
+        if (!p.usedSignatureMoveThisTurn) {
+          p.battery = Math.min(cap, (p.battery ?? 0) + 1)
+        }
+        p.usedSignatureMoveThisTurn = false
+      }
+    })
+  }
+}
+
+// Marks a participant as the active one for their turn: resets dodge penalty,
+// applies any pending Divine Protection action penalty, and resets their
+// partner digimon's dodge/intercede state. Shared by nextTurn and
+// removeParticipant's activate-next-participant case.
+function activateParticipant(
+  participant: CombatParticipant,
+  participants: CombatParticipant[],
+  digimonMap?: Map<string, any>
+) {
+  participant.isActive = true
+  participant.dodgePenalty = 0
+  participant.hasDirectedThisTurn = false
+
+  // Apply Divine Protection Simple Action penalty carried from previous turn
+  if (participant.pendingSimpleActionPenalty && participant.pendingSimpleActionPenalty > 0) {
+    participant.actionsRemaining = participant.actionsRemaining || { simple: 2 }
+    participant.actionsRemaining.simple = Math.max(
+      0,
+      participant.actionsRemaining.simple - participant.pendingSimpleActionPenalty,
+    )
+    participant.pendingSimpleActionPenalty = 0
+  }
+
+  // Also reset partner digimon's dodge penalty and apply accumulated intercede penalty
+  if (digimonMap && participant.type === 'tamer') {
+    const partner = participants.find((p) => {
+      if (p.type !== 'digimon') return false
+      const digi = digimonMap.get(p.entityId)
+      return digi?.partnerId === participant.entityId
+    })
+    if (partner) {
+      partner.dodgePenalty = 0
+      // Apply post-turn intercede penalty accumulated since last cycle
+      if (partner.interceptPenalty) {
+        partner.actionsRemaining = partner.actionsRemaining || { simple: 2 }
+        partner.actionsRemaining.simple = Math.max(0, partner.actionsRemaining.simple - partner.interceptPenalty)
+        partner.interceptPenalty = 0
+      }
+      partner.hasActed = false
+    }
+  }
+}
+
 export function useEncounters() {
   const encounters = ref<Encounter[]>([])
   const currentEncounter = ref<Encounter | null>(null)
@@ -295,17 +398,47 @@ export function useEncounters() {
 
   async function removeParticipant(
     encounterId: string,
-    participantId: string
+    participantId: string,
+    digimonMap?: Map<string, any>,
+    houseRules?: { signatureMoveBattery?: boolean } | null,
   ): Promise<Encounter | null> {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
 
+    const oldTurnOrder = encounter.turnOrder as string[]
+    const oldCurrentTurnIndex = encounter.currentTurnIndex
+    const removedIndex = oldTurnOrder.indexOf(participantId)
+
     const participants = (encounter.participants as CombatParticipant[]).filter(
       (p) => p.id !== participantId
     )
-    const turnOrder = (encounter.turnOrder as string[]).filter((id) => id !== participantId)
+    const turnOrder = oldTurnOrder.filter((id) => id !== participantId)
 
-    return updateEncounter(encounterId, { participants, turnOrder })
+    let currentTurnIndex = oldCurrentTurnIndex
+    let round = encounter.round
+
+    if (removedIndex !== -1 && removedIndex < oldCurrentTurnIndex) {
+      // The active participant shifted left by one slot; same person remains active
+      currentTurnIndex = oldCurrentTurnIndex - 1
+    } else if (removedIndex !== -1 && removedIndex === oldCurrentTurnIndex) {
+      // The active participant itself was removed
+      if (turnOrder.length === 0) {
+        currentTurnIndex = 0
+      } else {
+        if (oldCurrentTurnIndex >= turnOrder.length) {
+          // Round wrap: the removed participant was last in turn order
+          currentTurnIndex = 0
+          round += 1
+          applyRoundReset(participants, houseRules, digimonMap)
+        }
+        const nextParticipant = participants.find((p) => p.id === turnOrder[currentTurnIndex])
+        if (nextParticipant) {
+          activateParticipant(nextParticipant, participants, digimonMap)
+        }
+      }
+    }
+
+    return updateEncounter(encounterId, { participants, turnOrder, currentTurnIndex, round })
   }
 
   async function startCombat(encounterId: string): Promise<Encounter | null> {
@@ -345,57 +478,7 @@ export function useEncounters() {
     // If we've wrapped around, start a new round
     if (nextIndex === 0) {
       newRound += 1
-      // Reset actions and hasActed for all participants
-      participants.forEach((p) => {
-        // Capture Haste state BEFORE reset: potency=1 means applied after turn passed;
-        // actionsRemaining > 0 means the immediate Haste action wasn't spent on intercede.
-        const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
-        const hasteGrantsNextRound = !!(hasteEffect && (hasteEffect as any).potency === 1
-          && (p.actionsRemaining?.simple ?? 0) > 0)
-
-        p.actionsRemaining = { simple: 2 }
-        p.hasActed = false
-        p.usedAttackIds = []
-        p.hasAttemptedDigivolve = false
-        // Apply Stun action penalty (skip if already reduced mid-round when Stun was applied)
-        if (!p.stunActionReducedThisRound) {
-          const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
-          if (stunEffect) {
-            p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
-          }
-        }
-        p.stunActionReducedThisRound = false
-        if (hasteGrantsNextRound) {
-          p.actionsRemaining.simple += 1
-        }
-        // Clash round resets
-        if (p.clash) {
-          const opponent = participants.find((o) => o.id === (p.clash as any).opponentParticipantId)
-          const eitherPinned = (p.clash as any).isPinned || (opponent?.clash as any)?.isPinned
-          p.clash.clashCheckNeeded = !eitherPinned  // pinned side skips the check; controller retains
-          p.clash.isPinned = false                  // pins expire after one turn
-        }
-        p.usedFreeClashThisRound = false  // Wrestlemania free clash resets each round
-      })
-
-      // Signature Move Battery: grant +1 Battery at end of round to digimon who did not use Signature Move
-      if (houseRules?.signatureMoveBattery && digimonMap) {
-        participants.forEach((p) => {
-          if (p.type !== 'digimon') return
-          const digimon = digimonMap.get(p.entityId)
-          const stage = digimon?.stage as string | undefined
-          const stageBatteryCapacity: Record<string, number> = {
-            'champion': 2, 'ultimate': 3, 'mega': 4, 'ultra': 5,
-          }
-          const cap = stage ? (stageBatteryCapacity[stage] ?? 0) : 0
-          if (cap > 0) {
-            if (!p.usedSignatureMoveThisTurn) {
-              p.battery = Math.min(cap, (p.battery ?? 0) + 1)
-            }
-            p.usedSignatureMoveThisTurn = false
-          }
-        })
-      }
+      applyRoundReset(participants, houseRules, digimonMap)
     }
 
     // Mark current participant as having acted
@@ -478,38 +561,7 @@ export function useEncounters() {
     const nextParticipantId = turnOrder[nextIndex]
     const nextParticipant = participants.find((p) => p.id === nextParticipantId)
     if (nextParticipant) {
-      nextParticipant.isActive = true
-      nextParticipant.dodgePenalty = 0
-      nextParticipant.hasDirectedThisTurn = false
-
-      // Apply Divine Protection Simple Action penalty carried from previous turn
-      if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
-        nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
-        nextParticipant.actionsRemaining.simple = Math.max(
-          0,
-          nextParticipant.actionsRemaining.simple - nextParticipant.pendingSimpleActionPenalty,
-        )
-        nextParticipant.pendingSimpleActionPenalty = 0
-      }
-
-      // Also reset partner digimon's dodge penalty and apply accumulated intercede penalty
-      if (digimonMap && nextParticipant.type === 'tamer') {
-        const partner = participants.find((p) => {
-          if (p.type !== 'digimon') return false
-          const digi = digimonMap.get(p.entityId)
-          return digi?.partnerId === nextParticipant.entityId
-        })
-        if (partner) {
-          partner.dodgePenalty = 0
-          // Apply post-turn intercede penalty accumulated since last cycle
-          if (partner.interceptPenalty) {
-            partner.actionsRemaining = partner.actionsRemaining || { simple: 2 }
-            partner.actionsRemaining.simple = Math.max(0, partner.actionsRemaining.simple - partner.interceptPenalty)
-            partner.interceptPenalty = 0
-          }
-          partner.hasActed = false
-        }
-      }
+      activateParticipant(nextParticipant, participants, digimonMap)
     }
 
     const updatePayload: Partial<Encounter> = { participants, currentTurnIndex: nextIndex, round: newRound }

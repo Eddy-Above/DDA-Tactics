@@ -518,6 +518,9 @@ export default defineEventHandler(async (event) => {
         nextParticipant.dodgePenalty = 0
         nextParticipant.hasDirectedThisTurn = false
       }
+    } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
+      // The active participant shifted left by one slot; same person remains active
+      npcDefeatNextTurnIndex = currentTurnIndex - 1
     }
 
     const targetNameForLog = target.type === 'digimon'

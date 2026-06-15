@@ -467,6 +467,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           nextParticipant.hasDirectedThisTurn = false
         }
       }
+    } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
+      // The active participant shifted left by one slot; same person remains active
+      nextTurnIndex = currentTurnIndex - 1
     }
 
     defeatedLog = {
