@@ -13,6 +13,7 @@ import type { DigimonBaseStats, DigimonStage, DigimonSize, EddySoulRules } from 
 import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
+import { selectiveTargetingBlocksEffect } from './selectiveTargeting'
 
 interface SupportAttackParams {
   participants: any[]
@@ -34,6 +35,7 @@ interface SupportAttackParams {
   eddySoulRules?: EddySoulRules
   isSignatureMove?: boolean
   batteryCount?: number
+  selectiveTargetingFilter?: 'ally' | 'enemy' | null
 }
 
 interface SupportAttackResult {
@@ -189,6 +191,24 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
   if (!attacker) return { participants, battleLog, pendingRequests, resolved: true }
 
+  if (selectiveTargetingBlocksEffect(params.selectiveTargetingFilter ?? null, 'P')) {
+    const logEntry = {
+      id: `log-${Date.now()}-support`,
+      timestamp: new Date().toISOString(),
+      round: params.round,
+      actorId: params.attackerParticipantId,
+      actorName: params.attackerName,
+      action: 'Support',
+      target: params.targetName,
+      result: `${params.attackDef.effect} has no effect on ${params.targetName} (Selective Targeting)`,
+      damage: 0,
+      effects: ['Support', 'No Effect (Selective Targeting)'],
+      hit: true,
+    }
+    battleLog = [...battleLog, logEntry]
+    return { participants, battleLog, pendingRequests, resolved: true }
+  }
+
   const derivedStats = await getDigimonDerivedStats(attacker.entityId)
 
   const effectData = buildEffectData(
@@ -275,6 +295,24 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
   }
 
   const isAoe = (params.attackDef.tags || []).some((t: string) => t.startsWith('Area Attack'))
+
+  if (selectiveTargetingBlocksEffect(params.selectiveTargetingFilter ?? null, 'P')) {
+    const logEntry = {
+      id: `log-${Date.now()}-support`,
+      timestamp: new Date().toISOString(),
+      round: params.round,
+      actorId: params.attackerParticipantId,
+      actorName: params.attackerName,
+      action: 'Support',
+      target: params.targetName,
+      result: `${params.attackDef.effect} has no effect on ${params.targetName} (Selective Targeting)`,
+      damage: 0,
+      effects: ['Support', 'No Effect (Selective Targeting)'],
+      hit: true,
+    }
+    battleLog = [...battleLog, logEntry]
+    return { participants, battleLog, pendingRequests, resolved: true }
+  }
 
   if (isPlayerTarget) {
     // Create health-roll request for the player
@@ -438,6 +476,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
   const attackerDerived = await getDigimonDerivedStats(attacker.entityId)
   const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId) : null
   let appliedEffectName: string | null = null
+  let selectiveTargetingBlocked = false
 
   participants = participants.map((p: any) => {
     if (p.id === params.targetParticipantId) {
@@ -448,16 +487,20 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
       }
 
       if (hit && params.attackDef.effect) {
-        const effectData = buildEffectData(
-          params.attackDef.effect,
-          Math.max(1, netSuccesses),
-          params.attackerName,
-          attackerDerived,
-          targetDerived,
-          params.isSignatureMove ? (params.batteryCount ?? 0) : 0
-        )
-        updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
-        appliedEffectName = params.attackDef.effect
+        if (selectiveTargetingBlocksEffect(params.selectiveTargetingFilter ?? null, EFFECT_ALIGNMENT[params.attackDef.effect])) {
+          selectiveTargetingBlocked = true
+        } else {
+          const effectData = buildEffectData(
+            params.attackDef.effect,
+            Math.max(1, netSuccesses),
+            params.attackerName,
+            attackerDerived,
+            targetDerived,
+            params.isSignatureMove ? (params.batteryCount ?? 0) : 0
+          )
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
+          appliedEffectName = params.attackDef.effect
+        }
       }
 
       return updated
@@ -475,7 +518,11 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
     target: null,
     result: `${dodgePool}d6 => [${dodgeDiceResults.join(',')}] = ${dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: 0,
-    effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+    effects: appliedEffectName
+      ? ['Dodge', `Applied: ${appliedEffectName}`]
+      : selectiveTargetingBlocked
+        ? ['Dodge', 'No Effect (Selective Targeting)']
+        : ['Dodge'],
     hit,
     dodgeDicePool: dodgePool,
     dodgeDiceResults,

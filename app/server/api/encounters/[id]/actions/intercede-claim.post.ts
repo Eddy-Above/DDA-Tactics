@@ -132,6 +132,15 @@ export default defineEventHandler(async (event) => {
   const intercedeGroupId = request.data.intercedeGroupId
   const isAreaAttack = !!request.data.isAreaAttack
 
+  // Selective Targeting: total target count for area attacks comes from the group state
+  let totalTargetCount = 1
+  if (isAreaAttack) {
+    const groupStateForCount = pendingRequests.find(
+      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
+    )
+    totalTargetCount = groupStateForCount?.data?.originalTargetIds?.length ?? 1
+  }
+
   // Load map for spatial position validation (single-target intercede, or area-attack throw claims)
   let claimMapRecord: any = null
   if ((encounter as any).mapId) {
@@ -492,6 +501,7 @@ export default defineEventHandler(async (event) => {
     dodgeSuccesses: 0,
     isSignatureMove: request.data.isSignatureMove,
     batteryCount: request.data.batteryCount,
+    totalTargetCount,
     houseRules,
   })
 

@@ -24,6 +24,7 @@ interface ResolveNpcAttackParams {
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
   counterattack?: boolean      // If true, target's dodge pool is halved (Counterattack mechanic)
   outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
+  totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
 }
 
 /**
@@ -159,6 +160,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     accuracySuccesses: params.accuracySuccesses,
     dodgeSuccesses,
     outsideClashCpuPenalty: params.outsideClashCpuPenalty,
+    totalTargetCount: params.totalTargetCount,
     houseRules: params.houseRules,
   })
 

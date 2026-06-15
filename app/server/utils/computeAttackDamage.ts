@@ -3,6 +3,7 @@ import { db, digimon, tamers } from '../db'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '../../data/attackConstants'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
 import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
+import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from './selectiveTargeting'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
@@ -15,6 +16,7 @@ export interface ComputeAttackDamageParams {
   isSignatureMove?: boolean
   batteryCount?: number
   outsideClashCpuPenalty?: number
+  totalTargetCount?: number
   houseRules?: any
 }
 
@@ -70,6 +72,7 @@ export async function computeAttackDamage(
   let attackDef: any = null
   let attackerHasCombatMonster = false
   let attackerHasPositiveReinforcement = false
+  let attackerHasSelectiveTargeting = false
   const attackerCombatMonsterBonus: number = attackerParticipant.combatMonsterBonus ?? 0
   const attackerMoodValue: number = attackerParticipant.moodValue ?? 3
 
@@ -113,6 +116,7 @@ export async function computeAttackDamage(
       const qualities = attackerDigimon.qualities
       attackerHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       attackerHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
+      attackerHasSelectiveTargeting = (qualities || []).some((q: any) => q.id === 'selective-targeting')
 
       // Weapons Expert: add chosen SPEC value (bit/cpu/ram) to Weapon-tagged attacks
       const attackerHasWeaponTag = attackDef?.tags?.some((t: string) => /^Weapon/i.test(t))
@@ -128,6 +132,13 @@ export async function computeAttackDamage(
       attackerFinesseRanks = (qualities || []).find((q: any) => q.id === 'finesse')?.ranks ?? 0
     }
   }
+
+  // Selective Targeting: filter applies only for [Area] attacks with multiple total targets
+  const isAreaAttack = attackDef?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+  const selectiveTargetingFilter = getSelectiveTargetingFilter(
+    attackerHasSelectiveTargeting, isAreaAttack, params.totalTargetCount ?? 1,
+    !!attackerParticipant.isEnemy, !!targetParticipant.isEnemy,
+  )
 
   // Signature Move battery bonus
   if (params.isSignatureMove && params.batteryCount) {
@@ -233,13 +244,16 @@ export async function computeAttackDamage(
     damageDealt = Math.max(0, damageDealt - targetFinesseRanks)
   }
 
+  // Selective Targeting: area attacks don't damage allies
+  if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
+
   // ── Effect potency & data ─────────────────────────────────────────────────
   let appliedEffectName: string | null = null
   let effectData: any | null = null
   let secondaryEffectData: any | null = null
 
   // Boss quality: Tank Buster secondary Stun when damage ≥ 4
-  if (hit && hasTankBusterTag && damageDealt >= 4) {
+  if (hit && hasTankBusterTag && damageDealt >= 4 && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, 'N')) {
     secondaryEffectData = {
       name: 'Stun',
       type: 'debuff' as const,
@@ -251,7 +265,9 @@ export async function computeAttackDamage(
   }
 
   if (attackDef?.effect) {
-    const shouldApply = attackDef.type === 'damage' ? damageDealt >= 2 : true
+    const alignment = EFFECT_ALIGNMENT[attackDef.effect]
+    const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
+      && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
     if (hit && shouldApply) {
       if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
         atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
@@ -264,7 +280,6 @@ export async function computeAttackDamage(
       let potencyFinal = potency
       if (params.isSignatureMove && params.batteryCount) potencyFinal += params.batteryCount
 
-      const alignment = EFFECT_ALIGNMENT[attackDef.effect]
       const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
       effectData = {
         name: attackDef.effect,

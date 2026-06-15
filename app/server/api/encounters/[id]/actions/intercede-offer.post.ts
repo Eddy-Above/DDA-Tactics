@@ -26,6 +26,7 @@ import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions } from '~/server/utils/encounterRoom'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
+import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -268,6 +269,12 @@ export default defineEventHandler(async (event) => {
 
     // All targets (player + NPC) are eligible for intercede offers
     const allTargetIds = [...playerTargetIds, ...npcTargetIds]
+
+    // Selective Targeting: attacker-level constants for filtering uncovered targets
+    const attackerDigForST = attacker.type === 'digimon' ? digimonById.get(attacker.entityId) : null
+    const attackerHasSelectiveTargeting = (attackerDigForST?.qualities || []).some((q: any) => q.id === 'selective-targeting')
+    const attackerIsEnemy = !!attacker.isEnemy
+    const totalTargetCount = allTargetIds.length
 
     // Build one intercede-offer per eligible tamer and one for GM
     const intercedeGroupId = `intercede-${Date.now()}-area`
@@ -532,6 +539,7 @@ export default defineEventHandler(async (event) => {
         const npcTargetName = npcTargetInfo[tid]?.name || 'Digimon'
         if (isSupportAttack && areaAttackDef) {
           const resolutionType = getEffectResolutionType(areaAttackDef.effect, areaAttackDef.tags || [], 'support')
+          const npcTargetIsEnemy = !!participants.find((p: any) => p.id === tid)?.isEnemy
           const supportParams = {
             participants, battleLog, pendingRequests,
             attackerParticipantId: body.attackerId,
@@ -546,6 +554,9 @@ export default defineEventHandler(async (event) => {
             turnOrder, houseRules,
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.batteryCount ?? 0,
+            selectiveTargetingFilter: getSelectiveTargetingFilter(
+              attackerHasSelectiveTargeting, true, totalTargetCount, attackerIsEnemy, npcTargetIsEnemy,
+            ),
           }
           let supportResult: any = null
           if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
@@ -573,6 +584,7 @@ export default defineEventHandler(async (event) => {
             houseRules,
             clashAttack: body.clashAttack,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty,
+            totalTargetCount,
           })
           participants = result.participants
           battleLog = result.battleLog
@@ -603,6 +615,9 @@ export default defineEventHandler(async (event) => {
             turnOrder, houseRules,
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.batteryCount ?? 0,
+            selectiveTargetingFilter: getSelectiveTargetingFilter(
+              attackerHasSelectiveTargeting, true, totalTargetCount, attackerIsEnemy, false,
+            ),
           }
           const supportResult = positiveResolutionType === 'positive-auto'
             ? await resolvePositiveAuto(supportParams)
@@ -645,6 +660,7 @@ export default defineEventHandler(async (event) => {
             batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
             clashAttack: body.clashAttack || false,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+            totalTargetCount,
             intercedeGroupId,
           },
         })
@@ -693,6 +709,8 @@ export default defineEventHandler(async (event) => {
         clashAttack: body.clashAttack || false,
         outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         areaShapeData: body.areaShapeData ?? null,
+        attackerHasSelectiveTargeting,
+        attackerIsEnemy,
         claims: [],
       },
     })

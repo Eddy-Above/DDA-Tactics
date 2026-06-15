@@ -6,6 +6,7 @@ import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/r
 import { triggerCounterattack } from '../../../utils/triggerCounterattack'
 import { resolveNpcAttack } from '../../../utils/resolveNpcAttack'
 import { applyStanceToDodge } from '../../../../utils/stanceModifiers'
+import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from '../../../utils/selectiveTargeting'
 
 interface SubmitResponseBody {
   requestId: string
@@ -290,15 +291,26 @@ export default defineEventHandler(async (event) => {
 
     // Look up attack definition
     let attackDef: any = null
+    let attackerQualitiesForST: any[] = []
     if (attackerParticipant?.type === 'digimon') {
       const [attackerDigimonForDef] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
       if (attackerDigimonForDef?.attacks) {
         const attacksList = attackerDigimonForDef.attacks
         attackDef = attacksList?.find((a: any) => a.id === request.data.attackId)
       }
+      attackerQualitiesForST = attackerDigimonForDef?.qualities || []
     }
 
     const isSupportAttack = request.data?.isSupportAttack || attackDef?.type === 'support'
+
+    // Selective Targeting: filter applies only for [Area] attacks with multiple total targets
+    const attackerHasSelectiveTargeting = attackerQualitiesForST.some((q: any) => q.id === 'selective-targeting')
+    const isAreaAttack = attackDef?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+    const targetParticipantForST = participants.find((p: any) => p.id === request.targetParticipantId)
+    const selectiveTargetingFilter = getSelectiveTargetingFilter(
+      attackerHasSelectiveTargeting, isAreaAttack, request.data.totalTargetCount ?? 1,
+      !!attackerParticipant?.isEnemy, !!targetParticipantForST?.isEnemy,
+    )
 
     if (isSupportAttack) {
       // === SUPPORT ATTACK: no damage, only debuff on hit ===
@@ -330,9 +342,10 @@ export default defineEventHandler(async (event) => {
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
           }
 
-          if (hit && attackDef?.effect) {
+          const supportAlignment = attackDef?.effect ? EFFECT_ALIGNMENT[attackDef.effect] : undefined
+          if (hit && attackDef?.effect && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, supportAlignment)) {
             const effectDuration = Math.max(1, netSuccesses)
-            const alignment = EFFECT_ALIGNMENT[attackDef.effect]
+            const alignment = supportAlignment
             const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
 
             const effectData = {
@@ -583,6 +596,8 @@ export default defineEventHandler(async (event) => {
         if (request.data.outsideClashCpuPenalty && request.data.outsideClashCpuPenalty > 0) {
           damageDealt = Math.max(1, damageDealt - request.data.outsideClashCpuPenalty)
         }
+        // Selective Targeting: area attacks don't damage allies
+        if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
       }
 
       // === DIVINE PROTECTION: offer to tamer targets before applying damage ===
@@ -703,10 +718,11 @@ export default defineEventHandler(async (event) => {
 
             // Auto-apply effect if attack has one and conditions are met
             if (attackDef?.effect) {
-              const shouldApply = attackDef.type === 'damage' ? damageDealt >= 2 : true
+              const alignment = EFFECT_ALIGNMENT[attackDef.effect]
+              const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
+                && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
               if (shouldApply) {
                 const effectDuration = Math.max(1, netSuccesses)
-                const alignment = EFFECT_ALIGNMENT[attackDef.effect]
                 const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
                 const newEffect = {
                   name: attackDef.effect,

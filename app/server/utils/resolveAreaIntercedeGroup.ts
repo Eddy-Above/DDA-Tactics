@@ -5,6 +5,7 @@ import { resolveParticipantName } from './participantName'
 import { applyEffectToParticipant } from '~/server/utils/applyEffect'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
+import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
 
 export interface AreaAttackClaim {
   interceptorParticipantId: string
@@ -255,6 +256,11 @@ export async function resolveAreaIntercedeGroup({
     if (info.type === 'tamer') targetTamerId = info.entityId
     else if (info.partnerId) targetTamerId = info.partnerId
 
+    const selectiveTargetingFilter = getSelectiveTargetingFilter(
+      !!groupData.attackerHasSelectiveTargeting, true, originalTargetIds.length,
+      !!groupData.attackerIsEnemy, !!target?.isEnemy,
+    )
+
     const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, attackDef)
     if (positiveResolutionType) {
       const supportParams = {
@@ -274,6 +280,7 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
+        selectiveTargetingFilter,
       }
       const supportResult = positiveResolutionType === 'positive-auto'
         ? await resolvePositiveAuto(supportParams)
@@ -314,6 +321,7 @@ export async function resolveAreaIntercedeGroup({
         batteryCount: groupData.batteryCount ?? 0,
         clashAttack: groupData.clashAttack || false,
         outsideClashCpuPenalty: groupData.outsideClashCpuPenalty ?? 0,
+        totalTargetCount: originalTargetIds.length,
       },
     })
   }
@@ -330,6 +338,11 @@ export async function resolveAreaIntercedeGroup({
       const [tam] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
       resolvedName = tam?.name || targetId
     }
+
+    const selectiveTargetingFilter = getSelectiveTargetingFilter(
+      !!groupData.attackerHasSelectiveTargeting, true, originalTargetIds.length,
+      !!groupData.attackerIsEnemy, !!target?.isEnemy,
+    )
 
     if (isSupportAttack && attackDef) {
       const resolutionType = getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support')
@@ -350,6 +363,7 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
+        selectiveTargetingFilter,
       }
       let supportResult: any = null
       if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
@@ -379,6 +393,7 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         clashAttack: groupData.clashAttack,
         outsideClashCpuPenalty: groupData.outsideClashCpuPenalty,
+        totalTargetCount: originalTargetIds.length,
       })
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog
