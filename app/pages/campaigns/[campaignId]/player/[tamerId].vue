@@ -523,7 +523,7 @@ watch(
       )
 
       if (matchingLogEntry) {
-        showAttackResultFromBattleLog(pendingAttack, matchingLogEntry)
+        showAttackResultFromBattleLog(pendingAttack, matchingLogEntry, pendingAttack.groupId)
         pendingAttacks.value.splice(i, 1)
       }
     }
