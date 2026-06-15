@@ -61,10 +61,14 @@
       :style="{ left: npcRadialScreen.x + 'px', top: npcRadialScreen.y + 'px' }"
     >
       <template v-if="npcClashButtons === 'controlled'">
-        <button class="npc-radial-btn clash" disabled>Controlled</button>
+        <div class="npc-radial-clash-group">
+          <button class="npc-radial-btn clash" disabled>Controlled</button>
+        </div>
       </template>
       <template v-else-if="npcClashButtons">
-        <button v-for="btn in npcClashButtons" :key="btn.action" class="npc-radial-btn clash" :disabled="btn.disabled" @click="npcAction(btn.action)">{{ btn.label }}</button>
+        <div class="npc-radial-clash-group">
+          <button v-for="btn in npcClashButtons" :key="btn.action" class="npc-radial-btn clash" :disabled="btn.disabled" @click="npcAction(btn.action)">{{ btn.label }}</button>
+        </div>
       </template>
       <template v-else>
         <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
@@ -80,11 +84,15 @@
       :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
     >
       <template v-if="radialPlayerClashButtons === 'controlled'">
-        <button class="npc-radial-btn player clash" disabled>Controlled</button>
+        <div class="npc-radial-clash-group">
+          <button class="npc-radial-btn player clash" disabled>Controlled</button>
+        </div>
         <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
       </template>
       <template v-else-if="radialPlayerClashButtons">
-        <button v-for="btn in radialPlayerClashButtons" :key="btn.action" class="npc-radial-btn player clash" :disabled="btn.disabled" @click="playerRadialAction(btn.action)">{{ btn.label }}</button>
+        <div class="npc-radial-clash-group">
+          <button v-for="btn in radialPlayerClashButtons" :key="btn.action" class="npc-radial-btn player clash" :disabled="btn.disabled" @click="playerRadialAction(btn.action)">{{ btn.label }}</button>
+        </div>
         <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
       </template>
       <template v-else>
@@ -2520,7 +2528,20 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.move   { top: -38px; left: -55px; }
 .npc-radial-btn.stance { top: -68px; left: 0; }
 .npc-radial-btn.attack { top: -38px; left: 55px; }
-.npc-radial-btn.clash  { top: 30px; left: 0; }
+.npc-radial-clash-group {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.npc-radial-clash-group .npc-radial-btn {
+  position: static;
+  transform: none;
+}
 .npc-radial-btn:hover:not(:disabled)  { background: #2a3480; }
 .npc-radial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
@@ -2532,7 +2553,6 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
 .npc-radial-btn.player.digimon-stance { top: 0; left: 0; }
 .npc-radial-btn.player.mode-change    { top: -75px; left: 90px; }
-.npc-radial-btn.player.clash          { top: 30px; left: 0; }
 .npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
