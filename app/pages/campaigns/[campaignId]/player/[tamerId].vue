@@ -104,6 +104,7 @@ const attackResultQueue = ref<Array<{
   finalDamage?: number
   defeated?: boolean
   groupId?: string
+  divineProtectionNote?: string
 }>>([])
 
 // Tracks the expected number of attackResultQueue entries for an AoE groupId,
@@ -477,6 +478,15 @@ watch(
 
       console.log('[ATTACK RESULT] ✓ Found matching response! Showing modal for:', pendingAttack.attackName)
 
+      // Defer if Divine Protection is still pending for this target
+      const hasPendingDivineProtection = (activeEncounter.value?.pendingRequests || []).some(
+        (r: any) => r.type === 'divine-protection-offer' && r.targetParticipantId === matchingResponse.participantId
+      )
+      if (hasPendingDivineProtection) {
+        console.log('[ATTACK RESULT] Deferring — Divine Protection pending for:', pendingAttack.targetName)
+        continue
+      }
+
       // Reconstruct request-like object for showAttackResult (maintains backward compatibility)
       const syntheticRequest = {
         id: matchingResponse.requestId,
@@ -524,6 +534,47 @@ watch(
 
       if (matchingLogEntry) {
         showAttackResultFromBattleLog(pendingAttack, matchingLogEntry, pendingAttack.groupId)
+        pendingAttacks.value.splice(i, 1)
+        continue
+      }
+
+      // Divine Protection resolved (negated or declined) for this target?
+      const dpLogEntry = ([...(newBattleLog as any[])]).reverse().find(
+        (entry: any) =>
+          entry.effects?.includes('Divine Protection') &&
+          entry.actorId === pendingAttack.targetParticipantId &&
+          entry.hit === undefined &&
+          new Date(entry.timestamp).getTime() > pendingAttack.timestamp - 5000
+      )
+
+      if (dpLogEntry) {
+        const responses = activeEncounter.value?.requestResponses || []
+        const matchingResponse = responses.find((resp: any) =>
+          resp.response?.type === 'dodge-rolled' &&
+          resp.attackerParticipantId === pendingAttack.participantId &&
+          resp.participantId === pendingAttack.targetParticipantId &&
+          Math.abs(new Date(resp.response?.timestamp || 0).getTime() - pendingAttack.timestamp) < 120000
+        )
+
+        if (matchingResponse) {
+          const syntheticRequest = {
+            id: matchingResponse.requestId,
+            type: 'dodge-roll',
+            targetParticipantId: matchingResponse.participantId,
+            data: {
+              attackerParticipantId: matchingResponse.attackerParticipantId,
+              attackerName: matchingResponse.attackerName,
+              targetName: pendingAttack.targetName,
+              attackId: pendingAttack.attackData.id,
+              attackName: pendingAttack.attackName,
+              accuracyDicePool: pendingAttack.accuracyDicePool,
+              accuracySuccesses: pendingAttack.accuracySuccesses,
+              accuracyDiceResults: pendingAttack.accuracyDiceResults,
+            }
+          }
+          const dpOutcome = dpLogEntry.effects.includes('Damage Negated') ? 'negated' : 'declined'
+          showAttackResult(pendingAttack, syntheticRequest, matchingResponse, pendingAttack.groupId, dpOutcome)
+        }
         pendingAttacks.value.splice(i, 1)
       }
     }
@@ -2271,7 +2322,8 @@ function showAttackResult(
   pendingAttack: any,
   dodgeRequest: any,
   dodgeResponse: any,
-  groupId?: string
+  groupId?: string,
+  dpOutcome?: 'negated' | 'declined'
 ) {
   console.log('[ATTACK RESULT] showAttackResult called:', {
     attackName: pendingAttack.attackName,
@@ -2403,6 +2455,7 @@ function showAttackResult(
 
   // Calculate final damage (support attacks deal no damage)
   let finalDamage: number | null = null
+  let divineProtectionNote: string | undefined
   const isSupport = pendingAttack.attackData?.type === 'support'
   if (hit && !isSupport) {
     if (matchingLogEntry?.finalDamage != null) {
@@ -2410,6 +2463,11 @@ function showAttackResult(
     } else {
       const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
       finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
+    }
+
+    if (dpOutcome === 'negated') {
+      finalDamage = 0
+      divineProtectionNote = 'Divine Protection invoked — damage negated!'
     }
   }
 
@@ -2435,7 +2493,8 @@ function showAttackResult(
     armorPiercing: armorPiercing,
     targetArmor: targetArmor,
     finalDamage: finalDamage,
-    groupId: resolvedGroupId
+    groupId: resolvedGroupId,
+    divineProtectionNote: divineProtectionNote
   })
 
   console.log('[ATTACK RESULT] Added to queue, new length:', attackResultQueue.value.length)
@@ -6874,6 +6933,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
               <span class="text-orange-400 font-semibold text-lg">Damage Dealt:</span>
               <span class="text-red-400 font-bold text-xl">{{ result.finalDamage }}</span>
             </div>
+          </div>
+
+          <!-- Divine Protection Note -->
+          <div v-if="result.divineProtectionNote" class="mt-2 p-2 bg-yellow-900/20 rounded text-yellow-300 text-sm">
+            ✦ {{ result.divineProtectionNote }}
           </div>
 
           <!-- Defeated banner -->
