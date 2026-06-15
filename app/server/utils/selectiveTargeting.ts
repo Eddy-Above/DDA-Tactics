@@ -26,3 +26,20 @@ export function selectiveTargetingBlocksEffect(
   if (filter === 'enemy') return alignment === 'P'
   return false
 }
+
+/**
+ * Whether a target is FULLY shielded by Selective Targeting and should be dropped
+ * from the attack's target set entirely (no dodge prompt, no intercede offer, not shown
+ * in the attacker's results). Distinct from the partial blocking helpers above.
+ */
+export function selectiveTargetingExcludesTarget(
+  filter: 'ally' | 'enemy' | null,
+  attackType: string | undefined,
+  effectAlignment: 'P' | 'N' | 'NA' | undefined,
+): boolean {
+  if (!filter) return false
+  // Support attacks deal no damage: a target is fully shielded iff its effect is blocked.
+  if (attackType === 'support') return selectiveTargetingBlocksEffect(filter, effectAlignment)
+  // Damage attacks: ally takes 0 damage, and the damage-gated effect can't meet its threshold.
+  return selectiveTargetingBlocksDamage(filter)
+}

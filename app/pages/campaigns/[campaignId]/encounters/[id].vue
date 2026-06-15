@@ -1080,7 +1080,10 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     }
 
     const entity = getEntityDetails(participant)
-    const targetNames = targets.map(t => getEntityDetails(t)?.name || 'Unknown').join(', ')
+    // Exclude targets the server dropped via Selective Targeting from the logged target list.
+    const excludedSet = new Set<string>((currentEncounter.value as any)?.selectiveTargetingExcludedIds || [])
+    const targetNames = targets.filter(t => !excludedSet.has(t.id))
+      .map(t => getEntityDetails(t)?.name || 'Unknown').join(', ')
     const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
     const hadRerolls = hugePowerEnabled.value && originalDiceResults.some(d => d <= rerollThreshold)
     const hpLabel = hugePowerRank2Enabled.value ? 'HP2 reroll' : 'HP reroll'

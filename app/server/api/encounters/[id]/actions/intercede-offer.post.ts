@@ -26,7 +26,7 @@ import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions } from '~/server/utils/encounterRoom'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
-import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
+import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -228,13 +228,34 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    // Selective Targeting: attacker-level constants, computed up front so fully-shielded
+    // targets can be dropped from the attack entirely (no dodge prompt, no intercede offer).
+    const attackerDigForST = attacker.type === 'digimon' ? digimonById.get(attacker.entityId) : null
+    const attackerHasSelectiveTargeting = (attackerDigForST?.qualities || []).some((q: any) => q.id === 'selective-targeting')
+    const attackerIsEnemy = !!attacker.isEnemy
+    const isAreaAttack = areaAttackDef?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
+    const effectAlignment = areaAttackDef?.effect ? EFFECT_ALIGNMENT[areaAttackDef.effect] : undefined
+    const originalTargetCount = body.targetIds.length
+    const selectiveTargetingExcludedIds: string[] = []
+    const effectiveTargetIds = (body.targetIds as string[]).filter((tid: string) => {
+      const t = participants.find((p: any) => p.id === tid)
+      const filter = getSelectiveTargetingFilter(
+        attackerHasSelectiveTargeting, isAreaAttack, originalTargetCount, attackerIsEnemy, !!t?.isEnemy,
+      )
+      if (selectiveTargetingExcludesTarget(filter, areaAttackDef?.type, effectAlignment)) {
+        selectiveTargetingExcludedIds.push(tid)
+        return false
+      }
+      return true
+    })
+
     // Process each target: collect player targets and NPC targets separately
     const playerTargetIds: string[] = []
     const playerTargetInfo: Record<string, { name: string; entityId: string; type: string; partnerId?: string }> = {}
     const npcTargetIds: string[] = []
     const npcTargetInfo: Record<string, { name: string }> = {}
 
-    for (const targetId of body.targetIds) {
+    for (const targetId of effectiveTargetIds) {
       const target = participants.find((p: any) => p.id === targetId)
       if (!target) continue
 
@@ -270,10 +291,7 @@ export default defineEventHandler(async (event) => {
     // All targets (player + NPC) are eligible for intercede offers
     const allTargetIds = [...playerTargetIds, ...npcTargetIds]
 
-    // Selective Targeting: attacker-level constants for filtering uncovered targets
-    const attackerDigForST = attacker.type === 'digimon' ? digimonById.get(attacker.entityId) : null
-    const attackerHasSelectiveTargeting = (attackerDigForST?.qualities || []).some((q: any) => q.id === 'selective-targeting')
-    const attackerIsEnemy = !!attacker.isEnemy
+    // Reduced count after shielded targets were dropped above; threaded into per-target filters.
     const totalTargetCount = allTargetIds.length
 
     // Build one intercede-offer per eligible tamer and one for GM
@@ -676,7 +694,7 @@ export default defineEventHandler(async (event) => {
       }).where(eq(encounters.id, encounterId))
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
       if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-      return updated
+      return { ...updated, selectiveTargetingExcludedIds }
     }
 
     // Push intercede-group-state tracker so claims are accumulated before resolution
@@ -726,7 +744,7 @@ export default defineEventHandler(async (event) => {
 
     const [updatedArea] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
     if (!updatedArea) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-    return updatedArea
+    return { ...updatedArea, selectiveTargetingExcludedIds }
   }
 
   // ========================

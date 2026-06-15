@@ -2122,7 +2122,6 @@ async function confirmAccuracyReview() {
       const targets = ctx.areaTargets
       // Shared groupId so all targets' results from this AoE cast show in a single popup
       const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-      attackResultGroupTotals.value[areaGroupId] = targets.length
       const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
 
       // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
@@ -2144,7 +2143,13 @@ async function confirmAccuracyReview() {
         const returnedBattleLog = (result.battleLog as any[]) || []
         const newEntries = returnedBattleLog.slice(preBattleLogLength)
 
-        for (const target of targets) {
+        // Drop targets fully shielded by the attacker's Selective Targeting (server-decided):
+        // they get no dodge prompt and must not be awaited in the combined result modal.
+        const excludedSet = new Set<string>((result as any).selectiveTargetingExcludedIds || [])
+        const effectiveTargets = targets.filter(t => !excludedSet.has(t.id))
+        attackResultGroupTotals.value[areaGroupId] = effectiveTargets.length
+
+        for (const target of effectiveTargets) {
           if (accuracySuccesses === 0) {
             attackResultQueue.value.push({
               responseId: `miss-${Date.now()}-${target.id}`,
@@ -2199,7 +2204,8 @@ async function confirmAccuracyReview() {
           }
         }
 
-        if (accuracySuccesses === 0) maybeShowGroupModal(areaGroupId)
+        if (accuracySuccesses === 0 && effectiveTargets.length > 0) maybeShowGroupModal(areaGroupId)
+        if (effectiveTargets.length === 0) delete attackResultGroupTotals.value[areaGroupId]
         await loadData()
       } else {
         console.error('Failed to perform area attack')
