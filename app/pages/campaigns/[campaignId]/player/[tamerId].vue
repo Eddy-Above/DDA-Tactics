@@ -2600,8 +2600,8 @@ async function submitInitiativeRoll() {
     const fight = tamer.value.fight || -1  // If 0 or undefined, default to -1
     const modifierB = tamerAgility + fight // Tamer AGI + Fight
 
-    // Use the higher modifier (or just tamer modifier if no digimon)
-    const modifier = Math.max(modifierA, modifierB)
+    // Use the higher modifier (or just tamer modifier if no digimon), plus Strike First's +1 Initiative
+    const modifier = Math.max(modifierA, modifierB) + (hasStrikeFirst.value ? 1 : 0)
     const totalInitiative = initiativeRollResult.value.total + modifier
 
     console.log('Initiative calculation:', { digimon: digimon?.name || 'None (Tamer Only)', modifierA, modifierB, modifier, totalInitiative })
