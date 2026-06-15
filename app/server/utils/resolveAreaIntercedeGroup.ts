@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
+import { resolveParticipantName } from './participantName'
 import { applyEffectToParticipant } from '~/server/utils/applyEffect'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
@@ -324,7 +325,7 @@ export async function resolveAreaIntercedeGroup({
     let resolvedName = targetId
     if (target?.type === 'digimon') {
       const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-      resolvedName = dig?.name || targetId
+      resolvedName = resolveParticipantName(target, updatedParticipants, dig?.name || 'Digimon', target.isEnemy || false)
     } else if (target?.type === 'tamer') {
       const [tam] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
       resolvedName = tam?.name || targetId

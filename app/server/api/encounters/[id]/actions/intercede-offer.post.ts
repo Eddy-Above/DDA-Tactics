@@ -231,6 +231,7 @@ export default defineEventHandler(async (event) => {
     const playerTargetIds: string[] = []
     const playerTargetInfo: Record<string, { name: string; entityId: string; type: string; partnerId?: string }> = {}
     const npcTargetIds: string[] = []
+    const npcTargetInfo: Record<string, { name: string }> = {}
 
     for (const targetId of body.targetIds) {
       const target = participants.find((p: any) => p.id === targetId)
@@ -261,6 +262,7 @@ export default defineEventHandler(async (event) => {
       } else {
         // NPC target — defer resolution until after intercede window
         npcTargetIds.push(targetId)
+        npcTargetInfo[targetId] = { name: targetName }
       }
     }
 
@@ -527,8 +529,7 @@ export default defineEventHandler(async (event) => {
       let areaAutoAdvanceRound: number | undefined
       // Auto-resolve NPC targets immediately (no intercede window)
       for (const tid of npcTargetIds) {
-        const target = participants.find((p: any) => p.id === tid)
-        const npcTargetName = target?.name || tid
+        const npcTargetName = npcTargetInfo[tid]?.name || 'Digimon'
         if (isSupportAttack && areaAttackDef) {
           const resolutionType = getEffectResolutionType(areaAttackDef.effect, areaAttackDef.tags || [], 'support')
           const supportParams = {
