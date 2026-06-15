@@ -3,8 +3,9 @@ import { db, encounters, digimon, tamers, maps } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getClashSizeBonus, determineClashController } from '../../../../../data/attackConstants'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
-import { chebyshev } from '../../../../utils/gridDistance'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
+import { getFootprintDimensions, getFootprintCells } from '../../../../utils/mapMovement'
+import type { FootprintDims } from '../../../../utils/mapMovement'
 
 interface ClashInitiateBody {
   participantId: string
@@ -62,13 +63,24 @@ export default defineEventHandler(async (event) => {
     const targetPos = positions[target.id]
     if (attackerPos && targetPos) {
       let reachRanks = 0
+      let attackerDims: FootprintDims = { width: 1, height: 1, depth: 1 }
       if (actor.type === 'digimon') {
         const [actDig] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
         const qs = actDig?.qualities ?? []
         reachRanks = (qs as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
+        if (actDig) attackerDims = getFootprintDimensions(actDig.size as any, (actDig as any).giganticDimensions)
+      }
+      let targetDims: FootprintDims = { width: 1, height: 1, depth: 1 }
+      if (target.type === 'digimon') {
+        const [targetDig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+        if (targetDig) targetDims = getFootprintDimensions(targetDig.size as any, (targetDig as any).giganticDimensions)
       }
       const meleeRange = reachRanks > 0 ? reachRanks * 2 : 1
-      const dist = chebyshev(attackerPos, targetPos)
+      const attackerCells = getFootprintCells(attackerPos, attackerDims)
+      const targetCells = getFootprintCells(targetPos, targetDims)
+      const dist = Math.min(...attackerCells.flatMap(a =>
+        targetCells.map(t => Math.max(Math.abs(a.x - t.x), Math.abs(a.y - t.y), Math.abs(a.z - t.z)))
+      ))
       if (dist > meleeRange) {
         throw createError({ statusCode: 400, message: `Target out of clash range (distance: ${dist}, melee range: ${meleeRange})` })
       }

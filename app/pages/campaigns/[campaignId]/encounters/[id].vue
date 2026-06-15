@@ -2861,6 +2861,7 @@ function openClashTargetSelector(participantId: string) {
   selectedAttack.value = { participant, attack: { id: 'clash-initiate', name: 'Initiate Clash', type: 'clash-initiate' } }
   selectedTargetId.value = null
   selectedTargetIds.value = []
+  if (showMapView.value) return
   showTargetSelector.value = true
 }
 
@@ -3104,7 +3105,17 @@ const mapSelectedAttackProp = computed(() => {
   if (!selectedAttack.value || !showMapView.value) return null
   const p = selectedAttack.value.participant
   const digimon = digimonMap.value.get(p.entityId)
-  if (!digimon) return null
+  if (!digimon) {
+    return {
+      tags: selectedAttack.value.attack.tags ?? [],
+      range: selectedAttack.value.attack.range ?? 'melee',
+      type: selectedAttack.value.attack.type,
+      bit: 0,
+      effectiveLimit: 0,
+      meleeRange: 1,
+      attackerParticipantId: p.id,
+    }
+  }
   const stats = calcDigimonStats(digimon)
   const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
   const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
@@ -3124,6 +3135,10 @@ const mapSelectedAttackProp = computed(() => {
 })
 
 function onMapTargetSelected(targetId: string) {
+  if (selectedAttack.value?.attack.type === 'clash-initiate') {
+    handleInitiateClash(selectedAttack.value.participant.id, targetId)
+    return
+  }
   const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
   const target = participants.find(p => p.id === targetId)
   if (!target || !selectedAttack.value) return

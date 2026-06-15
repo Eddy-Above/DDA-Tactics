@@ -3715,6 +3715,7 @@ function openClashTargetSelector(participantId: string) {
   selectedTargetId.value = null
   selectedTargetIds.value = []
   clashInitiateRollResult.value = null
+  if (showMapView.value) return
   showTargetSelector.value = true
 }
 
@@ -4052,7 +4053,17 @@ const mapSelectedAttackProp = computed(() => {
   if (!selectedAttack.value || !showMapView.value) return null
   const p = selectedAttack.value.participant
   const digimon = digimonMap.value.get(p.entityId)
-  if (!digimon) return null
+  if (!digimon) {
+    return {
+      tags: selectedAttack.value.attack.tags ?? [],
+      range: selectedAttack.value.attack.range ?? 'melee',
+      type: selectedAttack.value.attack.type,
+      bit: 0,
+      effectiveLimit: 0,
+      meleeRange: 1,
+      attackerParticipantId: p.id,
+    }
+  }
   const stats = calcDigimonStats(digimon)
   const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
   const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
@@ -4084,6 +4095,10 @@ function onMapTargetSelected(targetId: string) {
     pendingDirectBolstered.value = mapDirectMode.value.bolstered
     mapDirectMode.value = null
     confirmPlayerDirect(target)
+    return
+  }
+  if (selectedAttack.value?.attack.type === 'clash-initiate') {
+    handleInitiateClash(selectedAttack.value.participant.id, targetId)
     return
   }
   const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
