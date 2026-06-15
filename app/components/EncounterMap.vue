@@ -170,7 +170,7 @@ import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules,
 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
-import { getAreaShape, normalize3 } from '~/utils/areaShapes'
+import { getAreaShape, computePassLanding } from '~/utils/areaShapes'
 import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composables/useMapMovement'
@@ -572,19 +572,11 @@ function onTargetSelected(targetId: string) {
 
 function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
   if (areaShapeData?.shape === 'pass') {
-    const nd = normalize3(areaShapeData.dir)
-    const steps = Math.round((areaShapeData.movement ?? 0) + (areaShapeData.ram ?? 0))
-    if (nd && steps > 0) {
-      const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
-      const newPos: Vec3 = {
-        x: areaShapeData.attackerPos.x + Math.round(nd.x * steps),
-        y: areaShapeData.attackerPos.y + Math.round(nd.y * steps),
-        z: areaShapeData.attackerPos.z + Math.round(nd.z * steps),
-      }
-      if (attackerId && !sameVec3(positions.value[attackerId], newPos)) {
-        positions.value = { ...positions.value, [attackerId]: newPos }
-        ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: newPos, path: [], version: 0 })
-      }
+    const newPos = computePassLanding(areaShapeData.attackerPos, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
+    const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
+    if (attackerId && !sameVec3(positions.value[attackerId], newPos)) {
+      positions.value = { ...positions.value, [attackerId]: newPos }
+      ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: newPos, path: [], version: 0 })
     }
   }
 

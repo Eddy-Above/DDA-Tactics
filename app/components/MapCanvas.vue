@@ -99,10 +99,11 @@ import type {
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
-import { getAreaShape, computeAreaCells, computePassBeam, normalize3 } from '~/utils/areaShapes'
+import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
-import type { FootprintDims } from '~/utils/movementRules'
-import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
+import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
+import { detectCapabilities } from '~/composables/useMapMovement'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -295,6 +296,8 @@ let lastAreaAimEvent: MouseEvent | null = null
 const passStep = ref<'movement' | 'extra' | null>(null)
 let passLockedDir: Vec3 | null = null
 let passMovementLength = 0
+// Whether the current Pass aim has a reachable valid finishing landing (see isPassLandingValid).
+let passLandingValid = true
 
 
 // ── Three.js internals ─────────────────────────────────────────────────────
@@ -314,6 +317,7 @@ let voxelMeshes: THREE.Mesh[] = []
 let reticuleGroup: THREE.Group
 let aoeGroup: THREE.Group
 let passRangeGroup: THREE.Group
+let passLandingGroup: THREE.Group
 let movementHighlightGroup: THREE.Group
 let pathHighlightGroup: THREE.Group
 let hoverGhostGroup: THREE.Group
@@ -388,6 +392,52 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
     const oCellSet = new Set(getFootprintCells(oPos, getParticipantFootprintDims(p.id)).map(c => `${c.x},${c.y},${c.z}`))
     return footprintIntersectsArea(anchor, dims, oCellSet)
   })
+}
+
+// Movement capabilities of a Pass attacker, for landing-support validation (canFly etc.).
+// Movement/RAM/CPU args only affect jumpRange/jumpHeight, which landing checks don't use.
+function getAttackerCapabilities(participantId: string | null | undefined): MovementCapabilities {
+  const empty: MovementCapabilities = { canFly: false, canJump: false, jumpRange: 0, jumpHeight: 0, canClimb: false, canSwim: false, canDig: false }
+  if (!participantId) return empty
+  const p = props.participants.find(pp => pp.id === participantId)
+  if (!p || p.type !== 'digimon') return empty
+  const dg = props.digimonMap[p.entityId]
+  if (!dg) return empty
+  return detectCapabilities(dg.qualities ?? [], 0, 0, 0)
+}
+
+// A [Pass] landing is valid if the attacker's footprint at `anchor` doesn't overlap any
+// other participant, and the anchor cell itself is supported terrain/voxel/stairs (or
+// open air the attacker can fly in).
+function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities): boolean {
+  if (footprintOccupied(anchor, dims, attackerId)) return false
+  if (!props.map) return true
+  return canLandOn(anchor, caps, props.map, new Set())
+}
+
+// Whether ANY ram value in [0, ramMax] yields a valid landing for this (attackerPos, dir,
+// movement). If false, the aim is "filtered": no amount of RAM repositioning can produce a
+// legal finish, so it cannot be locked in (step 1) or confirmed (step 2) — though the hit-area
+// pillar computed from `movement` remains valid for targeting enemies caught in it.
+function anyPassLandingValid(attackerPos: Vec3, dir: Vec3, movement: number, ramMax: number, dims: FootprintDims, attackerId: string, caps: MovementCapabilities): boolean {
+  for (let ram = 0; ram <= ramMax; ram++) {
+    if (isPassLandingValid(computePassLanding(attackerPos, dir, movement, ram), dims, attackerId, caps)) return true
+  }
+  return false
+}
+
+// Renders the [Pass] landing footprint: green if a valid finish is reachable from here
+// (using RAM if needed), red if filtered (no amount of RAM lands clear).
+function renderPassLandingMarker(anchor: Vec3, dims: FootprintDims, valid: boolean) {
+  passLandingGroup.clear()
+  const color = valid ? 0x33ff66 : 0xff3300
+  for (const c of getFootprintCells(anchor, dims)) {
+    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6 })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.04, c.z + 0.5)
+    passLandingGroup.add(mesh)
+  }
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -475,10 +525,11 @@ function initScene() {
   reticuleGroup = new THREE.Group()
   aoeGroup = new THREE.Group()
   passRangeGroup = new THREE.Group()
+  passLandingGroup = new THREE.Group()
   movementHighlightGroup = new THREE.Group()
   pathHighlightGroup = new THREE.Group()
   hoverGhostGroup = new THREE.Group()
-  scene.add(reticuleGroup, aoeGroup, passRangeGroup, movementHighlightGroup, pathHighlightGroup, hoverGhostGroup)
+  scene.add(reticuleGroup, aoeGroup, passRangeGroup, movementHighlightGroup, pathHighlightGroup, hoverGhostGroup, passLandingGroup)
 
   spriteGroups = new Map()
   tileMeshes = []
@@ -1185,7 +1236,9 @@ function resetPassState() {
   passStep.value = null
   passLockedDir = null
   passMovementLength = 0
+  passLandingValid = true
   if (passRangeGroup) passRangeGroup.clear()
+  if (passLandingGroup) passLandingGroup.clear()
 }
 
 function clearAoeState() {
@@ -1440,6 +1493,10 @@ function computeAndRenderAoe(event: MouseEvent) {
         bit: attack.bit, ram: 0, movement: movementLen,
         attackerDims: dims,
       }
+      const caps = getAttackerCapabilities(effectiveAttackerId.value)
+      const landingAnchor = computePassLanding(attackerPos, dir, movementLen, 0)
+      passLandingValid = anyPassLandingValid(attackerPos, dir, movementLen, attack.ram ?? 0, dims, effectiveAttackerId.value!, caps)
+      renderPassLandingMarker(landingAnchor, dims, passLandingValid)
       updateAoeHighlight(cells, { blocked: !los })
       return
     } else {
@@ -1452,6 +1509,10 @@ function computeAndRenderAoe(event: MouseEvent) {
         bit: attack.bit, ram: extra, movement: passMovementLength,
         attackerDims: dims,
       }
+      const caps = getAttackerCapabilities(effectiveAttackerId.value)
+      const landingAnchor = computePassLanding(attackerPos, nd, passMovementLength, extra)
+      passLandingValid = isPassLandingValid(landingAnchor, dims, effectiveAttackerId.value!, caps)
+      renderPassLandingMarker(landingAnchor, dims, passLandingValid)
       updateAoeHighlight(cells, { blocked: !los })
       return
     }
@@ -1868,6 +1929,11 @@ function onCanvasClick(event: MouseEvent) {
   if (props.selectedAttack && areaHighlightCells.value.length > 0) {
     const shape = getAreaShape(props.selectedAttack.tags)
     if (shape) {
+      // [Pass]: block both the step1->step2 lock-in and the terminal confirm while no
+      // landing (movement, possibly +RAM) is valid. Targeting via areaHighlightCells is
+      // unaffected — only the attacker's own finishing move is gated.
+      if (shape === 'pass' && !passLandingValid) return
+
       // [Pass] step 1: lock direction + movement length. Either move to step 2 (extra-movement
       // aiming) or, if the attacker has no RAM to spend, fall through and confirm immediately.
       if (shape === 'pass' && passStep.value !== 'extra' && lastAreaShapeData.value) {

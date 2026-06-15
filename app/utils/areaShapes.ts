@@ -264,6 +264,20 @@ export function computePassBeam(attackerPos: Vec3, dir: Vec3, length: number, at
   return lineCells(origin, nd, length, attackerDims.width, attackerDims.height)
 }
 
+/** Final cell the attacker occupies after a [Pass] move of `movement + ram` cells
+ *  along `dir`. Returns `attackerPos` unchanged if `dir` is degenerate or the
+ *  combined distance rounds to zero. */
+export function computePassLanding(attackerPos: Vec3, dir: Vec3, movement: number, ram: number): Vec3 {
+  const nd = normalize3(dir)
+  const steps = Math.round(movement + ram)
+  if (!nd || steps === 0) return { ...attackerPos }
+  return {
+    x: attackerPos.x + Math.round(nd.x * steps),
+    y: attackerPos.y + Math.round(nd.y * steps),
+    z: attackerPos.z + Math.round(nd.z * steps),
+  }
+}
+
 // [Pass] — directional 3D beam from the leading edge along `dir`, length `movement`.
 // RAM is post-attack repositioning only and does not extend the hit area. Scroll-wheel
 // pitch raises/lowers the endpoint and the beam tilts with it.
