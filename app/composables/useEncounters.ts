@@ -1,3 +1,4 @@
+import { toRaw } from 'vue'
 import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
@@ -324,7 +325,7 @@ export function useEncounters() {
     const source = currentEncounter.value?.id === encounterId
       ? currentEncounter.value
       : encounters.value.find((e) => e.id === encounterId)
-    const encounter = source ? structuredClone(source) : await fetchEncounter(encounterId)
+    const encounter = source ? structuredClone(toRaw(source)) : await fetchEncounter(encounterId)
     if (!encounter) return null
 
     const participants = encounter.participants as CombatParticipant[]
