@@ -1718,29 +1718,12 @@ async function handleEngageCombat() {
 async function handleNextTurn() {
   if (!currentEncounter.value) return
 
-  const current = activeParticipant.value
-  const entity = current ? getEntityDetails(current) : null
-
-  await nextTurn(currentEncounter.value.id, digimonMap.value, houseRules.value)
-
-  // Refetch to get updated state
-  await fetchEncounter(currentEncounter.value.id)
-
-  const newActive = activeParticipant.value
-  const newEntity = newActive ? getEntityDetails(newActive) : null
-
-  if (newEntity && currentEncounter.value) {
-    await addBattleLogEntry(currentEncounter.value.id, {
-      round: currentEncounter.value.round,
-      actorId: newActive!.id,
-      actorName: newEntity.name,
-      action: 'Turn started',
-      target: null,
-      result: `${newEntity.name}'s turn begins`,
-      damage: null,
-      effects: [],
-    })
-  }
+  await nextTurn(
+    currentEncounter.value.id,
+    digimonMap.value,
+    houseRules.value,
+    (p) => getEntityDetails(p)?.name ?? null,
+  )
 }
 
 // End combat — opens the modal to choose recovery check or immediate end

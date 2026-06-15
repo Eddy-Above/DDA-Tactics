@@ -3844,8 +3844,11 @@ async function handleEndTurn() {
   if (!activeEncounter.value || endingTurn.value || !isMyTurn.value) return
   endingTurn.value = true
   try {
-    await nextTurn(activeEncounter.value.id, digimonMap.value, houseRules.value)
-    await fetchEncounter(activeEncounter.value.id)
+    const updated = await nextTurn(activeEncounter.value.id, digimonMap.value, houseRules.value)
+    if (updated) {
+      activeEncounter.value = updated as any
+      await syncEncounterDigimon()
+    }
   } finally {
     endingTurn.value = false
   }

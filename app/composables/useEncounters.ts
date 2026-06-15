@@ -315,8 +315,16 @@ export function useEncounters() {
     })
   }
 
-  async function nextTurn(encounterId: string, digimonMap?: Map<string, any>, houseRules?: { signatureMoveBattery?: boolean } | null): Promise<Encounter | null> {
-    const encounter = await fetchEncounter(encounterId)
+  async function nextTurn(
+    encounterId: string,
+    digimonMap?: Map<string, any>,
+    houseRules?: { signatureMoveBattery?: boolean } | null,
+    getEntityName?: (p: CombatParticipant) => string | null | undefined,
+  ): Promise<Encounter | null> {
+    const source = currentEncounter.value?.id === encounterId
+      ? currentEncounter.value
+      : encounters.value.find((e) => e.id === encounterId)
+    const encounter = source ? structuredClone(source) : await fetchEncounter(encounterId)
     if (!encounter) return null
 
     const participants = encounter.participants as CombatParticipant[]
@@ -504,9 +512,27 @@ export function useEncounters() {
     }
 
     const updatePayload: Partial<Encounter> = { participants, currentTurnIndex: nextIndex, round: newRound }
-    if (poisonLogEntries.length > 0) {
+    const logEntries = [...poisonLogEntries]
+    if (getEntityName && nextParticipant) {
+      const name = getEntityName(nextParticipant)
+      if (name) {
+        logEntries.push({
+          id: `log-turnstart-${nextParticipant.id}-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          round: newRound,
+          actorId: nextParticipant.id,
+          actorName: name,
+          action: 'Turn started',
+          target: null,
+          result: `${name}'s turn begins`,
+          damage: null,
+          effects: [],
+        })
+      }
+    }
+    if (logEntries.length > 0) {
       const existingLog = [...((encounter?.battleLog as any[]) || [])]
-      updatePayload.battleLog = existingLog.concat(poisonLogEntries)
+      updatePayload.battleLog = existingLog.concat(logEntries)
     }
     return updateEncounter(encounterId, updatePayload)
   }
