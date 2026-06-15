@@ -2137,7 +2137,7 @@ async function useAction(type: 'simple' | 'complex', description: string) {
 }
 
 // Handle NPC radial menu actions from the map
-function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash') {
+function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash' | 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check') {
   if (!currentEncounter.value) return
   const p = (currentEncounter.value.participants as CombatParticipant[]).find(x => x.id === participantId)
   if (!p) return
@@ -2145,6 +2145,16 @@ function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash
     npcAttackParticipantId.value = npcAttackParticipantId.value === participantId ? null : participantId
   } else if (action === 'clash') {
     openClashTargetSelector(participantId)
+  } else if (action === 'clash-attack') {
+    executeClashAction(participantId, 'attack')
+  } else if (action === 'clash-pin') {
+    executeClashAction(participantId, 'pin')
+  } else if (action === 'clash-end') {
+    executeClashAction(participantId, 'end')
+  } else if (action === 'clash-throw') {
+    handleThrowClick(p)
+  } else if (action === 'clash-check') {
+    handleClashCheck(participantId)
   } else {
     npcStanceParticipantId.value = npcStanceParticipantId.value === participantId ? null : participantId
   }

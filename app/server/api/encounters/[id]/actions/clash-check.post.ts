@@ -6,7 +6,6 @@ import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 interface ClashCheckBody {
   clashId: string
   participantId: string
-  tamerId: string
   roll: number
   diceResults: number[]
 }
@@ -16,8 +15,8 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<ClashCheckBody>(event)
 
   if (!encounterId) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
-  if (!body.clashId || !body.participantId || !body.tamerId || body.roll === undefined || !body.diceResults) {
-    throw createError({ statusCode: 400, message: 'clashId, participantId, tamerId, roll, and diceResults are required' })
+  if (!body.clashId || !body.participantId || body.roll === undefined || !body.diceResults) {
+    throw createError({ statusCode: 400, message: 'clashId, participantId, roll, and diceResults are required' })
   }
 
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))

@@ -4221,6 +4221,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
                 else if (action === 'mode-change') mapModeChangeDigimonParticipantId = mapModeChangeDigimonParticipantId === id ? null : id
                 else if (action === 'clash')      openClashTargetSelector(id)
+                else if (action === 'clash-attack') executeClashAction(id, 'attack')
+                else if (action === 'clash-pin')    executeClashAction(id, 'pin')
+                else if (action === 'clash-end')    executeClashAction(id, 'end')
+                else if (action === 'clash-throw') {
+                  const p = (activeEncounter?.participants as CombatParticipant[] | undefined)?.find(x => x.id === id)
+                  if (p) handleThrowClick(p)
+                } else if (action === 'clash-check') handleClashCheck(id)
               }"
               @target-selected="onMapTargetSelected"
               @area-attack-confirmed="onMapAreaAttackConfirmed"

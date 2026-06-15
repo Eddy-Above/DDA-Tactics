@@ -60,10 +60,18 @@
       class="npc-radial-menu"
       :style="{ left: npcRadialScreen.x + 'px', top: npcRadialScreen.y + 'px' }"
     >
-      <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
-      <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
-      <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
-      <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
+      <template v-if="npcClashButtons === 'controlled'">
+        <button class="npc-radial-btn clash" disabled>Controlled</button>
+      </template>
+      <template v-else-if="npcClashButtons">
+        <button v-for="btn in npcClashButtons" :key="btn.action" class="npc-radial-btn clash" :disabled="btn.disabled" @click="npcAction(btn.action)">{{ btn.label }}</button>
+      </template>
+      <template v-else>
+        <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
+        <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
+        <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
+        <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
+      </template>
     </div>
     <!-- Player radial action menu -->
     <div
@@ -71,19 +79,29 @@
       class="npc-radial-menu"
       :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
     >
-      <button class="npc-radial-btn player move" :disabled="radialPlayerOutOfActions" @click="playerRadialMove()">Move</button>
-      <template v-if="playerRadialParticipantType === 'tamer'">
-        <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
-        <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
-        <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
-        <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
+      <template v-if="radialPlayerClashButtons === 'controlled'">
+        <button class="npc-radial-btn player clash" disabled>Controlled</button>
+        <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
       </template>
-      <template v-else-if="playerRadialParticipantType === 'digimon'">
-        <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
-        <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
-        <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-        <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
-        <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
+      <template v-else-if="radialPlayerClashButtons">
+        <button v-for="btn in radialPlayerClashButtons" :key="btn.action" class="npc-radial-btn player clash" :disabled="btn.disabled" @click="playerRadialAction(btn.action)">{{ btn.label }}</button>
+        <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
+      </template>
+      <template v-else>
+        <button class="npc-radial-btn player move" :disabled="radialPlayerOutOfActions" @click="playerRadialMove()">Move</button>
+        <template v-if="playerRadialParticipantType === 'tamer'">
+          <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
+          <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
+          <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
+          <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
+        </template>
+        <template v-else-if="playerRadialParticipantType === 'digimon'">
+          <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
+          <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
+          <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
+          <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
+          <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
+        </template>
       </template>
     </div>
   </div>
@@ -105,6 +123,8 @@ import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
 import { detectCapabilities } from '~/composables/useMapMovement'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
+
+type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -149,8 +169,8 @@ const emit = defineEmits<{
   (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
-  (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack' | 'clash'): void
-  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash'): void
+  (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction): void
+  (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -248,6 +268,33 @@ const radialPlayerOutOfActions = computed(() => {
   const p = props.participants.find(pp => pp.id === playerRadialId.value)
   return !p || (p.actionsRemaining?.simple || 0) < 1
 })
+// While a participant is in a clash, the radial menu shows only the clash actions valid for
+// their role (controller / controlled / pending clash-check) instead of the normal action set.
+function clashRadialButtons(p: CombatParticipant | null):
+  | { action: ClashRadialAction, label: string, disabled: boolean }[]
+  | 'controlled'
+  | null
+{
+  const clash = p?.clash
+  if (!clash) return null
+  if (clash.clashCheckNeeded) {
+    return [{ action: 'clash-check', label: 'Roll Clash Check', disabled: false }]
+  }
+  if (clash.isController) {
+    const simple = p?.actionsRemaining?.simple || 0
+    return [
+      { action: 'clash-attack', label: 'Clash Attack', disabled: simple < 2 },
+      { action: 'clash-pin', label: 'Pin', disabled: simple < 2 },
+      { action: 'clash-throw', label: 'Throw', disabled: simple < 2 },
+      { action: 'clash-end', label: 'End Clash', disabled: false },
+    ]
+  }
+  return 'controlled'
+}
+const npcClashButtons = computed(() => clashRadialButtons(npcRadialParticipant.value))
+const radialPlayerClashButtons = computed(() =>
+  clashRadialButtons(props.participants.find(pp => pp.id === playerRadialId.value) ?? null)
+)
 const hasModeChangeQuality = computed(() => {
   const d = radialDigimonParticipant.value
   if (!d) return false
@@ -1032,7 +1079,7 @@ function playerRadialMove() {
   emit('player-action', id, 'move')
 }
 
-function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash') {
+function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction) {
   if (!playerRadialId.value) return
   emit('player-action', playerRadialId.value, action)
   playerRadialId.value = null
@@ -2124,7 +2171,7 @@ function cancelMove() {
   pendingMovePath.value = []
 }
 
-function npcAction(action: 'move' | 'stance' | 'attack' | 'clash') {
+function npcAction(action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction) {
   const id = npcRadialId.value
   if (!id) return
   npcRadialId.value = null
