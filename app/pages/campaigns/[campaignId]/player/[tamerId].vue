@@ -209,6 +209,7 @@ const accuracyReviewContext = ref<{
   hugePower: boolean
   hugePowerRank2: boolean
 } | null>(null)
+const confirmingAttack = ref(false)
 
 // Note: Evolution chain navigation now uses currentDigimonId (see digimonChains computed)
 
@@ -2060,6 +2061,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
 async function confirmAccuracyReview() {
   if (!accuracyReview.value || !accuracyReviewContext.value || !activeEncounter.value || !tamer.value) return
 
+  confirmingAttack.value = true
   const ctx = accuracyReviewContext.value
   const { participant, attack } = ctx
   const { rolls: accuracyDiceResults, successes: accuracySuccesses, dicePool: accuracyPool } = accuracyReview.value
@@ -2261,6 +2263,7 @@ async function confirmAccuracyReview() {
     showAccuracyReview.value = false
     accuracyReview.value = null
     accuracyReviewContext.value = null
+    confirmingAttack.value = false
   }
 }
 
@@ -6034,10 +6037,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
         />
 
         <button
+          :disabled="confirmingAttack"
           @click="confirmAccuracyReview"
-          class="w-full bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          class="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
-          Confirm Attack
+          {{ confirmingAttack ? 'Confirming...' : 'Confirm Attack' }}
         </button>
       </div>
     </div>
