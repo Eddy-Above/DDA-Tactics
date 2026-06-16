@@ -1306,19 +1306,30 @@ function clearAoeState() {
   resetPassState()
 }
 
-function updateAoeHighlight(cells: Array<{ x: number; y: number; z: number }>, opts?: { blocked?: boolean }) {
-  const key = cells.map(c => `${c.x},${c.y},${c.z}`).sort().join('|') + (opts?.blocked ? ':blocked' : '')
+function updateAoeHighlight(
+  hitCells: Array<{ x: number; y: number; z: number }>,
+  blockedCells: Array<{ x: number; y: number; z: number }> = [],
+) {
+  const key =
+    hitCells.map(c => `H:${c.x},${c.y},${c.z}`).sort().join('|') +
+    '|' +
+    blockedCells.map(c => `X:${c.x},${c.y},${c.z}`).sort().join('|')
   if (key === lastAoeKey) return
   lastAoeKey = key
-  // When LoS is blocked, don't register cells as valid targets so click confirmation is suppressed
-  areaHighlightCells.value = opts?.blocked ? [] : cells
+  areaHighlightCells.value = hitCells
   aoeGroup.clear()
 
-  const color   = opts?.blocked ? 0xff3300 : 0xffaa00
-  const opacity = opts?.blocked ? 0.35     : 0.7
-  for (const c of cells) {
+  for (const c of hitCells) {
     const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity })
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.7 })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
+    aoeGroup.add(mesh)
+  }
+
+  for (const c of blockedCells) {
+    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
+    const mat = new THREE.MeshBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.35 })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
     aoeGroup.add(mesh)
@@ -1422,20 +1433,20 @@ function renderBlastFromStoredCenter() {
   if (!attack) return
   const center: Vec3 = { x: lastBlastCenter.value.x, y: blastCenterY.value, z: lastBlastCenter.value.z }
   lastBlastCenter.value = center
-  const los = hasLineOfSight(attackerPos, center)
-  blastLosBlocked.value = !los
+  const effectiveCenter = clipToLos(attackerPos, center)
   const dims = getParticipantFootprintDims(effectiveAttackerId.value)
   const cells = computeAreaCells(
     'blast', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
     attack.bit, attack.ram ?? 0, attack.movement ?? 0,
-    dims, center,
+    dims, effectiveCenter,
   )
   lastAreaShapeData.value = {
     shape: 'blast', rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
     bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
-    attackerDims: dims, blastCenter: center,
+    attackerDims: dims, blastCenter: effectiveCenter,
   }
-  updateAoeHighlight(cells, { blocked: !los })
+  const { hitCells, blockedCells } = classifyCellsByLos(cells, effectiveCenter)
+  updateAoeHighlight(hitCells, blockedCells)
 }
 
 function hasLineOfSight(from: Vec3, to: Vec3): boolean {
@@ -1451,6 +1462,38 @@ function hasLineOfSight(from: Vec3, to: Vec3): boolean {
   const solidMeshes = [...buildMeshes, ...voxelMeshes].filter(obj => obj instanceof THREE.Mesh)
   const hits = los.intersectObjects(solidMeshes, true)
   return hits.length === 0
+}
+
+function clipToLos(from: Vec3, to: Vec3): Vec3 {
+  const fromW = new THREE.Vector3(from.x + 0.5, from.y * TILE_SIZE + TILE_H + 0.5, from.z + 0.5)
+  const toW   = new THREE.Vector3(to.x   + 0.5, to.y   * TILE_SIZE + TILE_H + 0.5, to.z   + 0.5)
+  const dir = toW.clone().sub(fromW)
+  const dist = dir.length()
+  if (dist < 0.1) return to
+  dir.normalize()
+  const raycaster = new THREE.Raycaster(fromW, dir, 0.1, dist - 0.1)
+  const solidMeshes = [...buildMeshes, ...voxelMeshes].filter(obj => obj instanceof THREE.Mesh)
+  const hits = raycaster.intersectObjects(solidMeshes, true)
+  if (hits.length === 0) return to
+  const hitW = hits[0].point
+  return {
+    x: Math.floor(hitW.x),
+    y: Math.floor((hitW.y - TILE_H) / TILE_SIZE),
+    z: Math.floor(hitW.z),
+  }
+}
+
+function classifyCellsByLos(
+  cells: Vec3[],
+  losOrigin: Vec3,
+): { hitCells: Vec3[]; blockedCells: Vec3[] } {
+  const hitCells: Vec3[] = []
+  const blockedCells: Vec3[] = []
+  for (const c of cells) {
+    if (hasLineOfSight(losOrigin, c)) hitCells.push(c)
+    else blockedCells.push(c)
+  }
+  return { hitCells, blockedCells }
 }
 
 function computeAndRenderAoe(event: MouseEvent) {
@@ -1474,20 +1517,20 @@ function computeAndRenderAoe(event: MouseEvent) {
 
     const blastCenter = clampBlastCenter(attackerPos, pt.x, pt.z, blastCenterY.value)
 
-    const los = hasLineOfSight(attackerPos, blastCenter)
-    blastLosBlocked.value = !los
     lastBlastCenter.value = blastCenter
+    const effectiveCenter = clipToLos(attackerPos, blastCenter)
 
     const cells = computeAreaCells(
       shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims, blastCenter,
+      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims, effectiveCenter,
     )
     lastAreaShapeData.value = {
       shape, rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
       bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
-      attackerDims: dims, blastCenter,
+      attackerDims: dims, blastCenter: effectiveCenter,
     }
-    updateAoeHighlight(cells, { blocked: !los })
+    const { hitCells, blockedCells } = classifyCellsByLos(cells, effectiveCenter)
+    updateAoeHighlight(hitCells, blockedCells)
     return
   }
 
@@ -1502,7 +1545,8 @@ function computeAndRenderAoe(event: MouseEvent) {
       bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
       attackerDims: dims,
     }
-    updateAoeHighlight(cells)
+    const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
+    updateAoeHighlight(hitCells, blockedCells)
     return
   }
 
@@ -1524,22 +1568,21 @@ function computeAndRenderAoe(event: MouseEvent) {
     dir = { x: 1, y: 0, z: 0 }
   }
 
-  // LoS proxy: ray from the attacker toward the aim point, capped at the effective limit.
-  // Tip is in cell-index space (hasLineOfSight adds the +0.5 cell-centre offset itself).
-  const cisX = attackerPos.x + (dims.width - 1) / 2
-  const cisZ = attackerPos.z + (dims.depth - 1) / 2
-  const dlen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
-  const cap = Math.min(dlen, props.attackerEffectiveLimit || dlen)
-  const losTip = {
-    x: Math.round(cisX + (dir.x / dlen) * cap),
-    y: Math.round(attackerPos.y + (dir.y / dlen) * cap),
-    z: Math.round(cisZ + (dir.z / dlen) * cap),
-  }
-  const los = hasLineOfSight(attackerPos, losTip)
-
   // [Pass]: two-step aim. Step 1 picks direction + movement length (clamped to Movement);
   // step 2 locks the direction and only extends along it by extra movement (clamped to RAM).
   if (shape === 'pass') {
+    // LoS proxy: ray from the attacker toward the aim point, capped at the effective limit.
+    // Tip is in cell-index space (hasLineOfSight adds the +0.5 cell-centre offset itself).
+    const cisX = attackerPos.x + (dims.width - 1) / 2
+    const cisZ = attackerPos.z + (dims.depth - 1) / 2
+    const dlen = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
+    const cap = Math.min(dlen, props.attackerEffectiveLimit || dlen)
+    const losTip = {
+      x: Math.round(cisX + (dir.x / dlen) * cap),
+      y: Math.round(attackerPos.y + (dir.y / dlen) * cap),
+      z: Math.round(cisZ + (dir.z / dlen) * cap),
+    }
+    const los = hasLineOfSight(attackerPos, losTip)
     if (passStep.value !== 'extra') {
       if (passStep.value === null) passStep.value = 'movement'
       const movementLen = Math.min(dlen, attack.movement ?? 0)
@@ -1553,7 +1596,7 @@ function computeAndRenderAoe(event: MouseEvent) {
       const landingAnchor = computePassLanding(attackerPos, dir, movementLen, 0)
       passLandingValid = anyPassLandingValid(attackerPos, dir, movementLen, attack.ram ?? 0, dims, effectiveAttackerId.value!, caps)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
-      updateAoeHighlight(cells, { blocked: !los })
+      updateAoeHighlight(los ? cells : [], los ? [] : cells)
       return
     } else {
       const nd = passLockedDir!
@@ -1569,7 +1612,7 @@ function computeAndRenderAoe(event: MouseEvent) {
       const landingAnchor = computePassLanding(attackerPos, nd, passMovementLength, extra)
       passLandingValid = isPassLandingValid(landingAnchor, dims, effectiveAttackerId.value!, caps)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
-      updateAoeHighlight(cells, { blocked: !los })
+      updateAoeHighlight(los ? cells : [], los ? [] : cells)
       return
     }
   }
@@ -1583,7 +1626,8 @@ function computeAndRenderAoe(event: MouseEvent) {
     bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
     attackerDims: dims,
   }
-  updateAoeHighlight(cells, { blocked: !los })
+  const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
+  updateAoeHighlight(hitCells, blockedCells)
 }
 
 // ── Mouse interaction ──────────────────────────────────────────────────────
@@ -2296,7 +2340,8 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
       'burst', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
       attack.bit, attack.ram ?? 0, attack.movement ?? 0, getParticipantFootprintDims(effectiveAttackerId.value),
     )
-    updateAoeHighlight(cells)
+    const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
+    updateAoeHighlight(hitCells, blockedCells)
   }
 }, { immediate: false })
 
