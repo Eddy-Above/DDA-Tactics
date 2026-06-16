@@ -498,6 +498,7 @@ export interface CombatParticipant {
   id: string
   type: 'tamer' | 'digimon'
   entityId: string        // Reference to Tamer or Digimon ID
+  seq?: number            // Stable instance number assigned at add-time; never changes when others are removed
   initiative: number
   initiativeRoll: number  // The 3d6 roll result
   actionsRemaining: {

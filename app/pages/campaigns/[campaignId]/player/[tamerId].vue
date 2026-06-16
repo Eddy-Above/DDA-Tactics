@@ -1256,19 +1256,30 @@ function getParticipantName(participant: CombatParticipant): string {
   if (!digimon) digimon = allDigimon.value.find((d) => d.id === participant.entityId)
   const baseName = digimon?.name || 'Unknown'
 
-  // Number digimon when duplicates share the same name
   if (activeEncounter.value) {
     const participants = activeEncounter.value.participants as CombatParticipant[]
-    const duplicates = participants.filter(p => {
-      if (p.type !== 'digimon') return false
-      const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
-                allDigimon.value.find(d => d.id === p.entityId)
-      return (d?.name || 'Unknown') === baseName
-    })
-    if (duplicates.length > 1) {
-      const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
-      const index = sorted.findIndex(p => p.id === participant.id)
-      return `${baseName} ${index + 1}`
+    if (participant.seq !== undefined) {
+      // Stable: use the seq assigned at add-time so names don't shift when others are removed
+      const otherSameName = participants.some(p => {
+        if (p.id === participant.id || p.type !== 'digimon') return false
+        const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
+                  allDigimon.value.find(d => d.id === p.entityId)
+        return (d?.name || 'Unknown') === baseName
+      })
+      if (participant.seq > 1 || otherSameName) return `${baseName} ${participant.seq}`
+    } else {
+      // Legacy fallback for participants without seq
+      const duplicates = participants.filter(p => {
+        if (p.type !== 'digimon') return false
+        const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
+                  allDigimon.value.find(d => d.id === p.entityId)
+        return (d?.name || 'Unknown') === baseName
+      })
+      if (duplicates.length > 1) {
+        const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
+        const index = sorted.findIndex(p => p.id === participant.id)
+        return `${baseName} ${index + 1}`
+      }
     }
   }
 
@@ -3076,15 +3087,10 @@ function getAreaProtectTargetIds(data: any): string[] {
 
 // Resolve a participant ID to a display name
 function resolveParticipantName(participantId: string): string {
-  const participants = (activeEncounter.value?.participants as any[]) || []
-  const p = participants.find((pp: any) => pp.id === participantId)
+  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
+  const p = participants.find((pp) => pp.id === participantId)
   if (!p) return participantId
-  if (p.type === 'tamer') {
-    return allTamers.value.find((t: any) => t.id === p.entityId)?.name || participantId
-  } else if (p.type === 'digimon') {
-    return allDigimon.value.find((d: any) => d.id === p.entityId)?.name || participantId
-  }
-  return participantId
+  return getParticipantName(p)
 }
 
 // Intercede: Available interceptor options

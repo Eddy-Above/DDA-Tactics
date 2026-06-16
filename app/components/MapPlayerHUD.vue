@@ -95,8 +95,14 @@ const participantDisplayNames = computed(() => {
   for (const p of props.participants) {
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (!info) continue
-    const group = nameGroups[info.name]
-    result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
+    const seq = (p as any).seq as number | undefined
+    if (p.type === 'digimon' && seq !== undefined) {
+      const group = nameGroups[info.name]
+      result[p.id] = (seq > 1 || group.length > 1) ? `${info.name} ${seq}` : info.name
+    } else {
+      const group = nameGroups[info.name]
+      result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
+    }
   }
   return result
 })
