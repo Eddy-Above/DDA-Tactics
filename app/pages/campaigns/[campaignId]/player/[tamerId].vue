@@ -219,7 +219,7 @@ const confirmingAttack = ref(false)
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
-const { encounters, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, modeChange, error: encountersError } = useEncounters()
+const { encounters, currentEncounter, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, modeChange, error: encountersError } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const digimonMap = computed(() => {
@@ -247,6 +247,10 @@ encounterWs.onMessage((msg) => {
     if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
     lastEncounterStateVersion = msg.version
     activeEncounter.value = msg.encounter as any
+    // Keep the composable's currentEncounter in sync too — nextTurn() and other
+    // composable methods compute from it, and a stale base caused the player's
+    // End Turn to over-advance the initiative each round (mirrors the GM page).
+    currentEncounter.value = msg.encounter as any
     syncEncounterDigimon()
     if (tamer.value) {
       myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
