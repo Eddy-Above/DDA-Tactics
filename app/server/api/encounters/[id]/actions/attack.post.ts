@@ -24,6 +24,7 @@ interface AttackActionBody {
   lifestealed?: boolean
   hugePowerUsed?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
+  clashNoInterceptTargetId?: string  // Pass clash attack: this one target (clash opponent) cannot be interceded
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
 
@@ -434,6 +435,7 @@ export default defineEventHandler(async (event) => {
         batteryCount,
         skipActionDeduction: true,
         outsideClashCpuPenalty: 0,
+        clashNoInterceptTargetId: body.clashNoInterceptTargetId,
         areaShapeData: body.areaShapeData ?? null,
       },
     })

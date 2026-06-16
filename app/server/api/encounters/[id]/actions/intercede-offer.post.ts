@@ -46,6 +46,7 @@ interface IntercedeOfferBody {
   isSignatureMove?: boolean
   batteryCount?: number
   clashAttack?: boolean         // If true, target's dodge pool is halved (clash controller attack)
+  clashNoInterceptTargetId?: string  // Area clash attack (Pass): this one target (the clash opponent) cannot be interceded
   outsideClashCpuPenalty?: number  // Damage penalty when attacker is outside target's active clash
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
@@ -352,6 +353,8 @@ export default defineEventHandler(async (event) => {
         const { budget, caps, bodyStat } = movementProfileFor(p)
         const eligibleTargets: string[] = []
         for (const tid of allTargetIds) {
+          // Pass clash attack: no one may intercede for the original clash opponent.
+          if (tid === body.clashNoInterceptTargetId) continue
           const targetPos = participantPositions[tid]
           if (!targetPos) continue
           const targetParticipant = participants.find((pp: any) => pp.id === tid)
@@ -1199,6 +1202,14 @@ export default defineEventHandler(async (event) => {
 
   // Melee only: if the target has no valid displacement position, suppress all offers.
   if (!isRangedOnMap && !targetCanBeDisplaced) {
+    eligibleTamerIds.splice(0)
+    gmEligible = false
+  }
+
+  // Clash Attack: the controller and opponent are locked together in a grapple — no third party
+  // may intercede. Suppress all offers so the attack resolves directly (opponent dodges at half,
+  // or an NPC opponent auto-resolves) instead of stalling on an intercede prompt.
+  if (body.clashAttack) {
     eligibleTamerIds.splice(0)
     gmEligible = false
   }

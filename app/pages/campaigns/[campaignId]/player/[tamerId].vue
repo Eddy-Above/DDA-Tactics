@@ -209,6 +209,7 @@ const accuracyReviewContext = ref<{
   lifesteal: boolean
   hugePower: boolean
   hugePowerRank2: boolean
+  clashAreaAttack?: { controllerId: string; opponentId: string } | null
 } | null>(null)
 const confirmingAttack = ref(false)
 
@@ -1503,6 +1504,9 @@ const playerAttackOptions = computed(() => {
 // Clash Attack: the controller picks one of their MELEE attacks (incl. Basic Melee) to use on
 // the clash opponent. `canUseAttack` bans clashing participants, so filter by melee range only.
 const clashAttackActorId = ref<string | null>(null)
+// Set when a Pass (area) attack is chosen as a Clash Attack: routes through the normal area-aim
+// flow (highlight + movement), then ends the clash once the area attack is submitted.
+const clashAreaAttack = ref<{ controllerId: string; opponentId: string } | null>(null)
 const clashAttackParticipant = computed(() =>
   (activeEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === clashAttackActorId.value)
 )
@@ -2065,6 +2069,14 @@ async function confirmAttack(target: CombatParticipant) {
 }
 
 async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: AreaShapeData | null) {
+  // Pass clash attack: force-include the clash opponent and end the clash once submitted.
+  const clashCtx = clashAreaAttack.value
+  clashAreaAttack.value = null
+  if (clashCtx) {
+    const allParts = (activeEncounter.value?.participants as CombatParticipant[]) || []
+    const opponent = allParts.find(p => p.id === clashCtx.opponentId)
+    if (opponent && !targets.some(t => t.id === opponent.id)) targets = [...targets, opponent]
+  }
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
   try {
     const { participant, attack } = selectedAttack.value
@@ -2118,6 +2130,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       lifesteal: lifestealComplexEnabled.value,
       hugePower: hugePowerEnabled.value,
       hugePowerRank2: hugePowerRank2Enabled.value,
+      clashAreaAttack: clashCtx,
     }
     showAccuracyReview.value = true
   } catch (error) {
@@ -2153,8 +2166,11 @@ async function confirmAccuracyReview() {
         ctx.bolster ? { bolstered: true, bolsterType: ctx.bolsterType } : undefined,
         ctx.hugePower ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: ctx.hugePowerRank2 ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
         ctx.lifesteal ? { lifestealed: true } : undefined,
-        { targetIds: targets.map(t => t.id), areaShapeData: ctx.areaShapeData }
+        { targetIds: targets.map(t => t.id), areaShapeData: ctx.areaShapeData, clashNoInterceptTargetId: ctx.clashAreaAttack?.opponentId }
       )
+
+      // Pass clash attack ends the clash once the attack is submitted.
+      if (ctx.clashAreaAttack) await executeClashAction(ctx.clashAreaAttack.controllerId, 'end')
 
       if (result) {
         const returnedBattleLog = (result.battleLog as any[]) || []
@@ -3869,6 +3885,16 @@ async function confirmClashAttack(participant: CombatParticipant, attack: any) {
   clashAttackActorId.value = null
   const clash = (participant as any).clash
   if (!clash?.clashId || !actorId) return
+
+  // Area attack (Pass): route through the normal area-aim flow so the highlight renders and the
+  // attacker actually moves. confirmAreaAttack handles the clash context (force-include opponent,
+  // suppress intercede for the opponent, end the clash afterward).
+  if (getAreaShape(attack.tags ?? []) !== null) {
+    clashAreaAttack.value = { controllerId: actorId, opponentId: clash.opponentParticipantId }
+    showMapView.value = true
+    selectAttackAndShowTargets(participant, attack)
+    return
+  }
 
   // Roll accuracy (5+ = 1 success), reusing the same dice math as a normal attack
   const accuracyPool = getAttackStats(participant, attack).accuracy

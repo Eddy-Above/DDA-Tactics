@@ -824,6 +824,7 @@ export function useEncounters() {
     areaData?: {
       targetIds: string[]
       areaShapeData?: AreaShapeData | null
+      clashNoInterceptTargetId?: string
     }
   ): Promise<Encounter | null> {
     loading.value = true
@@ -848,6 +849,7 @@ export function useEncounters() {
           hugePowerRank: hugePowerData?.hugePowerRank,
           hugePowerTrackAll: hugePowerData?.hugePowerTrackAll,
           lifestealed: lifestealData?.lifestealed || false,
+          clashNoInterceptTargetId: areaData?.clashNoInterceptTargetId,
           areaShapeData: areaData?.areaShapeData ?? null,
         },
       })
