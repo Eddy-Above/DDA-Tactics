@@ -10,6 +10,7 @@ import {
   findThrowLandingCell,
 } from '~/server/utils/mapMovement'
 import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { getAreaShape } from '~/utils/areaShapes'
 import type { Vec3 } from '~/types'
 
 interface ClashActionBody {
@@ -23,6 +24,8 @@ interface ClashActionBody {
   accuracySuccesses?: number
   accuracyDiceResults?: number[]
   accuracyDicePool?: number
+  // For attack: charge "move after" ends the clash; pass attacks always end it (server-enforced)
+  endClash?: boolean
   // For throw: player-aimed landing cell, server-validated
   landingPos?: Vec3
 }
@@ -438,6 +441,46 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, message: 'attackId, accuracySuccesses, and accuracyDiceResults are required for attack action' })
     }
 
+    // Charge "move after" ends the clash (client sends endClash); a Pass attack always ends it
+    // (server-enforced from the attack's tags).
+    let isPassAttack = false
+    const attackDefForClash = actorDigimonEntity?.attacks?.find((a: any) => a.id === body.attackId)
+    if (attackDefForClash && getAreaShape(attackDefForClash.tags ?? []) === 'pass') {
+      isPassAttack = true
+    }
+    const shouldEndClash = !!body.endClash || isPassAttack
+    // Capture primitives (not `actor`) so the closure below doesn't reset narrowing of actor.clash.
+    const clashOpponentId = actor.clash.opponentParticipantId
+    const clashEndRound = encounter.round || 0
+
+    // Removes the clash from both participants (used when a charge/pass clash attack ends it).
+    const finalizeClashEndAfterAttack = async () => {
+      const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+      if (!fresh) return fresh
+      const newParticipants = fresh.participants.map((p: any) => {
+        if (p.id === body.participantId || p.id === clashOpponentId) {
+          const { clash, ...rest } = p
+          return { ...rest, clashCooldownUntilRound: clashEndRound + 1 }
+        }
+        return p
+      })
+      const newLog = [...fresh.battleLog, {
+        id: `log-${Date.now()}-clashendattack`,
+        timestamp: new Date().toISOString(),
+        round: clashEndRound,
+        actorId: body.participantId,
+        actorName,
+        action: 'Clash Ended',
+        target: targetName,
+        result: `The clash between ${actorName} and ${targetName} ends (${isPassAttack ? 'pass attack' : 'charge — moved after'}).`,
+        damage: null,
+        effects: ['Clash Ended'],
+      }]
+      await db.update(encounters).set({ participants: newParticipants, battleLog: newLog, updatedAt: new Date() }).where(eq(encounters.id, encounterId))
+      const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+      return updated
+    }
+
     // Deduct 2 simple actions
     participants = participants.map((p: any) => {
       if (p.id === body.participantId) {
@@ -471,6 +514,7 @@ export default defineEventHandler(async (event) => {
 
     // Auto-miss check
     if (body.accuracySuccesses === 0) {
+      if (shouldEndClash) return await finalizeClashEndAfterAttack()
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
       return updated
     }
@@ -490,6 +534,7 @@ export default defineEventHandler(async (event) => {
         clashAttack: true,
       },
     })
+    if (shouldEndClash) return await finalizeClashEndAfterAttack()
     return result
   }
 

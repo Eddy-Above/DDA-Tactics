@@ -63,7 +63,7 @@
           @charge-target-selected="onChargeTargetSelected"
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
-          @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else emit('player-action', id, action) }"
+          @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else if (action === 'clash-move') onClashMove(id); else emit('player-action', id, action) }"
           @cell-hovered="onCellHovered"
           @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
@@ -177,8 +177,10 @@ import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composabl
 import { useMapEditor } from '~/composables/useMapEditor'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
+import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
+import { chebyshev } from '~/utils/pathfinding'
 
-type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check'
+type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -616,6 +618,38 @@ function onNpcMove(participantId: string) {
   npcMoveParticipantId.value = participantId
 }
 
+// Clash reposition (controller only): same movement, but restricted to cells that keep the
+// mover's footprint in contact with its clash partner — clashing units may shuffle around but
+// must stay touching. Breaking contact is only allowed via charge/pass clash attacks (which end
+// the clash). The clash state is preserved by this move.
+function onClashMove(participantId: string) {
+  if (!map.value) return
+  const ctx = npcMoveCaps(participantId)
+  if (!ctx) return
+  const clash = (ctx.p as any)?.clash
+  if (!clash?.isController) return
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
+
+  const opponentId = clash.opponentParticipantId
+  const opp = opponentId ? ctx.occupied.get(opponentId) : undefined
+  if (opp) {
+    const moverDims = getFootprintDimensions((ctx.dInfo?.size ?? 'medium') as any, ctx.moverGig)
+    const oppDims = getFootprintDimensions((opp.size ?? 'medium') as any, opp.giganticDimensions ?? null)
+    const oppCells = getFootprintCells(opp.pos, oppDims)
+    // Reach-initiated clashes stay in contact at the reach distance; melee clashes at distance 1.
+    const contactRange = clash.reachInitiated && clash.reachDistance ? clash.reachDistance : 1
+    const filtered = new Set<string>()
+    for (const k of movement.reachableCells.value) {
+      const [x, y, z] = k.split(',').map(Number)
+      const moverCells = getFootprintCells({ x, y, z }, moverDims)
+      const inContact = moverCells.some(mc => oppCells.some(oc => chebyshev(mc, oc) <= contactRange))
+      if (inContact) filtered.add(k)
+    }
+    movement.reachableCells.value = filtered
+  }
+  npcMoveParticipantId.value = participantId
+}
+
 function startThrowAim(controllerId: string, thrownTargetId: string) {
   if (!map.value) return
   const ctx = throwCaps(thrownTargetId, controllerId)
@@ -677,6 +711,7 @@ function onCellHovered(cell: Vec3 | null) {
 
 function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction) {
   if (action === 'move') { onNpcMove(participantId); return }
+  if (action === 'clash-move') { onClashMove(participantId); return }
   emit('npc-action', participantId, action as 'stance' | 'attack' | 'clash' | ClashRadialAction)
 }
 

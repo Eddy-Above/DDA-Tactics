@@ -175,6 +175,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Attacker not found' })
   }
 
+  // While clashing, a participant cannot Dodge attacks from OUTSIDE the clash. An attack from the
+  // participant's own clash opponent (same clashId) is a Clash Attack and uses the half-dodge
+  // `clashAttack` flag instead, so it is NOT treated as "cannot dodge".
+  const targetCannotDodge = (t: any): boolean =>
+    !!(t?.clash?.clashId && (attacker as any)?.clash?.clashId !== t.clash.clashId)
+
   // ========================
   // AREA ATTACK PATH
   // ========================
@@ -602,6 +608,7 @@ export default defineEventHandler(async (event) => {
             houseRules,
             clashAttack: body.clashAttack,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty,
+            cannotDodge: targetCannotDodge(participants.find((p: any) => p.id === tid)),
             totalTargetCount,
           })
           participants = result.participants
@@ -678,6 +685,7 @@ export default defineEventHandler(async (event) => {
             batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
             clashAttack: body.clashAttack || false,
             outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+            cannotDodge: targetCannotDodge(target),
             totalTargetCount,
             intercedeGroupId,
           },
@@ -1279,6 +1287,7 @@ export default defineEventHandler(async (event) => {
           // Clash modifiers
           clashAttack: body.clashAttack || false,
           outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
+          cannotDodge: targetCannotDodge(target),
         },
       }
 
@@ -1348,6 +1357,7 @@ export default defineEventHandler(async (event) => {
           houseRules,
           clashAttack: body.clashAttack,
           outsideClashCpuPenalty: body.outsideClashCpuPenalty,
+          cannotDodge: targetCannotDodge(target),
         })
 
         await db.update(encounters).set({

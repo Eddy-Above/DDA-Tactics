@@ -256,8 +256,12 @@ export default defineEventHandler(async (event) => {
     const accuracySuccesses = request.data.accuracySuccesses
     let dodgeSuccesses = body.response.dodgeSuccesses ?? 0
 
-    // Clash Attack / Counterattack halfDodge: target may only use half their dodge pool — recount successes from capped dice
-    if (request.data.clashAttack || request.data.halfDodge) {
+    // Attacked from OUTSIDE the clash: the clashing target cannot dodge at all (server-enforced
+    // even if a dodge roll was somehow submitted).
+    if (request.data.cannotDodge) {
+      dodgeSuccesses = 0
+    } else if (request.data.clashAttack || request.data.halfDodge) {
+      // Clash Attack / Counterattack halfDodge: target may only use half their dodge pool — recount successes from capped dice
       const targetParticipantForDodge = participants.find((p: any) => p.id === request.targetParticipantId)
       let fullDodgePool = 3
       if (targetParticipantForDodge?.type === 'digimon') {

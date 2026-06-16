@@ -132,7 +132,7 @@ import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/mo
 import { detectCapabilities } from '~/composables/useMapMovement'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 
-type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check'
+type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
 // ── Props ──────────────────────────────────────────────────────────────────
 const props = defineProps<{
@@ -294,6 +294,7 @@ function clashRadialButtons(p: CombatParticipant | null):
       { action: 'clash-attack', label: 'Clash Attack', disabled: simple < 2 },
       { action: 'clash-pin', label: 'Pin', disabled: simple < 2 },
       { action: 'clash-throw', label: 'Throw', disabled: simple < 2 },
+      { action: 'clash-move', label: 'Reposition', disabled: false },
       { action: 'clash-end', label: 'End Clash', disabled: false },
     ]
   }
@@ -2528,6 +2529,9 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.move   { top: -38px; left: -55px; }
 .npc-radial-btn.stance { top: -68px; left: 0; }
 .npc-radial-btn.attack { top: -38px; left: 55px; }
+/* Standalone (non-clash-state) Clash button in the normal radial fan. Grouped clash-state
+   buttons override this with position: static inside .npc-radial-clash-group. */
+.npc-radial-btn.clash  { top: 30px; left: 0; }
 .npc-radial-clash-group {
   position: absolute;
   top: 12px;
@@ -2553,6 +2557,7 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
 .npc-radial-btn.player.digimon-stance { top: 0; left: 0; }
 .npc-radial-btn.player.mode-change    { top: -75px; left: 90px; }
+.npc-radial-btn.player.clash          { top: 30px; left: 0; }
 .npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

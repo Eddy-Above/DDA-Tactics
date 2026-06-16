@@ -23,6 +23,7 @@ interface ResolveNpcAttackParams {
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
   counterattack?: boolean      // If true, target's dodge pool is halved (Counterattack mechanic)
+  cannotDodge?: boolean        // If true, target gets NO dodge (attacked from outside their clash)
   outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
 }
@@ -143,6 +144,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   }
 
   dodgePool = Math.max(1, dodgePool)
+
+  // Attacked from OUTSIDE the clash: the target gets no dodge at all (overrides the min-1 floor).
+  if (params.cannotDodge) {
+    dodgePool = 0
+  }
 
   // Roll dodge
   const dodgeDiceResults: number[] = []

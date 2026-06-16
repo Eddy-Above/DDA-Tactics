@@ -4,7 +4,7 @@ import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
 import type { DigimonStage, EddySoulRules, Vec3 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
-import { computeAreaCellsFromData } from '~/utils/areaShapes'
+import { computeAreaCellsFromData, getAreaShape } from '~/utils/areaShapes'
 import { vec3Key } from '~/utils/mapGeometry'
 import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
@@ -998,6 +998,11 @@ const dodgeDicePool = computed(() => {
     pool += directedEffect.value
   }
 
+  // Attacked from outside the clash: the target cannot dodge at all.
+  if (currentDodgeRequest.value?.data?.cannotDodge) {
+    return 0
+  }
+
   // Counterattack: target rolls only half their Dodge Pool
   if (currentDodgeRequest.value?.data?.halfDodge) {
     pool = Math.max(1, Math.floor(pool / 2))
@@ -1493,6 +1498,18 @@ const playerAttackOptions = computed(() => {
   const p = playerAttackParticipant.value
   if (!p) return []
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
+})
+
+// Clash Attack: the controller picks one of their MELEE attacks (incl. Basic Melee) to use on
+// the clash opponent. `canUseAttack` bans clashing participants, so filter by melee range only.
+const clashAttackActorId = ref<string | null>(null)
+const clashAttackParticipant = computed(() =>
+  (activeEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === clashAttackActorId.value)
+)
+const clashAttackOptions = computed(() => {
+  const p = clashAttackParticipant.value
+  if (!p) return []
+  return getParticipantAttacks(p).filter(a => a.range === 'melee')
 })
 
 function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any): boolean {
@@ -3837,6 +3854,63 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
   }
 }
 
+// Clash Attack: open the melee-only attack picker for the controller. Picking an attack rolls
+// accuracy and submits to clash-action — see confirmClashAttack.
+function startClashAttack(participantId: string) {
+  if (!activeEncounter.value) return
+  const participant = (activeEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
+  if (!(participant as any)?.clash?.isController) return
+  clashAttackActorId.value = participantId
+}
+
+async function confirmClashAttack(participant: CombatParticipant, attack: any) {
+  if (!activeEncounter.value || !tamer.value) return
+  const actorId = clashAttackActorId.value
+  clashAttackActorId.value = null
+  const clash = (participant as any).clash
+  if (!clash?.clashId || !actorId) return
+
+  // Roll accuracy (5+ = 1 success), reusing the same dice math as a normal attack
+  const accuracyPool = getAttackStats(participant, attack).accuracy
+  const accuracyDiceResults: number[] = []
+  for (let i = 0; i < accuracyPool; i++) {
+    accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
+  }
+  const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
+
+  // Charge/Pass: pass always ends the clash; charge offers maintain vs move-after.
+  const isPass = getAreaShape(attack.tags ?? []) === 'pass'
+  const isCharge = (attack.tags ?? []).includes('Charge Attack')
+  let endClash = false
+  if (isPass) {
+    endClash = true
+  } else if (isCharge) {
+    endClash = confirm('Charge Attack: end the clash and move after? (Cancel = maintain the clash)')
+  }
+
+  try {
+    const actorTamerId = participant.type === 'tamer' ? participant.entityId : undefined
+    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/clash-action`, {
+      method: 'POST',
+      body: {
+        clashId: clash.clashId,
+        participantId: actorId,
+        tamerId: actorTamerId,
+        actionType: 'attack',
+        attackId: attack.id,
+        attackName: attack.name,
+        accuracySuccesses,
+        accuracyDiceResults,
+        accuracyDicePool: accuracyPool,
+        endClash,
+      },
+    })
+    await fetchEncounter(activeEncounter.value.id)
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to execute clash attack')
+  }
+}
+
 async function executeClashAction(participantId: string, actionType: 'attack' | 'end' | 'pin' | 'throw', options?: { landingPos?: Vec3 }) {
   if (!activeEncounter.value || !tamer.value) return
   const participants = activeEncounter.value.participants as CombatParticipant[]
@@ -4221,7 +4295,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 else if (action === 'digivolve') mapDigivolveDigimonParticipantId = mapDigivolveDigimonParticipantId === id ? null : id
                 else if (action === 'mode-change') mapModeChangeDigimonParticipantId = mapModeChangeDigimonParticipantId === id ? null : id
                 else if (action === 'clash')      openClashTargetSelector(id)
-                else if (action === 'clash-attack') executeClashAction(id, 'attack')
+                else if (action === 'clash-attack') startClashAttack(id)
                 else if (action === 'clash-pin')    executeClashAction(id, 'pin')
                 else if (action === 'clash-end')    executeClashAction(id, 'end')
                 else if (action === 'clash-throw') {
@@ -4656,7 +4730,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       <button
                         :disabled="participant.actionsRemaining.simple < 2"
                         class="text-xs px-2 py-1 rounded bg-red-900/50 text-red-300 hover:bg-red-900/80 disabled:opacity-50 disabled:cursor-not-allowed"
-                        @click="executeClashAction(participant.id, 'attack')"
+                        @click="startClashAttack(participant.id)"
                       >
                         Clash Attack (2)
                       </button>
@@ -5893,6 +5967,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </p>
         </div>
 
+        <div v-if="currentDodgeRequest?.data?.cannotDodge" class="mb-4 p-3 bg-red-900/40 rounded-lg border border-red-600">
+          <p class="text-red-300 text-sm font-medium">
+            You're locked in a clash — you cannot dodge attacks from outside it. This attack hits automatically.
+          </p>
+        </div>
+
         <p class="text-white text-sm mb-4">
           Roll {{ dodgeDicePool }}d6 — count 5+ as successes
           <span v-if="(currentDodgeRequest?.data?.dodgePenalty ?? 0) > 0" class="text-red-400 text-xs ml-1">
@@ -6637,6 +6717,39 @@ async function handleBreakClash(participantId: string, clashId: string) {
             {{ divineProtectionLoading ? 'Processing...' : `Take the hit (${currentDivineProtectionRequest.data?.pendingDamage} damage)` }}
           </button>
         </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Clash Attack: melee attack picker (controller chooses a melee attack to use on the opponent) -->
+  <Teleport to="body">
+    <div
+      v-if="clashAttackActorId"
+      class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+      @click.self="clashAttackActorId = null"
+    >
+      <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md max-h-[80vh] overflow-y-auto border-2 border-red-600">
+        <h2 class="font-display text-xl font-semibold text-white mb-1">Clash Attack</h2>
+        <p class="text-xs text-digimon-dark-400 mb-4">Choose a melee attack to use on the clash opponent. The target rolls half their Dodge pool.</p>
+        <div v-if="clashAttackOptions.length === 0" class="text-sm text-digimon-dark-400 italic">No melee attacks available.</div>
+        <div class="flex flex-col gap-2">
+          <button
+            v-for="attack in clashAttackOptions"
+            :key="attack.id"
+            class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+            @click="confirmClashAttack(clashAttackParticipant!, attack)"
+          >
+            <span class="font-semibold">{{ attack.name }}</span>
+            <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
+            <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
+              <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
+              <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
+              <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
+              <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
+            </span>
+          </button>
+        </div>
+        <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashAttackActorId = null">Cancel</button>
       </div>
     </div>
   </Teleport>
