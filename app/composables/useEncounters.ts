@@ -409,9 +409,9 @@ export function useEncounters() {
     const oldCurrentTurnIndex = encounter.currentTurnIndex
     const removedIndex = oldTurnOrder.indexOf(participantId)
 
-    const participants = (encounter.participants as CombatParticipant[]).filter(
-      (p) => p.id !== participantId
-    )
+    const participants = (encounter.participants as CombatParticipant[])
+      .filter((p) => p.id !== participantId)
+      .map((p) => p.clash?.opponentParticipantId === participantId ? { ...p, clash: undefined } : p)
     const turnOrder = oldTurnOrder.filter((id) => id !== participantId)
 
     let currentTurnIndex = oldCurrentTurnIndex
@@ -463,20 +463,23 @@ export function useEncounters() {
 
     const participants = encounter.participants as CombatParticipant[]
     const turnOrder = encounter.turnOrder as string[]
+    if (turnOrder.length === 0) return null
     let nextIndex = (encounter.currentTurnIndex + 1) % turnOrder.length
 
     // Skip any turn-order slots whose participant was removed from the encounter
     let skipped = 0
+    let crossedZero = nextIndex === 0
     while (!participants.find((p) => p.id === turnOrder[nextIndex]) && skipped < turnOrder.length) {
       nextIndex = (nextIndex + 1) % turnOrder.length
       skipped++
+      if (nextIndex === 0) crossedZero = true
     }
 
     let newRound = encounter.round
     const poisonLogEntries: any[] = []
 
     // If we've wrapped around, start a new round
-    if (nextIndex === 0) {
+    if (crossedZero) {
       newRound += 1
       applyRoundReset(participants, houseRules, digimonMap)
     }

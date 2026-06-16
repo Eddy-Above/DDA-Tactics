@@ -389,7 +389,7 @@ export async function resolveAreaIntercedeGroup({
         attackerName: groupData.attackerName,
         targetName: resolvedName,
         turnOrder: updatedTurnOrder,
-        currentTurnIndex,
+        currentTurnIndex: groupNextTurnIndex ?? currentTurnIndex,
         houseRules,
         clashAttack: groupData.clashAttack,
         outsideClashCpuPenalty: groupData.outsideClashCpuPenalty,

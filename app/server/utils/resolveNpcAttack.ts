@@ -423,6 +423,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     const defeatedWasCurrentTurn = defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder === currentTurnIndex
 
     participants = participants.filter((p: any) => p.id !== params.targetParticipantId)
+    // Clear clash state for any participant whose opponent was just removed
+    participants = participants.map((p: any) =>
+      p.clash?.opponentParticipantId === params.targetParticipantId ? { ...p, clash: null } : p
+    )
     if (params.turnOrder) {
       params.turnOrder = params.turnOrder.filter((id: string) => id !== params.targetParticipantId)
     }
@@ -471,6 +475,29 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           nextParticipant.isActive = true
           nextParticipant.dodgePenalty = 0
           nextParticipant.hasDirectedThisTurn = false
+          if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
+            nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
+            nextParticipant.actionsRemaining.simple = Math.max(
+              0,
+              nextParticipant.actionsRemaining.simple - nextParticipant.pendingSimpleActionPenalty,
+            )
+            nextParticipant.pendingSimpleActionPenalty = 0
+          }
+          if (nextParticipant.type === 'tamer') {
+            for (const p of participants.filter((p: any) => p.type === 'digimon')) {
+              const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
+              if (dig?.partnerId === nextParticipant.entityId) {
+                p.dodgePenalty = 0
+                if (p.interceptPenalty) {
+                  p.actionsRemaining = p.actionsRemaining || { simple: 2 }
+                  p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - p.interceptPenalty)
+                  p.interceptPenalty = 0
+                }
+                p.hasActed = false
+                break
+              }
+            }
+          }
         }
       }
     } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {

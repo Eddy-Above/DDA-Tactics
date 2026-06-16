@@ -477,6 +477,10 @@ export default defineEventHandler(async (event) => {
 
     // Filter out defeated NPC from participants
     finalParticipantsAfterDefeat = finalParticipants.filter((p: any) => p.id !== body.targetId)
+    // Clear clash state for any participant whose opponent was just removed
+    finalParticipantsAfterDefeat = finalParticipantsAfterDefeat.map((p: any) =>
+      p.clash?.opponentParticipantId === body.targetId ? { ...p, clash: null } : p
+    )
     // Filter out defeated NPC from turn order
     updatedTurnOrder = turnOrder.filter((id: string) => id !== body.targetId)
 
@@ -517,6 +521,29 @@ export default defineEventHandler(async (event) => {
         nextParticipant.isActive = true
         nextParticipant.dodgePenalty = 0
         nextParticipant.hasDirectedThisTurn = false
+        if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
+          nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
+          nextParticipant.actionsRemaining.simple = Math.max(
+            0,
+            nextParticipant.actionsRemaining.simple - nextParticipant.pendingSimpleActionPenalty,
+          )
+          nextParticipant.pendingSimpleActionPenalty = 0
+        }
+        if (nextParticipant.type === 'tamer') {
+          for (const p of finalParticipantsAfterDefeat.filter((p: any) => p.type === 'digimon')) {
+            const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
+            if (dig?.partnerId === nextParticipant.entityId) {
+              p.dodgePenalty = 0
+              if (p.interceptPenalty) {
+                p.actionsRemaining = p.actionsRemaining || { simple: 2 }
+                p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - p.interceptPenalty)
+                p.interceptPenalty = 0
+              }
+              p.hasActed = false
+              break
+            }
+          }
+        }
       }
     } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
       // The active participant shifted left by one slot; same person remains active
