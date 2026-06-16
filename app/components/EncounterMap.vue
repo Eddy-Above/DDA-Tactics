@@ -650,6 +650,16 @@ function onClashMove(participantId: string) {
   npcMoveParticipantId.value = participantId
 }
 
+// Post-attack charge move (charge clash attack, "move after"): the clash has already ended, so
+// the controller may charge away freely. Enters the normal free-move mode (no contact restriction).
+function startChargeAfterMove(participantId: string) {
+  if (!map.value) return
+  const ctx = npcMoveCaps(participantId)
+  if (!ctx) return
+  movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
+  npcMoveParticipantId.value = participantId
+}
+
 function startThrowAim(controllerId: string, thrownTargetId: string) {
   if (!map.value) return
   const ctx = throwCaps(thrownTargetId, controllerId)
@@ -830,7 +840,7 @@ function onStructureSave(id: string, type: string, woundBoxes: number | null, fa
   selectedStructure.value = null
 }
 
-defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim })
+defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim, startChargeAfterMove })
 </script>
 
 <style scoped>

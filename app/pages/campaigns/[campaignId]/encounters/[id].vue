@@ -622,6 +622,9 @@ const clashAttackActorId = ref<string | null>(null)
 // Set when a Pass (area) attack is chosen as a Clash Attack: routes through the normal area-aim
 // flow (highlight + movement), then ends the clash once the area attack is submitted.
 const clashAreaAttack = ref<{ controllerId: string; opponentId: string } | null>(null)
+// Set when a Charge (non-area) attack is chosen as a Clash Attack: the picker shows two options
+// (maintain clash vs attack-then-move) before resolving.
+const clashChargeChoice = ref<{ participant: CombatParticipant; attack: any } | null>(null)
 const clashAttackParticipant = computed(() =>
   (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === clashAttackActorId.value)
 )
@@ -2978,7 +2981,25 @@ function startClashAttack(participantId: string) {
   clashAttackActorId.value = participantId
 }
 
-async function confirmClashAttack(participant: CombatParticipant, attack: any) {
+// Dispatch a picked clash attack: a charge (non-area) attack offers two options first (maintain
+// clash vs attack-then-move); everything else goes straight to confirmClashAttack.
+function pickClashAttack(participant: CombatParticipant, attack: any) {
+  const isCharge = (attack.tags ?? []).includes('Charge Attack')
+  const isArea = getAreaShape(attack.tags ?? []) !== null
+  if (isCharge && !isArea) {
+    clashChargeChoice.value = { participant, attack }
+    return
+  }
+  confirmClashAttack(participant, attack)
+}
+
+function chooseClashCharge(moveAfter: boolean) {
+  const c = clashChargeChoice.value
+  clashChargeChoice.value = null
+  if (c) confirmClashAttack(c.participant, c.attack, { endClash: moveAfter, moveAfter })
+}
+
+async function confirmClashAttack(participant: CombatParticipant, attack: any, opts?: { endClash?: boolean; moveAfter?: boolean }) {
   if (!currentEncounter.value) return
   const actorId = clashAttackActorId.value
   clashAttackActorId.value = null
@@ -3003,15 +3024,8 @@ async function confirmClashAttack(participant: CombatParticipant, attack: any) {
   }
   const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
-  // Charge/Pass: pass always ends the clash; charge offers maintain vs move-after.
-  const isPass = getAreaShape(attack.tags ?? []) === 'pass'
-  const isCharge = (attack.tags ?? []).includes('Charge Attack')
-  let endClash = false
-  if (isPass) {
-    endClash = true
-  } else if (isCharge) {
-    endClash = confirm('Charge Attack: end the clash and move after? (Cancel = maintain the clash)')
-  }
+  // Charge "move after" ends the clash; otherwise the clash is maintained. (Pass is handled above.)
+  const endClash = opts?.endClash ?? false
 
   try {
     const tamerId = participant.type === 'tamer' ? participant.entityId : undefined
@@ -3031,6 +3045,12 @@ async function confirmClashAttack(participant: CombatParticipant, attack: any) {
       },
     })
     await fetchEncounter(currentEncounter.value.id)
+    // Charge "move after": the clash has ended — let the controller charge away with a free move.
+    if (opts?.moveAfter) {
+      showMapView.value = true
+      await nextTick()
+      encounterMapRef.value?.startChargeAfterMove?.(actorId)
+    }
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to execute clash attack')
   }
@@ -5177,30 +5197,45 @@ function onMapAttackCancelled() {
         <div
           v-if="clashAttackActorId"
           class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          @click.self="clashAttackActorId = null"
+          @click.self="clashAttackActorId = null; clashChargeChoice = null"
         >
           <div class="bg-digimon-dark-800 rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto border-2 border-red-600">
             <h2 class="text-xl font-display font-semibold text-white mb-1">Clash Attack</h2>
-            <p class="text-xs text-digimon-dark-400 mb-4">Choose a melee attack to use on the clash opponent. The target rolls half their Dodge pool.</p>
-            <div v-if="clashAttackOptions.length === 0" class="text-sm text-digimon-dark-400 italic">No melee attacks available.</div>
-            <div class="flex flex-col gap-2">
-              <button
-                v-for="attack in clashAttackOptions"
-                :key="attack.id"
-                class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-                @click="confirmClashAttack(clashAttackParticipant!, attack)"
-              >
-                <span class="font-semibold">{{ attack.name }}</span>
-                <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
-                <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
-                  <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
-                  <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
-                  <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
-                  <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
-                </span>
-              </button>
-            </div>
-            <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashAttackActorId = null">Cancel</button>
+            <!-- Charge attack: two options before resolving -->
+            <template v-if="clashChargeChoice">
+              <p class="text-xs text-digimon-dark-400 mb-4"><span class="font-semibold text-cyan-300">{{ clashChargeChoice.attack.name }}</span> has Charge. While clashing you may attack in place or attack then move.</p>
+              <div class="flex flex-col gap-2">
+                <button class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600" @click="chooseClashCharge(false)">
+                  <span class="font-semibold">Attack &amp; stay</span><span class="ml-2 text-xs text-digimon-dark-400">keep the clash</span>
+                </button>
+                <button class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600" @click="chooseClashCharge(true)">
+                  <span class="font-semibold">Attack &amp; move</span><span class="ml-2 text-xs text-digimon-dark-400">charge away, ends the clash</span>
+                </button>
+              </div>
+              <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashChargeChoice = null">Back</button>
+            </template>
+            <template v-else>
+              <p class="text-xs text-digimon-dark-400 mb-4">Choose a melee attack to use on the clash opponent. The target rolls half their Dodge pool.</p>
+              <div v-if="clashAttackOptions.length === 0" class="text-sm text-digimon-dark-400 italic">No melee attacks available.</div>
+              <div class="flex flex-col gap-2">
+                <button
+                  v-for="attack in clashAttackOptions"
+                  :key="attack.id"
+                  class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
+                  @click="pickClashAttack(clashAttackParticipant!, attack)"
+                >
+                  <span class="font-semibold">{{ attack.name }}</span>
+                  <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
+                  <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
+                    <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
+                    <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
+                    <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
+                    <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
+                  </span>
+                </button>
+              </div>
+              <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashAttackActorId = null">Cancel</button>
+            </template>
           </div>
         </div>
       </Teleport>
