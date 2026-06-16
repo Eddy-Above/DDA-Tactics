@@ -106,7 +106,10 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (actor.clash) {
+  // A Pass clash attack is legitimately made by the clashing controller and routes through this
+  // endpoint; it uniquely carries `clashNoInterceptTargetId`. All other attacks by a clashing
+  // participant are blocked.
+  if (actor.clash && !body.clashNoInterceptTargetId) {
     throw createError({ statusCode: 403, message: 'Cannot use regular attacks while in a clash' })
   }
 
