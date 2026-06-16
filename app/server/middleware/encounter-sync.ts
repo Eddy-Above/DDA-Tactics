@@ -19,7 +19,7 @@ export default defineEventHandler((event) => {
     if (event.node.res.statusCode >= 200 && event.node.res.statusCode < 300) {
       buildEncounterPayload(encounterId).then((encounter) => {
         if (!encounter) return
-        broadcast(encounterId, { type: 'encounter-state', encounterId, encounter, version: encounter.version })
+        broadcast(encounterId, { type: 'encounter-state', encounterId, encounter, version: Date.now() })
       }).catch((e) => console.error('[encounter-sync] Failed to broadcast encounter-state:', e))
     }
   })
