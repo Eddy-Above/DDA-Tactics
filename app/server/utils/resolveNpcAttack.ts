@@ -1,11 +1,18 @@
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
+import type { Vec3, GameMap } from '../types'
 import { getEffectStatModifiers } from '../../data/attackConstants'
 import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { computeAttackDamage } from './computeAttackDamage'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
+import {
+  getFootprintDimsForParticipant,
+  buildFootprintOccupiedSet,
+  isPositionInAir,
+  findPushPullLandingCell,
+} from './mapMovement'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -26,6 +33,8 @@ interface ResolveNpcAttackParams {
   cannotDodge?: boolean        // If true, target gets NO dodge (attacked from outside their clash)
   outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
+  mapRecord?: GameMap           // If provided, enables push/pull displacement
+  participantPositions?: Record<string, Vec3>
 }
 
 /**
@@ -40,6 +49,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   hit: boolean
   nextTurnIndex?: number
   nextRound?: number
+  positionPatch?: Record<string, Vec3>
 }> {
   let { participants, battleLog } = params
 
@@ -323,6 +333,85 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     return p
   })
 
+  // --- Push/Pull map displacement (map mode only) ---
+  let positionPatch: Record<string, Vec3> | undefined
+  let pushPullLogNote: string | null = null
+  if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && params.mapRecord && params.participantPositions) {
+    const targetPos = params.participantPositions[params.targetParticipantId]
+    const attackerPos = params.participantPositions[params.attackerParticipantId]
+
+    if (targetPos && attackerPos) {
+      const entityIds = [...new Set(
+        participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
+      )] as string[]
+      const digimonRows = entityIds.length
+        ? await db.select().from(digimon).where(inArray(digimon.id, entityIds))
+        : []
+      const digimonById = new Map(digimonRows.map((d: any) => [d.id, d]))
+
+      const targetPart = participants.find((p: any) => p.id === params.targetParticipantId)
+      const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
+      const occupiedSet = buildFootprintOccupiedSet(
+        params.participantPositions,
+        participants as any[],
+        digimonById as any,
+        new Set([params.targetParticipantId]),
+      )
+
+      const effectPotency = damageCalc.effectData?.potency ?? 0
+      const landingCell = findPushPullLandingCell(
+        targetPos,
+        attackerPos,
+        appliedEffectName === 'Knockback' ? 'push' : 'pull',
+        effectPotency,
+        targetDims,
+        params.mapRecord,
+        occupiedSet,
+      )
+
+      if (landingCell) {
+        let pushFallDamage = 0
+        let finalY = landingCell.y
+        if (isPositionInAir(landingCell, params.mapRecord)) {
+          let groundY = landingCell.y
+          while (groundY > 0 && isPositionInAir({ x: landingCell.x, y: groundY - 1, z: landingCell.z }, params.mapRecord)) {
+            groundY--
+          }
+          finalY = groundY
+          const fallHeight = landingCell.y - groundY
+          pushFallDamage = Math.max(0, fallHeight - 1)
+          if (pushFallDamage > 0 && targetPart?.type === 'digimon') {
+            const targetDigRec = digimonById.get(targetPart.entityId) as any
+            const quals = targetDigRec?.qualities ?? []
+            if (quals.some((q: any) => q.id === 'tumbler')) {
+              const hasAdvJumper = quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+              if (hasAdvJumper) {
+                pushFallDamage = 0
+              } else {
+                const td = await getDigimonDerivedStats(targetPart.entityId)
+                pushFallDamage = Math.max(0, pushFallDamage - (td?.ram ?? 0) * 2)
+              }
+            }
+          }
+        }
+
+        if (pushFallDamage > 0) {
+          participants = participants.map((p: any) => {
+            if (p.id === params.targetParticipantId) {
+              return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + pushFallDamage) }
+            }
+            return p
+          })
+        }
+
+        positionPatch = { [params.targetParticipantId]: { x: landingCell.x, y: finalY, z: landingCell.z } }
+        const moveLabel = appliedEffectName === 'Knockback' ? 'Knockback' : 'Pull'
+        const pushFallNote = pushFallDamage > 0 ? ` + ${pushFallDamage} fall damage` : ''
+        pushPullLogNote = `${moveLabel}: displaced ${effectPotency} cell(s)${pushFallNote}`
+      }
+    }
+  }
+
   // --- Auto-devolve check ---
   let autoDevolveLog: any = null
   const damagedTarget = participants.find((p: any) => p.id === params.targetParticipantId)
@@ -534,6 +623,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       'Dodge',
       ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
       ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
+      ...(pushPullLogNote ? [pushPullLogNote] : []),
     ],
     attackerParticipantId: params.attackerParticipantId,
     baseDamage: attackBaseDamage,
@@ -550,5 +640,5 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : [])]
 
-  return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound }
+  return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound, positionPatch }
 }

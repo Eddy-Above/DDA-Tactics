@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
+import { getRoomPositions, applyPositionPatch, broadcast } from '~/server/utils/encounterRoom'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
@@ -27,6 +28,22 @@ export default defineEventHandler(async (event) => {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
+  }
+
+  // Load map + positions for push/pull displacement (only if this encounter uses a map)
+  const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
+  let mapRecord: any = null
+  if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {
+    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
+    if (m) {
+      mapRecord = {
+        groundTiles: m.groundTiles ?? [],
+        voxels: (m as any).voxels ?? [],
+        stairs: m.stairs ?? [],
+        walls: m.walls ?? [],
+        doors: m.doors ?? [],
+      }
+    }
   }
 
   // Fetch campaign house rules
@@ -284,7 +301,14 @@ export default defineEventHandler(async (event) => {
               targetName: request.data.targetName,
               turnOrder,
               currentTurnIndex: encounter.currentTurnIndex || 0,
+              mapRecord: mapRecord ?? undefined,
+              participantPositions: participantPositions ?? undefined,
             })
+
+            if (result.positionPatch) {
+              const version = await applyPositionPatch(encounterId, result.positionPatch)
+              broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+            }
 
             updateData.participants = result.participants
             updateData.battleLog = result.battleLog

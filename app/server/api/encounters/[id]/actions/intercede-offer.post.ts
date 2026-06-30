@@ -24,7 +24,7 @@ import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, 
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
-import { getRoomPositions } from '~/server/utils/encounterRoom'
+import { getRoomPositions, applyPositionPatch, broadcast } from '~/server/utils/encounterRoom'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 
@@ -613,12 +613,18 @@ export default defineEventHandler(async (event) => {
             outsideClashCpuPenalty: body.outsideClashCpuPenalty,
             cannotDodge: targetCannotDodge(participants.find((p: any) => p.id === tid)),
             totalTargetCount,
+            mapRecord: mapRecord ?? undefined,
+            participantPositions: participantPositions ?? undefined,
           })
           participants = result.participants
           battleLog = result.battleLog
           if (result.turnOrder) turnOrder = result.turnOrder
           if (result.nextTurnIndex !== undefined) areaAutoAdvanceTurnIndex = result.nextTurnIndex
           if (result.nextRound !== undefined) areaAutoAdvanceRound = result.nextRound
+          if (result.positionPatch) {
+            const version = await applyPositionPatch(encounterId, result.positionPatch)
+            broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+          }
         }
       }
 
@@ -1369,7 +1375,14 @@ export default defineEventHandler(async (event) => {
           clashAttack: body.clashAttack,
           outsideClashCpuPenalty: body.outsideClashCpuPenalty,
           cannotDodge: targetCannotDodge(target),
+          mapRecord: mapRecord ?? undefined,
+          participantPositions: participantPositions ?? undefined,
         })
+
+        if (result.positionPatch) {
+          const version = await applyPositionPatch(encounterId, result.positionPatch)
+          broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+        }
 
         await db.update(encounters).set({
           participants: result.participants,

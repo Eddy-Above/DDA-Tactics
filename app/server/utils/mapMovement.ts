@@ -275,6 +275,33 @@ export function findThrowLandingCell(
   return landingPos
 }
 
+// Push (Knockback) / Pull displacement: walk the target step-by-step horizontally away from
+// or toward the attacker, stopping at the first invalid cell. Returns the furthest valid
+// landing cell, or null if the very first step is already blocked.
+export function findPushPullLandingCell(
+  targetPos: Vec3,
+  attackerPos: Vec3,
+  direction: 'push' | 'pull',
+  distance: number,
+  targetDims: FootprintDims,
+  map: GameMap,
+  occupiedSet: Set<string>,
+): Vec3 | null {
+  let dx = Math.sign(targetPos.x - attackerPos.x)
+  let dz = Math.sign(targetPos.z - attackerPos.z)
+  if (direction === 'pull') { dx = -dx; dz = -dz }
+  if (dx === 0 && dz === 0) return null
+  let best: Vec3 | null = null
+  let cur = { ...targetPos }
+  for (let i = 0; i < distance; i++) {
+    const next: Vec3 = { x: cur.x + dx, y: cur.y, z: cur.z + dz }
+    if (!isFootprintValid(next, targetDims, map, occupiedSet, PROJECTILE_CAPS)) break
+    best = next
+    cur = next
+  }
+  return best
+}
+
 // Determines HOW a destination is reachable: by walking alone, jumping, or flying.
 // Runs up to 3 BFS passes to classify without caching assumptions.
 export function classifyReachability(
