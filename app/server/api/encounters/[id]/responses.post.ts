@@ -818,6 +818,8 @@ export default defineEventHandler(async (event) => {
 
             const targetPart = (participants as any[]).find((p: any) => p.id === request.targetParticipantId)
             const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
+            const attackerPart = (participants as any[]).find((p: any) => p.id === request.data.attackerParticipantId)
+            const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById as any)
             const occupiedSet = buildFootprintOccupiedSet(
               positions,
               participants as any[],
@@ -831,6 +833,7 @@ export default defineEventHandler(async (event) => {
               appliedEffectName === 'Knockback' ? 'push' : 'pull',
               damageEffectPotency,
               targetDims,
+              attackerDims,
               pushPullMap,
               occupiedSet,
             )

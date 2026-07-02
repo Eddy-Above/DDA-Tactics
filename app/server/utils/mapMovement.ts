@@ -275,27 +275,63 @@ export function findThrowLandingCell(
   return landingPos
 }
 
-// Push (Knockback) / Pull displacement: walk the target step-by-step horizontally away from
-// or toward the attacker, stopping at the first invalid cell. Returns the furthest valid
-// landing cell, or null if the very first step is already blocked.
+// Center of a footprint box anchored (min-corner) at `anchor`.
+function footprintCenter(anchor: Vec3, dims: FootprintDims): Vec3 {
+  return {
+    x: anchor.x + (dims.width - 1) / 2,
+    y: anchor.y + (dims.height - 1) / 2,
+    z: anchor.z + (dims.depth - 1) / 2,
+  }
+}
+
+// Solid footing = ground/voxel/stair support below, treating water & wind as non-solid
+// (they never block movement, so a unit resting on them can be pushed down through them).
+function hasSolidFootingBelow(pos: Vec3, map: GameMap): boolean {
+  const g = map.groundTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)
+  if (g && g.terrain !== 'water') return true      // water ground isn't solid footing
+  if (hasSolidVoxelSupport(map, pos)) return true  // voxelBlocksMovement already excludes water/wind
+  if (hasSolidStairSupport(map, pos)) return true
+  return false
+}
+
+// Every cell of the footprint anchored at `cur` can traverse by `delta` (walls / voxels / ceilings).
+function footprintCanStep(cur: Vec3, delta: Vec3, dims: FootprintDims, map: GameMap): boolean {
+  return getFootprintCells(cur, dims).every(cell =>
+    canPassThrough(cell, { x: cell.x + delta.x, y: cell.y + delta.y, z: cell.z + delta.z }, PROJECTILE_CAPS, map),
+  )
+}
+
+// Push (Knockback) / Pull displacement: walk the target step-by-step in 3D away from or toward
+// the attacker, stopping at the first blocked step. Direction is taken from the footprint
+// centers so a large attacker/target displaces along the correct line; walls, solid voxels and
+// ceilings block every body cell (water/wind never block); a grounded target can't be pushed
+// down through the floor. Returns the furthest valid landing cell, or null if immediately blocked.
 export function findPushPullLandingCell(
   targetPos: Vec3,
   attackerPos: Vec3,
   direction: 'push' | 'pull',
   distance: number,
   targetDims: FootprintDims,
+  attackerDims: FootprintDims,
   map: GameMap,
   occupiedSet: Set<string>,
 ): Vec3 | null {
-  let dx = Math.sign(targetPos.x - attackerPos.x)
-  let dz = Math.sign(targetPos.z - attackerPos.z)
-  if (direction === 'pull') { dx = -dx; dz = -dz }
-  if (dx === 0 && dz === 0) return null
+  const tc = footprintCenter(targetPos, targetDims)
+  const ac = footprintCenter(attackerPos, attackerDims)
+  let dx = Math.sign(tc.x - ac.x)
+  let dy = Math.sign(tc.y - ac.y)
+  let dz = Math.sign(tc.z - ac.z)
+  if (direction === 'pull') { dx = -dx; dy = -dy; dz = -dz }
+  if (dx === 0 && dy === 0 && dz === 0) return null
   let best: Vec3 | null = null
   let cur = { ...targetPos }
   for (let i = 0; i < distance; i++) {
-    const next: Vec3 = { x: cur.x + dx, y: cur.y, z: cur.z + dz }
-    if (!isFootprintValid(next, targetDims, map, occupiedSet, PROJECTILE_CAPS)) break
+    const stepY = (dy < 0 && hasSolidFootingBelow(cur, map)) ? 0 : dy   // don't shove through a floor
+    const delta = { x: dx, y: stepY, z: dz }
+    if (delta.x === 0 && delta.y === 0 && delta.z === 0) break
+    const next: Vec3 = { x: cur.x + delta.x, y: cur.y + delta.y, z: cur.z + delta.z }
+    if (!footprintCanStep(cur, delta, targetDims, map)) break                          // walls/voxels/ceilings, full body
+    if (!isFootprintValid(next, targetDims, map, occupiedSet, PROJECTILE_CAPS)) break   // support + full-footprint occupancy
     best = next
     cur = next
   }

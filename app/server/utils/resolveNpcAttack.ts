@@ -351,6 +351,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
       const targetPart = participants.find((p: any) => p.id === params.targetParticipantId)
       const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
+      const attackerPart = participants.find((p: any) => p.id === params.attackerParticipantId)
+      const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById as any)
       const occupiedSet = buildFootprintOccupiedSet(
         params.participantPositions,
         participants as any[],
@@ -365,6 +367,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         appliedEffectName === 'Knockback' ? 'push' : 'pull',
         effectPotency,
         targetDims,
+        attackerDims,
         params.mapRecord,
         occupiedSet,
       )
