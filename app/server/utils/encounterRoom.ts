@@ -158,6 +158,20 @@ export async function applyPositionPatch(encounterId: string, patch: Record<stri
   return room.version
 }
 
+// Applies a position patch to the room AND broadcasts it to all viewers. The common pairing used by
+// every server displacement path (Clash Throw, Knockback/Pull, gravity, intercede reposition).
+export async function broadcastPositionPatch(encounterId: string, patch: Record<string, Vec3>): Promise<number> {
+  const version = await applyPositionPatch(encounterId, patch)
+  broadcast(encounterId, { type: 'position-patch', encounterId, patch, version })
+  return version
+}
+
+// A structure (wall/ceiling/etc.) is destroyed once its remaining wounds reach 0. Mirrors the
+// client's `destroyedIds()` in EncounterMap.vue so server pathing can ignore destroyed structures.
+export function getDestroyedStructureIds(destructibleStates: DestructibleState[]): Set<string> {
+  return new Set(destructibleStates.filter((s) => s.currentWounds <= 0).map((s) => s.structureId))
+}
+
 export async function applyStructureDamaged(encounterId: string, structureId: string, currentWounds: number): Promise<number> {
   const room = await getOrHydrate(encounterId)
   const idx = room.destructibleStates.findIndex((s) => s.structureId === structureId)

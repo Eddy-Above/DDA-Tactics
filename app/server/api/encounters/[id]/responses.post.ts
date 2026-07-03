@@ -1,6 +1,7 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns, maps } from '../../../db'
-import { applyPositionPatch, broadcast, getRoomPositions } from '../../../utils/encounterRoom'
+import { broadcastPositionPatch, getRoomPositions } from '../../../utils/encounterRoom'
+import { loadEncounterMap, loadParticipantDigimon } from '../../../utils/combatSpatial'
 import {
   getFootprintDimsForParticipant,
   buildFootprintOccupiedSet,
@@ -796,27 +797,14 @@ export default defineEventHandler(async (event) => {
       // Push/Pull map displacement (map mode only)
       let pushPullLogNote: string | null = null
       if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && encounter.mapId) {
-        const [mapRow] = await db.select().from(maps).where(eq(maps.id, encounter.mapId))
-        if (mapRow) {
-          const pushPullMap: import('../../../../types').GameMap = {
-            groundTiles: mapRow.groundTiles ?? [],
-            voxels: mapRow.voxels ?? [],
-            stairs: mapRow.stairs ?? [],
-            walls: mapRow.walls ?? [],
-            doors: mapRow.doors ?? [],
-          }
+        const pushPullMap = await loadEncounterMap(encounter.mapId)
+        if (pushPullMap) {
           const positions = await getRoomPositions(encounterId!)
           const targetPos = positions[request.targetParticipantId]
           const attackerPos = positions[request.data.attackerParticipantId]
 
           if (targetPos && attackerPos) {
-            const entityIds = [...new Set(
-              (participants as any[]).filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
-            )] as string[]
-            const digimonRows = entityIds.length
-              ? await db.select().from(digimon).where(inArray(digimon.id, entityIds))
-              : []
-            const digimonById = new Map(digimonRows.map((d: any) => [d.id, d]))
+            const digimonById = await loadParticipantDigimon(participants as any[])
 
             const targetPart = (participants as any[]).find((p: any) => p.id === request.targetParticipantId)
             const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
@@ -875,8 +863,7 @@ export default defineEventHandler(async (event) => {
 
               const finalPos = { x: landingCell.x, y: finalY, z: landingCell.z }
               const patch = { [request.targetParticipantId]: finalPos }
-              const version = await applyPositionPatch(encounterId!, patch)
-              broadcast(encounterId!, { type: 'position-patch', encounterId: encounterId!, patch, version })
+              await broadcastPositionPatch(encounterId!, patch)
 
               const moveLabel = appliedEffectName === 'Knockback' ? 'Knockback' : 'Pull'
               const pushFallNote = pushFallDamage > 0 ? ` + ${pushFallDamage} fall damage` : ''

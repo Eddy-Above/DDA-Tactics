@@ -16,6 +16,7 @@ import {
   detectCapabilitiesFromQualities,
 } from './mapMovement'
 import { computeGravityDrops } from './endOfTurnGravity'
+import { loadParticipantDigimon } from './combatSpatial'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -345,13 +346,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     const attackerPos = params.participantPositions[params.attackerParticipantId]
 
     if (targetPos && attackerPos) {
-      const entityIds = [...new Set(
-        participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
-      )] as string[]
-      const digimonRows = entityIds.length
-        ? await db.select().from(digimon).where(inArray(digimon.id, entityIds))
-        : []
-      const digimonById = new Map(digimonRows.map((d: any) => [d.id, d]))
+      const digimonById = await loadParticipantDigimon(participants)
 
       const targetPart = participants.find((p: any) => p.id === params.targetParticipantId)
       const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
@@ -598,13 +593,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         // Apply end-of-turn gravity (pure) when the map + positions are available, using positions
         // merged with any push/pull displacement so a just-moved target isn't double-dropped.
         if (params.mapRecord && params.participantPositions) {
-          const gEntityIds = [...new Set(
-            participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
-          )] as string[]
-          const gRows = gEntityIds.length
-            ? await db.select().from(digimon).where(inArray(digimon.id, gEntityIds))
-            : []
-          const gById = new Map(gRows.map((d: any) => [d.id, d]))
+          const gById = await loadParticipantDigimon(participants)
           const gPositions = { ...params.participantPositions, ...(positionPatch ?? {}) }
           const g = await computeGravityDrops(gPositions, participants, params.mapRecord, gById, nextRound ?? params.round)
           if (Object.keys(g.patch).length > 0) positionPatch = { ...(positionPatch ?? {}), ...g.patch }

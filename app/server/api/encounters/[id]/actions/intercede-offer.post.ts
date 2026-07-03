@@ -24,7 +24,8 @@ import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, 
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
-import { getRoomPositions, applyPositionPatch, broadcast } from '~/server/utils/encounterRoom'
+import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
+import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 
@@ -112,23 +113,9 @@ export default defineEventHandler(async (event) => {
   // Spatial map state (for intercede reach check)
   const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
 
-  let mapRecord: any = null
-  if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {
-    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
-    if (m) {
-      mapRecord = {
-        ...m,
-        groundTiles: m.groundTiles ?? [],
-        spaceTiles: m.spaceTiles ?? [],
-        voxels: (m as any).voxels ?? [],
-        walls: m.walls ?? [],
-        ceilings: m.ceilings ?? [],
-        stairs: m.stairs ?? [],
-        windows: m.windows ?? [],
-        doors: m.doors ?? [],
-      }
-    }
-  }
+  const mapRecord: any = ((encounter as any).mapId && Object.keys(participantPositions).length > 0)
+    ? await loadEncounterMap((encounter as any).mapId)
+    : null
 
   // Returns true if the interceptor (digimon participant) can reach targetPos on the map
   function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): boolean {
@@ -139,14 +126,7 @@ export default defineEventHandler(async (event) => {
     if (!interceptorP || interceptorP.type !== 'digimon') return true
     const digRecord = digimonById.get(interceptorP.entityId)
     if (!digRecord) return true
-    const qualities = digRecord.qualities ?? []
-    const derived = calculateDigimonDerivedStats(
-      digRecord.baseStats,
-      digRecord.stage as any,
-      digRecord.size as any,
-    )
-    const caps = detectCapabilitiesFromQualities(qualities, derived.movement, derived.ram, derived.cpu)
-    const budget = derived.movement
+    const { caps, budget } = getMovementProfile(interceptorP, digimonById, tamerById)
     const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
     return reachable.has(`${targetPos.x},${targetPos.y},${targetPos.z}`)
   }
@@ -309,28 +289,7 @@ export default defineEventHandler(async (event) => {
     // Movement/throw profile of a participant for the unified area-intercede flow:
     // budget/caps drive repositioning into the AoE (Rule 2), bodyStat drives the
     // subsequent throw-out-of-AoE range (Rule 3, mirrors EncounterMap.vue's throwCaps).
-    function movementProfileFor(p: any): { budget: number; caps: ReturnType<typeof detectCapabilitiesFromQualities>; bodyStat: number } {
-      if (p.type === 'digimon') {
-        const digRec = digimonById.get(p.entityId)
-        if (!digRec) return { budget: 0, caps: detectCapabilitiesFromQualities([], 0, 0, 0), bodyStat: 0 }
-        const quals = digRec.qualities ?? []
-        const deriv = calculateDigimonDerivedStats(digRec.baseStats, digRec.stage as any, digRec.size as any)
-        return {
-          budget: deriv.movement,
-          caps: detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu),
-          bodyStat: deriv.body,
-        }
-      }
-      const tamerRecord = tamerById.get(p.entityId)
-      if (!tamerRecord) return { budget: 0, caps: detectCapabilitiesFromQualities([], 0, 0, 0), bodyStat: 0 }
-      const attrs = tamerRecord.attributes || {}
-      const skills = tamerRecord.skills || {}
-      return {
-        budget: (attrs.agility || 0) + (skills.survival || 0),
-        caps: detectCapabilitiesFromQualities([], 0, 0, 0),
-        bodyStat: attrs.body || 0,
-      }
-    }
+    const movementProfileFor = (p: any) => getMovementProfile(p, digimonById, tamerById)
 
     // Offer-time eligibility gates for the unified area-attack intercede flow:
     // Rule 1 — candidate's current footprint must not already be inside the AoE.
@@ -622,8 +581,7 @@ export default defineEventHandler(async (event) => {
           if (result.nextTurnIndex !== undefined) areaAutoAdvanceTurnIndex = result.nextTurnIndex
           if (result.nextRound !== undefined) areaAutoAdvanceRound = result.nextRound
           if (result.positionPatch) {
-            const version = await applyPositionPatch(encounterId, result.positionPatch)
-            broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+            await broadcastPositionPatch(encounterId, result.positionPatch)
           }
         }
       }
@@ -1035,14 +993,7 @@ export default defineEventHandler(async (event) => {
       } else if (targetPos_map) {
         const digRec = digimonById.get(partnerParticipant.entityId)
         if (digRec) {
-          const quals = digRec.qualities ?? []
-          const deriv = calculateDigimonDerivedStats(
-            digRec.baseStats,
-            digRec.stage as any,
-            digRec.size as any,
-          )
-          const caps = detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu)
-          const budget = deriv.movement
+          const { caps, budget } = getMovementProfile(partnerParticipant, digimonById, tamerById)
           const interceptorDims = getFootprintDimensions(digRec.size as any, (digRec as any).giganticDimensions)
 
           let foundPos: { x: number; y: number; z: number } | null = null
@@ -1380,8 +1331,7 @@ export default defineEventHandler(async (event) => {
         })
 
         if (result.positionPatch) {
-          const version = await applyPositionPatch(encounterId, result.positionPatch)
-          broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+          await broadcastPositionPatch(encounterId, result.positionPatch)
         }
 
         await db.update(encounters).set({

@@ -10,7 +10,8 @@ import {
   findThrowLandingCell,
   computeFallDamage,
 } from '~/server/utils/mapMovement'
-import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { loadEncounterMap } from '~/server/utils/combatSpatial'
 import { getAreaShape } from '~/utils/areaShapes'
 import type { Vec3 } from '~/types'
 
@@ -250,20 +251,8 @@ export default defineEventHandler(async (event) => {
     let landingParticipantPositions: Record<string, Vec3> | null = null
 
     if (body.landingPos && (encounter as any).mapId) {
-      const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
-      if (m) {
-        const throwMapRecord: any = {
-          ...m,
-          groundTiles: m.groundTiles ?? [],
-          spaceTiles: m.spaceTiles ?? [],
-          voxels: (m as any).voxels ?? [],
-          walls: m.walls ?? [],
-          ceilings: m.ceilings ?? [],
-          stairs: m.stairs ?? [],
-          windows: m.windows ?? [],
-          doors: m.doors ?? [],
-        }
-
+      const throwMapRecord = await loadEncounterMap((encounter as any).mapId)
+      if (throwMapRecord) {
         const participantPositions = await getRoomPositions(encounterId)
         landingParticipantPositions = participantPositions
         const targetPos = participantPositions[target.id]
@@ -428,8 +417,7 @@ export default defineEventHandler(async (event) => {
 
     if (updatedTargetPosition) {
       const patch = { [target.id]: updatedTargetPosition }
-      const version = await applyPositionPatch(encounterId, patch)
-      broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch, version })
+      await broadcastPositionPatch(encounterId, patch)
     }
 
   } else if (body.actionType === 'attack') {

@@ -24,7 +24,8 @@ import {
 import { calculateDigimonDerivedStats } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
-import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -143,23 +144,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Load map for spatial position validation (single-target intercede, or area-attack throw claims)
-  let claimMapRecord: any = null
-  if ((encounter as any).mapId) {
-    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
-    if (m) {
-      claimMapRecord = {
-        ...m,
-        groundTiles: m.groundTiles ?? [],
-        spaceTiles: m.spaceTiles ?? [],
-        voxels: (m as any).voxels ?? [],
-        walls: m.walls ?? [],
-        ceilings: m.ceilings ?? [],
-        stairs: m.stairs ?? [],
-        windows: m.windows ?? [],
-        doors: m.doors ?? [],
-      }
-    }
-  }
+  const claimMapRecord: any = (encounter as any).mapId ? await loadEncounterMap((encounter as any).mapId) : null
 
   // Determine effective target — area attacks use chosenTargetId
   let effectiveTargetId: string
@@ -322,22 +307,7 @@ export default defineEventHandler(async (event) => {
 
     // Interceptor's movement/throw profile: budget+caps drive repositioning into the AoE,
     // bodyStat drives how far the target can then be thrown out of the AoE
-    let budget = 0
-    let caps = detectCapabilitiesFromQualities([], 0, 0, 0)
-    let bodyStat = 0
-    if (interceptor.type === 'digimon' && interceptorDigRec) {
-      const quals = interceptorDigRec.qualities ?? []
-      const deriv = calculateDigimonDerivedStats(interceptorDigRec.baseStats, interceptorDigRec.stage as any, interceptorDigRec.size as any)
-      budget = deriv.movement
-      caps = detectCapabilitiesFromQualities(quals, deriv.movement, deriv.ram, deriv.cpu)
-      bodyStat = deriv.body
-    } else if (interceptor.type === 'tamer') {
-      const tamerRecord = tamerById.get(interceptor.entityId)
-      const attrs = tamerRecord?.attributes || {}
-      const skills = tamerRecord?.skills || {}
-      budget = (attrs.agility || 0) + (skills.survival || 0)
-      bodyStat = attrs.body || 0
-    }
+    const { caps, budget, bodyStat } = getMovementProfile(interceptor, digimonById, tamerById)
 
     // Step 1: reposition the interceptor into the AoE, adjacent to the target
     const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]))
@@ -400,16 +370,10 @@ export default defineEventHandler(async (event) => {
     // GM ranged intercede: no specific interceptor was chosen at offer time, so no position was
     // pre-computed. Compute the best reachable line-of-fire cell now using the chosen interceptor.
     if (isRangedIntercede && !request.data.interceptePos && interceptorPos && targetPos && attackerPos && interceptorDigRec && interceptor.type === 'digimon') {
-      const quals = interceptorDigRec.qualities ?? []
-      const derived = calculateDigimonDerivedStats(
-        interceptorDigRec.baseStats,
-        interceptorDigRec.stage as any,
-        interceptorDigRec.size as any,
-      )
-      const caps = detectCapabilitiesFromQualities(quals, derived.movement, derived.ram, derived.cpu)
+      const { caps, budget } = getMovementProfile(interceptor, digimonById, tamerById)
       const interceptorDims = getFootprintDimensions(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
       const occupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId]))
-      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, derived.movement, caps, interceptorDims, claimMapRecord, occupied)
+      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, budget, caps, interceptorDims, claimMapRecord, occupied)
       intercDePos = computed ?? undefined
     }
 
@@ -669,8 +633,7 @@ export default defineEventHandler(async (event) => {
     }).where(eq(encounters.id, encounterId))
 
     if (updatedParticipantPositions) {
-      const version = await applyPositionPatch(encounterId, updatedParticipantPositions)
-      broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch: updatedParticipantPositions, version })
+      await broadcastPositionPatch(encounterId, updatedParticipantPositions)
     }
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
@@ -895,8 +858,7 @@ export default defineEventHandler(async (event) => {
   }).where(eq(encounters.id, encounterId))
 
   if (updatedParticipantPositions) {
-    const version = await applyPositionPatch(encounterId, updatedParticipantPositions)
-    broadcast(encounterId, { type: 'position-patch', encounterId: encounterId!, patch: updatedParticipantPositions, version })
+    await broadcastPositionPatch(encounterId, updatedParticipantPositions)
   }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))

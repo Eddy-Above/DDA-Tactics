@@ -1,7 +1,6 @@
-import { eq, inArray } from 'drizzle-orm'
-import { db, digimon, maps } from '../db'
 import type { Vec3, GameMap } from '../types'
-import { getRoomPositions, applyPositionPatch, broadcast } from './encounterRoom'
+import { getRoomPositions, broadcastPositionPatch } from './encounterRoom'
+import { loadEncounterMap, loadParticipantDigimon } from './combatSpatial'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
 import {
   getFootprintDimsForParticipant,
@@ -91,30 +90,14 @@ export async function applyEndOfTurnGravity(
   const positions = await getRoomPositions(encounterId)
   if (Object.keys(positions).length === 0) return { participants, logEntries: [] }
 
-  const [m] = await db.select().from(maps).where(eq(maps.id, mapId))
-  if (!m) return { participants, logEntries: [] }
-  const map: any = {
-    groundTiles: m.groundTiles ?? [],
-    voxels: (m as any).voxels ?? [],
-    stairs: m.stairs ?? [],
-    walls: m.walls ?? [],
-    doors: m.doors ?? [],
-  }
+  const map = await loadEncounterMap(mapId)
+  if (!map) return { participants, logEntries: [] }
 
-  const entityIds = [...new Set(
-    participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
-  )] as string[]
-  const digimonRows = entityIds.length
-    ? await db.select().from(digimon).where(inArray(digimon.id, entityIds))
-    : []
-  const digimonById = new Map(digimonRows.map((d: any) => [d.id, d]))
+  const digimonById = await loadParticipantDigimon(participants)
 
   const { patch, logEntries } = await computeGravityDrops(positions, participants, map, digimonById, round)
 
-  if (Object.keys(patch).length > 0) {
-    const version = await applyPositionPatch(encounterId, patch)
-    broadcast(encounterId, { type: 'position-patch', encounterId, patch, version })
-  }
+  if (Object.keys(patch).length > 0) await broadcastPositionPatch(encounterId, patch)
 
   return { participants, logEntries }
 }

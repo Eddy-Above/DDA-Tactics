@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
-import { getRoomPositions, applyPositionPatch, broadcast } from '~/server/utils/encounterRoom'
+import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
+import { loadEncounterMap } from '~/server/utils/combatSpatial'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
@@ -32,19 +33,9 @@ export default defineEventHandler(async (event) => {
 
   // Load map + positions for push/pull displacement (only if this encounter uses a map)
   const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
-  let mapRecord: any = null
-  if ((encounter as any).mapId && Object.keys(participantPositions).length > 0) {
-    const [m] = await db.select().from(maps).where(eq(maps.id, (encounter as any).mapId))
-    if (m) {
-      mapRecord = {
-        groundTiles: m.groundTiles ?? [],
-        voxels: (m as any).voxels ?? [],
-        stairs: m.stairs ?? [],
-        walls: m.walls ?? [],
-        doors: m.doors ?? [],
-      }
-    }
-  }
+  const mapRecord: any = ((encounter as any).mapId && Object.keys(participantPositions).length > 0)
+    ? await loadEncounterMap((encounter as any).mapId)
+    : null
 
   // Fetch campaign house rules
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
@@ -306,8 +297,7 @@ export default defineEventHandler(async (event) => {
             })
 
             if (result.positionPatch) {
-              const version = await applyPositionPatch(encounterId, result.positionPatch)
-              broadcast(encounterId, { type: 'position-patch', encounterId, patch: result.positionPatch, version })
+              await broadcastPositionPatch(encounterId, result.positionPatch)
             }
 
             updateData.participants = result.participants
