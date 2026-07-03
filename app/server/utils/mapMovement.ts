@@ -162,6 +162,41 @@ export function isPositionInAir(pos: Vec3, map: GameMap): boolean {
   return true
 }
 
+// Fall damage: meters fallen past the first 5, reduced by the faller's CPU (floored at 1 for any
+// qualifying fall). Tumbler adds an extra RAM×2 reduction (can reach 0); Advanced Mobility: Jumper
+// negates fall damage entirely. Falls of 5m or less deal nothing.
+export function computeFallDamage(
+  fallHeight: number,
+  cpu: number,
+  hasTumbler: boolean,
+  hasAdvJumper: boolean,
+  ram: number,
+): number {
+  const pastFive = fallHeight - 5
+  if (pastFive <= 0) return 0
+  let dmg = Math.max(1, pastFive - cpu)
+  if (hasTumbler) {
+    if (hasAdvJumper) return 0
+    dmg = Math.max(0, dmg - ram * 2)
+  }
+  return dmg
+}
+
+// A footprint is airborne when every cell of its base (bottom) layer sits in air (no support below).
+export function isFootprintAirborne(anchor: Vec3, dims: FootprintDims, map: GameMap): boolean {
+  for (let dx = 0; dx < dims.width; dx++)
+    for (let dz = 0; dz < dims.depth; dz++)
+      if (!isPositionInAir({ x: anchor.x + dx, y: anchor.y, z: anchor.z + dz }, map)) return false
+  return true
+}
+
+// Settle an airborne footprint straight down; returns the resting Y (base comes to rest on support, or 0).
+export function settleFootprintY(anchor: Vec3, dims: FootprintDims, map: GameMap): number {
+  let y = anchor.y
+  while (y > 0 && isFootprintAirborne({ x: anchor.x, y, z: anchor.z }, dims, map)) y--
+  return y
+}
+
 export function isFootprintValid(
   center: Vec3,
   dims: FootprintDims,

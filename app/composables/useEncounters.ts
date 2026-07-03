@@ -43,6 +43,7 @@ export interface CombatParticipant {
   lastHugePowerRound?: number
   lastHugePowerRank2Round?: number
   isEnemy?: boolean
+  airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears (future jump-to-air feature)
   battery?: number
   usedSignatureMoveThisTurn?: boolean
   combatMonsterBonus?: number

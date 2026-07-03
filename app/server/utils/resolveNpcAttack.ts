@@ -12,7 +12,10 @@ import {
   buildFootprintOccupiedSet,
   isPositionInAir,
   findPushPullLandingCell,
+  computeFallDamage,
+  detectCapabilitiesFromQualities,
 } from './mapMovement'
+import { computeGravityDrops } from './endOfTurnGravity'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -336,6 +339,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // --- Push/Pull map displacement (map mode only) ---
   let positionPatch: Record<string, Vec3> | undefined
   let pushPullLogNote: string | null = null
+  let gravityLogEntries: any[] = []
   if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && params.mapRecord && params.participantPositions) {
     const targetPos = params.participantPositions[params.targetParticipantId]
     const attackerPos = params.participantPositions[params.attackerParticipantId]
@@ -375,27 +379,25 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       if (landingCell) {
         let pushFallDamage = 0
         let finalY = landingCell.y
-        if (isPositionInAir(landingCell, params.mapRecord)) {
+        const targetDigRec = targetPart?.type === 'digimon' ? digimonById.get(targetPart.entityId) as any : null
+        const targetQuals = targetDigRec?.qualities ?? []
+        const targetCanFly = detectCapabilitiesFromQualities(targetQuals, 0, 0, 0).canFly
+        // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
+        if (!targetCanFly && isPositionInAir(landingCell, params.mapRecord)) {
           let groundY = landingCell.y
           while (groundY > 0 && isPositionInAir({ x: landingCell.x, y: groundY - 1, z: landingCell.z }, params.mapRecord)) {
             groundY--
           }
           finalY = groundY
           const fallHeight = landingCell.y - groundY
-          pushFallDamage = Math.max(0, fallHeight - 1)
-          if (pushFallDamage > 0 && targetPart?.type === 'digimon') {
-            const targetDigRec = digimonById.get(targetPart.entityId) as any
-            const quals = targetDigRec?.qualities ?? []
-            if (quals.some((q: any) => q.id === 'tumbler')) {
-              const hasAdvJumper = quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-              if (hasAdvJumper) {
-                pushFallDamage = 0
-              } else {
-                const td = await getDigimonDerivedStats(targetPart.entityId)
-                pushFallDamage = Math.max(0, pushFallDamage - (td?.ram ?? 0) * 2)
-              }
-            }
+          const hasTumbler = targetQuals.some((q: any) => q.id === 'tumbler')
+          const hasAdvJumper = targetQuals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+          let cpu = 1, ram = 0
+          if (targetPart?.type === 'digimon') {
+            const td = await getDigimonDerivedStats(targetPart.entityId)
+            cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
           }
+          pushFallDamage = computeFallDamage(fallHeight, cpu, hasTumbler, hasAdvJumper, ram)
         }
 
         if (pushFallDamage > 0) {
@@ -591,6 +593,23 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             }
           }
         }
+
+        // True turn boundary: the defeated NPC's turn ended and a new participant is active.
+        // Apply end-of-turn gravity (pure) when the map + positions are available, using positions
+        // merged with any push/pull displacement so a just-moved target isn't double-dropped.
+        if (params.mapRecord && params.participantPositions) {
+          const gEntityIds = [...new Set(
+            participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId),
+          )] as string[]
+          const gRows = gEntityIds.length
+            ? await db.select().from(digimon).where(inArray(digimon.id, gEntityIds))
+            : []
+          const gById = new Map(gRows.map((d: any) => [d.id, d]))
+          const gPositions = { ...params.participantPositions, ...(positionPatch ?? {}) }
+          const g = await computeGravityDrops(gPositions, participants, params.mapRecord, gById, nextRound ?? params.round)
+          if (Object.keys(g.patch).length > 0) positionPatch = { ...(positionPatch ?? {}), ...g.patch }
+          gravityLogEntries = g.logEntries
+        }
       }
     } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
       // The active participant shifted left by one slot; same person remains active
@@ -641,7 +660,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     dodgeSuccesses,
   }
 
-  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : [])]
+  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : []), ...gravityLogEntries]
 
   return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound, positionPatch }
 }

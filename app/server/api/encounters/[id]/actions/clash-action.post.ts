@@ -8,6 +8,7 @@ import {
   getFootprintCells,
   isPositionInAir,
   findThrowLandingCell,
+  computeFallDamage,
 } from '~/server/utils/mapMovement'
 import { applyPositionPatch, broadcast, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { getAreaShape } from '~/utils/areaShapes'
@@ -303,20 +304,19 @@ export default defineEventHandler(async (event) => {
               fallHeight = landingCell.y - groundY
             }
 
-            let fallDamage = Math.max(0, fallHeight - 1)
-
-            // Tumbler: RAM x2 fall/throw damage reduction; with Advanced Mobility: Jumper, negate entirely
-            if (fallDamage > 0 && targetDigimonEntity) {
-              const targetQualities = targetDigimonEntity.qualities || []
-              if (targetQualities.some((q: any) => q.id === 'tumbler')) {
-                const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-                if (hasAdvJumper) {
-                  fallDamage = 0
-                } else {
-                  const td = await getDigimonDerivedStats(target.entityId)
-                  fallDamage = Math.max(0, fallDamage - (td?.ram ?? 0) * 2)
-                }
+            // Fall damage = meters past the first 5, reduced by CPU (min 1); Tumbler adds RAM×2
+            // reduction, Advanced Mobility: Jumper negates entirely.
+            let fallDamage = 0
+            if (fallHeight > 0) {
+              const targetQualities = targetDigimonEntity?.qualities || []
+              const hasTumbler = targetQualities.some((q: any) => q.id === 'tumbler')
+              const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+              let cpu = 1, ram = 0
+              if (target.type === 'digimon') {
+                const td = await getDigimonDerivedStats(target.entityId)
+                cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
               }
+              fallDamage = computeFallDamage(fallHeight, cpu, hasTumbler, hasAdvJumper, ram)
             }
 
             fallDamageApplied = fallDamage

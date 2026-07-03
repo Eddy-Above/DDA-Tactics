@@ -6,6 +6,8 @@ import {
   buildFootprintOccupiedSet,
   isPositionInAir,
   findPushPullLandingCell,
+  computeFallDamage,
+  detectCapabilitiesFromQualities,
 } from '../../../utils/mapMovement'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
@@ -841,27 +843,25 @@ export default defineEventHandler(async (event) => {
             if (landingCell) {
               let pushFallDamage = 0
               let finalY = landingCell.y
-              if (isPositionInAir(landingCell, pushPullMap)) {
+              const targetDigRec = targetPart?.type === 'digimon' ? digimonById.get(targetPart.entityId) as any : null
+              const targetQuals = targetDigRec?.qualities ?? []
+              const targetCanFly = detectCapabilitiesFromQualities(targetQuals, 0, 0, 0).canFly
+              // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
+              if (!targetCanFly && isPositionInAir(landingCell, pushPullMap)) {
                 let groundY = landingCell.y
                 while (groundY > 0 && isPositionInAir({ x: landingCell.x, y: groundY - 1, z: landingCell.z }, pushPullMap)) {
                   groundY--
                 }
                 finalY = groundY
                 const fallHeight = landingCell.y - groundY
-                pushFallDamage = Math.max(0, fallHeight - 1)
-                if (pushFallDamage > 0 && targetPart?.type === 'digimon') {
-                  const targetDigRec = digimonById.get(targetPart.entityId) as any
-                  const quals = targetDigRec?.qualities ?? []
-                  if (quals.some((q: any) => q.id === 'tumbler')) {
-                    const hasAdvJumper = quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-                    if (hasAdvJumper) {
-                      pushFallDamage = 0
-                    } else {
-                      const td = await getDigimonDerivedStats(targetPart.entityId)
-                      pushFallDamage = Math.max(0, pushFallDamage - (td?.ram ?? 0) * 2)
-                    }
-                  }
+                const hasTumbler = targetQuals.some((q: any) => q.id === 'tumbler')
+                const hasAdvJumper = targetQuals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+                let cpu = 1, ram = 0
+                if (targetPart?.type === 'digimon') {
+                  const td = await getDigimonDerivedStats(targetPart.entityId)
+                  cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
                 }
+                pushFallDamage = computeFallDamage(fallHeight, cpu, hasTumbler, hasAdvJumper, ram)
               }
 
               if (pushFallDamage > 0) {

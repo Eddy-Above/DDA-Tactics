@@ -523,6 +523,7 @@ export interface CombatParticipant {
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
+  airborneByJump?: boolean  // Set when a unit intentionally jumped onto an air tile: at end of its turn it still falls to the ground but takes 0 fall damage, then the flag clears on landing (future jump-to-air feature; nothing sets it yet)
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
   modeChangeFreeSwapsUsed?: number  // Mode Change X.0 Rank 2 EddySoul rule: free swaps used this combat (0-3)
   currentInspiration?: number       // Tamer-only: live pool tracked during combat, initialized from DB totals

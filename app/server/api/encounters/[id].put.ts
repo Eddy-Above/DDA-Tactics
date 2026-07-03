@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
 import { getRoomSnapshot } from '../../utils/encounterRoom'
+import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -44,6 +45,17 @@ export default defineEventHandler(async (event) => {
 
   if (body.participants) {
     const participants = body.participants as any[]
+
+    // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
+    // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
+    const isTurnAdvance = typeof body.currentTurnIndex === 'number'
+      && (body.currentTurnIndex !== existing.currentTurnIndex || incomingRound > existingRound)
+    if (isTurnAdvance) {
+      const gravity = await applyEndOfTurnGravity(id, (existing as any).mapId, participants, incomingRound)
+      if (gravity.logEntries.length > 0) {
+        updateData.battleLog = [...(((body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...gravity.logEntries]
+      }
+    }
 
     // Auto-devolve any partner digimon KO'd by direct wound edit
     for (const p of participants) {

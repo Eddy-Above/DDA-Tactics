@@ -5,6 +5,7 @@ import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage } from '../../../../../types'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
+import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 
 interface NpcAttackBody {
   participantId: string
@@ -467,6 +468,7 @@ export default defineEventHandler(async (event) => {
   let finalParticipantsAfterDefeat = finalParticipants
   let npcDefeatNextTurnIndex: number | undefined
   let npcDefeatNextRound: number | undefined
+  let gravityLogEntries: any[] = []
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.isEnemy &&
@@ -545,6 +547,16 @@ export default defineEventHandler(async (event) => {
           }
         }
       }
+
+      // True turn boundary: the defeated NPC's turn ended and a new participant is active.
+      // Drop airborne non-flyers and apply fall damage.
+      const npcGravity = await applyEndOfTurnGravity(
+        encounterId,
+        (encounter as any).mapId,
+        finalParticipantsAfterDefeat,
+        npcDefeatNextRound ?? encounter.round ?? 0,
+      )
+      gravityLogEntries = npcGravity.logEntries
     } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
       // The active participant shifted left by one slot; same person remains active
       npcDefeatNextTurnIndex = currentTurnIndex - 1
@@ -627,7 +639,7 @@ export default defineEventHandler(async (event) => {
     hit: hit,
   }
 
-  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : [])]
+  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...gravityLogEntries]
 
   // Update encounter
   const updateData: any = {

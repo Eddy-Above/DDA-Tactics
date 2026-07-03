@@ -19,6 +19,7 @@ import {
   buildFootprintOccupiedSet,
   findAreaIntercedePosition,
   hasValidThrowOutOfAreaCell,
+  computeFallDamage,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -364,19 +365,19 @@ export default defineEventHandler(async (event) => {
       }
       targetFallHeight = landingCell.y - (checkY - 1)
     }
-    throwAllyFallDamage = Math.max(0, targetFallHeight - 1)
-    // Tumbler: RAM x2 fall/throw damage reduction; with Advanced Mobility: Jumper, negate entirely
-    if (throwAllyFallDamage > 0 && targetDigRecForPos) {
-      const targetQualities = targetDigRecForPos.qualities || []
-      if (targetQualities.some((q: any) => q.id === 'tumbler')) {
-        const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-        if (hasAdvJumper) {
-          throwAllyFallDamage = 0
-        } else {
-          const td = await getDigimonDerivedStats(targetParticipantForPos!.entityId)
-          throwAllyFallDamage = Math.max(0, throwAllyFallDamage - (td?.ram ?? 0) * 2)
-        }
+    // Fall damage = meters past the first 5, reduced by CPU (min 1); Tumbler adds RAM×2 reduction,
+    // Advanced Mobility: Jumper negates entirely.
+    throwAllyFallDamage = 0
+    if (targetFallHeight > 0) {
+      const targetQualities = targetDigRecForPos?.qualities || []
+      const hasTumbler = targetQualities.some((q: any) => q.id === 'tumbler')
+      const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+      let cpu = 1, ram = 0
+      if (targetParticipantForPos?.type === 'digimon') {
+        const td = await getDigimonDerivedStats(targetParticipantForPos.entityId)
+        cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
       }
+      throwAllyFallDamage = computeFallDamage(targetFallHeight, cpu, hasTumbler, hasAdvJumper, ram)
     }
 
     throwAllyLandingCell = landingCell
@@ -418,10 +419,11 @@ export default defineEventHandler(async (event) => {
       // Move interceptor to their intercede position
       updatedParticipantPositions[body.interceptorParticipantId] = { ...intercDePos }
 
-      // Jump fall damage: interceptor jumped to reach the intercede tile and now falls
+      // Interceptor jumped to reach the intercede tile and now falls back down. Per the jump-into-air
+      // rule, a unit that used its own jump movement takes NO fall damage — it still drops to the ground.
       if ((request.data.requiresJump ?? false) && !(request.data.requiresFly ?? false)) {
         const fallHeight: number = request.data.fallHeight || 0
-        fallDamageToApply = Math.max(0, fallHeight - 1)
+        fallDamageToApply = 0
         if (fallHeight > 0) {
           const groundY = intercDePos.y - fallHeight
           updatedParticipantPositions[body.interceptorParticipantId] = { x: intercDePos.x, y: groundY, z: intercDePos.z }
