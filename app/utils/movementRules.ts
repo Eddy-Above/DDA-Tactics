@@ -366,3 +366,34 @@ export function settleFootprintY(anchor: Vec3, dims: FootprintDims, map: GameMap
   while (y > 0 && isFootprintAirborne({ x: anchor.x, y, z: anchor.z }, dims, map)) y--
   return y
 }
+
+// Everything `resolveFall` needs about the faller. Flyers hover; airborneByJump units still fall but
+// take no damage; Tumbler/adv-jumper adjust the damage; cpu/ram feed the fall formula.
+export interface FallerProfile {
+  cpu: number
+  ram: number
+  hasTumbler: boolean
+  hasAdvJumper: boolean
+  canFly: boolean
+  airborneByJump?: boolean
+}
+
+// Resolves a unit falling from `startPos`: settles its footprint straight down to the surface and
+// computes fall damage. Flyers hover in place (no fall); a unit that jumped into the air still falls
+// but takes 0 damage. Single source used by push/pull, Clash Throw, thrown-ally and end-of-turn gravity.
+export function resolveFall(
+  startPos: Vec3,
+  dims: FootprintDims,
+  map: GameMap,
+  profile: FallerProfile,
+): { landingPos: Vec3; fallHeight: number; damage: number } {
+  if (profile.canFly) return { landingPos: startPos, fallHeight: 0, damage: 0 }
+  const landingY = settleFootprintY(startPos, dims, map)
+  const landingPos = { x: startPos.x, y: landingY, z: startPos.z }
+  const fallHeight = startPos.y - landingY
+  if (fallHeight <= 0) return { landingPos, fallHeight: 0, damage: 0 }
+  const damage = profile.airborneByJump
+    ? 0
+    : computeFallDamage(fallHeight, profile.cpu, profile.hasTumbler, profile.hasAdvJumper, profile.ram)
+  return { landingPos, fallHeight, damage }
+}

@@ -1,14 +1,8 @@
 import type { Vec3, GameMap } from '../types'
 import { getRoomPositions, broadcastPositionPatch } from './encounterRoom'
-import { loadEncounterMap, loadParticipantDigimon } from './combatSpatial'
-import { getDigimonDerivedStats } from './resolveSupportAttack'
-import {
-  getFootprintDimsForParticipant,
-  isFootprintAirborne,
-  settleFootprintY,
-  computeFallDamage,
-  detectCapabilitiesFromQualities,
-} from './mapMovement'
+import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
+import { getFootprintDimsForParticipant } from './mapMovement'
+import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
 // wounds in place and returns the position patch + battle-log entries. Flyers hover (skipped
@@ -30,34 +24,15 @@ export async function computeGravityDrops(
     const dims = getFootprintDimsForParticipant(p, digimonById)
     if (!isFootprintAirborne(pos, dims, map)) continue
 
-    // Flight hovers — no drop, no damage.
-    if (p.type === 'digimon') {
-      const quals = digimonById.get(p.entityId)?.qualities ?? []
-      if (detectCapabilitiesFromQualities(quals, 0, 0, 0).canFly) continue
-    }
+    const profile = await getFallerProfile(p, digimonById)
+    if (profile.canFly) continue   // flyers hover — no drop, no damage
 
-    const landingY = settleFootprintY(pos, dims, map)
-    const fallHeight = pos.y - landingY
+    const { landingPos, fallHeight, damage } = resolveFall(pos, dims, map, profile)
     if (fallHeight <= 0) continue
 
-    let damage = 0
-    if (p.airborneByJump) {
-      // Jumped onto an air tile intentionally: still falls, but takes no fall damage.
-      damage = 0
-    } else if (p.type === 'digimon') {
-      const quals = digimonById.get(p.entityId)?.qualities ?? []
-      const hasTumbler = quals.some((q: any) => q.id === 'tumbler')
-      const hasAdvJumper = quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-      const ds = await getDigimonDerivedStats(p.entityId)   // CPU (and RAM for Tumbler) always needed
-      damage = computeFallDamage(fallHeight, ds?.cpu ?? 0, hasTumbler, hasAdvJumper, ds?.ram ?? 0)
-    } else {
-      // Tamer (or other): CPU 1, no Tumbler.
-      damage = computeFallDamage(fallHeight, 1, false, false, 0)
-    }
-
-    patch[p.id] = { x: pos.x, y: landingY, z: pos.z }
+    patch[p.id] = landingPos
     if (damage > 0) p.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + damage)
-    if (p.airborneByJump) p.airborneByJump = false
+    if (p.airborneByJump) p.airborneByJump = false   // landed — clear the jump flag
 
     logEntries.push({
       id: `log-fall-${p.id}-${Date.now()}`,

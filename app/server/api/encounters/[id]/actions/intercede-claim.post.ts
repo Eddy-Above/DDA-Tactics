@@ -25,7 +25,8 @@ import { calculateDigimonDerivedStats } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
-import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
+import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
+import { resolveFall } from '~/utils/movementRules'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -326,29 +327,13 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 409, message: 'Invalid throw landing position — board state changed' })
     }
 
-    // Fall damage on landing for the thrown target
-    let targetFallHeight = 0
-    if (isPositionInAir(landingCell, claimMapRecord)) {
-      let checkY = landingCell.y
-      while (checkY > 0 && isPositionInAir({ x: landingCell.x, y: checkY - 1, z: landingCell.z }, claimMapRecord)) {
-        checkY -= 1
-      }
-      targetFallHeight = landingCell.y - (checkY - 1)
-    }
-    // Fall damage = meters past the first 5, reduced by CPU (min 1); Tumbler adds RAM×2 reduction,
-    // Advanced Mobility: Jumper negates entirely.
-    throwAllyFallDamage = 0
-    if (targetFallHeight > 0) {
-      const targetQualities = targetDigRecForPos?.qualities || []
-      const hasTumbler = targetQualities.some((q: any) => q.id === 'tumbler')
-      const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-      let cpu = 1, ram = 0
-      if (targetParticipantForPos?.type === 'digimon') {
-        const td = await getDigimonDerivedStats(targetParticipantForPos.entityId)
-        cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
-      }
-      throwAllyFallDamage = computeFallDamage(targetFallHeight, cpu, hasTumbler, hasAdvJumper, ram)
-    }
+    // Fall damage on landing for the thrown target (they remain at the chosen landing cell; a flyer
+    // hovers and takes none). Fall damage uses the shared formula/settle convention.
+    const throwAllyProfile = await getFallerProfile(
+      targetParticipantForPos,
+      new Map(targetDigRecForPos ? [[targetParticipantForPos!.entityId, targetDigRecForPos]] : []),
+    )
+    throwAllyFallDamage = resolveFall(landingCell, targetDims, claimMapRecord, throwAllyProfile).damage
 
     throwAllyLandingCell = landingCell
     updatedParticipantPositions[effectiveTargetId] = landingCell

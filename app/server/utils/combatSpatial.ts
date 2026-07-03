@@ -2,7 +2,8 @@ import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, maps } from '../db'
 import type { GameMap } from '../types'
 import { calculateDigimonDerivedStats } from '../../types'
-import { detectCapabilities, type MovementCapabilities } from '../../utils/movementRules'
+import { detectCapabilities, type MovementCapabilities, type FallerProfile } from '../../utils/movementRules'
+import { getDigimonDerivedStats } from './resolveSupportAttack'
 
 // Loads a full GameMap (all tile/structure layers) from the maps table for the given id, or null.
 // Centralises the map-record construction that was previously copied across every map-aware handler,
@@ -70,4 +71,27 @@ export function getMovementProfile(
     caps: detectCapabilities([], 0, 0, 0),
     bodyStat: attrs.body || 0,
   }
+}
+
+// Builds the fall profile (CPU/RAM + Tumbler/adv-jumper/Flight + airborneByJump) for a participant,
+// consumed by `resolveFall`. Digimon pull CPU/RAM from derived stats; tamers use CPU 1.
+export async function getFallerProfile(
+  participant: any,
+  digimonById: Map<string, any>,
+): Promise<FallerProfile> {
+  const airborneByJump = !!participant?.airborneByJump
+  if (participant?.type === 'digimon') {
+    const quals = digimonById.get(participant.entityId)?.qualities ?? []
+    const ds = await getDigimonDerivedStats(participant.entityId)
+    return {
+      cpu: ds?.cpu ?? 0,
+      ram: ds?.ram ?? 0,
+      hasTumbler: quals.some((q: any) => q.id === 'tumbler'),
+      hasAdvJumper: quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper'),
+      canFly: detectCapabilities(quals, 0, 0, 0).canFly,
+      airborneByJump,
+    }
+  }
+  // Tamer (or unknown): CPU 1, no qualities.
+  return { cpu: 1, ram: 0, hasTumbler: false, hasAdvJumper: false, canFly: false, airborneByJump }
 }

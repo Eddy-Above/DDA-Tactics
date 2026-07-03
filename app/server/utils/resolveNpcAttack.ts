@@ -16,7 +16,8 @@ import {
   detectCapabilitiesFromQualities,
 } from './mapMovement'
 import { computeGravityDrops } from './endOfTurnGravity'
-import { loadParticipantDigimon } from './combatSpatial'
+import { loadParticipantDigimon, getFallerProfile } from './combatSpatial'
+import { resolveFall } from '../../utils/movementRules'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -372,28 +373,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       )
 
       if (landingCell) {
-        let pushFallDamage = 0
-        let finalY = landingCell.y
-        const targetDigRec = targetPart?.type === 'digimon' ? digimonById.get(targetPart.entityId) as any : null
-        const targetQuals = targetDigRec?.qualities ?? []
-        const targetCanFly = detectCapabilitiesFromQualities(targetQuals, 0, 0, 0).canFly
         // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
-        if (!targetCanFly && isPositionInAir(landingCell, params.mapRecord)) {
-          let groundY = landingCell.y
-          while (groundY > 0 && isPositionInAir({ x: landingCell.x, y: groundY - 1, z: landingCell.z }, params.mapRecord)) {
-            groundY--
-          }
-          finalY = groundY
-          const fallHeight = landingCell.y - groundY
-          const hasTumbler = targetQuals.some((q: any) => q.id === 'tumbler')
-          const hasAdvJumper = targetQuals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-          let cpu = 1, ram = 0
-          if (targetPart?.type === 'digimon') {
-            const td = await getDigimonDerivedStats(targetPart.entityId)
-            cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
-          }
-          pushFallDamage = computeFallDamage(fallHeight, cpu, hasTumbler, hasAdvJumper, ram)
-        }
+        const targetProfile = await getFallerProfile(targetPart, digimonById)
+        const { landingPos: finalPos, damage: pushFallDamage } = resolveFall(landingCell, targetDims, params.mapRecord, targetProfile)
 
         if (pushFallDamage > 0) {
           participants = participants.map((p: any) => {
@@ -404,7 +386,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           })
         }
 
-        positionPatch = { [params.targetParticipantId]: { x: landingCell.x, y: finalY, z: landingCell.z } }
+        positionPatch = { [params.targetParticipantId]: finalPos }
         const moveLabel = appliedEffectName === 'Knockback' ? 'Knockback' : 'Pull'
         const pushFallNote = pushFallDamage > 0 ? ` + ${pushFallDamage} fall damage` : ''
         pushPullLogNote = `${moveLabel}: displaced ${effectPotency} cell(s)${pushFallNote}`

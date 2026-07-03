@@ -11,7 +11,8 @@ import {
   computeFallDamage,
 } from '~/server/utils/mapMovement'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
-import { loadEncounterMap } from '~/server/utils/combatSpatial'
+import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
+import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
 import type { Vec3 } from '~/types'
 
@@ -281,39 +282,13 @@ export default defineEventHandler(async (event) => {
           const landingCell = findThrowLandingCell(targetPos, body.landingPos, actorBodyStat, targetDims, throwMapRecord, occupiedSet)
 
           if (landingCell) {
-            // Fall damage: scan down from the landing cell to find the ground
-            let fallHeight = 0
-            let groundY = landingCell.y
-            if (isPositionInAir(landingCell, throwMapRecord)) {
-              let checkY = landingCell.y
-              while (checkY > 0 && isPositionInAir({ x: landingCell.x, y: checkY - 1, z: landingCell.z }, throwMapRecord)) {
-                checkY -= 1
-              }
-              groundY = checkY - 1
-              fallHeight = landingCell.y - groundY
-            }
-
-            // Fall damage = meters past the first 5, reduced by CPU (min 1); Tumbler adds RAM×2
-            // reduction, Advanced Mobility: Jumper negates entirely.
-            let fallDamage = 0
-            if (fallHeight > 0) {
-              const targetQualities = targetDigimonEntity?.qualities || []
-              const hasTumbler = targetQualities.some((q: any) => q.id === 'tumbler')
-              const hasAdvJumper = targetQualities.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-              let cpu = 1, ram = 0
-              if (target.type === 'digimon') {
-                const td = await getDigimonDerivedStats(target.entityId)
-                cpu = td?.cpu ?? 0; ram = td?.ram ?? 0
-              }
-              fallDamage = computeFallDamage(fallHeight, cpu, hasTumbler, hasAdvJumper, ram)
-            }
-
+            // Settle the thrown target to the ground (flyers hover); fall damage adds to the throw damage.
+            const targetProfile = await getFallerProfile(target, new Map(targetDigimonEntity ? [[target.entityId, targetDigimonEntity]] : []))
+            const { landingPos, damage: fallDamage } = resolveFall(landingCell, targetDims, throwMapRecord, targetProfile)
             fallDamageApplied = fallDamage
             damageDealt += fallDamage
             wasDisplaced = true
-            updatedTargetPosition = fallHeight > 0
-              ? { x: landingCell.x, y: groundY, z: landingCell.z }
-              : landingCell
+            updatedTargetPosition = landingPos
           }
         }
       }
