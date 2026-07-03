@@ -64,7 +64,7 @@ function isSolidWall(map: GameMap, from: Vec3, to: Vec3, destroyed: Set<string>)
 
   const y = from.y  // walls are per-floor; horizontal moves stay on same floor
 
-  for (const wall of map.walls) {
+  for (const wall of (map.walls ?? [])) {
     if (destroyed.has(wall.id)) continue
     if ((wall.y ?? 0) !== y) continue
     if (map.doors.some(d => d.wallId === wall.id)) continue  // door makes this face passable
@@ -96,7 +96,7 @@ function isSolidWall(map: GameMap, from: Vec3, to: Vec3, destroyed: Set<string>)
 
 function isBlockedByCeiling(map: GameMap, from: Vec3, to: Vec3, destroyed: Set<string>): boolean {
   if (to.y <= from.y) return false // only blocks upward movement
-  for (const ceiling of map.ceilings) {
+  for (const ceiling of (map.ceilings ?? [])) {
     if (destroyed.has(ceiling.id)) continue
     if (ceiling.x === from.x && ceiling.y === from.y && ceiling.z === from.z) return true
   }
@@ -104,14 +104,14 @@ function isBlockedByCeiling(map: GameMap, from: Vec3, to: Vec3, destroyed: Set<s
 }
 
 function getGroundTile(map: GameMap, pos: Vec3) {
-  return map.groundTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z) ?? null
+  return (map.groundTiles ?? []).find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z) ?? null
 }
 
 function getSpaceTile(map: GameMap, pos: Vec3) {
-  return map.spaceTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z) ?? null
+  return (map.spaceTiles ?? []).find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z) ?? null
 }
 
-function hasSolidVoxelSupport(map: GameMap, pos: Vec3): boolean {
+export function hasSolidVoxelSupport(map: GameMap, pos: Vec3): boolean {
   const below = mapVoxelAt(map, { x: pos.x, y: pos.y - 1, z: pos.z })
   return Boolean(below && voxelBlocksMovement(below))
 }
@@ -134,7 +134,7 @@ function hasStairAt(map: GameMap, pos: Vec3): boolean {
   return map.stairs.some(s => s.x === pos.x && s.y === pos.y && s.z === pos.z)
 }
 
-function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
+export function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
   return map.stairs.some(s => s.x === pos.x && s.y === pos.y - 1 && s.z === pos.z)
 }
 
@@ -213,7 +213,7 @@ export function canPassThrough(
       if (caps.canJump && to.y - from.y <= caps.jumpHeight) return true
       if (caps.canClimb) {
         // Check for climbable wall face on adjacent wall
-        const hasClimbable = map.walls.some(w =>
+        const hasClimbable = (map.walls ?? []).some(w =>
           !destroyedStructures.has(w.id) &&
           w.x === to.x && w.y === to.y && w.z === to.z
         )
@@ -284,4 +284,85 @@ export function sizeInteraction(moverSize: DigimonSize, blockerSize: DigimonSize
   const blockerIdx = order.indexOf(blockerSize)
   if (Math.abs(moverIdx - blockerIdx) >= 2) return 'passable-only'
   return 'blocked'
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities, fall & airborne helpers — the single source of truth shared by
+// the client (useMapMovement, MapCanvas) and the server (mapMovement, gravity).
+// ---------------------------------------------------------------------------
+
+// Movement capabilities for a thrown body in flight (Clash Throw / Intercede Throw / Push-Pull).
+export const PROJECTILE_CAPS: MovementCapabilities = {
+  canFly: true,
+  canJump: true,
+  jumpHeight: 99,
+  jumpRange: 99,
+  canClimb: false,
+  canSwim: true,
+  canDig: false,
+}
+
+// Derives a unit's MovementCapabilities from its qualities + derived stats.
+export function detectCapabilities(
+  qualities: Array<{ id: string; choiceId?: string; ranks?: number }>,
+  movement: number,
+  ram: number,
+  cpu: number,
+): MovementCapabilities {
+  const hasJumper = qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'jumper')
+  const hasAdvJumper = qualities.some(q => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
+  return {
+    canFly: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'flight'),
+    canJump: hasJumper,
+    jumpRange: hasJumper ? (hasAdvJumper ? movement + cpu : movement) : 0,
+    jumpHeight: hasJumper ? (hasAdvJumper ? movement + cpu * 5 : movement) : 0,
+    canClimb: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'wallclimber'),
+    canSwim: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'swimmer'),
+    canDig: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'digger'),
+  }
+}
+
+// True if `pos` has no solid support (ground tile at it, or a movement-blocking voxel/stair below).
+// Wind voxels aren't movement-blocking and ground terrain is only normal/water/earth, so wind never
+// counts as support.
+export function isPositionInAir(pos: Vec3, map: GameMap): boolean {
+  if (getGroundTile(map, pos)) return false
+  if (hasSolidVoxelSupport(map, pos)) return false
+  if (hasSolidStairSupport(map, pos)) return false
+  return true
+}
+
+// Fall damage: meters fallen past the first 5, reduced by the faller's CPU (floored at 1 for any
+// qualifying fall). Tumbler adds an extra RAM×2 reduction (can reach 0); Advanced Mobility: Jumper
+// negates fall damage entirely. Falls of 5m or less deal nothing.
+export function computeFallDamage(
+  fallHeight: number,
+  cpu: number,
+  hasTumbler: boolean,
+  hasAdvJumper: boolean,
+  ram: number,
+): number {
+  const pastFive = fallHeight - 5
+  if (pastFive <= 0) return 0
+  let dmg = Math.max(1, pastFive - cpu)
+  if (hasTumbler) {
+    if (hasAdvJumper) return 0
+    dmg = Math.max(0, dmg - ram * 2)
+  }
+  return dmg
+}
+
+// A footprint is airborne when every cell of its base (bottom) layer sits in air (no support below).
+export function isFootprintAirborne(anchor: Vec3, dims: FootprintDims, map: GameMap): boolean {
+  for (let dx = 0; dx < dims.width; dx++)
+    for (let dz = 0; dz < dims.depth; dz++)
+      if (!isPositionInAir({ x: anchor.x + dx, y: anchor.y, z: anchor.z + dz }, map)) return false
+  return true
+}
+
+// Settle an airborne footprint straight down; returns the resting Y (base comes to rest on support, or 0).
+export function settleFootprintY(anchor: Vec3, dims: FootprintDims, map: GameMap): number {
+  let y = anchor.y
+  while (y > 0 && isFootprintAirborne({ x: anchor.x, y, z: anchor.z }, dims, map)) y--
+  return y
 }

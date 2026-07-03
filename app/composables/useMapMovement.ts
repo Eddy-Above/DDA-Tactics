@@ -1,48 +1,15 @@
 import type { GameMap, Vec3, DigimonSize } from '~/types'
 import type { MovementCapabilities } from '~/utils/movementRules'
-import { canPassThrough, canLandOn, sizeInteraction, getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
+import { canPassThrough, canLandOn, sizeInteraction, getFootprintDimensions, getFootprintCells, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
 import { bfsReachable, findPath } from '~/utils/pathfinding'
 import { vec3Key } from '~/utils/mapGeometry'
 
 type GiganticDims = { width: number; height: number; depth: number } | null
 
-interface QualityLike { id: string; choiceId?: string; ranks?: number }
-
-// Movement capabilities for a thrown body in flight (Clash Throw / Intercede Throw).
-// Mirrors PROJECTILE_CAPS in app/server/utils/mapMovement.ts.
-export const PROJECTILE_CAPS: MovementCapabilities = {
-  canFly: true,
-  canJump: true,
-  jumpHeight: 99,
-  jumpRange: 99,
-  canClimb: false,
-  canSwim: true,
-  canDig: false,
-}
-
-export function detectCapabilities(qualities: QualityLike[], movement: number, ram: number, cpu: number): MovementCapabilities {
-  const has = (id: string) => qualities.some(q => q.id === id)
-  const hasFlight = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'flight')
-  const hasAdvFlight = has('advanced-mobility') && qualities.some(q => q.id === 'advanced-mobility' && q.choiceId === 'adv-flight')
-  const hasJumper = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'jumper')
-  const hasAdvJumper = has('advanced-mobility') && qualities.some(q => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper')
-  const hasClimb = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'wallclimber')
-  const hasSwim = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'swimmer')
-  const hasDig = has('extra-movement') && qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'digger')
-
-  const jumpRange = hasJumper ? (hasAdvJumper ? movement + cpu : movement) : 0
-  const jumpHeight = hasJumper ? (hasAdvJumper ? movement + cpu * 5 : movement) : 0
-
-  return {
-    canFly: hasFlight,
-    canJump: hasJumper,
-    jumpRange,
-    jumpHeight,
-    canClimb: hasClimb,
-    canSwim: hasSwim,
-    canDig: hasDig,
-  }
-}
+// Capabilities + projectile caps now live in the shared movementRules module (single source of
+// truth for client and server). Re-exported here so existing `from '~/composables/useMapMovement'`
+// importers keep working.
+export { detectCapabilities, PROJECTILE_CAPS }
 
 export function useMapMovement() {
   const reachableCells = ref<Set<string>>(new Set())
