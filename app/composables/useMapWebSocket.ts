@@ -2,7 +2,7 @@ import type { WebSocketMapMessage } from '~/types'
 
 type MessageHandler = (msg: WebSocketMapMessage) => void
 
-export function useMapWebSocket(encounterId: Ref<string | null>) {
+export function useMapWebSocket(encounterId: Ref<string | null>, basePath: 'encounters' | 'campaigns' = 'encounters') {
   const ws = ref<WebSocket | null>(null)
   const connected = ref(false)
   const messageQueue: string[] = []
@@ -15,7 +15,7 @@ export function useMapWebSocket(encounterId: Ref<string | null>) {
     if (!encounterId.value || destroyed) return
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}/api/encounters/${encounterId.value}/ws`
+    const url = `${protocol}//${window.location.host}/api/${basePath}/${encounterId.value}/ws`
 
     const socket = new WebSocket(url)
     ws.value = socket

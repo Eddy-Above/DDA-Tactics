@@ -15,6 +15,7 @@ useHead({
   <NuxtLayout>
     <NuxtPage />
   </NuxtLayout>
+  <RollLogPanel />
 </template>
 
 <style>

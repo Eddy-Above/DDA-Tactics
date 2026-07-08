@@ -1905,6 +1905,17 @@ function performAttributeRoll(attr: string, skillKey: string | null) {
   for (let i = 0; i < 3; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
   const total = rolls.reduce((a, b) => a + b, 0) + modifier
   attributeRollResult.value = { rolls, modifier, label, total }
+  logRoll({ rollName: label, rolls, modifier, total })
+}
+
+// Fire-and-forget: post a roll to the campaign-wide roll history (GM panel).
+// Never blocks or throws into the calling roll flow on failure.
+function logRoll(payload: { rollName: string; rolls: number[]; modifier: number; total: number; passed?: boolean }) {
+  if (!tamer.value?.id || !campaignId.value) return
+  $fetch(`/api/campaigns/${campaignId.value}/rolls`, {
+    method: 'POST',
+    body: { tamerId: tamer.value.id, ...payload },
+  }).catch(() => {})
 }
 
 function openTormentRollModal(torment: any) {
@@ -1923,7 +1934,9 @@ function performTormentRoll() {
   const rolls: number[] = []
   for (let i = 0; i < 3; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
   const total = rolls.reduce((a, b) => a + b, 0) + modifier
-  tormentRollResult.value = { rolls, modifier, total, passed: total >= 12 }
+  const passed = total >= 12
+  tormentRollResult.value = { rolls, modifier, total, passed }
+  logRoll({ rollName: `Torment: ${selectedTorment.value.name}`, rolls, modifier, total, passed })
 }
 
 function rollWillpower() {

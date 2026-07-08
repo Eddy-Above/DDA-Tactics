@@ -161,6 +161,24 @@ export interface DestructibleState {
   currentWounds: number
 }
 
+// One entry in the campaign-wide roll history (skill/attribute/torment rolls
+// plus "new day" markers). Mirrors the roll_log table row shape; createdAt is
+// a Date server-side but a string once JSON-serialized over HTTP/WS.
+export interface RollLogEntry {
+  id: string
+  campaignId: string
+  kind: 'roll' | 'new-day'
+  tamerId: string | null
+  characterName: string | null
+  spriteUrl: string | null
+  rollName: string | null
+  rolls: number[]
+  modifier: number
+  total: number
+  passed: boolean | null
+  createdAt: string | Date
+}
+
 export type WebSocketMapMessage =
   | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[]; version: number }
   | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
@@ -171,6 +189,7 @@ export type WebSocketMapMessage =
   | { type: 'full-state';       encounterId: string; participantPositions: Record<string, Vec3>; destructibleStates: DestructibleState[]; version: number }
   | { type: 'encounter-updated'; encounterId: string }
   | { type: 'encounter-state';  encounterId: string; encounter: Encounter; version: number }
+  | { type: 'roll-logged';      campaignId: string; entry: RollLogEntry }
 
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 

@@ -1,5 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, campaigns, tamers, digimon } from '../../../db'
+import { generateId } from '../../../utils/id'
+import { appendRollLogEntry } from '../../../utils/rollLog'
 
 export default defineEventHandler(async (event) => {
   const campaignId = getRouterParam(event, 'id')
@@ -43,6 +45,22 @@ export default defineEventHandler(async (event) => {
     }
     digimonResetCount = campaignDigimon.length
   }
+
+  // Drop a "New Day" marker into the campaign roll history (live-pushed)
+  await appendRollLogEntry(campaignId, {
+    id: generateId(),
+    campaignId,
+    kind: 'new-day',
+    tamerId: null,
+    characterName: null,
+    spriteUrl: null,
+    rollName: null,
+    rolls: [],
+    modifier: 0,
+    total: 0,
+    passed: null,
+    createdAt: new Date(),
+  })
 
   return {
     message: 'New day started',

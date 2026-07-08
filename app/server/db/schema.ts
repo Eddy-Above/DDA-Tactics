@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp, jsonb } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 
 // =====================================
@@ -396,6 +396,33 @@ export const campaigns = pgTable('campaigns', {
 })
 
 // =====================================
+// Roll Log Table
+// =====================================
+
+// Campaign-wide log of player skill/attribute/torment rolls plus "new day"
+// markers. Append-only; pruned to the newest 50 rows per campaign on insert
+// (see server/utils/rollLog.ts) so storage stays bounded per campaign.
+export const rollLog = pgTable('roll_log', {
+  id: text('id').primaryKey(),
+  campaignId: text('campaign_id').notNull(),  // FK to campaigns.id (constraint omitted, matching encounters.mapId pattern)
+  kind: text('kind').notNull().$type<'roll' | 'new-day'>(),
+
+  tamerId: text('tamer_id'),
+  characterName: text('character_name'),  // snapshot at roll time
+  spriteUrl: text('sprite_url'),          // snapshot at roll time
+  rollName: text('roll_name'),
+
+  rolls: jsonb('rolls').notNull().default([]).$type<number[]>(),
+  modifier: integer('modifier').notNull().default(0),
+  total: integer('total').notNull().default(0),
+  passed: boolean('passed'),  // torment rolls only
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+}, (table) => ({
+  campaignCreatedIdx: index('roll_log_campaign_created_idx').on(table.campaignId, table.createdAt),
+}))
+
+// =====================================
 // Evolution Lines Table
 // =====================================
 
@@ -578,3 +605,6 @@ export type NewEvolutionLine = typeof evolutionLines.$inferInsert
 
 export type Map = typeof maps.$inferSelect
 export type NewMap = typeof maps.$inferInsert
+
+export type RollLogRow = typeof rollLog.$inferSelect
+export type NewRollLogRow = typeof rollLog.$inferInsert
