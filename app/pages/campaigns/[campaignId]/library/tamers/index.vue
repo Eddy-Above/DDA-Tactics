@@ -1,18 +1,23 @@
 <script setup lang="ts">
+import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
+
 definePageMeta({
   title: 'Tamers',
 })
 
-const { campaignId, eddySoulRules } = useCampaignContext()
+const { campaignId, campaign, eddySoulRules, loadCampaign } = useCampaignContext()
 const { tamers, loading, error, fetchTamers, deleteTamer, calculateDerivedStats } = useTamers()
-const { exportTamers, importTamers } = useLibraryImportExport()
+const { importTamers } = useLibraryImportExport()
+const { exportCharacterBundle, parseBundleFile, importBundle } = useCharacterBundle()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
 const importResult = ref<{ show: boolean; successful: number; failed: number; errors: Array<{ index: number; name: string; error: string }> } | null>(null)
+const rulesDiff = ref<CreationRulesDiffEntry[] | null>(null)
 
 onMounted(() => {
   fetchTamers(campaignId.value)
+  loadCampaign()
 })
 
 async function handleDelete(id: string, name: string) {
@@ -21,20 +26,60 @@ async function handleDelete(id: string, name: string) {
   }
 }
 
+async function handleExport(tamer: (typeof tamers.value)[number]) {
+  await loadCampaign()
+  await exportCharacterBundle(tamer, campaign.value ? extractCreationRules(campaign.value) : undefined)
+}
+
 function handleImportClick() {
   fileInputRef.value?.click()
 }
 
 async function handleImportFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0]
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
   if (!file) return
   importLoading.value = true
   importResult.value = null
-  const result = await importTamers(file, campaignId.value)
-  importResult.value = { show: true, ...result }
-  await fetchTamers(campaignId.value)
-  importLoading.value = false
-  ;(event.target as HTMLInputElement).value = ''
+  rulesDiff.value = null
+  try {
+    const parsed = await parseBundleFile(file)
+    if (parsed.kind === 'legacy') {
+      // Legacy rules-less array export: DM-only import path, parity unverifiable
+      if (!confirm('This is a legacy export with no rules metadata — rule parity with this campaign cannot be verified. Import anyway?')) {
+        return
+      }
+      const result = await importTamers(file, campaignId.value)
+      importResult.value = { show: true, ...result }
+    } else {
+      await loadCampaign()
+      const diff = campaign.value
+        ? diffCreationRules(parsed.bundle.rules, extractCreationRules(campaign.value))
+        : []
+      if (diff.length > 0) {
+        rulesDiff.value = diff
+        return
+      }
+      const result = await importBundle(parsed.bundle, { campaignId: campaignId.value })
+      importResult.value = {
+        show: true,
+        successful: (result.tamerId ? 1 : 0) + result.digimonIds.length,
+        failed: result.errors.length,
+        errors: result.errors.map((message, i) => ({ index: i, name: '', error: message })),
+      }
+    }
+    await fetchTamers(campaignId.value)
+  } catch (e) {
+    importResult.value = {
+      show: true,
+      successful: 0,
+      failed: 1,
+      errors: [{ index: 0, name: '', error: e instanceof Error ? e.message : 'Import failed' }],
+    }
+  } finally {
+    importLoading.value = false
+    input.value = ''
+  }
 }
 </script>
 
@@ -73,6 +118,14 @@ async function handleImportFile(event: Event) {
       accept=".json"
       class="hidden"
       @change="handleImportFile"
+    />
+
+    <RulesDiffModal
+      v-if="rulesDiff"
+      :diff="rulesDiff"
+      source-label="Character"
+      :target-label="campaign?.name || 'Campaign'"
+      @close="rulesDiff = null"
     />
 
     <div
@@ -168,7 +221,8 @@ async function handleImportFile(event: Event) {
             <button
               class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                      text-white rounded transition-colors"
-              @click="exportTamers([tamer])"
+              title="Download as a character bundle (partner digimon, evolution lines, and campaign rules included)"
+              @click="handleExport(tamer)"
             >
               Export
             </button>

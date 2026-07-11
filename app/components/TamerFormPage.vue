@@ -2,11 +2,12 @@
 import type { Tamer } from '~/server/db/schema'
 import { useTamerForm } from '~/composables/useTamerForm'
 
-const props = defineProps<{ source: 'library' | 'portal', mode: 'create' | 'edit' }>()
+const props = defineProps<{ source: 'library' | 'portal' | 'workshop', mode: 'create' | 'edit' }>()
 
 // Derived config — props are static, no reactivity needed
 const isEdit = props.mode === 'edit'
 const isLibrary = props.source === 'library'
+const isWorkshop = props.source === 'workshop'
 const hasGmFeatures = isLibrary && isEdit
 const showGrantedInspirationControls = isLibrary
 const showGrantedInspirationNote = !isLibrary && isEdit
@@ -17,12 +18,12 @@ const showRefundCosts = isLibrary || isEdit
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
+const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, creationRules, loadCampaign } = useCreationRulesContext()
 const { fetchTamer, updateTamer, createTamer, loading, error } = useTamers()
 
-const recordId = computed(() => isLibrary ? route.params.id as string : route.params.tamerId as string)
+const recordId = computed(() => isLibrary || isWorkshop ? route.params.id as string : route.params.tamerId as string)
 
-const selectedTamerId = (!isLibrary && !isEdit)
+const selectedTamerId = (props.source === 'portal' && !isEdit)
   ? useCookie<string | null>(`player-tamer-id-${campaignId.value}`, { default: () => null })
   : null
 
@@ -106,6 +107,7 @@ const xpOpen = computed({
 })
 
 const backLink = computed(() => {
+  if (isWorkshop) return '/workshop'
   if (isLibrary) return `/campaigns/${campaignId.value}/library/tamers`
   if (!isEdit) return `/campaigns/${campaignId.value}/player`
   return `/campaigns/${campaignId.value}/player/${recordId.value}`
@@ -118,6 +120,7 @@ const pageTitle = computed(() => {
 })
 
 const backLinkLabel = computed(() => {
+  if (isWorkshop) return 'Back to Workshop'
   if (isLibrary) return 'Back to Tamers'
   if (!isEdit) return 'Back'
   return 'Back to Dashboard'
@@ -276,6 +279,7 @@ async function handleSubmit() {
       spriteUrl: form.spriteUrl || undefined,
     }
     if (hasGmFeatures) updatePayload.digivolutionsUsedToday = digivolutionsUsedToday.value
+    if (isWorkshop) updatePayload.creationRules = creationRules.value
     const updated = await updateTamer(tamer.value.id, updatePayload)
     if (updated) router.push(backLink.value)
   } else {
@@ -290,7 +294,7 @@ async function handleSubmit() {
     }))
     const createPayload: any = {
       ...form,
-      campaignId: campaignId.value,
+      campaignId: isWorkshop ? null : campaignId.value,
       aspects,
       torments: tormentData,
       xpBonuses: {
@@ -299,10 +303,13 @@ async function handleSubmit() {
         inspiration: xpBonuses.inspiration,
       },
     }
+    if (isWorkshop) createPayload.creationRules = creationRules.value
     if (isLibrary) createPayload.grantedInspiration = grantedInspiration.value
     const created = await createTamer(createPayload)
     if (created) {
-      if (!isLibrary) {
+      if (isWorkshop) {
+        router.push('/workshop')
+      } else if (!isLibrary) {
         selectedTamerId!.value = created.id
         router.push(`/campaigns/${campaignId.value}/player/${created.id}`)
       } else {

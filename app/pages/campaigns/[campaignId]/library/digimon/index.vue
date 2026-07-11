@@ -12,17 +12,19 @@ const STAGE_FILTERS = [
   { label: 'Dark Evo',    value: 'dark-evo'    },
 ]
 import { getStageBadgeColor, getAttributeColor } from '~/utils/displayHelpers'
+import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 
 definePageMeta({
   title: 'Digimon',
 })
 
 const router = useRouter()
-const { campaignId, eddySoulRules } = useCampaignContext()
+const { campaignId, campaign, eddySoulRules, loadCampaign } = useCampaignContext()
 const { digimonList, loading, error, fetchDigimon, deleteDigimon, copyDigimon, calculateDerivedStats: _calculateDerivedStats } = useDigimon()
 const calculateDerivedStats = (digimon: any) => _calculateDerivedStats(digimon, eddySoulRules.value)
 const { tamers, fetchTamers } = useTamers()
-const { exportDigimon, importDigimon } = useLibraryImportExport()
+const { importDigimon } = useLibraryImportExport()
+const { exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
 
 const filter = ref<'all' | 'partners' | 'enemies'>('all')
 const selectedTamerIds = ref<string[]>([])
@@ -33,6 +35,7 @@ const PAGE_SIZE = 12
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
 const importResult = ref<{ show: boolean; successful: number; failed: number; errors: Array<{ index: number; name: string; error: string }> } | null>(null)
+const rulesDiff = ref<CreationRulesDiffEntry[] | null>(null)
 
 const filteredDigimon = computed(() => {
   let list = digimonList.value
@@ -86,8 +89,13 @@ const tamerMap = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }), fetchTamers(campaignId.value)])
+  await Promise.all([fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }), fetchTamers(campaignId.value), loadCampaign()])
 })
+
+async function handleExport(digimon: typeof digimonList.value[0]) {
+  await loadCampaign()
+  exportDigimonBundle(digimon, campaign.value ? extractCreationRules(campaign.value) : undefined)
+}
 
 async function handleDelete(id: string, name: string) {
   if (confirm(`Are you sure you want to delete ${name}?`)) {
@@ -122,15 +130,50 @@ function handleImportClick() {
 }
 
 async function handleImportFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0]
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
   if (!file) return
   importLoading.value = true
   importResult.value = null
-  const result = await importDigimon(file, campaignId.value)
-  importResult.value = { show: true, ...result }
-  await fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })
-  importLoading.value = false
-  ;(event.target as HTMLInputElement).value = ''
+  rulesDiff.value = null
+  try {
+    const parsed = await parseBundleFile(file)
+    if (parsed.kind === 'legacy') {
+      // Legacy rules-less array export: DM-only import path, parity unverifiable
+      if (!confirm('This is a legacy export with no rules metadata — rule parity with this campaign cannot be verified. Import anyway?')) {
+        return
+      }
+      const result = await importDigimon(file, campaignId.value)
+      importResult.value = { show: true, ...result }
+    } else {
+      await loadCampaign()
+      const diff = campaign.value
+        ? diffCreationRules(parsed.bundle.rules, extractCreationRules(campaign.value))
+        : []
+      if (diff.length > 0) {
+        rulesDiff.value = diff
+        return
+      }
+      const result = await importBundle(parsed.bundle, { campaignId: campaignId.value })
+      importResult.value = {
+        show: true,
+        successful: (result.tamerId ? 1 : 0) + result.digimonIds.length,
+        failed: result.errors.length,
+        errors: result.errors.map((message, i) => ({ index: i, name: '', error: message })),
+      }
+    }
+    await fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })
+  } catch (e) {
+    importResult.value = {
+      show: true,
+      successful: 0,
+      failed: 1,
+      errors: [{ index: 0, name: '', error: e instanceof Error ? e.message : 'Import failed' }],
+    }
+  } finally {
+    importLoading.value = false
+    input.value = ''
+  }
 }
 </script>
 
@@ -169,6 +212,14 @@ async function handleImportFile(event: Event) {
       accept=".json"
       class="hidden"
       @change="handleImportFile"
+    />
+
+    <RulesDiffModal
+      v-if="rulesDiff"
+      :diff="rulesDiff"
+      source-label="File"
+      :target-label="campaign?.name || 'Campaign'"
+      @close="rulesDiff = null"
     />
 
     <div
@@ -343,7 +394,8 @@ async function handleImportFile(event: Event) {
             <button
               class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                      text-white rounded transition-colors"
-              @click="exportDigimon([digimon])"
+              title="Download as a digimon bundle (campaign rules included)"
+              @click="handleExport(digimon)"
             >
               Export
             </button>

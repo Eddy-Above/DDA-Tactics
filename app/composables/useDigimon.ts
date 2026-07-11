@@ -1,5 +1,5 @@
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily, type EddySoulRules } from '../types'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily, type EddySoulRules, type CreationRules } from '../types'
 
 // Extended type for update requests with sync option
 export type UpdateDigimonData = Partial<Digimon> & {
@@ -31,12 +31,18 @@ export interface CreateDigimonData {
   qualities?: Digimon['qualities']
   dataOptimization?: string
   bonusDP?: number
-  partnerId?: string
-  campaignId?: string
+  bonusStats?: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
+  bonusDPForQualities?: number
+  partnerId?: string | null
+  campaignId?: string | null
   isEnemy?: boolean
   isDarkEvolution?: boolean
+  giganticDimensions?: { width: number; height: number; depth: number } | null
+  evolvesFromId?: string | null
+  evolutionPathIds?: string[]
   notes?: string
   spriteUrl?: string
+  creationRules?: CreationRules | null
 }
 
 export interface DigimonEnvelope {
@@ -60,6 +66,7 @@ export function useDigimon() {
     partnerId?: string
     isEnemy?: boolean
     campaignId?: string
+    sandbox?: boolean
     stage?: DigimonStage
     ids?: string
     page?: number
@@ -70,6 +77,7 @@ export function useDigimon() {
     try {
       const query = new URLSearchParams()
       if (filters?.campaignId) query.set('campaignId', filters.campaignId)
+      if (filters?.sandbox) query.set('sandbox', 'true')
       if (filters?.partnerId) query.set('partnerId', filters.partnerId)
       if (filters?.isEnemy !== undefined) query.set('isEnemy', String(filters.isEnemy))
       if (filters?.stage) query.set('stage', filters.stage)

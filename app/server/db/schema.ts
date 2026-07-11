@@ -1,5 +1,6 @@
 import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
+import type { CreationRules } from '../../types'
 
 // =====================================
 // Tamers Table
@@ -99,6 +100,11 @@ export const tamers = pgTable('tamers', {
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),
 
+  // Workshop (sandbox) characters: rules snapshot they were built under
+  creationRules: jsonb('creation_rules').$type<CreationRules | null>(),
+  // Reserved for future accounts feature (unused for now)
+  ownerId: text('owner_id'),
+
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -194,6 +200,11 @@ export const digimon = pgTable('digimon', {
 
   notes: text('notes').notNull().default(''),
   spriteUrl: text('sprite_url'),
+
+  // Workshop (sandbox) characters: rules snapshot they were built under
+  creationRules: jsonb('creation_rules').$type<CreationRules | null>(),
+  // Reserved for future accounts feature (unused for now)
+  ownerId: text('owner_id'),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),

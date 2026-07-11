@@ -9,6 +9,7 @@ interface Props {
   placeholder?: string
   label?: string
   campaignId?: string
+  sandbox?: boolean  // list only workshop digimon (campaignId IS NULL) instead of a campaign's
   excludeEnemies?: boolean
 }
 
@@ -32,7 +33,8 @@ onMounted(async () => {
   loading.value = true
   try {
     const query: Record<string, string> = { pageSize: '500' }
-    if (props.campaignId) query.campaignId = props.campaignId
+    if (props.sandbox) query.sandbox = 'true'
+    else if (props.campaignId) query.campaignId = props.campaignId
     if (props.excludeEnemies) query.isEnemy = 'false'
     const envelope = await $fetch<{ data: Digimon[] }>('/api/digimon', { query })
     allDigimon.value = envelope.data

@@ -275,6 +275,32 @@ export interface CampaignRulesSettings {
   skillOrders?: boolean
 }
 
+// The subset of campaign settings that affects character CREATION (not combat).
+// Snapshotted onto sandbox (workshop) characters and embedded in export bundles
+// so imports can verify rule parity. skillRenames is carried for display
+// fidelity only and is never part of the parity comparison.
+export interface CreationRules {
+  level: CampaignLevel
+  eddySoulRules?: Pick<EddySoulRules,
+    | 'accuracyIsAgilityAthletics'
+    | 'damageIsBodyFeatsOfStrength'
+    | 'armorIsWillpowerEndurance'
+    | 'baseStatRangesEnabled'
+    | 'chargeAttackCosts3DP'
+    | 'instinctBoostsDodgeArmorSpeed'
+    | 'hugeSizeRequiresMega'
+    | 'bonusDPMinPerCategory'
+  >
+  houseRules?: Pick<HouseRules,
+    | 'allowDuplicateStatValues'
+    | 'allowFlexCPSplits'
+    | 'giganticMaxSize'
+    | 'skillOrders'
+  >
+  tormentRequirements?: TormentRequirements
+  skillRenames?: SkillRenames
+}
+
 export type CampaignLevel = 'standard' | 'enhanced' | 'extreme'
 
 export const DIGIVOLVE_WILLPOWER_DC: Record<CampaignLevel, number> = {
@@ -416,6 +442,8 @@ export interface Tamer {
   usedPerDaySkillOrders: string[]   // skill order names used today (once-per-day)
   digivolutionsUsedToday: number    // for EddySoul digivolution limit rule
   notes: string
+  creationRules?: CreationRules | null  // sandbox (workshop) characters: rules snapshot they were built under
+  ownerId?: string | null               // reserved for future accounts feature
   createdAt: Date
   updatedAt: Date
 }
@@ -495,6 +523,8 @@ export interface Digimon {
   giganticDimensions?: { width: number; height: number; depth: number } | null
   notes: string
   spriteUrl: string | null
+  creationRules?: CreationRules | null  // sandbox (workshop) characters: rules snapshot they were built under
+  ownerId?: string | null               // reserved for future accounts feature
   createdAt: Date
   updatedAt: Date
 }

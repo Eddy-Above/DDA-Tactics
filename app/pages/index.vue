@@ -93,12 +93,20 @@ function getLevelColor(level: string) {
           Select a campaign or create a new one
         </p>
       </div>
-      <NuxtLink
-        to="/campaigns/new"
-        class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
-      >
-        + New Campaign
-      </NuxtLink>
+      <div class="flex gap-2">
+        <NuxtLink
+          to="/workshop"
+          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+        >
+          🛠️ Character Workshop
+        </NuxtLink>
+        <NuxtLink
+          to="/campaigns/new"
+          class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+        >
+          + New Campaign
+        </NuxtLink>
+      </div>
     </div>
 
     <div class="mb-6">

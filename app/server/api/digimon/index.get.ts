@@ -1,4 +1,4 @@
-import { eq, or, inArray, and, count } from 'drizzle-orm'
+import { eq, or, inArray, and, count, isNull } from 'drizzle-orm'
 import { db, digimon, tamers } from '../../db'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
@@ -23,7 +23,10 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  if (campaignId) {
+  if (query.sandbox === 'true') {
+    // Workshop (sandbox) digimon: not attached to any campaign
+    conditions.push(isNull(digimon.campaignId))
+  } else if (campaignId) {
     const campaignTamerIds = db.select({ id: tamers.id }).from(tamers).where(eq(tamers.campaignId, campaignId))
     conditions.push(or(
       eq(digimon.campaignId, campaignId),

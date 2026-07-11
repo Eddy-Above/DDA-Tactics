@@ -15,6 +15,7 @@ import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } fr
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
+import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 
 definePageMeta({
   layout: 'player',
@@ -22,7 +23,7 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { campaignId, campaignLevel, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
+const { campaignId, campaign, campaignLevel, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, loadCampaign } = useCampaignContext()
 const skillLabels = computed(() => getResolvedSkillLabels(skillRenames.value))
 const tamerId = computed(() => route.params.tamerId as string)
 
@@ -32,6 +33,68 @@ const isChildRoute = computed(() => {
   const basePath = `/campaigns/${campaignId.value}/player/${tamerId.value}`
   return path !== basePath && path.startsWith(basePath + '/')
 })
+
+// Character bundle export/import (Character Workshop feature)
+const { exportCharacterBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const digimonFileInputRef = ref<HTMLInputElement | null>(null)
+const digimonImportLoading = ref(false)
+const digimonImportError = ref<string | null>(null)
+const importRulesDiff = ref<CreationRulesDiffEntry[] | null>(null)
+
+async function handleExportCharacter() {
+  if (!tamer.value) return
+  await loadCampaign()
+  if (!campaign.value) return
+  await exportCharacterBundle(tamer.value, extractCreationRules(campaign.value))
+}
+
+function handleImportDigimonClick() {
+  digimonFileInputRef.value?.click()
+}
+
+async function handleImportDigimonFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  digimonImportLoading.value = true
+  digimonImportError.value = null
+  importRulesDiff.value = null
+  try {
+    const parsed = await parseBundleFile(file)
+    if (parsed.kind === 'legacy') {
+      digimonImportError.value = 'This is a legacy export with no rules metadata — ask your GM to import it via the campaign library.'
+      return
+    }
+    if (parsed.bundle.tamer) {
+      digimonImportError.value = 'This file contains a whole character. Import it from the character-select screen instead.'
+      return
+    }
+    await loadCampaign()
+    if (!campaign.value) {
+      digimonImportError.value = 'Could not load campaign rules — try again.'
+      return
+    }
+    // Warn + block: digimon rules must match the campaign's creation rules
+    const diff = diffCreationRules(parsed.bundle.rules, extractCreationRules(campaign.value))
+    if (diff.length > 0) {
+      importRulesDiff.value = diff
+      return
+    }
+    const result = await importBundle(parsed.bundle, {
+      campaignId: campaignId.value,
+      partnerTamerId: tamerId.value,
+    })
+    if (result.errors.length > 0) {
+      digimonImportError.value = `Imported with problems: ${result.errors.join('; ')}`
+    }
+    await loadData()
+  } catch (e) {
+    digimonImportError.value = e instanceof Error ? e.message : 'Import failed'
+  } finally {
+    digimonImportLoading.value = false
+    input.value = ''
+  }
+}
 
 // State
 const tamer = ref<Tamer | null>(null)
@@ -5331,6 +5394,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     >
                       Edit
                     </NuxtLink>
+                    <button
+                      class="text-digimon-orange-400 hover:text-digimon-orange-300 transition-colors text-sm"
+                      title="Download this character (with partner digimon and evolution lines) as a bundle file"
+                      @click="handleExportCharacter"
+                    >
+                      Export
+                    </button>
                   </div>
                   <p class="text-digimon-dark-400">Age {{ tamer.age }} • {{ campaignLevel }} campaign</p>
                   <div class="mt-2 space-y-1">
@@ -5542,14 +5612,44 @@ async function handleBreakClash(participantId: string, clashId: string) {
             <!-- Partner Digimon Header -->
             <div class="flex items-center justify-between">
               <h2 class="font-display text-xl font-semibold text-white">Partner Digimon</h2>
-              <NuxtLink
-                :to="`/campaigns/${campaignId}/player/${tamerId}/digimon/new`"
-                class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg
-                       font-semibold transition-colors text-sm"
-              >
-                + Create Digimon
-              </NuxtLink>
+              <div class="flex gap-2">
+                <button
+                  :disabled="digimonImportLoading"
+                  class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg
+                         font-semibold transition-colors text-sm"
+                  @click="handleImportDigimonClick"
+                >
+                  {{ digimonImportLoading ? 'Importing...' : 'Import Digimon' }}
+                </button>
+                <NuxtLink
+                  :to="`/campaigns/${campaignId}/player/${tamerId}/digimon/new`"
+                  class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg
+                         font-semibold transition-colors text-sm"
+                >
+                  + Create Digimon
+                </NuxtLink>
+              </div>
             </div>
+
+            <input
+              ref="digimonFileInputRef"
+              type="file"
+              accept=".json"
+              class="hidden"
+              @change="handleImportDigimonFile"
+            />
+
+            <div v-if="digimonImportError" class="bg-red-900/30 border border-red-500 rounded-lg p-3 text-sm text-red-400">
+              {{ digimonImportError }}
+            </div>
+
+            <RulesDiffModal
+              v-if="importRulesDiff"
+              :diff="importRulesDiff"
+              source-label="Digimon"
+              :target-label="campaign?.name || 'Campaign'"
+              @close="importRulesDiff = null"
+            />
 
             <!-- Partner Digimon (grouped by evolution chain) -->
             <div v-for="chain in digimonChains" :key="chain.chainId" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">

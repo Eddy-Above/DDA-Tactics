@@ -1,10 +1,11 @@
 import type { Tamer } from '../server/db/schema'
-import type { EddySoulRules } from '../types'
+import type { CreationRules, EddySoulRules } from '../types'
 
 export interface CreateTamerData {
   name: string
   age: number
-  campaignId?: string
+  campaignId?: string | null
+  creationRules?: CreationRules | null
   attributes: {
     agility: number
     body: number
@@ -34,6 +35,7 @@ export interface CreateTamerData {
   xp?: number
   inspiration?: number
   grantedInspiration?: number
+  xpBonuses?: Tamer['xpBonuses']
   notes?: string
   spriteUrl?: string
 }
@@ -43,11 +45,11 @@ export function useTamers() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchTamers(campaignId?: string) {
+  async function fetchTamers(campaignId?: string, options?: { sandbox?: boolean }) {
     loading.value = true
     error.value = null
     try {
-      const query = campaignId ? `?campaignId=${campaignId}` : ''
+      const query = options?.sandbox ? '?sandbox=true' : campaignId ? `?campaignId=${campaignId}` : ''
       tamers.value = await $fetch<Tamer[]>(`/api/tamers${query}`)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch tamers'

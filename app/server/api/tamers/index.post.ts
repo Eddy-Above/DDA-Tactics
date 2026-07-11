@@ -54,6 +54,7 @@ interface CreateTamerBody {
   xp?: number
   inspiration?: number
   grantedInspiration?: number
+  creationRules?: import('../../../types').CreationRules | null
 }
 
 export default defineEventHandler(async (event) => {
@@ -111,6 +112,7 @@ export default defineEventHandler(async (event) => {
     notes: body.notes || '',
     spriteUrl: body.spriteUrl,
     xpBonuses,
+    creationRules: body.creationRules ?? null,
     createdAt: now,
     updatedAt: now,
   }

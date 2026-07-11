@@ -61,6 +61,9 @@ interface CreateDigimonBody {
   evolvesFromId?: string | null
   evolutionPathIds?: string[]
   syncBonusDP?: boolean
+  isDarkEvolution?: boolean
+  giganticDimensions?: { width: number; height: number; depth: number } | null
+  creationRules?: import('../../../types').CreationRules | null
 }
 
 export default defineEventHandler(async (event) => {
@@ -110,8 +113,11 @@ export default defineEventHandler(async (event) => {
     partnerId: body.partnerId || null,
     campaignId: body.campaignId || null,
     isEnemy: body.isEnemy || false,
+    isDarkEvolution: body.isDarkEvolution || false,
+    giganticDimensions: body.giganticDimensions ?? null,
     notes: body.notes || '',
     spriteUrl: body.spriteUrl || null,
+    creationRules: body.creationRules ?? null,
     createdAt: now,
     updatedAt: now,
   }

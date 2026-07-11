@@ -7,15 +7,16 @@ import { BASE_STAT_RANGES } from '~/types'
 import { STAGE_ORDER } from '~/data/qualities'
 
 const props = defineProps<{
-  source: 'library' | 'portal'
+  source: 'library' | 'portal' | 'workshop'
   mode: 'create' | 'edit'
 }>()
 const isEdit = props.mode === 'edit'
 const isLibrary = props.source === 'library'
+const isWorkshop = props.source === 'workshop'
 
 const route = useRoute()
 const router = useRouter()
-const { campaignId, eddySoulRules, houseRules, loadCampaign } = useCampaignContext()
+const { campaignId, eddySoulRules, houseRules, creationRules, loadCampaign } = useCreationRulesContext()
 
 const tamerId = computed(() => route.params.tamerId as string)
 const recordId = computed(() => route.params.id as string)
@@ -148,24 +149,29 @@ const qualitiesFromBaseDP = computed(() => Math.max(0, dpUsedOnQualities.value -
 // Boss Qualities are available to NPC/enemy digimon and to Dark Digivolution forms
 const isBossDigimon = computed(() => form.isEnemy || form.isDarkEvolution)
 
-const digimonLinkBase = computed(() =>
-  isLibrary
+const digimonLinkBase = computed(() => {
+  if (isWorkshop) return '/workshop/digimon'
+  return isLibrary
     ? `/campaigns/${campaignId.value}/library/digimon`
     : `/campaigns/${campaignId.value}/player/${tamerId.value}/digimon`
-)
+})
 
-const backLink = computed(() =>
-  isLibrary
+const backLink = computed(() => {
+  if (isWorkshop) return '/workshop'
+  return isLibrary
     ? `/campaigns/${campaignId.value}/library/digimon`
     : `/campaigns/${campaignId.value}/player/${tamerId.value}`
-)
+})
 
-const backLinkLabel = computed(() => isLibrary ? 'Back to Digimon' : 'Back to Dashboard')
+const backLinkLabel = computed(() => {
+  if (isWorkshop) return 'Back to Workshop'
+  return isLibrary ? 'Back to Digimon' : 'Back to Dashboard'
+})
 
 const pageTitle = computed(() =>
   isEdit
-    ? (isLibrary ? 'Edit Digimon' : 'Edit Partner Digimon')
-    : (isLibrary ? 'New Digimon' : 'Create Partner Digimon')
+    ? (isLibrary || isWorkshop ? 'Edit Digimon' : 'Edit Partner Digimon')
+    : (isLibrary || isWorkshop ? 'New Digimon' : 'Create Partner Digimon')
 )
 
 const evolutionChain = computed(() => {
@@ -195,14 +201,20 @@ async function loadDigimon() {
   try {
     const [data] = await Promise.all([
       fetchDigimonById(recordId.value),
-      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+      isWorkshop
+        ? fetchDigimon({ sandbox: true, pageSize: 500 })
+        : fetchDigimon({ campaignId: campaignId.value ?? undefined, pageSize: 500 }),
     ])
     if (!data) {
       loadError.value = 'Digimon not found'
       return
     }
-    if (!isLibrary && data.partnerId !== tamerId.value) {
+    if (props.source === 'portal' && data.partnerId !== tamerId.value) {
       loadError.value = 'You can only edit your own partner Digimon'
+      return
+    }
+    if (isWorkshop && data.campaignId) {
+      loadError.value = 'This Digimon belongs to a campaign — edit it there instead'
       return
     }
     loadedDigimon.value = data
@@ -243,8 +255,8 @@ function handleAddAttack(attack: any) {
 
 onMounted(async () => {
   await loadCampaign()
-  if (isLibrary) fetchTamers(campaignId.value)
-  if (!isLibrary) form.partnerId = tamerId.value
+  if (isLibrary) fetchTamers(campaignId.value ?? undefined)
+  if (props.source === 'portal') form.partnerId = tamerId.value
   basicInfoExpanded.value = !isEdit
   if (isEdit) await loadDigimon()
 })
@@ -312,8 +324,8 @@ async function handleSubmit() {
       attacks: form.attacks,
       qualities: form.qualities,
       dataOptimization: form.dataOptimization || undefined,
-      partnerId: isLibrary ? (form.partnerId || null) : tamerId.value,
-      isEnemy: isLibrary ? form.isEnemy : false,
+      partnerId: props.source === 'portal' ? tamerId.value : (form.partnerId || null),
+      isEnemy: isLibrary || isWorkshop ? form.isEnemy : false,
       isDarkEvolution: form.isDarkEvolution,
       notes: form.notes,
       spriteUrl: form.spriteUrl || undefined,
@@ -321,6 +333,7 @@ async function handleSubmit() {
       evolutionPathIds: form.evolutionPathIds,
       syncBonusDP: form.syncBonusDP,
       giganticDimensions: form.size === 'gigantic' ? { ...giganticDims } : null,
+      ...(isWorkshop ? { creationRules: creationRules.value } : {}),
     }
     await updateDigimon(loadedDigimon.value.id, data)
     router.push(backLink.value)
@@ -338,8 +351,8 @@ async function handleSubmit() {
       qualities: form.qualities,
       dataOptimization: form.dataOptimization || undefined,
       bonusDP: form.bonusDP || 0,
-      partnerId: isLibrary ? (form.partnerId || null) : tamerId.value,
-      isEnemy: isLibrary ? form.isEnemy : false,
+      partnerId: props.source === 'portal' ? tamerId.value : (form.partnerId || null),
+      isEnemy: isLibrary || isWorkshop ? form.isEnemy : false,
       isDarkEvolution: form.isDarkEvolution,
       notes: form.notes,
       spriteUrl: form.spriteUrl || undefined,
@@ -352,8 +365,9 @@ async function handleSubmit() {
     if (form.evolvesFromId) data.evolvesFromId = form.evolvesFromId
     if (form.evolutionPathIds.length > 0) data.evolutionPathIds = form.evolutionPathIds
     if (form.evolvesFromId || form.evolutionPathIds.length > 0) data.syncBonusDP = form.syncBonusDP
+    if (isWorkshop) data.creationRules = creationRules.value
 
-    const created = await createDigimon({ ...data, campaignId: campaignId.value })
+    const created = await createDigimon({ ...data, campaignId: isWorkshop ? null : campaignId.value })
     if (created) {
       router.push(backLink.value)
     }
@@ -535,7 +549,7 @@ async function handleCopy() {
               </select>
             </div>
             <div class="flex items-end gap-6">
-              <label v-if="isLibrary" class="flex items-center gap-2 cursor-pointer">
+              <label v-if="isLibrary || isWorkshop" class="flex items-center gap-2 cursor-pointer">
                 <input
                   v-model="form.isEnemy"
                   type="checkbox"
@@ -1218,8 +1232,9 @@ async function handleCopy() {
               v-model="form.evolvesFromId"
               :stage="getPreviousStages(form.stage)"
               :exclude-ids="loadedDigimon ? [loadedDigimon.id] : []"
-              :campaign-id="campaignId"
-              :exclude-enemies="!isLibrary"
+              :campaign-id="campaignId ?? undefined"
+              :sandbox="isWorkshop"
+              :exclude-enemies="props.source === 'portal'"
               label="Evolves From"
               placeholder="Select pre-evolution..."
             />
@@ -1234,8 +1249,9 @@ async function handleCopy() {
               v-model="form.evolutionPathIds"
               :stage="getNextStages(form.stage)"
               :exclude-ids="loadedDigimon ? [loadedDigimon.id] : []"
-              :campaign-id="campaignId"
-              :exclude-enemies="!isLibrary"
+              :campaign-id="campaignId ?? undefined"
+              :sandbox="isWorkshop"
+              :exclude-enemies="props.source === 'portal'"
               label="Evolves To"
               placeholder="Select evolutions..."
             />
