@@ -1,6 +1,7 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type NewDigimon } from '../../db'
 import { generateId } from '../../utils/id'
+import { getSessionUser } from '../../utils/session'
 import {
   type DigimonStage,
   type DigimonAttribute,
@@ -89,6 +90,10 @@ export default defineEventHandler(async (event) => {
   const now = new Date()
   const stageConfig = STAGE_CONFIG[body.stage]
 
+  // See tamers/index.post.ts for why this stamps on every create (including
+  // bundle imports), not just Workshop ones.
+  const sessionUser = await getSessionUser(event)
+
   const newDigimon: NewDigimon = {
     id,
     name: body.name,
@@ -118,6 +123,7 @@ export default defineEventHandler(async (event) => {
     notes: body.notes || '',
     spriteUrl: body.spriteUrl || null,
     creationRules: body.creationRules ?? null,
+    ownerId: sessionUser?.id ?? null,
     createdAt: now,
     updatedAt: now,
   }

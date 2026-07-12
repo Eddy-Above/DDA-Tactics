@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, tamers, type Tamer } from '../../db'
+import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
 type UpdateTamerBody = Partial<Omit<Tamer, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -23,6 +24,8 @@ export default defineEventHandler(async (event) => {
       message: `Tamer with ID ${id} not found`,
     })
   }
+
+  await assertCanModifySandboxCharacter(event, existing)
 
   const updateData: Partial<Tamer> = {
     ...body,

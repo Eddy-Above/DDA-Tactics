@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, campaigns, type Campaign } from '../../db'
 import { hashPassword } from '../../utils/password'
+import { requireOwnerOrCoOwner } from '../../utils/campaignAuth'
 
 interface UpdateCampaignBody {
   name?: string
@@ -31,6 +32,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Settings are only reserved for the owner/co-owner once a campaign has
+  // an owner. Ownerless campaigns keep today's fully-open behavior (access
+  // is governed purely by the DM password, unchanged).
+  if (existing.ownerId) {
+    await requireOwnerOrCoOwner(event, id)
+  }
+
   const updateData: Partial<Campaign> = { updatedAt: new Date() }
 
   if (body.name !== undefined) updateData.name = body.name
@@ -58,6 +66,7 @@ export default defineEventHandler(async (event) => {
     hasPassword: !!updated.passwordHash,
     hasDmPassword: !!updated.dmPasswordHash,
     rulesSettings: updated.rulesSettings,
+    ownerId: updated.ownerId,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   }

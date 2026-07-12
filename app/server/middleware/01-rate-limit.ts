@@ -22,6 +22,13 @@ const TIERS: RateLimitTier[] = [
     windowMs: 60_000,
     match: (method, path) => method === 'POST' && /\/verify-(dm-)?password$/.test(path),
   },
+  // Account registration/login — same tier as password verification.
+  {
+    key: 'auth',
+    limit: 5,
+    windowMs: 60_000,
+    match: (method, path) => method === 'POST' && /^\/api\/auth\/(register|login)$/.test(path),
+  },
   // Encounter action writes happen frequently during combat but should still
   // be bounded well above normal usage.
   {

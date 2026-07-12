@@ -1,9 +1,21 @@
+// Gates the GM tool pages (library create/edit, maps). Settings has its own,
+// stricter middleware — see settings-access.ts.
 export default defineNuxtRouteMiddleware(async (to) => {
   const campaignId = to.params.campaignId as string
   if (!campaignId) return
 
   const cookie = useCookie(`campaign-dm-${campaignId}`)
   if (cookie.value) return
+
+  // Account-based DM access: owner, co-owner, or co-dm grant all count.
+  try {
+    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean }>(
+      `/api/campaigns/${campaignId}/my-access`,
+    )
+    if (access.isOwner || access.isCoOwner || access.isCoDm) return
+  } catch {
+    // ignore — fall through to the password-based check
+  }
 
   // Check if campaign has a DM password
   try {

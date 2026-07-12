@@ -402,6 +402,10 @@ export const campaigns = pgTable('campaigns', {
   dmPasswordHash: text('dm_password_hash'),
   rulesSettings: jsonb('rules_settings').notNull().default({}).$type<Record<string, any>>(),
 
+  // Stamped only at creation time if the creator was logged in; never
+  // reassigned afterward (no ownership transfer/retroactive claiming).
+  ownerId: text('owner_id'),
+
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -539,6 +543,48 @@ export const maps = pgTable('maps', {
 })
 
 // =====================================
+// Users / Sessions / Campaign Access Grants Tables
+// =====================================
+
+// Optional accounts: username + password only, no personal data.
+// Case-insensitive uniqueness is enforced via a functional unique index in
+// migration 0016 (CREATE UNIQUE INDEX ... ON users (LOWER(username))).
+export const users = pgTable('users', {
+  id: text('id').primaryKey(),
+  username: text('username').notNull(),
+  passwordHash: text('password_hash').notNull(),
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+// Server-side sessions backing an httpOnly cookie. The row id itself is the
+// opaque session token (the cookie value) — no separate token column.
+export const sessions = pgTable('sessions', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+})
+
+// One row per (campaign, account). Holds two independent grant axes at
+// once so a single account can e.g. be a co-dm AND scoped to one specific
+// player tamer simultaneously.
+export const campaignAccessGrants = pgTable('campaign_access_grants', {
+  id: text('id').primaryKey(),
+  campaignId: text('campaign_id').notNull(),
+  userId: text('user_id').notNull(),
+
+  dmRole: text('dm_role').$type<'co-dm' | 'co-owner' | null>(),
+  playerScope: text('player_scope').$type<'all' | 'specific' | null>(),
+  playerTamerId: text('player_tamer_id'),
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+// =====================================
 // Relations
 // =====================================
 
@@ -619,3 +665,12 @@ export type NewMap = typeof maps.$inferInsert
 
 export type RollLogRow = typeof rollLog.$inferSelect
 export type NewRollLogRow = typeof rollLog.$inferInsert
+
+export type UserRow = typeof users.$inferSelect
+export type NewUserRow = typeof users.$inferInsert
+
+export type SessionRow = typeof sessions.$inferSelect
+export type NewSessionRow = typeof sessions.$inferInsert
+
+export type CampaignAccessGrantRow = typeof campaignAccessGrants.$inferSelect
+export type NewCampaignAccessGrantRow = typeof campaignAccessGrants.$inferInsert

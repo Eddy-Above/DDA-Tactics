@@ -1,5 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type Digimon } from '../../db'
+import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
 type UpdateDigimonBody = Partial<Omit<Digimon, 'id' | 'createdAt' | 'updatedAt'>> & {
   syncBonusDP?: boolean // Whether to sync bonusDP to all linked evolution forms
@@ -25,6 +26,8 @@ export default defineEventHandler(async (event) => {
       message: `Digimon with ID ${id} not found`,
     })
   }
+
+  await assertCanModifySandboxCharacter(event, existing)
 
   // Two-way sync for evolution links
   const now = new Date()

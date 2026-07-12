@@ -28,6 +28,7 @@ export default defineEventHandler(async (event) => {
       hasPassword: !!c.passwordHash,
       hasDmPassword: !!c.dmPasswordHash,
       rulesSettings: c.rulesSettings,
+      ownerId: c.ownerId,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
     })),

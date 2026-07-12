@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, tamers, digimon, evolutionLines } from '../../db'
+import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -20,6 +21,8 @@ export default defineEventHandler(async (event) => {
       message: `Tamer with ID ${id} not found`,
     })
   }
+
+  await assertCanModifySandboxCharacter(event, existing)
 
   // Delete all digimon associated with this tamer
   await db.delete(digimon).where(eq(digimon.partnerId, id))

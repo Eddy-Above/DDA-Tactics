@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
+import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -20,6 +21,8 @@ export default defineEventHandler(async (event) => {
       message: `Digimon with ID ${id} not found`,
     })
   }
+
+  await assertCanModifySandboxCharacter(event, existing)
 
   // Delete digimon
   await db.delete(digimon).where(eq(digimon.id, id))

@@ -481,7 +481,26 @@ async function loadData() {
   }
 }
 
+// Page/navigation-level gating only, mirroring the character-select hub
+// (player/index.vue) — an account scoped to one specific tamer can't reach
+// a different tamer's dashboard by navigating to its URL directly, unless
+// it also holds DM-tier access.
+async function enforceSpecificTamerScope() {
+  try {
+    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; playerScope: 'all' | 'specific' | null; playerTamerId: string | null }>(
+      `/api/campaigns/${campaignId.value}/my-access`,
+    )
+    const hasDmTier = access.isOwner || access.isCoOwner || access.isCoDm
+    if (!hasDmTier && access.playerScope === 'specific' && access.playerTamerId !== tamerId.value) {
+      await navigateTo(`/campaigns/${campaignId.value}/player`)
+    }
+  } catch {
+    // ignore — fall through, same as every other account-access check in the app
+  }
+}
+
 onMounted(async () => {
+  await enforceSpecificTamerScope()
   await loadData()
   // Low-frequency fallback; the WebSocket above handles near-instant updates
   // while connected.

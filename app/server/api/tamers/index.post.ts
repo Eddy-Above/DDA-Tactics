@@ -1,5 +1,6 @@
 import { db, tamers, type NewTamer } from '../../db'
 import { generateId } from '../../utils/id'
+import { getSessionUser } from '../../utils/session'
 
 interface CreateTamerBody {
   name: string
@@ -77,6 +78,13 @@ export default defineEventHandler(async (event) => {
   const id = generateId()
   const now = new Date()
 
+  // Stamped whenever the requester is logged in, whether this is a fresh
+  // Workshop character or a bundle import (both go through this same
+  // endpoint) — importing someone else's exported character makes you the
+  // owner of your copy, it never carries over the original's ownership
+  // (the export format doesn't include ownerId in the first place).
+  const sessionUser = await getSessionUser(event)
+
   // Ensure JSON fields are properly structured
   const attributes = body.attributes || { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0 }
   const skills = body.skills || {
@@ -113,6 +121,7 @@ export default defineEventHandler(async (event) => {
     spriteUrl: body.spriteUrl,
     xpBonuses,
     creationRules: body.creationRules ?? null,
+    ownerId: sessionUser?.id ?? null,
     createdAt: now,
     updatedAt: now,
   }

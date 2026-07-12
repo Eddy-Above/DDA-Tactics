@@ -6,10 +6,12 @@ definePageMeta({
 const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, calculateDerivedStats } = useTamers()
 const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon } = useDigimon()
 const { exportCharacterBundle, exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const { user: currentUser, fetchMe, initialized } = useAuth()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
 const importFeedback = ref<{ tone: 'success' | 'warning' | 'error'; message: string; errors: string[] } | null>(null)
+const showOnlyMine = ref(false)
 
 const loading = computed(() => tamersLoading.value || digimonLoading.value)
 
@@ -19,6 +21,19 @@ const tamerNameById = computed(() => {
   return map
 })
 
+// Ownership only gates editing/deleting — the roster itself always stays
+// fully public. Unowned (legacy/anonymous) characters remain editable and
+// deletable by anyone.
+function isMine(record: { ownerId?: string | null }) {
+  return !!currentUser.value && record.ownerId === currentUser.value.id
+}
+function canModify(record: { ownerId?: string | null }) {
+  return !record.ownerId || isMine(record)
+}
+
+const visibleTamers = computed(() => (showOnlyMine.value ? tamers.value.filter(isMine) : tamers.value))
+const visibleDigimon = computed(() => (showOnlyMine.value ? digimonList.value.filter(isMine) : digimonList.value))
+
 async function loadAll() {
   await Promise.all([
     fetchTamers(undefined, { sandbox: true }),
@@ -26,7 +41,10 @@ async function loadAll() {
   ])
 }
 
-onMounted(loadAll)
+onMounted(async () => {
+  if (!initialized.value) await fetchMe()
+  await loadAll()
+})
 
 function levelLabel(rules?: { level?: string } | null) {
   const level = rules?.level ?? 'standard'
@@ -41,16 +59,18 @@ function levelColor(rules?: { level?: string } | null) {
   }
 }
 
-async function handleDeleteTamer(id: string, name: string) {
-  if (confirm(`Delete ${name}? Their partner digimon stay in the workshop.`)) {
-    await deleteTamer(id)
+async function handleDeleteTamer(tamer: { id: string; name: string; ownerId?: string | null }) {
+  if (!canModify(tamer)) return
+  if (confirm(`Delete ${tamer.name}? Their partner digimon stay in the workshop.`)) {
+    await deleteTamer(tamer.id)
     await loadAll()
   }
 }
 
-async function handleDeleteDigimon(id: string, name: string) {
-  if (confirm(`Delete ${name}?`)) {
-    await deleteDigimon(id)
+async function handleDeleteDigimon(d: { id: string; name: string; ownerId?: string | null }) {
+  if (!canModify(d)) return
+  if (confirm(`Delete ${d.name}?`)) {
+    await deleteDigimon(d.id)
     await loadAll()
   }
 }
@@ -106,11 +126,14 @@ async function handleImportFile(event: Event) {
         </NuxtLink>
         <h1 class="font-display text-3xl font-bold text-white">Character Workshop</h1>
         <p class="text-digimon-dark-400 max-w-2xl">
-          A shared sandbox for experimenting with tamer and digimon builds under any rules — no campaign needed.
-          Each character remembers the rules it was built with; export it to bring it into a campaign with matching rules.
+          A shared sandbox for experimenting with tamer and digimon builds under any rules.
         </p>
       </div>
-      <div class="flex gap-2 flex-wrap">
+      <div class="flex gap-2 flex-wrap items-center">
+        <label v-if="currentUser" class="flex items-center gap-2 text-sm text-digimon-dark-300 mr-2">
+          <input v-model="showOnlyMine" type="checkbox" class="rounded" />
+          My Characters Only
+        </label>
         <button
           :disabled="importLoading"
           class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white
@@ -175,13 +198,15 @@ async function handleImportFile(event: Event) {
       <!-- Tamers -->
       <section class="mb-10">
         <h2 class="font-display text-2xl font-semibold text-white mb-4">Tamers</h2>
-        <div v-if="tamers.length === 0" class="bg-digimon-dark-800/50 border border-digimon-dark-700 rounded-xl p-8 text-center">
+        <div v-if="visibleTamers.length === 0" class="bg-digimon-dark-800/50 border border-digimon-dark-700 rounded-xl p-8 text-center">
           <div class="text-4xl mb-2">👤</div>
-          <p class="text-digimon-dark-400">No workshop tamers yet — create one to start experimenting.</p>
+          <p class="text-digimon-dark-400">
+            {{ showOnlyMine ? "You don't own any workshop tamers yet." : 'No workshop tamers yet — create one to start experimenting.' }}
+          </p>
         </div>
         <div v-else class="grid gap-4">
           <div
-            v-for="tamer in tamers"
+            v-for="tamer in visibleTamers"
             :key="tamer.id"
             class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700
                    hover:border-digimon-dark-600 transition-colors"
@@ -217,12 +242,20 @@ async function handleImportFile(event: Event) {
 
               <div class="flex gap-2">
                 <NuxtLink
+                  v-if="canModify(tamer)"
                   :to="`/workshop/tamers/${tamer.id}`"
                   class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
                 >
                   Edit
                 </NuxtLink>
+                <span
+                  v-else
+                  title="Owned by another account — you can't edit this character"
+                  class="px-3 py-1.5 text-sm bg-digimon-dark-800 text-digimon-dark-500 rounded cursor-not-allowed"
+                >
+                  Edit
+                </span>
                 <button
                   class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
@@ -231,9 +264,12 @@ async function handleImportFile(event: Event) {
                   Export
                 </button>
                 <button
-                  class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50
+                  :disabled="!canModify(tamer)"
+                  :title="!canModify(tamer) ? 'Owned by another account — you can\'t delete this character' : ''"
+                  class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50 disabled:opacity-40
+                         disabled:cursor-not-allowed disabled:hover:bg-red-900/30
                          text-red-400 rounded transition-colors"
-                  @click="handleDeleteTamer(tamer.id, tamer.name)"
+                  @click="handleDeleteTamer(tamer)"
                 >
                   Delete
                 </button>
@@ -246,13 +282,15 @@ async function handleImportFile(event: Event) {
       <!-- Digimon -->
       <section>
         <h2 class="font-display text-2xl font-semibold text-white mb-4">Digimon</h2>
-        <div v-if="digimonList.length === 0" class="bg-digimon-dark-800/50 border border-digimon-dark-700 rounded-xl p-8 text-center">
+        <div v-if="visibleDigimon.length === 0" class="bg-digimon-dark-800/50 border border-digimon-dark-700 rounded-xl p-8 text-center">
           <div class="text-4xl mb-2">🥚</div>
-          <p class="text-digimon-dark-400">No workshop digimon yet — create one to start experimenting.</p>
+          <p class="text-digimon-dark-400">
+            {{ showOnlyMine ? "You don't own any workshop digimon yet." : 'No workshop digimon yet — create one to start experimenting.' }}
+          </p>
         </div>
         <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div
-            v-for="d in digimonList"
+            v-for="d in visibleDigimon"
             :key="d.id"
             class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700
                    hover:border-digimon-dark-600 transition-colors"
@@ -287,12 +325,20 @@ async function handleImportFile(event: Event) {
 
               <div class="flex flex-col gap-1.5 items-stretch">
                 <NuxtLink
+                  v-if="canModify(d)"
                   :to="`/workshop/digimon/${d.id}`"
                   class="px-3 py-1 text-sm text-center bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
                 >
                   Edit
                 </NuxtLink>
+                <span
+                  v-else
+                  title="Owned by another account — you can't edit this character"
+                  class="px-3 py-1 text-sm text-center bg-digimon-dark-800 text-digimon-dark-500 rounded cursor-not-allowed"
+                >
+                  Edit
+                </span>
                 <button
                   class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
@@ -301,9 +347,12 @@ async function handleImportFile(event: Event) {
                   Export
                 </button>
                 <button
-                  class="px-3 py-1 text-sm bg-red-900/30 hover:bg-red-900/50
+                  :disabled="!canModify(d)"
+                  :title="!canModify(d) ? 'Owned by another account — you can\'t delete this character' : ''"
+                  class="px-3 py-1 text-sm bg-red-900/30 hover:bg-red-900/50 disabled:opacity-40
+                         disabled:cursor-not-allowed disabled:hover:bg-red-900/30
                          text-red-400 rounded transition-colors"
-                  @click="handleDeleteDigimon(d.id, d.name)"
+                  @click="handleDeleteDigimon(d)"
                 >
                   Delete
                 </button>

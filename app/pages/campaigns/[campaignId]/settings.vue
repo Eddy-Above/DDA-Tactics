@@ -3,11 +3,142 @@ import { skillsByAttribute, skillLabels, attributes } from '~/constants/tamer-sk
 
 definePageMeta({
   title: 'Campaign Settings',
-  middleware: ['campaign-access', 'dm-access'],
+  middleware: ['campaign-access', 'settings-access'],
 })
 
 const { campaignId, campaign, loadCampaign } = useCampaignContext()
 const { updateCampaign, deleteCampaign, verifyDmPassword } = useCampaigns()
+const { searchUsers } = useAuth()
+const { tamers: campaignTamers, fetchTamers } = useTamers()
+
+interface GrantView {
+  id: string
+  userId: string
+  username: string
+  dmRole: 'co-dm' | 'co-owner' | null
+  playerScope: 'all' | 'specific' | null
+  playerTamerId: string | null
+  playerTamerName: string | null
+}
+
+const grants = ref<GrantView[]>([])
+const ownerUsername = ref<string | null>(null)
+const grantsLoading = ref(false)
+const grantSaving = ref(false)
+const grantError = ref('')
+
+const showAddGrant = ref(false)
+const addSearchQuery = ref('')
+const addSearchResults = ref<{ id: string; username: string }[]>([])
+const addSelectedUser = ref<{ id: string; username: string } | null>(null)
+const addDmRole = ref<'none' | 'co-dm' | 'co-owner'>('none')
+const addPlayerScope = ref<'none' | 'all' | 'specific'>('none')
+const addPlayerTamerId = ref('')
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null
+watch(addSearchQuery, (q) => {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(async () => {
+    addSearchResults.value = q.trim() ? await searchUsers(q) : []
+  }, 250)
+})
+
+function dmRoleValue(g: GrantView) { return g.dmRole ?? 'none' }
+function playerScopeValue(g: GrantView) { return g.playerScope ?? 'none' }
+
+async function loadGrants() {
+  if (!campaign.value?.ownerId) return
+  grantsLoading.value = true
+  try {
+    const result = await $fetch<{ grants: GrantView[]; ownerUsername: string | null }>(
+      `/api/campaigns/${campaignId.value}/grants`,
+    )
+    grants.value = result.grants
+    ownerUsername.value = result.ownerUsername
+  } catch (e) {
+    console.error('Failed to load access grants:', e)
+  } finally {
+    grantsLoading.value = false
+  }
+}
+
+function selectAddUser(u: { id: string; username: string }) {
+  addSelectedUser.value = u
+  addSearchQuery.value = ''
+  addSearchResults.value = []
+}
+
+function resetAddForm() {
+  showAddGrant.value = false
+  addSelectedUser.value = null
+  addSearchQuery.value = ''
+  addSearchResults.value = []
+  addDmRole.value = 'none'
+  addPlayerScope.value = 'none'
+  addPlayerTamerId.value = ''
+  grantError.value = ''
+}
+
+async function submitAddGrant() {
+  if (!addSelectedUser.value) return
+  if (addDmRole.value === 'none' && addPlayerScope.value === 'none') {
+    grantError.value = 'Choose at least one access level'
+    return
+  }
+  if (addPlayerScope.value === 'specific' && !addPlayerTamerId.value) {
+    grantError.value = 'Choose a tamer'
+    return
+  }
+  grantSaving.value = true
+  grantError.value = ''
+  try {
+    await $fetch(`/api/campaigns/${campaignId.value}/grants`, {
+      method: 'POST',
+      body: {
+        userId: addSelectedUser.value.id,
+        dmRole: addDmRole.value === 'none' ? null : addDmRole.value,
+        playerScope: addPlayerScope.value === 'none' ? null : addPlayerScope.value,
+        playerTamerId: addPlayerScope.value === 'specific' ? addPlayerTamerId.value : null,
+      },
+    })
+    resetAddForm()
+    await loadGrants()
+  } catch (e: any) {
+    grantError.value = e?.data?.message || e?.message || 'Failed to grant access'
+  } finally {
+    grantSaving.value = false
+  }
+}
+
+async function updateGrant(g: GrantView, patch: Partial<{ dmRole: string; playerScope: string; playerTamerId: string }>) {
+  grantSaving.value = true
+  try {
+    const body: Record<string, unknown> = {}
+    if (patch.dmRole !== undefined) body.dmRole = patch.dmRole === 'none' ? null : patch.dmRole
+    if (patch.playerScope !== undefined) {
+      body.playerScope = patch.playerScope === 'none' ? null : patch.playerScope
+      if (patch.playerScope !== 'specific') body.playerTamerId = null
+    }
+    if (patch.playerTamerId !== undefined) body.playerTamerId = patch.playerTamerId || null
+    await $fetch(`/api/campaigns/${campaignId.value}/grants/${g.id}`, { method: 'PUT', body })
+    await loadGrants()
+  } catch (e) {
+    console.error('Failed to update grant:', e)
+  } finally {
+    grantSaving.value = false
+  }
+}
+
+async function removeGrant(g: GrantView) {
+  if (!confirm(`Remove ${g.username}'s access?`)) return
+  grantSaving.value = true
+  try {
+    await $fetch(`/api/campaigns/${campaignId.value}/grants/${g.id}`, { method: 'DELETE' })
+    await loadGrants()
+  } finally {
+    grantSaving.value = false
+  }
+}
 
 const loading = ref(true)
 const saving = ref(false)
@@ -135,6 +266,11 @@ onMounted(async () => {
     }
 
   }
+
+  if (campaign.value?.ownerId) {
+    await Promise.all([loadGrants(), fetchTamers(campaignId.value)])
+  }
+
   loading.value = false
 })
 
@@ -285,7 +421,162 @@ async function handleDelete() {
       <div class="text-digimon-dark-400">Loading...</div>
     </div>
 
-    <form v-else class="space-y-6" @submit.prevent="handleSave">
+    <!-- Account Access -->
+    <div v-if="!loading" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700 mb-6">
+      <h3 class="font-semibold text-white mb-2">Account Access</h3>
+
+      <div v-if="!campaign?.ownerId" class="text-sm text-digimon-dark-400">
+        This campaign has no owner account — only a campaign's creator, while logged in, can enable account-based
+        access. Password-based access is unaffected.
+      </div>
+
+      <div v-else class="space-y-4">
+        <p class="text-sm text-digimon-dark-400">
+          Owner: <span class="text-white">{{ ownerUsername ?? '—' }}</span>
+        </p>
+
+        <div v-if="grantsLoading" class="text-sm text-digimon-dark-500">Loading access grants...</div>
+
+        <div v-else class="space-y-2">
+          <div v-if="grants.length === 0" class="text-sm text-digimon-dark-500">No accounts granted access yet.</div>
+          <div
+            v-for="g in grants"
+            :key="g.id"
+            class="flex flex-wrap items-center gap-3 bg-digimon-dark-900 border border-digimon-dark-700 rounded-lg p-3"
+          >
+            <span class="text-white font-medium min-w-[120px]">{{ g.username }}</span>
+
+            <select
+              :value="dmRoleValue(g)"
+              class="bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-sm text-white"
+              @change="updateGrant(g, { dmRole: ($event.target as HTMLSelectElement).value })"
+            >
+              <option value="none">No DM access</option>
+              <option value="co-dm">Co-DM (all GM tools, no Settings)</option>
+              <option value="co-owner">Co-Owner (full access)</option>
+            </select>
+
+            <select
+              :value="playerScopeValue(g)"
+              class="bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-sm text-white"
+              @change="updateGrant(g, { playerScope: ($event.target as HTMLSelectElement).value })"
+            >
+              <option value="none">No player access</option>
+              <option value="all">All tamers</option>
+              <option value="specific">One specific tamer</option>
+            </select>
+
+            <select
+              v-if="playerScopeValue(g) === 'specific'"
+              :value="g.playerTamerId ?? ''"
+              class="bg-digimon-dark-700 border border-digimon-dark-600 rounded px-2 py-1 text-sm text-white"
+              @change="updateGrant(g, { playerTamerId: ($event.target as HTMLSelectElement).value })"
+            >
+              <option value="" disabled>Choose a tamer...</option>
+              <option v-for="t in campaignTamers" :key="t.id" :value="t.id">{{ t.name }}</option>
+            </select>
+
+            <button type="button" class="ml-auto text-red-400 hover:text-red-300 text-sm" @click="removeGrant(g)">
+              Remove
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!showAddGrant">
+          <button
+            type="button"
+            class="text-sm text-digimon-orange-400 hover:text-digimon-orange-300"
+            @click="showAddGrant = true"
+          >
+            + Add Account
+          </button>
+        </div>
+
+        <div v-else class="bg-digimon-dark-900 border border-digimon-dark-700 rounded-lg p-4 space-y-3">
+          <div v-if="!addSelectedUser">
+            <label class="block text-sm text-digimon-dark-400 mb-1">Search username</label>
+            <input
+              v-model="addSearchQuery"
+              type="text"
+              placeholder="Start typing a username..."
+              class="w-full bg-digimon-dark-800 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white text-sm
+                     focus:border-digimon-orange-500 focus:outline-none"
+            />
+            <div v-if="addSearchResults.length > 0" class="mt-2 space-y-1">
+              <button
+                v-for="r in addSearchResults"
+                :key="r.id"
+                type="button"
+                class="block w-full text-left px-3 py-1.5 rounded bg-digimon-dark-800 hover:bg-digimon-dark-700 text-sm text-white"
+                @click="selectAddUser(r)"
+              >
+                {{ r.username }}
+              </button>
+            </div>
+          </div>
+
+          <div v-else class="flex items-center justify-between">
+            <span class="text-white text-sm">Granting access to <strong>{{ addSelectedUser.username }}</strong></span>
+            <button type="button" class="text-xs text-digimon-dark-400 hover:text-white" @click="addSelectedUser = null">
+              Change
+            </button>
+          </div>
+
+          <div v-if="addSelectedUser" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-digimon-dark-400 mb-1">DM Role</label>
+              <select
+                v-model="addDmRole"
+                class="w-full bg-digimon-dark-800 border border-digimon-dark-600 rounded px-2 py-1.5 text-sm text-white"
+              >
+                <option value="none">No DM access</option>
+                <option value="co-dm">Co-DM (all GM tools, no Settings)</option>
+                <option value="co-owner">Co-Owner (full access)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-digimon-dark-400 mb-1">Player Access</label>
+              <select
+                v-model="addPlayerScope"
+                class="w-full bg-digimon-dark-800 border border-digimon-dark-600 rounded px-2 py-1.5 text-sm text-white"
+              >
+                <option value="none">No player access</option>
+                <option value="all">All tamers</option>
+                <option value="specific">One specific tamer</option>
+              </select>
+            </div>
+            <div v-if="addPlayerScope === 'specific'" class="sm:col-span-2">
+              <label class="block text-xs text-digimon-dark-400 mb-1">Tamer</label>
+              <select
+                v-model="addPlayerTamerId"
+                class="w-full bg-digimon-dark-800 border border-digimon-dark-600 rounded px-2 py-1.5 text-sm text-white"
+              >
+                <option value="" disabled>Choose a tamer...</option>
+                <option v-for="t in campaignTamers" :key="t.id" :value="t.id">{{ t.name }}</option>
+              </select>
+            </div>
+          </div>
+
+          <p v-if="grantError" class="text-sm text-red-400">{{ grantError }}</p>
+
+          <div class="flex gap-2">
+            <button
+              type="button"
+              :disabled="!addSelectedUser || grantSaving"
+              class="bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium"
+              @click="submitAddGrant"
+            >
+              {{ grantSaving ? 'Saving...' : 'Grant Access' }}
+            </button>
+            <button type="button" class="text-digimon-dark-400 hover:text-white text-sm" @click="resetAddForm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <form v-if="!loading" class="space-y-6" @submit.prevent="handleSave">
       <!-- Name -->
       <div>
         <label class="block text-sm font-medium text-digimon-dark-300 mb-2">Campaign Name</label>

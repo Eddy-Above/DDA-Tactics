@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-07-12 | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **New feature: optional user accounts (username + password, no email).** Two coexisting systems: campaign passwords remain fully functional and unchanged for every existing/ownerless campaign; accounts are an additive, optional layer. New tables `users` (case-insensitive-unique via a functional index on `LOWER(username)`), `sessions` (row id = the opaque session token itself, backs a new `httpOnly`/`sameSite:lax` `session` cookie — the app's first real server-validated identity, unlike the existing boolean-flag `campaign-access-{id}`/`campaign-dm-{id}` cookies), and `campaignAccessGrants` (one row per campaign+account, two independent axes: `dmRole: 'co-dm'\|'co-owner'\|null` and `playerScope: 'all'\|'specific'\|null` + `playerTamerId`), plus `campaigns.ownerId` (migration `0016_add_accounts.sql`). New `server/utils/session.ts` (`createSession`/`getSessionUser`/`destroySession`, reuses the existing PBKDF2 `password.ts` helpers) and `server/utils/campaignAuth.ts` (`getMyCampaignAccess`/`requireOwnerOrCoOwner`, the single source of truth for permission checks). New endpoints: `POST /api/auth/register`\|`login`\|`logout`, `GET /api/auth/me`, `GET /api/users/search`, `GET /api/campaigns/[id]/my-access`, `GET`/`POST /api/campaigns/[id]/grants`, `PUT`/`DELETE /api/campaigns/[id]/grants/[grantId]` — the last four owner/co-owner-gated via `requireOwnerOrCoOwner`. **Campaign ownership**: stamped only at creation (`campaigns/index.post.ts`) if logged in; **never reassigned afterward** — no claim/transfer flow. Middleware split three ways: `campaign-access.ts`/`dm-access.ts` gained an account-grant check *in addition to* their existing password-cookie check (either satisfies); new `middleware/settings-access.ts` replaces `dm-access.ts` specifically on `settings.vue` — for owned campaigns, Settings/Delete now require owner/co-owner (the DM password alone still grants every other GM tool, just not Settings); ownerless campaigns are completely untouched. Matching server-side enforcement added to `campaigns/[id].put.ts`/`.delete.ts` (only when `ownerId` is set). **Workshop ownership**: stays fully public/browsable for everyone regardless of login (deliberate); `tamers`/`digimon` `ownerId` (added inert in migration 0015) is now stamped from the session on every create — Workshop or campaign-scoped, fresh or bundle-imported alike (exported bundles never carried `ownerId` to begin with, so importing someone else's export forks a personally-owned copy); new `server/utils/ownership.ts`'s `assertCanModifySandboxCharacter` 403s `PUT`/`DELETE` on sandbox (`campaignId IS NULL`) records with a mismatched owner, unowned/legacy records staying open to anyone. `workshop/index.vue` gains a "My Characters Only" filter toggle and greys out Edit/Delete on cards you don't own. **Player `'specific'`-tamer scoping**: a genuinely new restriction (previously any password holder could act as any tamer) — `player/index.vue`'s character list and `player/[tamerId].vue`'s mount guard both check `GET .../my-access` and confine/redirect accordingly; explicitly page/navigation-level only, not enforced on the ~40 existing combat action endpoints (documented boundary, matches the app's pre-existing all-client-side security model everywhere else). New UI: `pages/auth/login.vue` (combined login/register), globally-mounted `components/AccountWidget.vue` (`app.vue`, alongside `RollLogPanel`), and a new "Account Access" card at the top of `settings.vue` (grant list + username-search "Add Account" flow, or an explanatory note for ownerless campaigns). New composable `useAuth.ts`. Corrected a stale doc claim along the way: campaign passwords are PBKDF2-SHA512 (`server/utils/password.ts`), not bcrypt. |
 | 2026-07-11 | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius | **New feature: Character Workshop (standalone sandbox creator) + rules-aware character bundles.** New ungated top-level route area `/workshop` (campaign-access/dm-access middleware only trigger on `route.params.campaignId`): landing page (`pages/workshop/index.vue`) lists sandbox tamers/digimon (stored with `campaignId NULL`) with create/edit/delete/export/import; create/edit pages (`workshop/tamers/new.vue`, `workshop/tamers/[id].vue`, `workshop/digimon/new.vue`, `workshop/digimon/[id].vue`) wrap the existing `TamerFormPage`/`DigimonFormPage` (new `source: 'workshop'` value) under a `CreationRulesPicker.vue` panel exposing ONLY creation-relevant rules (level, 8 EddySoul toggles, 3 house rules + skillOrders, torment requirements). Rules flow via new `useCreationRulesContext.ts` (provide/inject; falls back to `useCampaignContext()` on campaign pages — the provided context must always win on /workshop because `useCampaignContext`'s `campaign` is a global `useState` that can hold the last-visited campaign). `tamers`/`digimon` tables gain `creation_rules jsonb` (sandbox rules snapshot) + `owner_id text` (reserved for future accounts) via hand-written migration `0015_add_workshop_columns.sql`; `GET /api/tamers`/`GET /api/digimon` gain `sandbox=true` (`campaignId IS NULL` filter); both POSTs (and the pass-through PUTs) persist `creationRules` (digimon POST also now persists previously-dropped `isDarkEvolution`/`giganticDimensions`). New `utils/creationRules.ts` (`CreationRules` type in `types/index.ts`, `extractCreationRules`, `diffCreationRules` — normalizes sparse settings so missing=false/default, skillRenames excluded as cosmetic, `defaultCreationRules`). New v2 export format `dda-character-bundle` (`useCharacterBundle.ts`): embeds `rules` + tamer + partner digimon + evolution lines with `localKey` remapping on import (fixing the legacy exports' loss of partner/evolution links; import order: tamer → digimon sans links → evolutionPathIds pass → evolvesFromId pass → lines). Import flows (all **warn + block** on rules mismatch via new `RulesDiffModal.vue`): player character-select `player/index.vue` "Import Character" (auto-selects on success), player dashboard `player/[tamerId].vue` "Import Digimon" (partnered to that tamer) + "Export" next to Edit, library tamers/digimon pages (bundle-aware import + parity check; legacy rules-less arrays still importable there behind an explicit confirm — rejected in player-side imports), workshop landing (adopts the bundle's rules, no parity check). `DigimonSelector`/`DigimonMultiSelector` gain a `sandbox` prop for workshop evolution-link pickers. Home page gains a "🛠️ Character Workshop" nav button. |
 | 2026-07-08 | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **New feature: campaign-wide GM roll history panel.** A collapsible left-edge tab (`components/RollLogPanel.vue`, mounted globally in `app.vue` so it's visible on every page, GM and player alike, including 3D map play and the map editor) shows the last 50 player attribute/skill/torment rolls plus "New Day" markers, live-pushed and newest-first, sized to ~5 visible rows with scroll for the rest. Storage: new append-only `rollLog` table (`server/db/schema.ts`, hand-written migration `0014_add_roll_log.sql` — see the migration-tooling note under Data Models & Storage), pruned to the newest 50 rows per campaign on every insert by `server/utils/rollLog.ts`'s `appendRollLogEntry()`. New endpoints `GET`/`POST /api/campaigns/[id]/rolls` and WS route `/api/campaigns/[id]/ws` (joins the existing `encounterRoom.ts` peer registry under a `campaign:{id}` key rather than `{encounterId}`). `campaigns/[id]/new-day.post.ts` now also appends a `kind:'new-day'` marker row. `composables/useMapWebSocket.ts` gained a `basePath: 'encounters'\|'campaigns'` param (default unchanged) so `RollLogPanel` can reuse it. `player/[tamerId].vue`'s `performAttributeRoll`/`performTormentRoll` fire-and-forget POST their result via a new `logRoll()` helper. Panel extras: unseen-roll count badge while collapsed, relative-time timestamps, and a per-character filter dropdown. |
 | 2026-06-16 | Pages & Components | **Fix: player "End Turn" over-advanced the initiative (accumulating one extra step per round).** Both the player and GM end-turn buttons call the same `nextTurn()` in `useEncounters.ts`, which computes `nextIndex = (currentTurnIndex + 1) % turnOrder.length` from the composable's *private* `currentEncounter`/`encounters` refs (each `useEncounters()` call gets its own copy — not a shared singleton). The GM page's view ref *is* the composable's `currentEncounter` and its `encounter-state` WS handler sets `currentEncounter.value = msg.encounter`, so its base is always fresh. The player page kept its view in a separate `activeEncounter` ref and its `encounter-state` WS handler updated **only** `activeEncounter.value`, never the composable's `currentEncounter` — so as the GM passed turns the composable base froze, and the player's `nextTurn` wrote `staleBase + 1` (the server stores the index verbatim), with the gap growing by 1 each round. Fix: `player/[tamerId].vue` now destructures `currentEncounter` from `useEncounters()` and sets `currentEncounter.value = msg.encounter` in the `encounter-state` WS handler right after `activeEncounter.value`, mirroring the GM page — keeping the composable base fresh on every live push (hardens any composable method that reads encounter state, not just `nextTurn`). No signature/API/DB changes; `loadData()`/`fetchEncounter()` and the player's own action write-backs already synced the composable, so the WS handler was the only desync gap. |
@@ -100,7 +101,7 @@
 # Project Map: DDA Tactics (Digimon Session Helper)
 > Deep analysis of project. Read this file to understand the full project context.
 
-> ⚠️ AUTH: All API routes are unprotected server-side. Security relies entirely on client-side middleware cookies. Any direct API request bypasses auth.
+> ⚠️ AUTH: Most API routes are unprotected server-side — security relies on client-side middleware cookies, and any direct request bypasses that. **Exception (2026-07-12):** the optional-accounts feature added real server-side session checks for a narrow set of write endpoints — owned-campaign settings save/delete, campaign access-grant management, and sandbox (Workshop) tamer/digimon edit/delete once owned. See Cross-Cutting Concerns → Auth Flow for the full model.
 
 ---
 
@@ -162,19 +163,37 @@ No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` 
 
 **Sources:** `server/api/**/*.ts` (all Nitro file-based routes)
 
-All routes return JSON. No auth middleware on API routes — access is enforced by client-side Nuxt middleware (`middleware/campaign-access.ts`, `middleware/dm-access.ts`) via cookies. **Rate limiting**: `server/middleware/01-rate-limit.ts` (global Nitro middleware, in-memory per-IP) caps `verify-(dm-)?password` at 5/min, `POST`/`PUT /api/encounters/*` at 30/min, and general `GET /api/*` at 100/min, returning `429` + `Retry-After` when exceeded.
+All routes return JSON. No auth middleware on most API routes — access is enforced by client-side Nuxt middleware (`middleware/campaign-access.ts`, `middleware/dm-access.ts`, `middleware/settings-access.ts`) via cookies. **Exception (2026-07-12):** account-gated write endpoints (`campaigns/[id].put.ts`/`.delete.ts` when owned, the sandbox character `PUT`/`DELETE` handlers, and all `campaigns/[id]/grants/*` endpoints) DO perform real server-side session checks via `server/utils/session.ts`/`campaignAuth.ts` — see Cross-Cutting Concerns → Auth Flow for the full model. **Rate limiting**: `server/middleware/01-rate-limit.ts` (global Nitro middleware, in-memory per-IP) caps `verify-(dm-)?password` and `POST /api/auth/(register|login)` at 5/min, `POST`/`PUT /api/encounters/*` at 30/min, and general `GET /api/*` at 100/min, returning `429` + `Retry-After` when exceeded.
+
+### Auth — `server/api/auth/` (2026-07-12)
+
+| Method | Path | Handler File | Request Body | Response |
+|---|---|---|---|---|
+| POST | `/api/auth/register` | `auth/register.post.ts` | `{username, password}` — username 3-30 chars alphanumeric/underscore/hyphen, password 8-500 chars | `{id, username, expiresAt}`; sets `httpOnly` `session` cookie; 409 if username taken (case-insensitive); rate-limited 5/min/IP |
+| POST | `/api/auth/login` | `auth/login.post.ts` | `{username, password}` | `{id, username, expiresAt}`; sets `httpOnly` `session` cookie; 401 on bad credentials; rate-limited 5/min/IP |
+| POST | `/api/auth/logout` | `auth/logout.post.ts` | — | `{success: true}`; destroys the session row and clears the cookie |
+| GET | `/api/auth/me` | `auth/me.get.ts` | — | `{user: {id, username} \| null}` — always 200, no 401 branching needed client-side |
+
+### Users — `server/api/users/` (2026-07-12)
+
+| Method | Path | Handler File | Request Body | Response |
+|---|---|---|---|---|
+| GET | `/api/users/search` | `users/search.get.ts` | query: `q` | `{results: Array<{id, username}>}` — up to 10 case-insensitive substring matches; unauthenticated (usernames aren't sensitive); powers the "Add Account" search in campaign Settings |
 
 ### Campaigns — `server/api/campaigns/`
 
 | Method | Path | Handler File | Request Body / Params | Response |
 |---|---|---|---|---|
 | GET | `/api/campaigns` | `campaigns/index.get.ts` | query: `page?` (default 1), `pageSize?` (default 20, max 100), `search?` (case-insensitive name match) | `{ data: Campaign[], total, page, pageSize, totalPages }` |
-| POST | `/api/campaigns` | `campaigns/index.post.ts` | `{name, description, level, password?, dmPassword?, rulesSettings?}` | `Campaign` |
-| GET | `/api/campaigns/[id]` | `campaigns/[id].get.ts` | path: `id` | `Campaign` |
-| PUT | `/api/campaigns/[id]` | `campaigns/[id].put.ts` | path: `id`, body: partial `Campaign` fields | `Campaign` |
-| DELETE | `/api/campaigns/[id]` | `campaigns/[id].delete.ts` | path: `id` | `{success: true}` |
+| POST | `/api/campaigns` | `campaigns/index.post.ts` | `{name, description, level, password?, dmPassword?, rulesSettings?}` | `Campaign` — `ownerId` is stamped from the session if logged in (2026-07-12), else `null` (identical to prior behavior) |
+| GET | `/api/campaigns/[id]` | `campaigns/[id].get.ts` | path: `id` | `Campaign` (now includes `ownerId`) |
+| PUT | `/api/campaigns/[id]` | `campaigns/[id].put.ts` | path: `id`, body: partial `Campaign` fields | `Campaign`; **if `ownerId` is set**, requires the requester to be the owner or a `co-owner` grant (`requireOwnerOrCoOwner`, 403 otherwise) — ownerless campaigns are unaffected (2026-07-12) |
+| DELETE | `/api/campaigns/[id]` | `campaigns/[id].delete.ts` | path: `id` | `{success: true}`; same owner/co-owner gating as PUT when `ownerId` is set (2026-07-12); also cleans up the campaign's `campaignAccessGrants` rows |
 | POST | `/api/campaigns/[id]/verify-password` | `campaigns/[id]/verify-password.post.ts` | `{password}` | `{success: bool}` + sets cookie `campaign-access-{id}`; 400 if `password` missing, non-string, or >500 chars; rate-limited to 5/min/IP |
 | POST | `/api/campaigns/[id]/verify-dm-password` | `campaigns/[id]/verify-dm-password.post.ts` | `{password}` | `{success: bool}` + sets cookie `campaign-dm-{id}`; 400 if `password` missing, non-string, or >500 chars; rate-limited to 5/min/IP |
+| GET | `/api/campaigns/[id]/my-access` | `campaigns/[id]/my-access.get.ts` | path: `id` | `MyCampaignAccess` (`{userId, isOwner, isCoOwner, isCoDm, playerScope, playerTamerId}`, all false/null if logged out or ungranted) — single source of truth consumed by `campaign-access.ts`/`dm-access.ts`/`settings-access.ts` middleware and the Settings Account Access section (2026-07-12) |
+| GET/POST | `/api/campaigns/[id]/grants` | `campaigns/[id]/grants/index.get.ts` / `index.post.ts` | POST: `{userId, dmRole?, playerScope?, playerTamerId?}` | List / create-or-upsert a `campaignAccessGrants` row. Owner/co-owner only; 400 if the campaign has no owner; validates `playerTamerId` belongs to the campaign when `playerScope='specific'` (2026-07-12) |
+| PUT/DELETE | `/api/campaigns/[id]/grants/[grantId]` | `.../grants/[grantId].put.ts` / `.delete.ts` | PUT: partial `{dmRole?, playerScope?, playerTamerId?}` | Update / revoke a grant. Owner/co-owner only (2026-07-12) |
 | POST | `/api/campaigns/[id]/new-day` | `campaigns/[id]/new-day.post.ts` | path: `id` | Resets `digivolutionsUsedToday`, `usedPerDayOrders`, `usedPerDaySkillOrders` on all tamers/digimon in campaign; also appends a `kind: 'new-day'` marker row to the campaign's roll log (via `appendRollLogEntry`, see Roll History row below) and broadcasts it live |
 | GET | `/api/campaigns/[id]/rolls` | `campaigns/[id]/rolls.get.ts` | path: `id` | `{ entries: RollLogEntry[] }` — last 50 roll-log rows for the campaign (rolls + new-day markers), newest first |
 | POST | `/api/campaigns/[id]/rolls` | `campaigns/[id]/rolls.post.ts` | `{tamerId, rollName, rolls: number[], modifier, total, passed?}` | Appends one entry to the campaign's roll log (GM-visible history panel, see `RollLogPanel.vue`). Snapshots `characterName`/`spriteUrl` server-side from the `tamerId` lookup (does not trust client-supplied name/sprite); via `server/utils/rollLog.ts`'s `appendRollLogEntry()`, prunes the campaign's log to the newest 50 rows on every insert, and broadcasts `{type: 'roll-logged', campaignId, entry}` to the `campaign:{id}` WS room. Returns the inserted `RollLogEntry` |
@@ -186,20 +205,20 @@ All routes return JSON. No auth middleware on API routes — access is enforced 
 | Method | Path | Handler File | Request Body | Response |
 |---|---|---|---|---|
 | GET | `/api/digimon` | `digimon/index.get.ts` | query: `campaignId?`, `sandbox?` (`'true'` → `campaignId IS NULL` workshop rows, takes precedence over `campaignId`), `partnerId?`, `isEnemy?`, `stage?`, `ids?` (comma-separated), `page?` (default 1), `pageSize?` (default 50, max 500 — auto-sized to the `ids` count when `ids` is present and `pageSize` is omitted) | `{ data: Digimon[], total, page, pageSize, totalPages }` |
-| POST | `/api/digimon` | `digimon/index.post.ts` | Full `Digimon` shape (name, stage, attribute, baseStats, attacks, qualities, etc.); also accepts `creationRules?` (workshop rules snapshot), `isDarkEvolution?`, `giganticDimensions?` (previously silently dropped on create) | `Digimon` |
+| POST | `/api/digimon` | `digimon/index.post.ts` | Full `Digimon` shape (name, stage, attribute, baseStats, attacks, qualities, etc.); also accepts `creationRules?` (workshop rules snapshot), `isDarkEvolution?`, `giganticDimensions?` (previously silently dropped on create) | `Digimon`; stamps `ownerId` from the session when logged in (2026-07-12) |
 | GET | `/api/digimon/[id]` | `digimon/[id].get.ts` | path: `id` | `Digimon` |
-| PUT | `/api/digimon/[id]` | `digimon/[id].put.ts` | Partial `Digimon` fields | `Digimon` |
-| DELETE | `/api/digimon/[id]` | `digimon/[id].delete.ts` | path: `id` | `{success: true}` |
+| PUT | `/api/digimon/[id]` | `digimon/[id].put.ts` | Partial `Digimon` fields | `Digimon`; 403 if the record is sandbox (`campaignId IS NULL`), has an `ownerId`, and the requester isn't that owner (`assertCanModifySandboxCharacter`, 2026-07-12) |
+| DELETE | `/api/digimon/[id]` | `digimon/[id].delete.ts` | path: `id` | `{success: true}`; same ownership check as PUT (2026-07-12) |
 
 ### Tamers — `server/api/tamers/`
 
 | Method | Path | Handler File | Request Body | Response |
 |---|---|---|---|---|
 | GET | `/api/tamers` | `tamers/index.get.ts` | query: `campaignId?`, `sandbox?` (`'true'` → `campaignId IS NULL` workshop rows, takes precedence over `campaignId`) | `Tamer[]` |
-| POST | `/api/tamers` | `tamers/index.post.ts` | Full `Tamer` shape; also accepts `creationRules?` (workshop rules snapshot) | `Tamer` |
+| POST | `/api/tamers` | `tamers/index.post.ts` | Full `Tamer` shape; also accepts `creationRules?` (workshop rules snapshot) | `Tamer`; stamps `ownerId` from the session when logged in — Workshop create or bundle import alike, campaign-scoped or not (2026-07-12) |
 | GET | `/api/tamers/[id]` | `tamers/[id].get.ts` | path: `id` | `Tamer` |
-| PUT | `/api/tamers/[id]` | `tamers/[id].put.ts` | Partial `Tamer` fields | `Tamer` |
-| DELETE | `/api/tamers/[id]` | `tamers/[id].delete.ts` | path: `id` | `{success: true}` |
+| PUT | `/api/tamers/[id]` | `tamers/[id].put.ts` | Partial `Tamer` fields | `Tamer`; 403 if the record is sandbox (`campaignId IS NULL`), has an `ownerId`, and the requester isn't that owner (`server/utils/ownership.ts`'s `assertCanModifySandboxCharacter`, 2026-07-12) |
+| DELETE | `/api/tamers/[id]` | `tamers/[id].delete.ts` | path: `id` | `{success: true}`; same ownership check as PUT (2026-07-12) |
 
 ### Evolution Lines — `server/api/evolution-lines/`
 
@@ -279,7 +298,7 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 
 **Sources:** `server/db/schema.ts`, `server/db/index.ts`, `drizzle.config.ts`
 
-**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/` (0000–0015; note: 0002 is missing — sequence gap, appears intentional). No caching layer (no Redis). No message queue.
+**Engine:** PostgreSQL. **ORM:** Drizzle. **Migrations:** `server/db/migrations/` (0000–0016; note: 0002 is missing — sequence gap, appears intentional). No caching layer (no Redis). No message queue.
 
 > **Migration tooling note (2026-07-08):** `server/db/migrations/meta/` snapshots/journal (`drizzle-kit generate`'s bookkeeping) haven't been updated since `0006_add_granted_inspiration` — migrations `0007`–`0014` exist as `.sql` files but aren't registered in `_journal.json`. `npm run db:generate` will misbehave (diffs against the stale 0006 snapshot) until this is reconciled; the actual sync mechanism in practice is `npm run db:push` (schema.ts ↔ live DB introspection, journal-independent). `0014_add_roll_log.sql` was hand-written to match the existing plain-SQL migration style rather than generated, for this reason.
 
@@ -310,11 +329,11 @@ All 34 `jsonb` columns listed below are native Postgres `jsonb` (migration 0013 
 | `notes` | text | — |
 | `spriteUrl` | text | — |
 | `creationRules` | jsonb | `CreationRules \| null` — Workshop (sandbox) characters only: creation-rules snapshot they were built under (migration 0015). Null for campaign characters (rules come from the campaign) |
-| `ownerId` | text | Reserved for future accounts feature; nothing writes it yet (migration 0015) |
+| `ownerId` | text | Stamped with the current session's account id on every create (`POST /api/tamers`) when logged in — Workshop or campaign-scoped, including bundle imports (migration 0015 added the column; wired up 2026-07-12). Enforcement (edit/delete restricted to the owner) applies only when `campaignId IS NULL` — see Cross-Cutting Concerns → Auth Flow |
 | `createdAt` | timestamp | — |
 | `updatedAt` | timestamp | — |
 
-> **Sandbox rows (2026-07-11):** Workshop characters are ordinary `tamers`/`digimon` rows with `campaignId NULL` — list them via `GET /api/tamers?sandbox=true` / `GET /api/digimon?sandbox=true`.
+> **Sandbox rows (2026-07-11):** Workshop characters are ordinary `tamers`/`digimon` rows with `campaignId NULL` — list them via `GET /api/tamers?sandbox=true` / `GET /api/digimon?sandbox=true`. **Ownership (2026-07-12):** Workshop stays fully public/browsable regardless of `ownerId`; once a sandbox record has an `ownerId`, only that account can edit/delete it via `PUT`/`DELETE /api/tamers/[id]` and `.../digimon/[id]` (`server/utils/ownership.ts`'s `assertCanModifySandboxCharacter`) — unowned (legacy/anonymous) records stay open to anyone, unchanged. Exported bundles (`useCharacterBundle.ts`) never carry `ownerId`; importing a bundle re-stamps ownership to the importer's own account if logged in, so importing someone else's export effectively forks a personally-owned copy.
 
 ### Table: `digimon`
 
@@ -347,7 +366,7 @@ All 34 `jsonb` columns listed below are native Postgres `jsonb` (migration 0013 
 | `notes` | text | — |
 | `spriteUrl` | text | — |
 | `creationRules` | jsonb | `CreationRules \| null` — Workshop (sandbox) digimon only: creation-rules snapshot (migration 0015) |
-| `ownerId` | text | Reserved for future accounts feature; nothing writes it yet (migration 0015) |
+| `ownerId` | text | Same stamping/enforcement rules as `tamers.ownerId` above (2026-07-12) |
 | `createdAt` | timestamp | — |
 | `updatedAt` | timestamp | — |
 
@@ -380,11 +399,48 @@ All 34 `jsonb` columns listed below are native Postgres `jsonb` (migration 0013 
 | `name` | text | — |
 | `description` | text | — |
 | `level` | text | `'standard'\|'enhanced'\|'extreme'` |
-| `passwordHash` | text | bcrypt; null if no password |
-| `dmPasswordHash` | text | bcrypt; null if no DM password |
+| `passwordHash` | text | PBKDF2-SHA512 via `server/utils/password.ts` (`salt:hash` hex, not bcrypt — corrected 2026-07-12); null if no password |
+| `dmPasswordHash` | text | Same format; null if no DM password |
 | `rulesSettings` | jsonb | `CampaignRulesSettings` — EddySoulRules + HouseRules + TormentRequirements + SkillRenames |
+| `ownerId` | text | Account id, stamped only at creation time (`POST /api/campaigns`) if the creator was logged in; **never reassigned afterward** — no retroactive claiming for campaigns created while logged out (migration 0016, 2026-07-12). Drives the owner/co-owner permission tier — see Cross-Cutting Concerns → Auth Flow |
 | `createdAt` | timestamp | — |
 | `updatedAt` | timestamp | — |
+
+### Table: `users` (2026-07-12)
+
+Optional accounts: username + password only, no personal data.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | — |
+| `username` | text | Case-insensitive unique via a functional index (`CREATE UNIQUE INDEX ... ON users (LOWER(username))`, migration 0016) — not a DB-level FK/constraint pattern elsewhere in this schema, but necessary to avoid a race between two concurrent same-name registrations |
+| `passwordHash` | text | PBKDF2-SHA512 via `server/utils/password.ts` (reused as-is, no new dependency) |
+| `createdAt` / `updatedAt` | timestamp | — |
+
+### Table: `sessions` (2026-07-12)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | The row id itself is the opaque session token — used directly as the `session` cookie value, no separate token column |
+| `userId` | text | No FK constraint (project convention) |
+| `expiresAt` | timestamp | ~30 days from creation, matching the existing campaign-cookie TTL convention |
+| `createdAt` | timestamp | — |
+
+Backs an `httpOnly`, `sameSite: 'lax'` cookie (`secure` in production) set server-side via h3's `setCookie` in `server/utils/session.ts` — unlike the existing `campaign-access-{id}`/`campaign-dm-{id}` boolean-flag cookies, which are plain non-`httpOnly` client-set flags (see Cross-Cutting Concerns → Auth Flow).
+
+### Table: `campaignAccessGrants` (`campaign_access_grants`, 2026-07-12)
+
+One row per (campaign, account); a single account can hold both grant axes simultaneously.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | text PK | — |
+| `campaignId` | text | No FK; unique index on `(campaignId, userId)` |
+| `userId` | text | No FK |
+| `dmRole` | text nullable | `'co-dm'` (all GM tools, no Settings) \| `'co-owner'` (full owner-equivalent power, incl. Settings/Delete/grant management) \| `null` |
+| `playerScope` | text nullable | `'all'` (equivalent to knowing the campaign password) \| `'specific'` (restricted to exactly one tamer — enforced at the page/navigation level only, see Cross-Cutting Concerns) \| `null` |
+| `playerTamerId` | text nullable | Set only when `playerScope = 'specific'`; must belong to the same campaign (validated server-side on grant create/update) |
+| `createdAt` / `updatedAt` | timestamp | — |
 
 ### Table: `evolutionLines`
 
@@ -448,6 +504,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 - `campaigns` → `tamers`, `digimon`, `encounters`, `evolutionLines`, `maps`, `rollLog` (one-to-many via `campaignId`; `rollLog.campaignId` has no DB FK constraint, matching the `encounters.mapId` convention)
 - `tamers` → `digimon` (one-to-many via `partnerId`)
 - `tamers` → `evolutionLines` (one-to-many via `partnerId`)
+- `users` → `sessions` (one-to-many via `userId`), `campaigns` (one-to-many via `ownerId`), `campaignAccessGrants` (one-to-many via `userId`), `tamers`/`digimon` (one-to-many via `ownerId`) — none are DB FK constraints, matching this schema's convention throughout
+- `campaigns` → `campaignAccessGrants` (one-to-many via `campaignId`)
 
 ---
 
@@ -461,14 +519,15 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 | Path | Component File | Layout | Middleware | Notes |
 |---|---|---|---|---|
 | `/` | `pages/index.vue` | default | — | Campaign list; password modal; "🛠️ Character Workshop" nav button → `/workshop` |
-| `/workshop` | `pages/workshop/index.vue` | default | — (ungated — no `campaignId` route param, so campaign/dm middleware never trigger) | Character Workshop landing: shared sandbox. Lists sandbox tamers (`/api/tamers?sandbox=true`) + digimon (`/api/digimon?sandbox=true&pageSize=500`) as cards with Edit/Export/Delete; Import Bundle (adopts the bundle's rules as `creationRules`, rejects legacy array files); level badge per card from `creationRules.level` |
+| `/auth/login` | `pages/auth/login.vue` | default | — | Combined login/register form (`useAuth()`); `?from=` redirect-back query param; no middleware (fully public). Also reachable via the globally-mounted `AccountWidget.vue` (`app.vue`, next to `RollLogPanel`) (2026-07-12) |
+| `/workshop` | `pages/workshop/index.vue` | default | — (ungated — no `campaignId` route param, so campaign/dm middleware never trigger) | Character Workshop landing: shared sandbox, **stays fully public regardless of login state** (2026-07-12). Lists sandbox tamers (`/api/tamers?sandbox=true`) + digimon (`/api/digimon?sandbox=true&pageSize=500`) as cards with Edit/Export/Delete; Import Bundle (adopts the bundle's rules as `creationRules`, rejects legacy array files); level badge per card from `creationRules.level`. **Ownership (2026-07-12):** "My Characters Only" filter toggle (shown when logged in); Edit/Delete greyed out (with tooltip) on cards owned by a different account — unowned cards stay open to everyone |
 | `/workshop/tamers/new` | `pages/workshop/tamers/new.vue` | default | — | `CreationRulesPicker` (v-model `ref(defaultCreationRules())`) + `provideCreationRules(rules)` + `<TamerFormPage source="workshop" mode="create">` |
 | `/workshop/tamers/[id]` | `pages/workshop/tamers/[id].vue` | default | — | Edit sandbox tamer; loads stored `creationRules` into the provided rules ref (picker starts collapsed; rules remain editable — it's a sandbox) |
 | `/workshop/digimon/new` | `pages/workshop/digimon/new.vue` | default | — | Same pattern with `DigimonFormPage source="workshop"` |
 | `/workshop/digimon/[id]` | `pages/workshop/digimon/[id].vue` | default | — | Edit sandbox digimon; refuses records with a `campaignId` ("edit it in its campaign") |
 | `/campaigns/new` | `pages/campaigns/new.vue` | default | — | Create campaign form |
 | `/campaigns/[campaignId]` | `pages/campaigns/[campaignId]/index.vue` | default | campaign-access | Campaign hub |
-| `/campaigns/[campaignId]/settings` | `pages/campaigns/[campaignId]/settings.vue` | default | dm-access | Campaign rules config |
+| `/campaigns/[campaignId]/settings` | `pages/campaigns/[campaignId]/settings.vue` | default | campaign-access, **settings-access** (was dm-access, 2026-07-12) | Campaign rules config. New **Account Access** card at the top (2026-07-12): for owned campaigns, shows the owner + a grant list (per-account DM role and player scope, inline-editable) + "Add Account" username-search flow; for ownerless campaigns, shows an explanatory note instead. See Cross-Cutting Concerns → Auth Flow for the permission model |
 | `/campaigns/[campaignId]/library` | `pages/campaigns/[campaignId]/library/index.vue` | default | campaign-access | Library landing |
 | `/campaigns/[campaignId]/library/digimon` | `.../library/digimon/index.vue` | default | campaign-access | Digimon list |
 | `/campaigns/[campaignId]/library/digimon/new` | `.../library/digimon/new.vue` | default | dm-access | Create digimon; uses `DigimonFormPage` |
@@ -541,9 +600,9 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 | — select-optout view | ~4491 | per-character never-intercede checkboxes |
 | GM Intercede Result modal | ~4550 | showGmIntercedeResultModal |
 | Willpower roll modal | ~4273 | showWillpowerRollModal |
-| `/campaigns/[campaignId]/player` | `.../player/index.vue` | player | campaign-access | Player hub / character select. **(2026-07-11)** "Import Character" button (both empty-state and below the grid): parses a `dda-character-bundle` file, blocks legacy arrays and digimon-only bundles with pointer messages, runs `diffCreationRules(bundle.rules, extractCreationRules(campaign))` — mismatch opens `RulesDiffModal` (blocked); clean import creates tamer+digimon+lines into the campaign and auto-selects the new tamer |
+| `/campaigns/[campaignId]/player` | `.../player/index.vue` | player | campaign-access | Player hub / character select. **(2026-07-12)** `visibleTamers` computed filters the selectable list to a single tamer (`GET .../my-access`'s `playerTamerId`) when the viewer's grant has `playerScope: 'specific'` and no DM-tier grant; the `player-tamer-id-{campaignId}` selection cookie is cleared on mount if it points at a tamer outside that restriction. Page/navigation-level only — see Cross-Cutting Concerns → Auth Flow. **(2026-07-11)** "Import Character" button (both empty-state and below the grid): parses a `dda-character-bundle` file, blocks legacy arrays and digimon-only bundles with pointer messages, runs `diffCreationRules(bundle.rules, extractCreationRules(campaign))` — mismatch opens `RulesDiffModal` (blocked); clean import creates tamer+digimon+lines into the campaign and auto-selects the new tamer |
 | `/campaigns/[campaignId]/player/new` | `.../player/new.vue` | player | campaign-access | Create player character |
-| `/campaigns/[campaignId]/player/[tamerId]` | `.../player/[tamerId].vue` | player | campaign-access | Tamer detail view; End Turn button shown when it's the player's own turn in active combat; map view shows a "TURN ORDER" panel (top-left) matching the GM view. Mirrors `[id].vue`'s throw-aiming (`encounterMapRef`, `throwAimControllerId`, `throwAllyAimContext`, `handleThrowClick`/`cancelThrowAim`/`onThrowLandingSelected`, `handleThrowAllyClick`/`cancelThrowAllyAim`/`onThrowAllyLandingSelected`, `getAreaProtectTargetIds`, `executeClashAction` signature) and `handleIntercedeClaim(interceptorParticipantId, throwOptions?)` (Parts A/C); a `watch()` on the current intercede offer's `data` clears `playerIntercedeAreaChosenTarget`/cancels in-progress throw-aim if the chosen target drops out of `tamerAreaTargetIds`/`digimonAreaTargetIds`. Adds `hasThrowImpactRequest`/`currentThrowImpactRequest` computeds + `confirmThrowImpactAttack()` (Part B) — Throw Impact Attack modal prompts to roll a `basic-ranged` accuracy check (+`accuracyBonus` dice) against `targetIds` when the player's Clash Throw lands on a group of enemies, then resolves via the existing `attack` endpoint. Opens its own `useMapWebSocket` connection once `activeEncounter` is set, debounce-refetching on `encounter-updated`; poll interval lengthened `5000` → `30000` (Part E). Attack Result modal groups all targets of one AoE cast into a single popup via `attackResultGroup` (computed off a shared `groupId`/`areaGroupId`/`intercedeGroupId`) — see `showAttackResult`/`showAttackResultFromBattleLog`/`closeAttackResultModal`/`confirmAreaAttack`. `pendingAttacks` entries carry `targetParticipantId` (the per-target participant ID, set alongside the existing attacker `participantId`) so the dodge-response/battle-log watchers, `showAttackResult`'s `matchingLogEntry`, and `reconstructAttackResults`'s dedup guard all match per-target rather than grabbing the first result for a shared attacker. `attackResultGroupTotals` (set to `targets.length` in `confirmAreaAttack`) + `maybeShowGroupModal(groupId?)` gate `showAttackResultModal` so an AoE result popup only appears once every target's result is queued; modal template is `max-h-[85vh] overflow-y-auto` with compact per-target cards (`p-3 mb-2`, merged "HIT! vs {target}" header) to fit 4+ targets. **Inspiration spending (2026-06-14)**: `confirmAttack`/`confirmAreaAttack` apply an optional pre-roll Act of Inspiration +5 to `accuracyPool` (toggle on `AttackRiderOptions`), then open a new **Accuracy Roll Review modal** (`showAccuracyReview`/`accuracyReview`/`accuracyReviewContext`, Teleported `z-50`) hosting `RollInterceptPanel` (re-roll / +1 die) before `confirmAccuracyReview()` calls `performAttack`; the modal has no cancel option — once the accuracy roll happens the attack must be confirmed. The Dodge and Counterattack modals each gained their own pre-roll Act of Inspiration toggle (`dodgeActOfInspirationEnabled`, `counterattackActOfInspirationEnabled`, always +5 dice) feeding async `rollDodgeDice()`/`rollCounterattackDice()`, plus `RollInterceptPanel` on the rolled result. `InspirationPanel` (extracted from the former inline block) is used in card view and as a new floating Map Mode panel (bottom-right, `z-50`), making Inspiration spend reachable in Map Mode. **Roll history capture (2026-07-08)**: `performAttributeRoll()` (~line 1898) and `performTormentRoll()` (~line 1927, torment label `Torment: {selectedTorment.name}`, `passed: total >= 12`) each fire-and-forget POST their result to `/api/campaigns/[campaignId]/rolls` via a shared `logRoll()` helper (~line 1913), feeding the global `RollLogPanel.vue`. Failure is swallowed (`.catch(() => {})`) so a roll-log outage never blocks the roll modal. |
+| `/campaigns/[campaignId]/player/[tamerId]` | `.../player/[tamerId].vue` | player | campaign-access | **(2026-07-12)** `enforceSpecificTamerScope()` runs first in `onMounted`: if the viewer's grant is `playerScope: 'specific'` and this route's `tamerId` isn't the granted one (and the viewer has no DM-tier grant), redirects to the player hub — same page/navigation-level boundary as the hub's filter. Tamer detail view; End Turn button shown when it's the player's own turn in active combat; map view shows a "TURN ORDER" panel (top-left) matching the GM view. Mirrors `[id].vue`'s throw-aiming (`encounterMapRef`, `throwAimControllerId`, `throwAllyAimContext`, `handleThrowClick`/`cancelThrowAim`/`onThrowLandingSelected`, `handleThrowAllyClick`/`cancelThrowAllyAim`/`onThrowAllyLandingSelected`, `getAreaProtectTargetIds`, `executeClashAction` signature) and `handleIntercedeClaim(interceptorParticipantId, throwOptions?)` (Parts A/C); a `watch()` on the current intercede offer's `data` clears `playerIntercedeAreaChosenTarget`/cancels in-progress throw-aim if the chosen target drops out of `tamerAreaTargetIds`/`digimonAreaTargetIds`. Adds `hasThrowImpactRequest`/`currentThrowImpactRequest` computeds + `confirmThrowImpactAttack()` (Part B) — Throw Impact Attack modal prompts to roll a `basic-ranged` accuracy check (+`accuracyBonus` dice) against `targetIds` when the player's Clash Throw lands on a group of enemies, then resolves via the existing `attack` endpoint. Opens its own `useMapWebSocket` connection once `activeEncounter` is set, debounce-refetching on `encounter-updated`; poll interval lengthened `5000` → `30000` (Part E). Attack Result modal groups all targets of one AoE cast into a single popup via `attackResultGroup` (computed off a shared `groupId`/`areaGroupId`/`intercedeGroupId`) — see `showAttackResult`/`showAttackResultFromBattleLog`/`closeAttackResultModal`/`confirmAreaAttack`. `pendingAttacks` entries carry `targetParticipantId` (the per-target participant ID, set alongside the existing attacker `participantId`) so the dodge-response/battle-log watchers, `showAttackResult`'s `matchingLogEntry`, and `reconstructAttackResults`'s dedup guard all match per-target rather than grabbing the first result for a shared attacker. `attackResultGroupTotals` (set to `targets.length` in `confirmAreaAttack`) + `maybeShowGroupModal(groupId?)` gate `showAttackResultModal` so an AoE result popup only appears once every target's result is queued; modal template is `max-h-[85vh] overflow-y-auto` with compact per-target cards (`p-3 mb-2`, merged "HIT! vs {target}" header) to fit 4+ targets. **Inspiration spending (2026-06-14)**: `confirmAttack`/`confirmAreaAttack` apply an optional pre-roll Act of Inspiration +5 to `accuracyPool` (toggle on `AttackRiderOptions`), then open a new **Accuracy Roll Review modal** (`showAccuracyReview`/`accuracyReview`/`accuracyReviewContext`, Teleported `z-50`) hosting `RollInterceptPanel` (re-roll / +1 die) before `confirmAccuracyReview()` calls `performAttack`; the modal has no cancel option — once the accuracy roll happens the attack must be confirmed. The Dodge and Counterattack modals each gained their own pre-roll Act of Inspiration toggle (`dodgeActOfInspirationEnabled`, `counterattackActOfInspirationEnabled`, always +5 dice) feeding async `rollDodgeDice()`/`rollCounterattackDice()`, plus `RollInterceptPanel` on the rolled result. `InspirationPanel` (extracted from the former inline block) is used in card view and as a new floating Map Mode panel (bottom-right, `z-50`), making Inspiration spend reachable in Map Mode. **Roll history capture (2026-07-08)**: `performAttributeRoll()` (~line 1898) and `performTormentRoll()` (~line 1927, torment label `Torment: {selectedTorment.name}`, `passed: total >= 12`) each fire-and-forget POST their result to `/api/campaigns/[campaignId]/rolls` via a shared `logRoll()` helper (~line 1913), feeding the global `RollLogPanel.vue`. Failure is swallowed (`.catch(() => {})`) so a roll-log outage never blocks the roll modal. |
 | `/campaigns/[campaignId]/player/[tamerId]/edit` | `.../player/[tamerId]/edit.vue` | player | campaign-access | Edit own tamer |
 | `/campaigns/[campaignId]/player/[tamerId]/digimon/new` | `.../player/[tamerId]/digimon/new.vue` | player | campaign-access | Add partner digimon |
 | `/campaigns/[campaignId]/player/[tamerId]/digimon/[id]` | `.../player/[tamerId]/digimon/[id].vue` | player | campaign-access | Partner digimon detail |
@@ -555,12 +614,13 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 | `default` | `app/layouts/default.vue` | All DM/GM pages; header nav + footer |
 | `player` | `app/layouts/player.vue` | Player-facing views; simplified nav |
 
-**Global (layout-independent) mount:** `app/app.vue` renders `<RollLogPanel />` as a sibling of `<NuxtLayout>`, so it's present on every route including `layout: false` pages (e.g. the map editor) — see `RollLogPanel` in Shared Components below.
+**Global (layout-independent) mount:** `app/app.vue` renders `<RollLogPanel />` and `<AccountWidget />` as siblings of `<NuxtLayout>`, so both are present on every route including `layout: false` pages and the header-less `player` layout — see Shared Components below.
 
 ### Shared Components
 
 | Component | File | Purpose | Key Props |
 |---|---|---|---|
+| `AccountWidget` | `components/AccountWidget.vue` | **(2026-07-12)** Fixed top-right corner widget, mounted globally in `app.vue`. Logged out: "Log In / Register" link to `/auth/login`. Logged in: `👤 {username}` with a small dropdown (Log Out). Calls `useAuth().fetchMe()` on mount if not already `initialized` | none |
 | `AttackRiderOptions` | `components/AttackRiderOptions.vue` | Bolster Attack / Lifesteal Complex Action / Huge Power (+ Rank 2) / Act of Inspiration (always +5 dice, pre-roll) toggle UI for a selected attack; shared by the card-view target-selector modal and the map-view floating rider-options panel on both player and GM pages | `selectedAttack`, `round`, `eddySoulRules?`, `canBolster`, `hugePower: {rank1, rank2}`, `actOfInspirationCost`, `currentInspiration`; `v-model`s: `bolsterAttackEnabled`, `bolsterAttackType`, `lifestealComplexEnabled`, `hugePowerEnabled`, `hugePowerRank2Enabled`, `actOfInspirationEnabled` |
 | `RollInterceptPanel` | `components/RollInterceptPanel.vue` | Post-roll Inspiration "intercept" panel for a just-rolled dice pool (Accuracy/Dodge/Counterattack): Re-roll all dice, or +1 die, each costing 1 Inspiration via `spend-inspiration`; recomputes `successes` (5+) client-side. Used in the Dodge modal, Counterattack modal, and the Accuracy Roll Review modal on `player/[tamerId].vue` | `currentInspiration`, `maxInspiration`, `loading`; `v-model:rollResult: {rolls: number[], successes: number, dicePool: number} \| null`; emits `spend-inspiration: {spendType: 'reroll'\|'modifier', amount}` |
 | `InspirationPanel` | `components/InspirationPanel.vue` | General "declare only" Inspiration spend panel: Act of Inspiration (for Skill Checks), Fateful Intervention. Extracted from `player/[tamerId].vue`'s former inline block; used in card view and as a floating bottom-right panel in Map Mode | `currentInspiration`, `maxInspiration`, `actOfInspirationCost`, `fatefulInterventionCost`, `loading`; emits `spend-inspiration: {spendType: 'act-of-inspiration'\|'fateful-intervention', amount}` |
@@ -589,13 +649,14 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ### State Management
 
-No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`computed`). Auth state persists via cookies.
+No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`computed`). Campaign password-flag state persists via boolean-flag cookies (unchanged); account login state persists via `useAuth()`'s module-level `user` ref, restored from the `httpOnly` `session` cookie on app init — see Cross-Cutting Concerns → Auth Flow.
 
 **Composables — `app/composables/`:**
 
 | Composable | File | Responsibility |
 |---|---|---|
 | `useCampaigns` | `useCampaigns.ts` | List, fetch, create, delete campaigns; password verification |
+| `useAuth` | `useAuth.ts` | **(2026-07-12)** Module-level (singleton-like) `user`/`loading`/`error`/`initialized` refs; `register`/`login`/`logout`/`fetchMe`/`searchUsers`. Backs `AccountWidget.vue` and `auth/login.vue` |
 | `useCampaignContext` | `useCampaignContext.ts` | Extract `campaignId` from route; fetch current campaign |
 | `useTamers` | `useTamers.ts` | CRUD for tamers; `fetchTamers(campaignId)` |
 | `useTamerForm` | `useTamerForm.ts` | Reactive form state for tamer create/edit; derived stats |
@@ -657,7 +718,7 @@ flowchart TD
     Middleware["middleware/\ncampaign-access, dm-access\n(client route middleware)"]
     ServerAPI["server/api/**\n(40+ endpoints)"]
     ServerMiddleware["server/middleware/\n01-rate-limit.ts, encounter-sync.ts\n(global Nitro middleware)"]
-    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, selectiveTargeting, encounterPayload, id, password, participantName, mapMovement, endOfTurnGravity, gridDistance, areaShapes, encounterRoom"]
+    ServerUtils["server/utils/\napplyEffect, resolveNpcAttack, triggerCounterattack, resolveSupportAttack, resolveAreaIntercedeGroup, computeAttackDamage, selectiveTargeting, encounterPayload, id, password, participantName, mapMovement, endOfTurnGravity, gridDistance, areaShapes, encounterRoom, session, campaignAuth, ownership"]
     DB["server/db/\nindex.ts + schema.ts"]
     Postgres[("PostgreSQL")]
 
@@ -731,6 +792,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 > 2026-06-13: `encounterPayload.ts` (new) → 🟡 MODERATE; `01-rate-limit.ts` (new) → 🟢 LOW (self-contained, no imports beyond `h3` types)
 > 2026-06-15: `selectiveTargeting.ts` (new) → 🟡 MODERATE
 > 2026-07-11: `utils/creationRules.ts` (new) → 🟡 MODERATE; `useCreationRulesContext.ts` (new) → 🟡 MODERATE; `useCharacterBundle.ts` (new) → 🟢 LOW
+> 2026-07-12: `server/utils/session.ts` (new) → 🟡 MODERATE; `server/utils/campaignAuth.ts` (new) → 🟡 MODERATE; `server/utils/ownership.ts` (new) → 🟢 LOW; `composables/useAuth.ts` (new) → 🟡 MODERATE
 
 **Sources:** Import traces across all source files.
 
@@ -766,7 +828,12 @@ No HTTP clients, no third-party APIs, no webhooks.
 | `utils/modeChange.ts` | `encounters/[id].vue`, `player/[tamerId].vue` | Both encounter pages' Mode Change UI | `encounters/[id].vue`, `player/[tamerId].vue` | 🟢 LOW |
 | `composables/useEvolution.ts` | `library/evolution/[id].vue`, `digivolve.post` | 1 page | `library/evolution/[id].vue`, `digivolve.post.ts` | 🟡 MODERATE |
 | `middleware/campaign-access.ts` | All `[campaignId]` routes | All campaign pages | `campaigns/[campaignId]/index.vue`, `encounters/[id].vue`, `player/[tamerId]/index.vue` | 🟡 MODERATE |
-| `middleware/dm-access.ts` | Settings, new/edit library pages | ~8 pages | `campaigns/[campaignId]/settings.vue`, `library/digimon/new.vue`, `library/tamers/new.vue` | 🟡 MODERATE |
+| `middleware/dm-access.ts` | New/edit library pages, maps (no longer Settings, 2026-07-12) | ~7 pages | `library/digimon/new.vue`, `library/tamers/new.vue`, `library/maps/*` | 🟡 MODERATE |
+| `middleware/settings-access.ts` | Settings only (2026-07-12, new — split off `dm-access.ts`) | 1 page | `campaigns/[campaignId]/settings.vue` | 🟢 LOW |
+| `server/utils/session.ts` | `campaignAuth.ts`, `ownership.ts`, all `auth/*`/`users/search` endpoints, `campaigns/index.post`, `tamers`/`digimon` POST/PUT/DELETE | All account-aware server endpoints | Any file importing `getSessionUser`/`createSession`/`destroySession` | 🟡 MODERATE |
+| `server/utils/campaignAuth.ts` | `campaigns/[id]/my-access.get`, `campaigns/[id]/grants/*`, `campaigns/[id].put`/`.delete` | Settings page, all three access middleware (via the `my-access` endpoint) | `campaigns/[id].put.ts`, `campaigns/[id].delete.ts`, `campaigns/[id]/grants/*.ts`, `middleware/*-access.ts` | 🟡 MODERATE |
+| `server/utils/ownership.ts` | `tamers/[id].put`/`.delete`, `digimon/[id].put`/`.delete` | Workshop edit/delete flows | `tamers/[id].put.ts`, `tamers/[id].delete.ts`, `digimon/[id].put.ts`, `digimon/[id].delete.ts` | 🟢 LOW |
+| `composables/useAuth.ts` | `AccountWidget.vue`, `auth/login.vue`, `workshop/index.vue`, `campaigns/[campaignId]/settings.vue` | Every page (via the globally-mounted `AccountWidget`) | `AccountWidget.vue`, `auth/login.vue` | 🟡 MODERATE |
 | `constants/tamer-skills.ts` | `TamerFormPage` only | 2 pages | `TamerFormPage.vue` | 🟢 LOW |
 | `data/hazards.ts` | `HazardManager` only | 1 component, encounter page | `HazardManager.vue` | 🟢 LOW |
 | `utils/torment-validation.ts` | `useTamerValidation` only | TamerFormPage | `useTamerValidation.ts`, `TamerFormPage.vue` | 🟢 LOW |
@@ -779,16 +846,27 @@ No HTTP clients, no third-party APIs, no webhooks.
 ## 8. Cross-Cutting Concerns
 > Last verified: 2026-04-14
 
-**Sources:** `middleware/campaign-access.ts`, `middleware/dm-access.ts`, `server/utils/password.ts`, `server/api/campaigns/[id]/verify-password.post.ts`, `nuxt.config.ts`
+**Sources:** `middleware/campaign-access.ts`, `middleware/dm-access.ts`, `middleware/settings-access.ts`, `server/utils/password.ts`, `server/utils/session.ts`, `server/utils/campaignAuth.ts`, `server/utils/ownership.ts`, `server/api/auth/*`, `server/api/campaigns/[id]/verify-password.post.ts`, `server/api/campaigns/[id]/my-access.get.ts`, `server/api/campaigns/[id]/grants/*`, `nuxt.config.ts`
 
 ### Auth Flow
 
-- **Strategy:** Cookie-based (no JWT, no OAuth, no sessions table)
-- **Player access:** Cookie `campaign-access-{campaignId}` — set after `POST /api/campaigns/[id]/verify-password` succeeds
-- **DM access:** Cookie `campaign-dm-{campaignId}` — set after `POST /api/campaigns/[id]/verify-dm-password` succeeds
-- **Enforcement:** Client middleware in `middleware/campaign-access.ts` and `middleware/dm-access.ts` — reads cookies and redirects if missing
-- **Password storage:** bcrypt hashed in `campaigns.passwordHash` / `campaigns.dmPasswordHash` via `server/utils/password.ts`
-- **No server-side session validation** on API routes — API is fully open if hit directly; security relies on client enforcement
+Two independent, coexisting systems as of 2026-07-12 — passwords are the original mechanism and remain fully functional; accounts are optional and layer on top.
+
+**1. Campaign passwords (original, unchanged in spirit):**
+- Cookie-based boolean flags, no server-side validation on their own: `campaign-access-{campaignId}` (player) / `campaign-dm-{campaignId}` (DM), each set client-side via Nuxt's `useCookie()` (readable by JS, value literally `'true'`, 30-day TTL) after `POST /api/campaigns/[id]/verify-(dm-)?password` succeeds.
+- Password storage: PBKDF2-SHA512 (`salt:hash` hex, `server/utils/password.ts`) in `campaigns.passwordHash`/`dmPasswordHash` — **not bcrypt**, despite this doc previously saying so.
+- For a campaign with **no owner** (`campaigns.ownerId IS NULL` — every pre-2026-07-12 campaign, plus any created while logged out), this is the *entire* access model, completely unchanged: DM password holders get full access including Settings and Delete.
+
+**2. Optional accounts (2026-07-12, new):** Username + password only, no email/personal data, self-serve registration.
+- **Real server-side sessions** — the first server-validated identity concept in this app. `users`/`sessions`/`campaignAccessGrants` tables (see Data Models). Session cookie (`session`) is `httpOnly`/`sameSite: lax`/`secure`-in-prod, set server-side via h3's `setCookie` in `server/utils/session.ts` (`createSession`/`getSessionUser`/`destroySession`) — deliberately **not** the client `useCookie()` pattern used for the password flags above, since this is a real credential-backed session.
+- **Campaign ownership:** `campaigns.ownerId` is stamped only at creation time (`POST /api/campaigns`) if the creator was logged in, and is **never reassigned afterward** — no claim/transfer flow exists or is planned. Owned campaigns unlock **grants**: an owner can give a specific account a `dmRole` (`'co-dm'` = all GM tools, `'co-owner'` = full owner-equivalent power incl. Settings/Delete/grant management) and/or a `playerScope` (`'all'` = today's shared-tamer-pool behavior, `'specific'` = restricted to one named tamer) — both axes independent, one `campaignAccessGrants` row per (campaign, account). `server/utils/campaignAuth.ts`'s `getMyCampaignAccess(event, campaignId)` is the single source of truth for "what can the current session do here," exposed client-side via `GET /api/campaigns/[id]/my-access`.
+- **Middleware (three-tier, all account-checks are additive to the existing password checks, tried first):**
+  - `middleware/campaign-access.ts` — base "can view this campaign" gate. Password cookie OR *any* grant (`isOwner`/`isCoOwner`/`isCoDm`/`playerScope !== null`) passes.
+  - `middleware/dm-access.ts` — GM tool pages (library create/edit, maps). DM password cookie OR `isOwner`/`isCoOwner`/`isCoDm`.
+  - `middleware/settings-access.ts` (**new**, replaces `dm-access.ts` specifically on `settings.vue`) — for ownerless campaigns, defers entirely to the legacy DM-password check (unaffected). For owned campaigns, requires `isOwner`/`isCoOwner`; **the DM password alone no longer reaches Settings** once a campaign has an owner (it still grants every other GM tool via `dm-access.ts`).
+- **Server-side enforcement** (new — the app's first): `campaigns/[id].put.ts`/`.delete.ts` call `requireOwnerOrCoOwner` when `ownerId` is set; `campaigns/[id]/grants/*` are owner/co-owner-only; sandbox (`campaignId IS NULL`) tamer/digimon `PUT`/`DELETE` call `server/utils/ownership.ts`'s `assertCanModifySandboxCharacter` (403 if the record has an `ownerId` that doesn't match the session). Everywhere else — all ~40 existing combat/encounter action endpoints, campaign-scoped (non-Workshop) tamer/digimon edits, and the `'specific'`-tamer player restriction — remains **client/page-level enforcement only**, matching the app's pre-existing security model; this is a deliberate, documented scope boundary, not an oversight (see `player/index.vue`/`player/[tamerId].vue` rows above).
+- **No password reset** (no email to reset via) and **no case-insensitive collisions** (functional unique index on `LOWER(username)`).
+- **Rate limiting:** `POST /api/auth/(register|login)` share the existing 5/min/IP tier with `verify-(dm-)?password`.
 
 ### Error Handling
 

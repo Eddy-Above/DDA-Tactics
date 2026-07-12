@@ -28,6 +28,7 @@ export default defineEventHandler(async (event) => {
     hasPassword: !!campaign.passwordHash,
     hasDmPassword: !!campaign.dmPasswordHash,
     rulesSettings: campaign.rulesSettings,
+    ownerId: campaign.ownerId,
     createdAt: campaign.createdAt,
     updatedAt: campaign.updatedAt,
   }

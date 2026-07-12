@@ -657,8 +657,37 @@ export interface Campaign {
   hasPassword: boolean
   hasDmPassword: boolean
   rulesSettings: CampaignRulesSettings
+  ownerId: string | null  // stamped at creation only if logged in; never reassigned
   createdAt: Date
   updatedAt: Date
+}
+
+// === Account Types ===
+
+export interface AccountUser {
+  id: string
+  username: string
+}
+
+export interface CampaignAccessGrant {
+  id: string
+  campaignId: string
+  userId: string
+  username: string  // joined in for display
+  dmRole: 'co-dm' | 'co-owner' | null
+  playerScope: 'all' | 'specific' | null
+  playerTamerId: string | null
+  playerTamerName?: string | null  // joined in for display when playerScope = 'specific'
+}
+
+// The current viewer's access to a specific campaign (session + grant + ownership resolved server-side)
+export interface MyCampaignAccess {
+  userId: string | null
+  isOwner: boolean
+  isCoOwner: boolean
+  isCoDm: boolean
+  playerScope: 'all' | 'specific' | null
+  playerTamerId: string | null
 }
 
 // === Utility Functions ===

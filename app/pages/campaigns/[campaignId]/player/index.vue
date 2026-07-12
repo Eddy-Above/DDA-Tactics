@@ -17,8 +17,39 @@ const importLoading = ref(false)
 const importError = ref<string | null>(null)
 const rulesDiff = ref<CreationRulesDiffEntry[] | null>(null)
 
+interface MyAccess {
+  isOwner: boolean
+  isCoOwner: boolean
+  isCoDm: boolean
+  playerScope: 'all' | 'specific' | null
+  playerTamerId: string | null
+}
+const myAccess = ref<MyAccess | null>(null)
+function hasDmTierAccess(a: MyAccess) { return a.isOwner || a.isCoOwner || a.isCoDm }
+
+// Page/navigation-level gating only (matches the rest of the app's existing
+// client-side access model) — an account scoped to one specific tamer only
+// ever sees/selects that tamer here, unless it also holds DM-tier access.
+const visibleTamers = computed(() => {
+  if (!myAccess.value || hasDmTierAccess(myAccess.value) || myAccess.value.playerScope !== 'specific') {
+    return tamers.value
+  }
+  return tamers.value.filter((t) => t.id === myAccess.value?.playerTamerId)
+})
+
 onMounted(async () => {
   await Promise.all([fetchTamers(campaignId.value), loadCampaign()])
+  try {
+    myAccess.value = await $fetch<MyAccess>(`/api/campaigns/${campaignId.value}/my-access`)
+  } catch {
+    myAccess.value = null
+  }
+  if (
+    myAccess.value && !hasDmTierAccess(myAccess.value) && myAccess.value.playerScope === 'specific'
+    && selectedTamerId.value && selectedTamerId.value !== myAccess.value.playerTamerId
+  ) {
+    selectedTamerId.value = null
+  }
   loading.value = false
 })
 
@@ -123,7 +154,7 @@ async function handleImportFile(event: Event) {
         {{ importError }}
       </div>
 
-      <div v-if="tamers.length === 0" class="text-center py-8">
+      <div v-if="visibleTamers.length === 0" class="text-center py-8">
         <div class="text-6xl mb-4">👤</div>
         <h2 class="text-xl font-semibold text-white mb-2">No Characters Available</h2>
         <p class="text-digimon-dark-400 mb-6">Create your Tamer to get started</p>
@@ -146,7 +177,7 @@ async function handleImportFile(event: Event) {
 
       <div v-else class="grid gap-4">
         <button
-          v-for="tamer in tamers"
+          v-for="tamer in visibleTamers"
           :key="tamer.id"
           class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700
                  hover:border-digimon-orange-500 transition-all text-left group"

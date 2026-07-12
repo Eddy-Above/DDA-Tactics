@@ -1,6 +1,7 @@
 import { db, campaigns, type NewCampaign } from '../../db'
 import { generateId } from '../../utils/id'
 import { hashPassword } from '../../utils/password'
+import { getSessionUser } from '../../utils/session'
 
 interface CreateCampaignBody {
   name: string
@@ -23,6 +24,10 @@ export default defineEventHandler(async (event) => {
   const id = generateId()
   const now = new Date()
 
+  // Owner is stamped only at creation time, only if the creator was logged
+  // in, and is never reassigned afterward — no retroactive claiming.
+  const sessionUser = await getSessionUser(event)
+
   const newCampaign: NewCampaign = {
     id,
     name: body.name,
@@ -31,6 +36,7 @@ export default defineEventHandler(async (event) => {
     passwordHash: body.password ? hashPassword(body.password) : null,
     dmPasswordHash: body.dmPassword ? hashPassword(body.dmPassword) : null,
     rulesSettings: {},
+    ownerId: sessionUser?.id ?? null,
     createdAt: now,
     updatedAt: now,
   }
@@ -45,6 +51,7 @@ export default defineEventHandler(async (event) => {
     hasPassword: !!newCampaign.passwordHash,
     hasDmPassword: !!newCampaign.dmPasswordHash,
     rulesSettings: {},
+    ownerId: newCampaign.ownerId,
     createdAt: newCampaign.createdAt,
     updatedAt: newCampaign.updatedAt,
   }
