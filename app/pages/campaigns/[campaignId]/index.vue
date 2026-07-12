@@ -36,18 +36,38 @@ const stats = computed(() => [
 async function openDmSection() {
   if (!campaign.value) await loadCampaign()
 
-  if (campaign.value?.hasDmPassword) {
-    const cookie = useCookie(`campaign-dm-${campaignId.value}`)
-    if (cookie.value) {
-      navigateTo(`/campaigns/${campaignId.value}/library`)
-    } else {
-      showDmPasswordModal.value = true
-      dmPasswordInput.value = ''
-      dmPasswordError.value = ''
-    }
-  } else {
+  if (!campaign.value?.hasDmPassword) {
     navigateTo(`/campaigns/${campaignId.value}/library`)
+    return
   }
+
+  const cookie = useCookie(`campaign-dm-${campaignId.value}`)
+  if (cookie.value) {
+    navigateTo(`/campaigns/${campaignId.value}/library`)
+    return
+  }
+
+  // Account-based DM access: owner, co-owner, or co-dm grant all count —
+  // mirrors the bypass condition in middleware/dm-access.ts. Checked here
+  // (rather than left to that middleware) because this hub page isn't
+  // covered by dm-access.ts, and its failure path has no way to reopen
+  // this modal.
+  try {
+    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean }>(
+      `/api/campaigns/${campaignId.value}/my-access`,
+    )
+    if (access.isOwner || access.isCoOwner || access.isCoDm) {
+      useCookie(`campaign-dm-${campaignId.value}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
+      navigateTo(`/campaigns/${campaignId.value}/library`)
+      return
+    }
+  } catch {
+    // ignore — fall through to the password prompt
+  }
+
+  showDmPasswordModal.value = true
+  dmPasswordInput.value = ''
+  dmPasswordError.value = ''
 }
 
 async function submitDmPassword() {

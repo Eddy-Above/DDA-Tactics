@@ -39,17 +39,35 @@ async function goToPage(newPage: number) {
   await fetchCampaigns({ page: newPage, pageSize: 20, search: searchTerm.value })
 }
 
-function openCampaign(campaign: any) {
-  if (campaign.hasPassword) {
-    const cookie = useCookie(`campaign-access-${campaign.id}`)
-    if (cookie.value) {
-      navigateTo(`/campaigns/${campaign.id}`)
-    } else {
-      openPasswordModal(campaign.id)
-    }
-  } else {
+async function openCampaign(campaign: any) {
+  if (!campaign.hasPassword) {
     navigateTo(`/campaigns/${campaign.id}`)
+    return
   }
+
+  const cookie = useCookie(`campaign-access-${campaign.id}`)
+  if (cookie.value) {
+    navigateTo(`/campaigns/${campaign.id}`)
+    return
+  }
+
+  // Account-based access: any grant at all (DM-tier or player-tier) counts
+  // as "you belong here" and skips the password prompt entirely — mirrors
+  // the bypass condition in middleware/campaign-access.ts.
+  try {
+    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; playerScope: 'all' | 'specific' | null }>(
+      `/api/campaigns/${campaign.id}/my-access`,
+    )
+    if (access.isOwner || access.isCoOwner || access.isCoDm || access.playerScope) {
+      useCookie(`campaign-access-${campaign.id}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
+      navigateTo(`/campaigns/${campaign.id}`)
+      return
+    }
+  } catch {
+    // ignore — fall through to the password prompt
+  }
+
+  openPasswordModal(campaign.id)
 }
 
 function openPasswordModal(campaignId: string) {

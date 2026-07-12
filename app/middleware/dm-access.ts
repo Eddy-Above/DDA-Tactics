@@ -8,11 +8,18 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (cookie.value) return
 
   // Account-based DM access: owner, co-owner, or co-dm grant all count.
+  // useRequestFetch (not $fetch) so the session cookie is forwarded during
+  // SSR/direct navigation — a bare $fetch on the server doesn't carry the
+  // incoming request's cookies to this internal call.
   try {
-    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean }>(
+    const requestFetch = useRequestFetch()
+    const access = await requestFetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean }>(
       `/api/campaigns/${campaignId}/my-access`,
     )
-    if (access.isOwner || access.isCoOwner || access.isCoDm) return
+    if (access.isOwner || access.isCoOwner || access.isCoDm) {
+      useCookie(`campaign-dm-${campaignId}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
+      return
+    }
   } catch {
     // ignore — fall through to the password-based check
   }

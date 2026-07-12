@@ -19,7 +19,11 @@ export default defineNuxtRouteMiddleware(async (to) => {
       return
     }
 
-    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean }>(`/api/campaigns/${campaignId}/my-access`)
+    // useRequestFetch (not $fetch) so the session cookie is forwarded during
+    // SSR/direct navigation — a bare $fetch on the server doesn't carry the
+    // incoming request's cookies to this internal call.
+    const requestFetch = useRequestFetch()
+    const access = await requestFetch<{ isOwner: boolean; isCoOwner: boolean }>(`/api/campaigns/${campaignId}/my-access`)
     if (access.isOwner || access.isCoOwner) return
 
     return navigateTo(`/campaigns/${campaignId}`)
