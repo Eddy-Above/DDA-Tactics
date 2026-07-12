@@ -443,7 +443,8 @@ export interface Tamer {
   digivolutionsUsedToday: number    // for EddySoul digivolution limit rule
   notes: string
   creationRules?: CreationRules | null  // sandbox (workshop) characters: rules snapshot they were built under
-  ownerId?: string | null               // reserved for future accounts feature
+  ownerId?: string | null               // account that created the record (accounts feature)
+  hidden?: boolean                      // workshop-only: owner hid this character from other users
   createdAt: Date
   updatedAt: Date
 }
@@ -524,7 +525,8 @@ export interface Digimon {
   notes: string
   spriteUrl: string | null
   creationRules?: CreationRules | null  // sandbox (workshop) characters: rules snapshot they were built under
-  ownerId?: string | null               // reserved for future accounts feature
+  ownerId?: string | null               // account that created the record (accounts feature)
+  hidden?: boolean                      // workshop-only: owner hid this character from other users
   createdAt: Date
   updatedAt: Date
 }

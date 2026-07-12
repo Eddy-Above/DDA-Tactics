@@ -102,8 +102,11 @@ export const tamers = pgTable('tamers', {
 
   // Workshop (sandbox) characters: rules snapshot they were built under
   creationRules: jsonb('creation_rules').$type<CreationRules | null>(),
-  // Reserved for future accounts feature (unused for now)
+  // Stamped from the session on create when logged in; gates sandbox edit/delete
   ownerId: text('owner_id'),
+  // Workshop-only visibility: owner can hide a sandbox character from other
+  // users' Workshop lists (meaningless without an owner — filter ignores it)
+  hidden: boolean('hidden').notNull().default(false),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -203,8 +206,11 @@ export const digimon = pgTable('digimon', {
 
   // Workshop (sandbox) characters: rules snapshot they were built under
   creationRules: jsonb('creation_rules').$type<CreationRules | null>(),
-  // Reserved for future accounts feature (unused for now)
+  // Stamped from the session on create when logged in; gates sandbox edit/delete
   ownerId: text('owner_id'),
+  // Workshop-only visibility: owner can hide a sandbox character from other
+  // users' Workshop lists (meaningless without an owner — filter ignores it)
+  hidden: boolean('hidden').notNull().default(false),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),

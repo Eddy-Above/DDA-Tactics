@@ -3,8 +3,8 @@ definePageMeta({
   title: 'Character Workshop',
 })
 
-const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, calculateDerivedStats } = useTamers()
-const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon } = useDigimon()
+const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, updateTamer, calculateDerivedStats } = useTamers()
+const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon, updateDigimon } = useDigimon()
 const { exportCharacterBundle, exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
 const { user: currentUser, fetchMe, initialized } = useAuth()
 
@@ -57,6 +57,21 @@ function levelColor(rules?: { level?: string } | null) {
     case 'extreme': return 'text-red-400'
     default: return 'text-green-400'
   }
+}
+
+// Owner-only quick toggle; hidden characters are only ever returned to
+// their owner by the sandbox API, so flipping to hidden won't drop the
+// card from the owner's own list.
+async function toggleTamerHidden(tamer: { id: string; hidden?: boolean; ownerId?: string | null }) {
+  if (!isMine(tamer)) return
+  await updateTamer(tamer.id, { hidden: !tamer.hidden })
+  await loadAll()
+}
+
+async function toggleDigimonHidden(d: { id: string; hidden?: boolean; ownerId?: string | null }) {
+  if (!isMine(d)) return
+  await updateDigimon(d.id, { hidden: !d.hidden })
+  await loadAll()
 }
 
 async function handleDeleteTamer(tamer: { id: string; name: string; ownerId?: string | null }) {
@@ -232,6 +247,13 @@ async function handleImportFile(event: Event) {
                   <span class="text-sm font-medium" :class="levelColor(tamer.creationRules)">
                     {{ levelLabel(tamer.creationRules) }}
                   </span>
+                  <span
+                    v-if="tamer.hidden"
+                    title="Only you can see this character"
+                    class="text-xs px-2 py-0.5 rounded bg-purple-900/40 border border-purple-500/50 text-purple-300"
+                  >
+                    🙈 Hidden
+                  </span>
                 </div>
                 <div class="flex gap-4 text-sm text-digimon-dark-400">
                   <span>Wounds: {{ calculateDerivedStats(tamer, tamer.creationRules?.eddySoulRules).woundBoxes }}</span>
@@ -262,6 +284,15 @@ async function handleImportFile(event: Event) {
                   @click="exportCharacterBundle(tamer)"
                 >
                   Export
+                </button>
+                <button
+                  v-if="isMine(tamer)"
+                  :title="tamer.hidden ? 'Make visible to everyone' : 'Hide from other users'"
+                  class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
+                         text-white rounded transition-colors"
+                  @click="toggleTamerHidden(tamer)"
+                >
+                  {{ tamer.hidden ? 'Unhide' : 'Hide' }}
                 </button>
                 <button
                   :disabled="!canModify(tamer)"
@@ -313,6 +344,13 @@ async function handleImportFile(event: Event) {
                   <span class="text-xs font-medium" :class="levelColor(d.creationRules)">
                     {{ levelLabel(d.creationRules) }}
                   </span>
+                  <span
+                    v-if="d.hidden"
+                    title="Only you can see this character"
+                    class="text-xs px-1.5 py-0.5 rounded bg-purple-900/40 border border-purple-500/50 text-purple-300"
+                  >
+                    🙈 Hidden
+                  </span>
                 </div>
                 <p class="text-sm text-digimon-dark-400 capitalize">
                   {{ d.stage }} · {{ d.attribute }}
@@ -345,6 +383,15 @@ async function handleImportFile(event: Event) {
                   @click="exportDigimonBundle(d)"
                 >
                   Export
+                </button>
+                <button
+                  v-if="isMine(d)"
+                  :title="d.hidden ? 'Make visible to everyone' : 'Hide from other users'"
+                  class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
+                         text-white rounded transition-colors"
+                  @click="toggleDigimonHidden(d)"
+                >
+                  {{ d.hidden ? 'Unhide' : 'Hide' }}
                 </button>
                 <button
                   :disabled="!canModify(d)"

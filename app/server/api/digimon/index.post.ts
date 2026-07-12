@@ -65,6 +65,7 @@ interface CreateDigimonBody {
   isDarkEvolution?: boolean
   giganticDimensions?: { width: number; height: number; depth: number } | null
   creationRules?: import('../../../types').CreationRules | null
+  hidden?: boolean
 }
 
 export default defineEventHandler(async (event) => {
@@ -124,6 +125,8 @@ export default defineEventHandler(async (event) => {
     spriteUrl: body.spriteUrl || null,
     creationRules: body.creationRules ?? null,
     ownerId: sessionUser?.id ?? null,
+    // Anonymous creates can never be hidden — hiding is owner-only
+    hidden: !!(sessionUser && body.hidden),
     createdAt: now,
     updatedAt: now,
   }

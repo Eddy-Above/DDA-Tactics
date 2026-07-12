@@ -17,6 +17,7 @@ const isWorkshop = props.source === 'workshop'
 const route = useRoute()
 const router = useRouter()
 const { campaignId, eddySoulRules, houseRules, creationRules, loadCampaign } = useCreationRulesContext()
+const { user: authUser, isAuthenticated, fetchMe, initialized: authInitialized } = useAuth()
 
 const tamerId = computed(() => route.params.tamerId as string)
 const recordId = computed(() => route.params.id as string)
@@ -41,6 +42,14 @@ const loadedDigimon = ref<Digimon | null>(null)
 const initialLoading = ref(isEdit)
 const loadError = ref<string | null>(null)
 const copying = ref(false)
+
+// Workshop-only visibility: hiding is owner-only, so the toggle appears in
+// create mode when logged in (the new record will be owned), or in edit
+// mode when the loaded record belongs to the current account.
+const hidden = ref(false)
+const canToggleHidden = computed(() =>
+  isWorkshop && (isEdit ? !!loadedDigimon.value?.ownerId && loadedDigimon.value.ownerId === authUser.value?.id : isAuthenticated.value),
+)
 
 const linkedEvolvesFrom = ref<Digimon | null>(null)
 const linkedEvolvesTo = ref<Digimon[]>([])
@@ -218,6 +227,7 @@ async function loadDigimon() {
       return
     }
     loadedDigimon.value = data
+    hidden.value = data.hidden ?? false
     Object.assign(form, {
       name: data.name,
       nickname: data.nickname ?? '',
@@ -255,6 +265,7 @@ function handleAddAttack(attack: any) {
 
 onMounted(async () => {
   await loadCampaign()
+  if (isWorkshop && !authInitialized.value) await fetchMe()
   if (isLibrary) fetchTamers(campaignId.value ?? undefined)
   if (props.source === 'portal') form.partnerId = tamerId.value
   basicInfoExpanded.value = !isEdit
@@ -334,6 +345,7 @@ async function handleSubmit() {
       syncBonusDP: form.syncBonusDP,
       giganticDimensions: form.size === 'gigantic' ? { ...giganticDims } : null,
       ...(isWorkshop ? { creationRules: creationRules.value } : {}),
+      ...(canToggleHidden.value ? { hidden: hidden.value } : {}),
     }
     await updateDigimon(loadedDigimon.value.id, data)
     router.push(backLink.value)
@@ -366,6 +378,7 @@ async function handleSubmit() {
     if (form.evolutionPathIds.length > 0) data.evolutionPathIds = form.evolutionPathIds
     if (form.evolvesFromId || form.evolutionPathIds.length > 0) data.syncBonusDP = form.syncBonusDP
     if (isWorkshop) data.creationRules = creationRules.value
+    if (canToggleHidden.value) data.hidden = hidden.value
 
     const created = await createDigimon({ ...data, campaignId: isWorkshop ? null : campaignId.value })
     if (created) {
@@ -1204,6 +1217,18 @@ async function handleCopy() {
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Visibility (workshop, owner-only) -->
+      <div v-if="canToggleHidden" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Visibility</h2>
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input v-model="hidden" type="checkbox" class="w-4 h-4 rounded mt-1 shrink-0" />
+          <div>
+            <span class="text-digimon-dark-300">🙈 Hide from other users</span>
+            <p class="text-xs text-digimon-dark-500">Only you will see this character in the Workshop. You can unhide it at any time.</p>
+          </div>
+        </label>
       </div>
 
       <!-- Notes -->

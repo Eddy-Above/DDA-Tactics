@@ -38,6 +38,7 @@ export interface CreateTamerData {
   xpBonuses?: Tamer['xpBonuses']
   notes?: string
   spriteUrl?: string
+  hidden?: boolean
 }
 
 export function useTamers() {

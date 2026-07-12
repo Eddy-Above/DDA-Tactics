@@ -107,6 +107,10 @@ export default defineEventHandler(async (event) => {
     updatedAt: now,
   }
 
+  // Hiding is owner-only: an unowned record can't be hidden (it would
+  // vanish for everyone, its anonymous editor included).
+  if (!existing.ownerId) delete updateData.hidden
+
   console.log('[PUT /api/digimon/:id] Received qualities:', { id, qualitiesCount: body.qualities?.length, qualities: body.qualities })
 
   await db.update(digimon).set(updateData).where(eq(digimon.id, id))

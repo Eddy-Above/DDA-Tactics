@@ -32,6 +32,10 @@ export default defineEventHandler(async (event) => {
     updatedAt: new Date(),
   }
 
+  // Hiding is owner-only: an unowned record can't be hidden (it would
+  // vanish for everyone, its anonymous editor included).
+  if (!existing.ownerId) delete updateData.hidden
+
   console.log('[PUT /api/tamers/:id] Updating tamer:', { id, name: body.name })
 
   await db.update(tamers).set(updateData).where(eq(tamers.id, id))

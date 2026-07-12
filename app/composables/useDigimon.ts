@@ -43,6 +43,7 @@ export interface CreateDigimonData {
   notes?: string
   spriteUrl?: string
   creationRules?: CreationRules | null
+  hidden?: boolean
 }
 
 export interface DigimonEnvelope {

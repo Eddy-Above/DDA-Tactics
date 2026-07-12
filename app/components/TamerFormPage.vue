@@ -20,6 +20,7 @@ const route = useRoute()
 const router = useRouter()
 const { campaignId, campaignLevel, campaignRules, skillRenames, eddySoulRules, houseRules, skillOrdersEnabled, creationRules, loadCampaign } = useCreationRulesContext()
 const { fetchTamer, updateTamer, createTamer, loading, error } = useTamers()
+const { user: authUser, isAuthenticated, fetchMe, initialized: authInitialized } = useAuth()
 
 const recordId = computed(() => isLibrary || isWorkshop ? route.params.id as string : route.params.tamerId as string)
 
@@ -30,6 +31,14 @@ const selectedTamerId = (props.source === 'portal' && !isEdit)
 const tamer = ref<Tamer | null>(null)
 const initialLoading = ref(true)
 const digivolutionsUsedToday = ref(0)
+
+// Workshop-only visibility: hiding is owner-only, so the toggle appears in
+// create mode when logged in (the new record will be owned), or in edit
+// mode when the loaded record belongs to the current account.
+const hidden = ref(false)
+const canToggleHidden = computed(() =>
+  isWorkshop && (isEdit ? !!tamer.value?.ownerId && tamer.value.ownerId === authUser.value?.id : isAuthenticated.value),
+)
 
 // Section collapse state (edit mode only; create mode always shows all sections)
 const sectionsCollapsed = reactive({
@@ -134,6 +143,7 @@ const submitLabel = computed(() => {
 
 onMounted(async () => {
   await loadCampaign()
+  if (isWorkshop && !authInitialized.value) await fetchMe()
   if (!isEdit) {
     initialLoading.value = false
     return
@@ -141,6 +151,7 @@ onMounted(async () => {
   const fetched = await fetchTamer(recordId.value)
   if (fetched) {
     tamer.value = fetched
+    hidden.value = fetched.hidden ?? false
     form.name = fetched.name
     form.age = fetched.age
     Object.assign(form.attributes, fetched.attributes)
@@ -280,6 +291,7 @@ async function handleSubmit() {
     }
     if (hasGmFeatures) updatePayload.digivolutionsUsedToday = digivolutionsUsedToday.value
     if (isWorkshop) updatePayload.creationRules = creationRules.value
+    if (canToggleHidden.value) updatePayload.hidden = hidden.value
     const updated = await updateTamer(tamer.value.id, updatePayload)
     if (updated) router.push(backLink.value)
   } else {
@@ -304,6 +316,7 @@ async function handleSubmit() {
       },
     }
     if (isWorkshop) createPayload.creationRules = creationRules.value
+    if (canToggleHidden.value) createPayload.hidden = hidden.value
     if (isLibrary) createPayload.grantedInspiration = grantedInspiration.value
     const created = await createTamer(createPayload)
     if (created) {
@@ -1208,6 +1221,18 @@ async function handleSubmit() {
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- Visibility (workshop, owner-only) -->
+      <div v-if="canToggleHidden" class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+        <h2 class="font-display text-xl font-semibold text-white mb-4">Visibility</h2>
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input v-model="hidden" type="checkbox" class="w-4 h-4 rounded mt-1 shrink-0" />
+          <div>
+            <span class="text-digimon-dark-300">🙈 Hide from other users</span>
+            <p class="text-xs text-digimon-dark-500">Only you will see this character in the Workshop. You can unhide it at any time.</p>
+          </div>
+        </label>
       </div>
 
       <!-- Notes -->

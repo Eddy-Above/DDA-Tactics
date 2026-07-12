@@ -1,5 +1,6 @@
 import { eq, or, inArray, and, count, isNull } from 'drizzle-orm'
 import { db, digimon, tamers } from '../../db'
+import { getSessionUser } from '../../utils/session'
 
 type DigimonStage = 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
 
@@ -24,8 +25,14 @@ export default defineEventHandler(async (event) => {
   }
 
   if (query.sandbox === 'true') {
-    // Workshop (sandbox) digimon: not attached to any campaign
+    // Workshop (sandbox) digimon: not attached to any campaign. Hidden
+    // characters are visible only to their owner; hidden-without-owner is
+    // neutralized (visible) — see tamers/index.get.ts for rationale.
     conditions.push(isNull(digimon.campaignId))
+    const sessionUser = await getSessionUser(event)
+    const visibility = [eq(digimon.hidden, false), isNull(digimon.ownerId)]
+    if (sessionUser) visibility.push(eq(digimon.ownerId, sessionUser.id))
+    conditions.push(or(...visibility)!)
   } else if (campaignId) {
     const campaignTamerIds = db.select({ id: tamers.id }).from(tamers).where(eq(tamers.campaignId, campaignId))
     conditions.push(or(
