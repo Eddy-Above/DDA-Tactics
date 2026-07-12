@@ -35,6 +35,8 @@ const navItems = computed(() => {
             </div>
           </NuxtLink>
 
+          <AccountWidget variant="inline" />
+
           <!-- Navigation -->
           <nav class="flex items-center gap-1">
             <NuxtLink

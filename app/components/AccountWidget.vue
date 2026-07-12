@@ -1,5 +1,5 @@
 <template>
-  <div class="account-widget">
+  <div class="account-widget" :class="`account-widget--${props.variant}`">
     <template v-if="isAuthenticated">
       <button class="widget-btn" @click="menuOpen = !menuOpen">
         👤 {{ user?.username }}
@@ -15,6 +15,10 @@
 </template>
 
 <script setup lang="ts">
+const props = withDefaults(defineProps<{ variant?: 'floating' | 'inline' }>(), {
+  variant: 'floating',
+})
+
 const { user, isAuthenticated, fetchMe, logout, initialized } = useAuth()
 const menuOpen = ref(false)
 
@@ -30,11 +34,18 @@ async function handleLogout() {
 
 <style scoped>
 .account-widget {
+  font-size: 0.75rem;
+}
+
+.account-widget--floating {
   position: fixed;
   top: 8px;
   right: 8px;
   z-index: 45;
-  font-size: 0.75rem;
+}
+
+.account-widget--inline {
+  position: relative;
 }
 
 .widget-btn {

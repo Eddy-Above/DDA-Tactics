@@ -1,5 +1,7 @@
 <script setup lang="ts">
 // Main app component
+const route = useRoute()
+
 useHead({
   htmlAttrs: {
     lang: 'en',
@@ -16,7 +18,7 @@ useHead({
     <NuxtPage />
   </NuxtLayout>
   <RollLogPanel />
-  <AccountWidget />
+  <AccountWidget v-if="route.meta.layout === 'player' || route.meta.layout === false" />
 </template>
 
 <style>
