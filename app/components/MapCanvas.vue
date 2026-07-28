@@ -75,7 +75,18 @@
         <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
         <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
         <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
+        <button v-if="isDm" class="npc-radial-btn gm-move" @click="gmMove(npcRadialId!)">GM Move</button>
       </template>
+    </div>
+    <!-- GM-only radial: free-reposition any character on any turn (no action cost, no distance limit) -->
+    <div
+      v-if="isDm && gmRadialScreen && gmRadialId"
+      class="npc-radial-menu"
+      :style="{ left: gmRadialScreen.x + 'px', top: gmRadialScreen.y + 'px' }"
+    >
+      <div class="npc-radial-clash-group">
+        <button class="npc-radial-btn gm-move" @click="gmMove(gmRadialId)">GM Move</button>
+      </div>
     </div>
     <!-- Player radial action menu -->
     <div
@@ -156,6 +167,7 @@ const props = defineProps<{
   reachableCells: Set<string>
   activePath: Vec3[]
   placingParticipantId: string | null
+  gmMoveParticipantId: string | null   // GM free-move: reposition this participant onto any valid tile
   npcMoveParticipantId: string | null
   chargeMode: 'before' | 'after' | null
   chargeMoveParticipantId: string | null
@@ -179,6 +191,8 @@ const emit = defineEmits<{
   (e: 'charge-target-selected', attackerId: string, destination: Vec3, targetId: string | null): void
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction): void
   (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction): void
+  (e: 'gm-move', participantId: string): void
+  (e: 'gm-moved', participantId: string, position: Vec3): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
@@ -234,6 +248,10 @@ const npcOutOfActions = computed(() => {
   const p = npcRadialParticipant.value
   return !p || (p.actionsRemaining?.simple || 0) < 1
 })
+// GM-only radial (any token, any turn) — currently just the "GM Move" free-reposition action.
+const gmRadialId = ref<string | null>(null)
+const gmRadialScreen = ref<{ x: number; y: number } | null>(null)
+
 const playerRadialId = ref<string | null>(null)
 const playerRadialScreen = ref<{ x: number; y: number } | null>(null)
 const playerRadialParticipantType = computed(() =>
@@ -1091,6 +1109,26 @@ function updatePlayerRadial() {
   }
 }
 
+// Keep GM radial menu pinned as camera moves
+function updateGmRadial() {
+  if (!gmRadialId.value) return
+  const p = props.participants.find(x => x.id === gmRadialId.value)
+  const pos = p && props.participantPositions[p.id]
+  if (pos) {
+    const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
+    gmRadialScreen.value = worldToScreen2D(v) ?? gmRadialScreen.value
+  }
+}
+
+// GM free-move: close the GM radial and tell the parent to enter reposition mode for `id`.
+function gmMove(id: string) {
+  gmRadialId.value = null
+  gmRadialScreen.value = null
+  npcRadialId.value = null
+  npcRadialScreen.value = null
+  emit('gm-move', id)
+}
+
 function playerRadialMove() {
   if (!playerRadialId.value) return
   const id = playerRadialId.value
@@ -1160,6 +1198,7 @@ function animate() {
   updateCharacterOverlays()
   updateNpcRadial()
   updatePlayerRadial()
+  updateGmRadial()
 
   // Sync movement highlight with reactive data
   updateMovementHighlights()
@@ -2081,8 +2120,10 @@ function onCanvasClick(event: MouseEvent) {
 
   const placementSurfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
 
-  // Placement: a character is selected in the panel — clicking a tile/voxel places them
-  if (props.placingParticipantId && placementSurfaceHit) {
+  // Placement (Setup) / GM free-move — a character is chosen; clicking a tile/voxel places (teleports)
+  // them onto any valid surface. Same footprint/occupancy validation for both.
+  const placeId = props.placingParticipantId ?? props.gmMoveParticipantId
+  if (placeId && placementSurfaceHit) {
     const hitType = placementSurfaceHit.object.userData.type
     const tile = placementSurfaceHit.object.userData.tile as { y: number; isSpawnPoint?: boolean } | undefined
     const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number; isSpawnPoint?: boolean } | undefined
@@ -2095,7 +2136,7 @@ function onCanvasClick(event: MouseEvent) {
       ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
       : { x: Math.floor(placementSurfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(placementSurfaceHit.point.z) }
     // Reject if any other placed participant occupies the same tile footprint
-    const placing = props.participants.find(pp => pp.id === props.placingParticipantId)
+    const placing = props.participants.find(pp => pp.id === placeId)
     const placingSize: DigimonSize = placing?.type === 'digimon' ? (props.digimonMap[placing.entityId]?.size ?? 'medium') : 'medium'
     const placingGig = placing?.type === 'digimon' ? props.digimonMap[placing.entityId]?.giganticDimensions : null
     const { tileCount: pCount } = getSizeParams(placingSize, placingGig)
@@ -2105,7 +2146,7 @@ function onCanvasClick(event: MouseEvent) {
       }
     }
     const occupied = props.participants.some(p => {
-      if (p.id === props.placingParticipantId) return false
+      if (p.id === placeId) return false
       const oPos = props.participantPositions[p.id]
       if (!oPos || oPos.y !== cell.y) return false
       const oSize: DigimonSize = p.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
@@ -2116,7 +2157,8 @@ function onCanvasClick(event: MouseEvent) {
              cell.z < oPos.z + oCount && cell.z + pCount > oPos.z
     })
     if (occupied) return
-    emit('unit-placed', props.placingParticipantId, cell)
+    if (props.placingParticipantId) emit('unit-placed', placeId, cell)
+    else emit('gm-moved', placeId, cell)
     return
   }
 
@@ -2156,13 +2198,30 @@ function onCanvasClick(event: MouseEvent) {
     const p = props.participants.find(p => p.id === participantId)
     if (!p) return
 
-    // GM clicking an NPC — only show radial action menu when it's that NPC's active turn
+    // GM clicking an NPC — only show combat radial when it's that NPC's active turn
     if (props.isDm && (p as any).isEnemy) {
       if (p.id === props.activeParticipantId) {
         npcRadialId.value = npcRadialId.value === p.id ? null : p.id
         return
       }
-      // Non-active-turn enemy: fall through to show health bar overlay
+      // Non-active-turn enemy: fall through to the GM radial below.
+    }
+
+    // GM: clicking any token that didn't open the combat radial (off-turn NPCs and player-owned
+    // tokens, on anyone's turn) opens the GM free-reposition radial.
+    if (props.isDm) {
+      if (gmRadialId.value === participantId) {
+        gmRadialId.value = null
+        gmRadialScreen.value = null
+      } else {
+        gmRadialId.value = participantId
+        const pos = props.participantPositions[participantId]
+        if (pos) {
+          const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
+          gmRadialScreen.value = worldToScreen2D(v) ?? null
+        }
+      }
+      return
     }
 
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
@@ -2200,12 +2259,14 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  // Click empty space — close health bar, NPC radial, player radial, exit move mode
+  // Click empty space — close health bar, NPC radial, player radial, GM radial, exit move mode
   clickedHealthBar.value = null
   npcRadialId.value = null
   npcRadialScreen.value = null
   playerRadialId.value = null
   playerRadialScreen.value = null
+  gmRadialId.value = null
+  gmRadialScreen.value = null
   if (!pendingMovePos.value) movingParticipantId.value = null
 }
 
@@ -2617,4 +2678,8 @@ defineExpose({ movingParticipantId })
 .npc-radial-btn.player.clash          { top: 30px; left: 0; }
 .npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
 .npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
+/* GM-only free-move button (purple). In the combat NPC radial it sits below Clash; in the
+   standalone GM radial it is centered by the clash-group flex layout (position: static). */
+.npc-radial-btn.gm-move { top: 62px; left: 0; background: #3a1a4a; border-color: #cc66ff; white-space: nowrap; }
+.npc-radial-btn.gm-move:hover:not(:disabled) { background: #4a2560; }
 </style>

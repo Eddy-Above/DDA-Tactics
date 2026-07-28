@@ -46,6 +46,7 @@
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
+          :gm-move-participant-id="gmMoveParticipantId"
           :charge-mode="chargeMode"
           :charge-move-participant-id="chargeMoveParticipantId"
           :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
@@ -64,8 +65,10 @@
           :npc-move-participant-id="npcMoveParticipantId"
           @npc-action="onNpcAction"
           @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else if (action === 'clash-move') onClashMove(id); else emit('player-action', id, action) }"
+          @gm-move="onGmMoveStart"
+          @gm-moved="onGmMove"
           @cell-hovered="onCellHovered"
-          @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; movement.clearMovement() }"
+          @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; gmMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
         />
         <div v-else class="no-map">
@@ -364,6 +367,8 @@ const digimonMapForCanvas = computed(() => {
 // ── Placement panel ─────────────────────────────────────────────────────────
 const selectedId = ref<string | null>(null)
 const npcMoveParticipantId = ref<string | null>(null)
+// GM free-move: the participant the GM is repositioning (free teleport, no action cost, any turn)
+const gmMoveParticipantId = ref<string | null>(null)
 const throwAimContext = ref<{ controllerId: string; thrownTargetId: string } | null>(null)
 const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 
@@ -458,6 +463,22 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
       body: { participantId },
     }).catch((e: unknown) => console.error('move action deduct failed', e))
   }
+}
+
+// GM free-move: enter reposition mode for a participant (cancels any other move mode). The GM then
+// clicks any valid tile → onGmMove. No reachable highlight — placement is free (any valid surface).
+function onGmMoveStart(participantId: string) {
+  gmMoveParticipantId.value = participantId
+  npcMoveParticipantId.value = null
+  chargeMoveParticipantId.value = null
+  movement.clearMovement()
+}
+
+// GM free-move destination chosen: reposition the character with NO action cost (no /actions/move).
+function onGmMove(participantId: string, position: Vec3) {
+  positions.value = { ...positions.value, [participantId]: position }
+  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path: [], version: 0 })
+  gmMoveParticipantId.value = null
 }
 
 function destroyedIds(): Set<string> {
