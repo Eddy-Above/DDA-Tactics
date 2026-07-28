@@ -5,6 +5,8 @@ import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage } from '../../../../../types'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
+import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
+import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
 
@@ -218,7 +220,7 @@ export default defineEventHandler(async (event) => {
         targetHasGone = idx >= 0 && idx < currentIndex
       }
     }
-    const supportParticipants = updatedParticipants.map((p: any) => {
+    let supportParticipants = updatedParticipants.map((p: any) => {
       if (p.id === body.targetId && hit && npcAttackDef.effect) {
         const effectDuration = Math.max(1, netSuccesses)
         const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
@@ -246,6 +248,24 @@ export default defineEventHandler(async (event) => {
       }
       return p
     })
+
+    // Knockback / Pull: displace the target on the map (support-attack path).
+    let supportPushLogNote: string | null = null
+    if ((appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && (encounter as any).mapId) {
+      const atkDerived = actor.type === 'digimon' ? await getDigimonDerivedStats(actor.entityId) : null
+      const { potency } = calculateEffectPotency(appliedEffectName, atkDerived, null)
+      const disp = await applyPushPullDisplacement({
+        encounterId,
+        mapId: (encounter as any).mapId,
+        participants: supportParticipants,
+        attackerParticipantId: actor.id,
+        targetParticipantId: body.targetId,
+        effect: appliedEffectName,
+        distance: potency,
+      })
+      supportParticipants = disp.participants
+      supportPushLogNote = disp.logNote
+    }
 
     // Resolve names
     let supportAttackerName = 'Unknown'
@@ -290,7 +310,11 @@ export default defineEventHandler(async (event) => {
       target: null,
       result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
       damage: 0,
-      effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+      effects: [
+        'Dodge',
+        ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
+        ...(supportPushLogNote ? [supportPushLogNote] : []),
+      ],
       hit,
     }
 
@@ -365,7 +389,7 @@ export default defineEventHandler(async (event) => {
 
   // Apply damage to target and auto-apply attack effects
   let appliedEffectName: string | null = null
-  const finalParticipants = updatedParticipants.map((p: any) => {
+  let finalParticipants = updatedParticipants.map((p: any) => {
     // Handle attacker: reset Combat Monster bonus on hit
     if (p.id === body.participantId && hit && attackerHasCombatMonster) {
       return { ...p, combatMonsterBonus: 0 }
@@ -415,6 +439,25 @@ export default defineEventHandler(async (event) => {
     }
     return p
   })
+
+  // Knockback / Pull: displace the target on the map (damage-attack path). Runs before the
+  // auto-devolve / defeat / gravity checks so those see the post-displacement state.
+  let npcPushLogNote: string | null = null
+  if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && (encounter as any).mapId) {
+    const atkDerived = actor.type === 'digimon' ? await getDigimonDerivedStats(actor.entityId) : null
+    const { potency } = calculateEffectPotency(appliedEffectName, atkDerived, null)
+    const disp = await applyPushPullDisplacement({
+      encounterId,
+      mapId: (encounter as any).mapId,
+      participants: finalParticipants,
+      attackerParticipantId: actor.id,
+      targetParticipantId: body.targetId,
+      effect: appliedEffectName,
+      distance: potency,
+    })
+    finalParticipants = disp.participants
+    npcPushLogNote = disp.logNote
+  }
 
   // Auto-devolve check: if target is KO'd but has evolution history, devolve instead
   let autoDevolveLog: any = null
@@ -630,7 +673,11 @@ export default defineEventHandler(async (event) => {
     target: null,
     result: `${body.dodgeDicePool}d6 => [${body.dodgeDiceResults.join(',')}] = ${body.dodgeSuccesses} successes - Net: ${netSuccesses} - ${hit ? 'HIT!' : 'MISS!'}`,
     damage: hit ? damageDealt : 0,
-    effects: appliedEffectName ? ['Dodge', `Applied: ${appliedEffectName}`] : ['Dodge'],
+    effects: [
+      'Dodge',
+      ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
+      ...(npcPushLogNote ? [npcPushLogNote] : []),
+    ],
     attackerParticipantId: actor.id,
 
     // Damage calculation breakdown
