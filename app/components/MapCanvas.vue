@@ -1018,7 +1018,9 @@ function updateCharacterOverlays() {
     if (!ghostWalls.value) {
       const dir        = center.clone().sub(camera.position).normalize()
       const occRay     = new THREE.Raycaster(camera.position, dir, 0, distToChar - 0.1)
-      const hits       = occRay.intersectObjects([...wallMeshes.map(w => w.mesh), ...voxelMeshes], false)
+      // Raycasting ignores Object3D.visible, so clipped-away geometry must be excluded by hand.
+      const occluders  = [...wallMeshes.map(w => w.mesh), ...voxelMeshes].filter(m => m.visible)
+      const hits       = occRay.intersectObjects(occluders, false)
       const windowWallIds = new Set((props.map?.windows ?? []).map(w => w.wallId))
       const isOccluded = hits.some(hit => {
         if (voxelMeshes.includes(hit.object as THREE.Mesh)) return true
