@@ -389,11 +389,11 @@ type EditHit =
   | { type: 'wall-edge'; tile: Vec3; face: WallFace }
   | { type: 'voxel'; cell: Vec3 }
 let dragStartHit: EditHit | null = null
-let isSnapping = false
 let rightDragActive = false
 let rightDragLastX = 0
-let rightDragAccum = 0
-const PIXELS_PER_SNAP = 50
+let azimuthTween: { from: number; to: number; start: number; duration: number } | null = null
+const AZIMUTH_STEP = Math.PI / 4      // Q/E turn size
+const AZIMUTH_TWEEN_MS = 220
 const keysHeld = new Set<string>()
 const clipY = ref(20)
 const ghostWalls = ref(false)
@@ -573,7 +573,6 @@ function initScene() {
   controls.target.set(cx, 0, cz)
   controls.update()
   controls.addEventListener('change', () => emit('map-changed'))
-  controls.addEventListener('end', () => snapAzimuth(0))
 
   // Lights
   const ambient = new THREE.AmbientLight(0xffffff, 0.55)
@@ -600,33 +599,38 @@ function initScene() {
 
 }
 
-// ── Right-drag rotation (custom accumulation for snap-per-threshold) ──────
-function applyRightDragRotation(dx: number) {
-  rightDragAccum += dx
-  const step = Math.PI / 4
-  while (rightDragAccum >= PIXELS_PER_SNAP) {
-    snapAzimuth(-step)
-    rightDragAccum -= PIXELS_PER_SNAP
-  }
-  while (rightDragAccum <= -PIXELS_PER_SNAP) {
-    snapAzimuth(+step)
-    rightDragAccum += PIXELS_PER_SNAP
-  }
-}
-
-// ── Camera rotation snap ───────────────────────────────────────────────────
-function snapAzimuth(delta = 0) {
-  if (isSnapping) return
-  const step = Math.PI / 4  // 22.5°
-  const current = controls.getAzimuthalAngle()
-  const snapped = Math.round((current + delta) / step) * step
-  if (delta === 0 && Math.abs(current - snapped) < 1e-6) return
-  isSnapping = true
+// ── Camera azimuth: free right-drag rotation + eased Q/E steps ──────────────
+function setAzimuth(angle: number) {
   const dist = camera.position.distanceTo(controls.target)
   const polar = controls.getPolarAngle()
-  camera.position.setFromSpherical(new THREE.Spherical(dist, polar, snapped)).add(controls.target)
+  camera.position.setFromSpherical(new THREE.Spherical(dist, polar, angle)).add(controls.target)
   controls.update()
-  isSnapping = false
+}
+
+// Right-drag rotates continuously — a full turn per viewport width, matching
+// OrbitControls' own rotate speed. Dragging cancels any in-flight Q/E turn.
+function applyRightDragRotation(dx: number) {
+  const width = containerRef.value?.clientWidth || 1
+  if (dx === 0) return
+  azimuthTween = null
+  setAzimuth(controls.getAzimuthalAngle() - (2 * Math.PI * dx) / width)
+}
+
+// Q/E turn to the next 45° multiple, eased rather than jumping. Chained
+// presses queue off the pending target so repeats stay evenly spaced.
+function stepAzimuth(delta: number) {
+  const from = azimuthTween ? azimuthTween.to : controls.getAzimuthalAngle()
+  const to = Math.round((from + delta) / AZIMUTH_STEP) * AZIMUTH_STEP
+  azimuthTween = { from, to, start: performance.now(), duration: AZIMUTH_TWEEN_MS }
+}
+
+function tickAzimuthTween() {
+  if (!azimuthTween) return
+  const { from, to, start, duration } = azimuthTween
+  const t = Math.min(1, (performance.now() - start) / duration)
+  const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2   // easeInOutQuad
+  setAzimuth(from + (to - from) * eased)
+  if (t >= 1) azimuthTween = null
 }
 
 // ── Element blend texture ──────────────────────────────────────────────────
@@ -1128,8 +1132,8 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); emit('attack-cancelled'); return }
   }
-  if (e.key === 'q' || e.key === 'Q') { snapAzimuth(-Math.PI / 4); return }
-  if (e.key === 'e' || e.key === 'E') { snapAzimuth(+Math.PI / 4); return }
+  if (e.key === 'q' || e.key === 'Q') { stepAzimuth(-AZIMUTH_STEP); return }
+  if (e.key === 'e' || e.key === 'E') { stepAzimuth(+AZIMUTH_STEP); return }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault()
   keysHeld.add(e.key)
 }
@@ -1141,6 +1145,7 @@ function onKeyUp(e: KeyboardEvent) {
 function animate() {
   rafId = requestAnimationFrame(animate)
   applyKeyMovement()
+  tickAzimuthTween()
   controls.update()
 
   // Health bar screen position stays fixed after click — no update needed
@@ -1912,7 +1917,6 @@ function onMouseDown(event: MouseEvent) {
     }
     rightDragActive = true
     rightDragLastX = event.clientX
-    rightDragAccum = 0
     return
   }
   if (!props.isDm || props.activeTool === 'select') return
