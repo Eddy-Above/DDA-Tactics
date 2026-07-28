@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, tamers, campaigns } from '../../../../db'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage, CampaignRulesSettings } from '../../../../../types'
+import { getDigizoidArmorBonus } from '../../../../utils/digizoidArmor'
 
 interface DigivolveBody {
   participantId: string
@@ -195,10 +196,10 @@ export default defineEventHandler(async (event) => {
   const bonusStats = newDigimon.bonusStats
   const newStage = (newDigimon.stage || targetEntry.stage) as DigimonStage
   const stageConfig = STAGE_CONFIG[newStage]
-  const newMaxWounds = (baseStats?.health || 0) + (bonusStats?.health || 0) + (stageConfig?.woundBonus || 0)
-  const newTotalHealth = (baseStats?.health || 0) + (bonusStats?.health || 0)
-
   const newQualities = newDigimon.qualities || []
+  const newDigizoidHealthBonus = getDigizoidArmorBonus(newQualities).health
+  const newMaxWounds = (baseStats?.health || 0) + (bonusStats?.health || 0) + newDigizoidHealthBonus + (stageConfig?.woundBonus || 0)
+  const newTotalHealth = (baseStats?.health || 0) + (bonusStats?.health || 0) + newDigizoidHealthBonus
   const newHasCombatMonster = (newQualities as any[]).some((q: any) => q.id === 'combat-monster')
 
   // Update participant

@@ -18,6 +18,7 @@ import { triggerCounterattack } from '../../../utils/triggerCounterattack'
 import { resolveNpcAttack } from '../../../utils/resolveNpcAttack'
 import { applyStanceToDodge } from '../../../../utils/stanceModifiers'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from '../../../utils/selectiveTargeting'
+import { getDigizoidArmorBonus, getReflectArmorRange } from '../../../utils/digizoidArmor'
 
 interface SubmitResponseBody {
   requestId: string
@@ -267,6 +268,14 @@ export default defineEventHandler(async (event) => {
     const accuracySuccesses = request.data.accuracySuccesses
     let dodgeSuccesses = body.response.dodgeSuccesses ?? 0
 
+    // Digizoid Armor: fetch target's qualities once (used for Brown's auto-dodge-success below,
+    // and for the halfDodge full-pool recompute)
+    let targetQualitiesForDodge: any[] = []
+    if (targetParticipantForTurn?.type === 'digimon') {
+      const [targetDigimonForQualities] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+      targetQualitiesForDodge = targetDigimonForQualities?.qualities || []
+    }
+
     // Attacked from OUTSIDE the clash: the clashing target cannot dodge at all (server-enforced
     // even if a dodge roll was somehow submitted).
     if (request.data.cannotDodge) {
@@ -294,9 +303,22 @@ export default defineEventHandler(async (event) => {
       fullDodgePool = Math.max(1, fullDodgePool - (targetParticipantForDodge?.dodgePenalty ?? 0))
       const targetEffectModsForDodge = getEffectStatModifiers(targetParticipantForDodge?.activeEffects || [])
       fullDodgePool += targetEffectModsForDodge.dodge
+      // Digizoid Armor: flat +Dodge (Blue) + this round's rolled Black Armor bonus
+      fullDodgePool += getDigizoidArmorBonus(targetQualitiesForDodge).dodge
+      fullDodgePool += (targetParticipantForDodge as any)?.blackArmorRoundBonus?.dodge ?? 0
       const maxClashPool = Math.max(1, Math.floor(fullDodgePool / 2))
       const clashDiceResults = (body.response.dodgeDiceResults ?? []).slice(0, maxClashPool)
       dodgeSuccesses = clashDiceResults.filter((d: number) => d >= 5).length
+    }
+
+    // Digizoid Armor: Brown's 1 automatic dodge success, resets once per round
+    let brownArmorAutoDodgeConsumed = false
+    if (!request.data.cannotDodge) {
+      const targetHasBrownArmor = targetQualitiesForDodge.some((q: any) => q.id === 'digizoid-armor' && q.choiceId === 'brown')
+      if (targetHasBrownArmor && (targetParticipantForTurn as any)?.brownArmorAutoDodgeAvailable) {
+        dodgeSuccesses += 1
+        brownArmorAutoDodgeConsumed = true
+      }
     }
 
     const netSuccesses = accuracySuccesses - dodgeSuccesses
@@ -355,6 +377,7 @@ export default defineEventHandler(async (event) => {
             ...p,
             dodgePenalty: (p.dodgePenalty ?? 0) + 1,
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+            ...(brownArmorAutoDodgeConsumed ? { brownArmorAutoDodgeAvailable: false } : {}),
           }
 
           const supportAlignment = attackDef?.effect ? EFFECT_ALIGNMENT[attackDef.effect] : undefined
@@ -519,6 +542,7 @@ export default defineEventHandler(async (event) => {
       let attackerCombatMonsterBonus = 0
       let attackerHasPositiveReinforcement = false
       let attackerMoodValue = 3
+      let attackerTotalArmor = 0
       if (attackerParticipant?.type === 'digimon') {
         const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
         if (attackerDigimon) {
@@ -531,6 +555,14 @@ export default defineEventHandler(async (event) => {
           attackerCombatMonsterBonus = attackerParticipant.combatMonsterBonus ?? 0
           attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
           attackerMoodValue = attackerParticipant.moodValue ?? 3
+
+          // Attacker's own total Armor (only needed for Gold/Obsidian Digizoid Armor reflect damage below)
+          attackerTotalArmor = (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0)
+          attackerTotalArmor += getDigizoidArmorBonus(attackerQualities).armor
+          attackerTotalArmor += (attackerParticipant as any)?.blackArmorRoundBonus?.armor ?? 0
+          const attackerDataOpt = (attackerQualities || []).find((q: any) => q.id === 'data-optimization')
+          if (attackerDataOpt?.choiceId === 'guardian') attackerTotalArmor += 2
+          if (attackerDataOpt?.choiceId === 'effect-warrior') attackerTotalArmor -= 2
         }
       }
 
@@ -543,6 +575,7 @@ export default defineEventHandler(async (event) => {
       let targetDigimonRef: any = null
       let targetHasPositiveReinforcement = false
       let targetMoodValue = 3
+      let targetDigizoidChoiceId: string | undefined
       if (targetParticipant?.type === 'digimon') {
         const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
         targetDigimonRef = targetDigimon
@@ -561,6 +594,14 @@ export default defineEventHandler(async (event) => {
           targetHasCombatMonster = (targetQualities || []).some((q: any) => q.id === 'combat-monster')
           targetHasPositiveReinforcement = (targetQualities || []).some((q: any) => q.id === 'positive-reinforcement')
           targetMoodValue = targetParticipant.moodValue ?? 3
+
+          // Digizoid Armor: flat +Armor/+Health (all variants), + this round's rolled Black Armor bonus
+          const targetDigizoidArmor = (targetQualities || []).find((q: any) => q.id === 'digizoid-armor')
+          targetDigizoidChoiceId = targetDigizoidArmor?.choiceId
+          const targetDigizoidBonus = getDigizoidArmorBonus(targetQualities)
+          targetArmor += targetDigizoidBonus.armor
+          targetHealthStat += targetDigizoidBonus.health
+          targetArmor += (targetParticipant as any)?.blackArmorRoundBonus?.armor ?? 0
         }
       } else if (targetParticipant?.type === 'tamer') {
         const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
@@ -676,6 +717,18 @@ export default defineEventHandler(async (event) => {
         damageEffectPotencyStat = result.potencyStat
       }
 
+      // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker on a matching-range hit
+      let reflectDamageToAttacker = 0
+      if (hit && attackDef?.type === 'damage' && damageDealt > 0 && targetDigizoidChoiceId) {
+        const reflectRange = getReflectArmorRange(targetDigizoidChoiceId)
+        if (reflectRange && attackDef?.range === reflectRange) {
+          const attackerDerivedForReflect = attackerParticipant?.type === 'digimon'
+            ? await getDigimonDerivedStats(request.data.attackerEntityId) : null
+          const attackerCpu = attackerDerivedForReflect?.cpu ?? 0
+          reflectDamageToAttacker = Math.max(1, attackerCpu * 2 - attackerTotalArmor)
+        }
+      }
+
       let lifestealHealAmount = 0
       participants = participants.map((p: any) => {
         // Handle attacker: reset Combat Monster bonus on hit + Lifesteal healing + Positive Reinforcement mood
@@ -690,6 +743,11 @@ export default defineEventHandler(async (event) => {
               : damageEffectPotency
             lifestealHealAmount = Math.min(damageDealt, lifestealPotency)
             attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
+          }
+          // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker
+          if (hit && reflectDamageToAttacker > 0) {
+            const woundsBeforeReflect = attackerUpdates.currentWounds ?? (p.currentWounds || 0)
+            attackerUpdates.currentWounds = Math.min(p.maxWounds, woundsBeforeReflect + reflectDamageToAttacker)
           }
           if (attackerHasPositiveReinforcement) {
             // Land attack → +1 Mood; Miss → –1 Mood
@@ -706,6 +764,7 @@ export default defineEventHandler(async (event) => {
             dodgePenalty: (p.dodgePenalty ?? 0) + 1,
             // Consume Directed effect (bonus was applied client-side to dodge pool)
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+            ...(brownArmorAutoDodgeConsumed ? { brownArmorAutoDodgeAvailable: false } : {}),
           }
           // Positive Reinforcement: get hit → –1 Mood; successfully dodge → +1 Mood
           if (targetHasPositiveReinforcement) {
@@ -912,6 +971,7 @@ export default defineEventHandler(async (event) => {
           'Dodge',
           ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
           ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
+          ...(hit && reflectDamageToAttacker > 0 ? [`Digizoid Armor: reflected ${reflectDamageToAttacker} damage to ${request.data.attackerName}`] : []),
           ...(pushPullLogNote ? [pushPullLogNote] : []),
         ],
         attackerParticipantId: request.data.attackerParticipantId,

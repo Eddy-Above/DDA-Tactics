@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
 import { getRoomSnapshot } from '../../utils/encounterRoom'
 import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
+import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -44,7 +45,7 @@ export default defineEventHandler(async (event) => {
   const isNewRound = incomingRound > existingRound
 
   if (body.participants) {
-    const participants = body.participants as any[]
+    let participants = body.participants as any[]
 
     // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
     // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
@@ -81,27 +82,9 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    // Boss quality: Juggernaut — at the start of each new round, add stacking +2 to a random stat
+    // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
     if (isNewRound) {
-      const juggernauntStatMap: Record<number, 'accuracy' | 'damage' | 'dodge' | 'armor'> = {
-        1: 'armor',    // 1: Health → nearest analog is armor for automation
-        2: 'accuracy',
-        3: 'damage',
-        4: 'dodge',
-        5: 'armor',
-        6: 'damage',   // 6: Choose → default to damage
-      }
-      for (const p of participants) {
-        if (p.type !== 'digimon') continue
-        const [digi] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
-        if (!digi) continue
-        const quals = digi.qualities || []
-        if (!(quals as any[]).some((q: any) => q.id === 'juggernaut')) continue
-        const roll = Math.floor(Math.random() * 6) + 1
-        const stat = juggernauntStatMap[roll]
-        const prev = p.juggernauntBonuses ?? {}
-        p.juggernauntBonuses = { ...prev, [stat]: ((prev as any)[stat] ?? 0) + 2 }
-      }
+      participants = await applyRoundStartQualityTriggers(participants)
     }
 
     updateData.participants = participants

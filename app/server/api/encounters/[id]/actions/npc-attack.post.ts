@@ -6,6 +6,7 @@ import type { DigimonStage } from '../../../../../types'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
+import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
 
 interface NpcAttackBody {
   participantId: string
@@ -515,6 +516,9 @@ export default defineEventHandler(async (event) => {
           }
           p.usedFreeClashThisRound = false
         })
+
+        // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
+        finalParticipantsAfterDefeat = await applyRoundStartQualityTriggers(finalParticipantsAfterDefeat)
       }
 
       const nextParticipantId = updatedTurnOrder[npcDefeatNextTurnIndex]

@@ -692,6 +692,10 @@ export default defineEventHandler(async (event) => {
     if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
       return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
     }
+    // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker (single-target intercede only)
+    if (!isAreaAttack && p.id === attackerId && damageCalc.reflectDamageToAttacker > 0) {
+      return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damageCalc.reflectDamageToAttacker) }
+    }
     return p
   })
 

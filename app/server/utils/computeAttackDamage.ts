@@ -4,6 +4,7 @@ import { EFFECT_ALIGNMENT, getEffectStatModifiers } from '../../data/attackConst
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
 import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from './selectiveTargeting'
+import { getDigizoidArmorBonus, getReflectArmorRange } from './digizoidArmor'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
@@ -40,6 +41,7 @@ export interface ComputeAttackDamageResult {
   targetHasPositiveReinforcement: boolean
   targetMoodValue: number
   targetHealthStat: number
+  reflectDamageToAttacker: number
 }
 
 /**
@@ -73,6 +75,7 @@ export async function computeAttackDamage(
   let attackerHasCombatMonster = false
   let attackerHasPositiveReinforcement = false
   let attackerHasSelectiveTargeting = false
+  let attackerTotalArmor = 0
   const attackerCombatMonsterBonus: number = attackerParticipant.combatMonsterBonus ?? 0
   const attackerMoodValue: number = attackerParticipant.moodValue ?? 3
 
@@ -118,6 +121,14 @@ export async function computeAttackDamage(
       attackerHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       attackerHasSelectiveTargeting = (qualities || []).some((q: any) => q.id === 'selective-targeting')
 
+      // Attacker's own total Armor (only needed for Gold/Obsidian Digizoid Armor reflect damage below)
+      attackerTotalArmor = resolvedAttackerStats.armor
+      attackerTotalArmor += getDigizoidArmorBonus(qualities).armor
+      attackerTotalArmor += attackerParticipant.blackArmorRoundBonus?.armor ?? 0
+      const attackerDataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
+      if (attackerDataOpt?.choiceId === 'guardian') attackerTotalArmor += 2
+      if (attackerDataOpt?.choiceId === 'effect-warrior') attackerTotalArmor -= 2
+
       // Weapons Expert: add chosen SPEC value (bit/cpu/ram) to Weapon-tagged attacks
       const attackerHasWeaponTag = attackDef?.tags?.some((t: string) => /^Weapon/i.test(t))
       if (attackerHasWeaponTag && !attackerIsDisarmed) {
@@ -159,6 +170,7 @@ export async function computeAttackDamage(
   let targetHasCombatMonster = false
   let targetHasPositiveReinforcement = false
   let targetHealthStat = 0
+  let targetDigizoidChoiceId: string | undefined
   const targetMoodValue: number = targetParticipant.moodValue ?? 3
 
   if (targetParticipant.type === 'digimon') {
@@ -181,6 +193,14 @@ export async function computeAttackDamage(
       targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       const dataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
       if (dataOpt?.choiceId === 'guardian') targetArmor += 2
+
+      // Digizoid Armor: flat +Armor/+Health (all variants), + this round's rolled Black Armor bonus
+      const digizoidArmor = (qualities || []).find((q: any) => q.id === 'digizoid-armor')
+      targetDigizoidChoiceId = digizoidArmor?.choiceId
+      const digizoidBonus = getDigizoidArmorBonus(qualities)
+      targetArmor += digizoidBonus.armor
+      targetHealthStat += digizoidBonus.health
+      targetArmor += targetParticipant.blackArmorRoundBonus?.armor ?? 0
 
       targetFinesseRanks = (qualities || []).find((q: any) => q.id === 'finesse')?.ranks ?? 0
     }
@@ -246,6 +266,19 @@ export async function computeAttackDamage(
 
   // Selective Targeting: area attacks don't damage allies
   if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
+
+  // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker on a matching-range hit
+  let reflectDamageToAttacker = 0
+  if (hit && attackDef?.type === 'damage' && damageDealt > 0 && targetDigizoidChoiceId) {
+    const reflectRange = getReflectArmorRange(targetDigizoidChoiceId)
+    if (reflectRange && attackDef?.range === reflectRange) {
+      if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
+        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+      }
+      const attackerCpu = atkDerivedCached?.cpu ?? 0
+      reflectDamageToAttacker = Math.max(1, attackerCpu * 2 - attackerTotalArmor)
+    }
+  }
 
   // ── Effect potency & data ─────────────────────────────────────────────────
   let appliedEffectName: string | null = null
@@ -314,5 +347,6 @@ export async function computeAttackDamage(
     targetHasPositiveReinforcement,
     targetMoodValue,
     targetHealthStat,
+    reflectDamageToAttacker,
   }
 }

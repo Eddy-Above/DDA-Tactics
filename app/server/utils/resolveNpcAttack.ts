@@ -18,6 +18,8 @@ import {
 import { computeGravityDrops } from './endOfTurnGravity'
 import { loadParticipantDigimon, getFallerProfile } from './combatSpatial'
 import { resolveFall } from '../../utils/movementRules'
+import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
+import { getDigizoidArmorBonus } from './digizoidArmor'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -112,6 +114,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       targetHasCombatMonster = targetQualities.some((q: any) => q.id === 'combat-monster')
       const instinct = targetQualities.find((q: any) => q.id === 'instinct')
       dodgePool += instinct?.ranks || 0
+
+      // Digizoid Armor: flat +Dodge (Blue) + this round's rolled Black Armor bonus
+      dodgePool += getDigizoidArmorBonus(targetQualities).dodge
+      dodgePool += (target as any).blackArmorRoundBonus?.dodge ?? 0
     }
   } else if (target.type === 'tamer') {
     const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
@@ -170,7 +176,15 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   for (let i = 0; i < dodgePool; i++) {
     dodgeDiceResults.push(Math.floor(Math.random() * 6) + 1)
   }
-  const dodgeSuccesses = dodgeDiceResults.filter((d: number) => d >= 5).length
+  let dodgeSuccesses = dodgeDiceResults.filter((d: number) => d >= 5).length
+
+  // Digizoid Armor: Brown's 1 automatic dodge success, resets once per round
+  let brownArmorAutoDodgeConsumed = false
+  const targetHasBrownArmor = targetQualities.some((q: any) => q.id === 'digizoid-armor' && q.choiceId === 'brown')
+  if (targetHasBrownArmor && (target as any).brownArmorAutoDodgeAvailable) {
+    dodgeSuccesses += 1
+    brownArmorAutoDodgeConsumed = true
+  }
 
   // Shared damage calculation (handles attacker loading, armor, and effects internally)
   const damageCalc = await computeAttackDamage({
@@ -208,6 +222,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           ...p,
           dodgePenalty: (p.dodgePenalty ?? 0) + 1,
           activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+          ...(brownArmorAutoDodgeConsumed ? { brownArmorAutoDodgeAvailable: false } : {}),
         }
 
         if (hit && damageCalc.effectData) {
@@ -270,6 +285,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         lifestealHealAmount = Math.min(damageDealt, damageCalc.effectData?.potency ?? 0)
         attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
       }
+      // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker
+      if (hit && damageCalc.reflectDamageToAttacker > 0) {
+        const woundsBeforeReflect = attackerUpdates.currentWounds ?? (p.currentWounds || 0)
+        attackerUpdates.currentWounds = Math.min(p.maxWounds, woundsBeforeReflect + damageCalc.reflectDamageToAttacker)
+      }
       if (attackerHasPositiveReinforcement) {
         // Land attack → +1 Mood; Miss → –1 Mood
         attackerUpdates.moodValue = Math.min(6, Math.max(1, (p.moodValue ?? 3) + (hit ? 1 : -1)))
@@ -286,6 +306,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         dodgePenalty: (p.dodgePenalty ?? 0) + 1,
         // Consume Directed effect (bonus was applied to dodge pool above)
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
+        ...(brownArmorAutoDodgeConsumed ? { brownArmorAutoDodgeAvailable: false } : {}),
       }
       // Positive Reinforcement: get hit → –1 Mood; successfully dodge → +1 Mood
       if (targetHasPositiveReinforcement) {
@@ -537,6 +558,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
             }
             p.usedFreeClashThisRound = false
           })
+
+          // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
+          participants = await applyRoundStartQualityTriggers(participants)
         }
 
         // Activate the next participant
@@ -616,6 +640,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       'Dodge',
       ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
       ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
+      ...(hit && damageCalc.reflectDamageToAttacker > 0 ? [`Digizoid Armor: reflected ${damageCalc.reflectDamageToAttacker} damage to ${params.attackerName}`] : []),
       ...(pushPullLogNote ? [pushPullLogNote] : []),
     ],
     attackerParticipantId: params.attackerParticipantId,

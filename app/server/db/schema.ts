@@ -311,6 +311,8 @@ export const encounters = pgTable('encounters', {
     tormentorBonusStacks?: number
     tankBusterUsedAtThresholds?: number[]
     mapPosition?: { x: number; y: number; z: number }
+    blackArmorRoundBonus?: { armor: number; dodge: number }
+    brownArmorAutoDodgeAvailable?: boolean
   }>>(),
 
   // Turn order (participant IDs)

@@ -1062,6 +1062,8 @@ const dodgeDicePool = computed(() => {
       const resolvedStats = applyStatSwaps(rawStats, targetParticipant.statSwaps)
       const qualityDodgeBonus = calcDigimonStats(digi).dodge - rawStats.dodge
       pool = resolvedStats.dodge + qualityDodgeBonus || 3
+      // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of calcDigimonStats)
+      pool += (targetParticipant as any).blackArmorRoundBonus?.dodge ?? 0
     }
   } else if (targetParticipant.type === 'tamer') {
     const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)

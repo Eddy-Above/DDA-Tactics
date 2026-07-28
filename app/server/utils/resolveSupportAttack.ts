@@ -14,6 +14,7 @@ import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { selectiveTargetingBlocksEffect } from './selectiveTargeting'
+import { getDigizoidArmorBonus } from './digizoidArmor'
 
 interface SupportAttackParams {
   participants: any[]
@@ -112,7 +113,8 @@ async function getTargetHealthPool(targetEntityId: string, targetType: string): 
     if (targetDigimon) {
       const baseStats = targetDigimon.baseStats
       const bonusStats = (targetDigimon as any).bonusStats
-      return (baseStats?.health ?? 0) + (bonusStats?.health ?? 0) || 3
+      const digizoidHealthBonus = getDigizoidArmorBonus(targetDigimon.qualities).health
+      return (baseStats?.health ?? 0) + (bonusStats?.health ?? 0) + digizoidHealthBonus || 3
     }
   }
   return 3

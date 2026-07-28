@@ -592,6 +592,9 @@ export interface CombatParticipant {
   tormentorBonusStacks?: number            // Tormentor: stacking +2 per participant that failed the check
   tankBusterUsedAtThresholds?: number[]    // Tank Buster: wound-% thresholds already consumed (e.g. [0.75, 0.50])
   usedCounterattackThisCombat?: boolean    // Counterattack: set after use (Chain Counter conditionally skips setting this)
+  // Digizoid Armor
+  blackArmorRoundBonus?: { armor: number; dodge: number }  // Black Digizoid Armor: rolled fresh each round
+  brownArmorAutoDodgeAvailable?: boolean   // Brown Digizoid Armor: 1 free dodge success, resets each round
 }
 
 export interface ActiveEffect {

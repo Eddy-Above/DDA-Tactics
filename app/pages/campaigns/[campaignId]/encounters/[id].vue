@@ -654,8 +654,11 @@ function getDodgePool(participant: CombatParticipant): number {
   if (participant.type === 'digimon') {
     const digimon = digimonMap.value.get(participant.entityId)
     if (digimon) {
-      const totalDodge = (digimon.baseStats?.dodge ?? 0) + ((digimon as any).bonusStats?.dodge ?? 0)
+      // calcDigimonStats already includes Digizoid Armor's flat +Dodge (Blue) bonus
+      const totalDodge = calcDigimonStats(digimon).dodge
       pool = totalDodge || 3
+      // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of calcDigimonStats)
+      pool += (participant as any).blackArmorRoundBonus?.dodge ?? 0
     }
   } else if (participant.type === 'tamer') {
     const tamer = tamerMap.value.get(participant.entityId)
