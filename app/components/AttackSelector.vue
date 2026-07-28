@@ -231,7 +231,7 @@ function getAttackStats(attack: Attack) {
 
   // Check if attack has a specific tag
   const hasTag = (pattern: string) => attack.tags.some(t => t.toLowerCase().includes(pattern.toLowerCase()))
-  const hasWeaponTag = attack.tags.some(t => /^Weapon\s+/i.test(t))
+  const hasWeaponTag = attack.tags.some(t => /^Weapon\s+/i.test(t)) || attack.tags.includes('Chrome Digizoid')
   const hasSignatureTag = attack.tags.some(t => t.toLowerCase().includes('signature'))
 
   // === GLOBAL QUALITY BONUSES (apply to all attacks) ===

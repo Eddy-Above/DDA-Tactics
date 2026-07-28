@@ -1428,7 +1428,7 @@ function getAttackStats(participant: CombatParticipant, attack: any) {
   // Helper functions
   const hasQuality = (id: string) => digimon.qualities?.some((q: any) => q.id === id)
   const hasTag = (pattern: string) => attack.tags?.some((t: string) => t.toLowerCase().includes(pattern.toLowerCase()))
-  const hasWeaponTag = attack.tags?.some((t: string) => /^Weapon\s+/i.test(t))
+  const hasWeaponTag = attack.tags?.some((t: string) => /^Weapon\s+/i.test(t)) || attack.tags?.includes('Chrome Digizoid')
   const hasSignatureTag = attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))
 
   // === GLOBAL QUALITY BONUSES ===
@@ -3574,7 +3574,7 @@ function getAttackBonuses(
   }
 
   // Digizoid Weapon bonuses (only for [Weapon] tagged attacks)
-  const hasWeaponTag = hasTag(tags, 'weapon')
+  const hasWeaponTag = hasTag(tags, 'weapon') || tags.includes('Chrome Digizoid')
   if (hasWeaponTag) {
     const digizoidWeapon = qualities.find(q => q.id === 'digizoid-weapon')
     if (digizoidWeapon) {
