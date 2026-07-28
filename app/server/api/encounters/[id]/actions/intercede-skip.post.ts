@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
 import { loadEncounterMap } from '~/server/utils/combatSpatial'
+import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
@@ -271,6 +272,7 @@ export default defineEventHandler(async (event) => {
             if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
             else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
             else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+            else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
 
             if (supportResult) {
               updateData.participants = supportResult.participants

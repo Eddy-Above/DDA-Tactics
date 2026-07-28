@@ -7,17 +7,9 @@ import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { computeAttackDamage } from './computeAttackDamage'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
-import {
-  getFootprintDimsForParticipant,
-  buildFootprintOccupiedSet,
-  isPositionInAir,
-  findPushPullLandingCell,
-  computeFallDamage,
-  detectCapabilitiesFromQualities,
-} from './mapMovement'
 import { computeGravityDrops } from './endOfTurnGravity'
-import { loadParticipantDigimon, getFallerProfile } from './combatSpatial'
-import { resolveFall } from '../../utils/movementRules'
+import { loadParticipantDigimon } from './combatSpatial'
+import { computePushPull } from './pushPull'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 
@@ -364,55 +356,19 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   let pushPullLogNote: string | null = null
   let gravityLogEntries: any[] = []
   if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && params.mapRecord && params.participantPositions) {
-    const targetPos = params.participantPositions[params.targetParticipantId]
-    const attackerPos = params.participantPositions[params.attackerParticipantId]
-
-    if (targetPos && attackerPos) {
-      const digimonById = await loadParticipantDigimon(participants)
-
-      const targetPart = participants.find((p: any) => p.id === params.targetParticipantId)
-      const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
-      const attackerPart = participants.find((p: any) => p.id === params.attackerParticipantId)
-      const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById as any)
-      const occupiedSet = buildFootprintOccupiedSet(
-        params.participantPositions,
-        participants as any[],
-        digimonById as any,
-        new Set([params.targetParticipantId]),
-      )
-
-      const effectPotency = damageCalc.effectData?.potency ?? 0
-      const landingCell = findPushPullLandingCell(
-        targetPos,
-        attackerPos,
-        appliedEffectName === 'Knockback' ? 'push' : 'pull',
-        effectPotency,
-        targetDims,
-        attackerDims,
-        params.mapRecord,
-        occupiedSet,
-      )
-
-      if (landingCell) {
-        // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
-        const targetProfile = await getFallerProfile(targetPart, digimonById)
-        const { landingPos: finalPos, damage: pushFallDamage } = resolveFall(landingCell, targetDims, params.mapRecord, targetProfile)
-
-        if (pushFallDamage > 0) {
-          participants = participants.map((p: any) => {
-            if (p.id === params.targetParticipantId) {
-              return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + pushFallDamage) }
-            }
-            return p
-          })
-        }
-
-        positionPatch = { [params.targetParticipantId]: finalPos }
-        const moveLabel = appliedEffectName === 'Knockback' ? 'Knockback' : 'Pull'
-        const pushFallNote = pushFallDamage > 0 ? ` + ${pushFallDamage} fall damage` : ''
-        pushPullLogNote = `${moveLabel}: displaced ${effectPotency} cell(s)${pushFallNote}`
-      }
-    }
+    const disp = await computePushPull({
+      map: params.mapRecord,
+      positions: params.participantPositions,
+      participants,
+      digimonById: await loadParticipantDigimon(participants),
+      attackerParticipantId: params.attackerParticipantId,
+      targetParticipantId: params.targetParticipantId,
+      effect: appliedEffectName as 'Knockback' | 'Pull',
+      distance: damageCalc.effectData?.potency ?? 0,
+    })
+    participants = disp.participants
+    if (disp.patch) positionPatch = disp.patch
+    pushPullLogNote = disp.logNote
   }
 
   // --- Auto-devolve check ---

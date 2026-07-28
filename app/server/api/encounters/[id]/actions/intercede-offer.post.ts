@@ -26,6 +26,7 @@ import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
 import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
+import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 
@@ -548,6 +549,7 @@ export default defineEventHandler(async (event) => {
           if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
           else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
           else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+          else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
           if (supportResult) {
             participants = supportResult.participants
             battleLog = supportResult.battleLog
@@ -868,6 +870,8 @@ export default defineEventHandler(async (event) => {
         supportResult = await resolvePositiveHealth(supportParams)
       } else if (resolutionType === 'negative') {
         supportResult = await resolveNegativeSupportNpc(supportParams)
+      } else if (resolutionType === 'instant') {
+        supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
       }
 
       if (supportResult?.resolved) {
@@ -1294,6 +1298,7 @@ export default defineEventHandler(async (event) => {
         if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
         else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
         else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+        else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
 
         if (supportResult) {
           await db.update(encounters).set({

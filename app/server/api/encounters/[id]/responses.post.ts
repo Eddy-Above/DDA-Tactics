@@ -1,16 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns, maps } from '../../../db'
-import { broadcastPositionPatch, getRoomPositions } from '../../../utils/encounterRoom'
-import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from '../../../utils/combatSpatial'
-import { resolveFall } from '../../../../utils/movementRules'
-import {
-  getFootprintDimsForParticipant,
-  buildFootprintOccupiedSet,
-  isPositionInAir,
-  findPushPullLandingCell,
-  computeFallDamage,
-  detectCapabilitiesFromQualities,
-} from '../../../utils/mapMovement'
+import { applyPushPullDisplacement } from '../../../utils/pushPull'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
@@ -857,60 +847,17 @@ export default defineEventHandler(async (event) => {
       // Push/Pull map displacement (map mode only)
       let pushPullLogNote: string | null = null
       if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && encounter.mapId) {
-        const pushPullMap = await loadEncounterMap(encounter.mapId)
-        if (pushPullMap) {
-          const positions = await getRoomPositions(encounterId!)
-          const targetPos = positions[request.targetParticipantId]
-          const attackerPos = positions[request.data.attackerParticipantId]
-
-          if (targetPos && attackerPos) {
-            const digimonById = await loadParticipantDigimon(participants as any[])
-
-            const targetPart = (participants as any[]).find((p: any) => p.id === request.targetParticipantId)
-            const targetDims = getFootprintDimsForParticipant(targetPart, digimonById as any)
-            const attackerPart = (participants as any[]).find((p: any) => p.id === request.data.attackerParticipantId)
-            const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById as any)
-            const occupiedSet = buildFootprintOccupiedSet(
-              positions,
-              participants as any[],
-              digimonById as any,
-              new Set([request.targetParticipantId]),
-            )
-
-            const landingCell = findPushPullLandingCell(
-              targetPos,
-              attackerPos,
-              appliedEffectName === 'Knockback' ? 'push' : 'pull',
-              damageEffectPotency,
-              targetDims,
-              attackerDims,
-              pushPullMap,
-              occupiedSet,
-            )
-
-            if (landingCell) {
-              // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
-              const targetProfile = await getFallerProfile(targetPart, digimonById)
-              const { landingPos: finalPos, damage: pushFallDamage } = resolveFall(landingCell, targetDims, pushPullMap, targetProfile)
-
-              if (pushFallDamage > 0) {
-                participants = (participants as any[]).map((p: any) => {
-                  if (p.id === request.targetParticipantId) {
-                    return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + pushFallDamage) }
-                  }
-                  return p
-                })
-              }
-
-              const patch = { [request.targetParticipantId]: finalPos }
-              await broadcastPositionPatch(encounterId!, patch)
-
-              const moveLabel = appliedEffectName === 'Knockback' ? 'Knockback' : 'Pull'
-              const pushFallNote = pushFallDamage > 0 ? ` + ${pushFallDamage} fall damage` : ''
-              pushPullLogNote = `${moveLabel}: displaced ${damageEffectPotency} cell(s)${pushFallNote}`
-            }
-          }
-        }
+        const disp = await applyPushPullDisplacement({
+          encounterId: encounterId!,
+          mapId: encounter.mapId,
+          participants,
+          attackerParticipantId: request.data.attackerParticipantId,
+          targetParticipantId: request.targetParticipantId,
+          effect: appliedEffectName as 'Knockback' | 'Pull',
+          distance: damageEffectPotency,
+        })
+        participants = disp.participants
+        pushPullLogNote = disp.logNote
       }
 
       // Auto-devolve check: if target is KO'd but has evolution history, devolve instead
