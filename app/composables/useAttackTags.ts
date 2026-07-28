@@ -6,6 +6,7 @@
 
 import { computed, isRef, type Ref } from 'vue'
 import { EFFECT_ALIGNMENT, EFFECT_ATTACK_TYPE_RESTRICTIONS, TAG_RESTRICTIONS, getTagPatternForQuality, isEffectValidForType } from '../data/attackConstants'
+import type { EddySoulRules } from '../types'
 
 export type Attack = {
   id: string
@@ -48,10 +49,15 @@ interface DigimonFormData {
   qualities?: DigimonFormQuality[]
 }
 
-export function useAttackTags(form: Ref<DigimonFormData> | DigimonFormData, newAttack: Ref<NewAttack> | NewAttack) {
+export function useAttackTags(
+  form: Ref<DigimonFormData> | DigimonFormData,
+  newAttack: Ref<NewAttack> | NewAttack,
+  eddySoulRules?: Ref<EddySoulRules | undefined> | EddySoulRules,
+) {
   // Handle both Ref and reactive objects
   const formValue = computed(() => isRef(form) ? form.value : form)
   const newAttackValue = computed(() => isRef(newAttack) ? newAttack.value : newAttack)
+  const eddySoulRulesValue = computed(() => isRef(eddySoulRules) ? eddySoulRules.value : eddySoulRules)
 
   // Get tags already used by existing attacks
   const usedAttackTags = computed(() => {
@@ -106,6 +112,24 @@ export function useAttackTags(form: Ref<DigimonFormData> | DigimonFormData, newA
             ? `Already applied to ${weaponRank} attack${weaponRank > 1 ? 's' : ''} (max for rank ${weaponRank})`
             : undefined,
         })
+      }
+
+      // Chrome Digizoid Weaponry without Weapon Rank (EddySoul rule): since there's no
+      // Weapon Rank to derive a tag limit from, the bonus can be designated to one attack only.
+      // If the Digimon does have Weapon Rank, Chrome's bonus already applies to all [Weapon]-tagged
+      // attacks via the normal "weapon" tag, so this special tag isn't offered.
+      if (quality.id === 'digizoid-weapon' && quality.choiceId === 'chrome') {
+        const hasWeaponRank = (formValue.value.qualities || []).some((q) => q.id === 'weapon')
+        if (!hasWeaponRank && eddySoulRulesValue.value?.chromeWeaponNoWeaponRankRequired) {
+          const alreadyUsed = isTagAlreadyUsed('chrome-digizoid')
+          tags.push({
+            id: 'chrome-digizoid',
+            name: 'Chrome Digizoid',
+            description: '+2 Accuracy, +1 Damage (no Weapon Rank — limited to this one attack)',
+            disabled: alreadyUsed,
+            disabledReason: alreadyUsed ? 'Already applied to an attack (no Weapon Rank — limited to 1)' : undefined,
+          })
+        }
       }
 
       if (quality.id === 'armor-piercing') {

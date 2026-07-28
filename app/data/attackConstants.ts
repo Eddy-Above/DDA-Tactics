@@ -270,6 +270,7 @@ export const QUALITY_TO_TAG_PATTERN: Record<string, string> = {
   'signature-move': 'Signature Move',
   'ammo': 'Ammo',
   'area-attack': 'Area Attack',
+  'digizoid-weapon': 'Chrome Digizoid',
 }
 
 /**

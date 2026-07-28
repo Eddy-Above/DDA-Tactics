@@ -124,7 +124,7 @@ export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulR
   // ========================
 
   // 1. Create attacks composable (no dependencies)
-  const attacksComposable = useDigimonAttacks(form)
+  const attacksComposable = useDigimonAttacks(form, eddySoulRules)
 
   // 2. Create stats composable (no dependencies - dpUsedOnQualities comes from useDigimonDP internally)
   const statsComposable = useDigimonStats(form, eddySoulRules)
