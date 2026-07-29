@@ -42,13 +42,11 @@ export function getFootprintCells(anchor: Vec3, dims: FootprintDims): Vec3[] {
 
 function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 
-// True if `pos` lies within the map's horizontal footprint (x/z bounds). Vertical (y) is
-// intentionally unbounded. Used to keep open-air flight from drifting off the map edge.
-export function isWithinMapFootprint(map: GameMap, pos: Vec3): boolean {
-  const w = map.dimensions?.width
-  const d = map.dimensions?.depth
-  if (w == null || d == null) return true // no footprint defined → don't restrict
-  return pos.x >= 0 && pos.x < w && pos.z >= 0 && pos.z < d
+// Maps are endless: the `dimensions` field only seeds the starting floor + camera centering and no
+// longer bounds movement. Open-air flight/knockback is limited by move budget / distance instead.
+// (Kept as a function so the `canFly && isWithinMapFootprint(...)` call sites stay unchanged.)
+export function isWithinMapFootprint(_map: GameMap, _pos: Vec3): boolean {
+  return true
 }
 
 // True if a wall (without a door) blocks the cardinal move from→to.
@@ -360,11 +358,26 @@ export function isFootprintAirborne(anchor: Vec3, dims: FootprintDims, map: Game
   return true
 }
 
-// Settle an airborne footprint straight down; returns the resting Y (base comes to rest on support, or 0).
+// Lowest Y worth scanning down to when settling a fall — the map's lowest ground/voxel/stair (so a
+// unit can fall onto a floor below the base level), or the unit's own level if the map has none.
+function lowestStructureY(map: GameMap): number {
+  let min = Infinity
+  for (const t of (map.groundTiles ?? [])) if (t.y < min) min = t.y
+  for (const v of (map.voxels ?? [])) if (v.y < min) min = v.y
+  for (const s of (map.stairs ?? [])) if (s.y < min) min = s.y
+  return min === Infinity ? 0 : min
+}
+
+// Settle an airborne footprint straight down: rests on the highest support at or below its current Y
+// (including floors below the base level). If the whole column below is open (no floor/voxel), the
+// unit stays where it is rather than falling into infinite void.
 export function settleFootprintY(anchor: Vec3, dims: FootprintDims, map: GameMap): number {
-  let y = anchor.y
-  while (y > 0 && isFootprintAirborne({ x: anchor.x, y, z: anchor.z }, dims, map)) y--
-  return y
+  if (!isFootprintAirborne(anchor, dims, map)) return anchor.y
+  const minY = lowestStructureY(map)
+  for (let y = anchor.y - 1; y >= minY; y--) {
+    if (!isFootprintAirborne({ x: anchor.x, y, z: anchor.z }, dims, map)) return y
+  }
+  return anchor.y
 }
 
 // Everything `resolveFall` needs about the faller. Flyers hover; airborneByJump units still fall but
