@@ -144,8 +144,14 @@ export function calculateEffectPotency(
   }
   const potencyStat = EFFECT_POTENCY_STAT[effectName]
   const rawPotency = attackerDerived ? (attackerDerived[potencyStat] ?? 0) : 0
-  // Frenzy damage buff is BIT½ (halved at apply-time so EFFECT_STAT_MODIFIERS returns the right value)
-  const potency = effectName === 'Frenzy' ? Math.floor(rawPotency / 2) : rawPotency
+  // Frenzy damage buff is BIT½ (halved at apply-time so EFFECT_STAT_MODIFIERS returns the right value).
+  // Knockback/Pull distance is CPU Value + Stage Bonus — the spec value (which already includes one
+  // stage bonus) PLUS the stage bonus again (e.g. a rookie with CPU 1 knocks back 1 + 1 = 2 tiles).
+  const potency = effectName === 'Frenzy'
+    ? Math.floor(rawPotency / 2)
+    : (effectName === 'Knockback' || effectName === 'Pull')
+      ? rawPotency + (attackerDerived?.stageBonus ?? 0)
+      : rawPotency
   return { potency, potencyStat }
 }
 

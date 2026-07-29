@@ -474,6 +474,7 @@ export interface DigimonDerivedStats {
   // Range & Effective Limit
   range: number           // floor((Accuracy + Brains) / 2) + BIT
   effectiveLimit: number  // floor(Accuracy / 2) + Brains + BIT
+  stageBonus: number      // Stage Bonus for this stage (also already baked into bit/cpu/ram)
 }
 
 export interface Attack {
@@ -752,6 +753,7 @@ export function calculateDigimonDerivedStats(
     movement: stageConfig.movement,
     range,
     effectiveLimit,
+    stageBonus: stageConfig.stageBonus,
   }
 }
 
