@@ -227,11 +227,15 @@ export function useEncounters() {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchEncounters(campaignId?: string) {
+  async function fetchEncounters(campaignId?: string, opts?: { visibleToPlayers?: boolean }) {
     loading.value = true
     error.value = null
     try {
-      const query = campaignId ? `?campaignId=${campaignId}` : ''
+      const params = new URLSearchParams()
+      if (campaignId) params.set('campaignId', campaignId)
+      // Player pages pass this so GM-staged (hidden) encounters never reach the client
+      if (opts?.visibleToPlayers) params.set('visibleToPlayers', 'true')
+      const query = params.toString() ? `?${params}` : ''
       encounters.value = await $fetch<Encounter[]>(`/api/encounters${query}`)
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to fetch encounters'
@@ -271,6 +275,30 @@ export function useEncounters() {
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to create encounter'
       console.error('Failed to create encounter:', e)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // 'fresh'    — same cast/initiative/map/positions, clean slate to fight from
+  // 'snapshot' — verbatim save-state including whose turn it is and everyone's wounds
+  async function duplicateEncounter(
+    id: string,
+    opts?: { name?: string; mode?: 'fresh' | 'snapshot' }
+  ): Promise<Encounter | null> {
+    loading.value = true
+    error.value = null
+    try {
+      const copy = await $fetch<Encounter>(`/api/encounters/${id}/duplicate`, {
+        method: 'POST',
+        body: { name: opts?.name, mode: opts?.mode ?? 'fresh' },
+      })
+      encounters.value = [copy, ...encounters.value]
+      return copy
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Failed to duplicate encounter'
+      console.error('Failed to duplicate encounter:', e)
       return null
     } finally {
       loading.value = false
@@ -333,7 +361,10 @@ export function useEncounters() {
     initialInspiration?: number
   ): CombatParticipant {
     return {
-      id: `${type}-${entityId}-${Date.now()}`,
+      // Random suffix: adding several of the same entity in a tight loop can land in the
+      // same millisecond, and two participants sharing an id would also share a
+      // participantPositions entry on the map.
+      id: `${type}-${entityId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       type,
       entityId,
       initiative,
@@ -355,10 +386,59 @@ export function useEncounters() {
     }
   }
 
+  // Whether a digimon participant should be hidden from turnOrder because its partner
+  // Tamer is also in the encounter — partner digimon act on their tamer's turn and are
+  // rendered grouped under them. A partner digimon added WITHOUT its tamer is a
+  // first-class combatant and keeps its own turn; the previous "any digimon with a
+  // partnerId" test dropped it from turnOrder entirely, making it invisible.
+  function isGroupedUnderTamer(
+    participant: any,
+    participants: any[],
+    digimonMap?: Map<string, any>
+  ): boolean {
+    if (participant.type !== 'digimon' || !digimonMap) return false
+    const partnerId = digimonMap.get(participant.entityId)?.partnerId
+    if (!partnerId) return false
+    return participants.some((p: any) => p.type === 'tamer' && p.entityId === partnerId)
+  }
+
+  // Who the rebuilt turn order should keep pointing at. `isActive` is a clean single flag
+  // (nextTurn clears the outgoing participant and sets the incoming one), so it's the
+  // reliable answer during combat; the turn-order slot is a fallback for legacy rows that
+  // predate the flag. Returns undefined outside combat — nobody is active during setup, and
+  // anchoring on an arbitrary participant there would drift currentTurnIndex off 0 for no
+  // reason (startCombat resets it to 0 anyway).
+  function activeTurnAnchor(encounter: any, participants: any[]): string | undefined {
+    if (encounter.phase !== 'combat') return undefined
+    return participants.find((p: any) => p.isActive)?.id
+      ?? (encounter.turnOrder as string[])?.[encounter.currentTurnIndex ?? 0]
+  }
+
+  // Single source of truth for turn order. Sorts by initiative (highest first), drops the
+  // GM metadata row and tamer-grouped partner digimon, and — crucially — reports where the
+  // currently-active participant landed, so adding someone mid-combat doesn't silently
+  // hand the turn to whoever the old index now points at.
+  function rebuildTurnOrder(
+    participants: any[],
+    digimonMap?: Map<string, any>,
+    activeParticipantId?: string | null
+  ): { turnOrder: string[]; currentTurnIndex: number } {
+    const turnOrder = [...participants]
+      .sort((a, b) => b.initiative - a.initiative)
+      .filter((p) => {
+        if (p.type === 'gm') return false
+        return !isGroupedUnderTamer(p, participants, digimonMap)
+      })
+      .map((p) => p.id)
+
+    const activeIndex = activeParticipantId ? turnOrder.indexOf(activeParticipantId) : -1
+    return { turnOrder, currentTurnIndex: activeIndex >= 0 ? activeIndex : 0 }
+  }
+
   async function addParticipant(
     encounterId: string,
     participant: CombatParticipant,
-    digimonMap?: Map<string, any>  // Optional: for hierarchical filtering of partner digimon
+    digimonMap?: Map<string, any>,  // Optional: for hierarchical filtering of partner digimon
   ): Promise<Encounter | null> {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
@@ -372,28 +452,12 @@ export function useEncounters() {
 
     const participants = [...existing, participantWithSeq]
 
-    // Sort by initiative (highest first)
-    let sortedParticipants = participants.sort((a, b) => b.initiative - a.initiative)
+    // Keep the active participant active across the re-sort — otherwise adding a
+    // late-joining tamer mid-combat moves the turn to someone else.
+    const activeId = activeTurnAnchor(encounter, participants)
+    const { turnOrder, currentTurnIndex } = rebuildTurnOrder(participants, digimonMap, activeId)
 
-    // Apply hierarchical filter if digimonMap provided (exclude partner digimon from turnOrder)
-    if (digimonMap) {
-      sortedParticipants = sortedParticipants.filter(p => {
-        // Exclude GM metadata participant
-        if (p.type === 'gm') return false
-        // Always include tamers and enemies
-        if (p.type === 'tamer' || p.type === 'enemy') return true
-        // For digimon, only include if NOT a partner (no partnerId)
-        if (p.type === 'digimon') {
-          const d = digimonMap.get(p.entityId)
-          return !d?.partnerId  // Exclude if has partnerId (is a partner digimon)
-        }
-        return true
-      })
-    }
-
-    const turnOrder = sortedParticipants.map((p) => p.id)
-
-    const result = await updateEncounter(encounterId, { participants, turnOrder })
+    const result = await updateEncounter(encounterId, { participants, turnOrder, currentTurnIndex })
     return result
   }
 
@@ -413,31 +477,41 @@ export function useEncounters() {
     const participants = (encounter.participants as CombatParticipant[])
       .filter((p) => p.id !== participantId)
       .map((p) => p.clash?.opponentParticipantId === participantId ? { ...p, clash: undefined } : p)
-    const turnOrder = oldTurnOrder.filter((id) => id !== participantId)
+    const remainingTurnOrder = oldTurnOrder.filter((id) => id !== participantId)
 
-    let currentTurnIndex = oldCurrentTurnIndex
+    let survivingIndex = oldCurrentTurnIndex
     let round = encounter.round
 
     if (removedIndex !== -1 && removedIndex < oldCurrentTurnIndex) {
       // The active participant shifted left by one slot; same person remains active
-      currentTurnIndex = oldCurrentTurnIndex - 1
+      survivingIndex = oldCurrentTurnIndex - 1
     } else if (removedIndex !== -1 && removedIndex === oldCurrentTurnIndex) {
       // The active participant itself was removed
-      if (turnOrder.length === 0) {
-        currentTurnIndex = 0
+      if (remainingTurnOrder.length === 0) {
+        survivingIndex = 0
       } else {
-        if (oldCurrentTurnIndex >= turnOrder.length) {
+        if (oldCurrentTurnIndex >= remainingTurnOrder.length) {
           // Round wrap: the removed participant was last in turn order
-          currentTurnIndex = 0
+          survivingIndex = 0
           round += 1
           applyRoundReset(participants, houseRules, digimonMap)
         }
-        const nextParticipant = participants.find((p) => p.id === turnOrder[currentTurnIndex])
+        const nextParticipant = participants.find((p) => p.id === remainingTurnOrder[survivingIndex])
         if (nextParticipant) {
           activateParticipant(nextParticipant, participants, digimonMap)
         }
       }
     }
+
+    // Rebuild rather than reuse the filtered list: removing a Tamer un-groups their partner
+    // digimon, which must now claim its own slot in the turn order. Anchoring on whoever is
+    // active keeps the current turn with the same participant across that reshuffle.
+    // (The branches above already moved `isActive` onto the right participant; the
+    // surviving slot is the fallback for rows predating that flag.)
+    const activeId = encounter.phase === 'combat'
+      ? (participants.find((p) => p.isActive)?.id ?? remainingTurnOrder[survivingIndex])
+      : undefined
+    const { turnOrder, currentTurnIndex } = rebuildTurnOrder(participants, digimonMap, activeId)
 
     return updateEncounter(encounterId, { participants, turnOrder, currentTurnIndex, round })
   }
@@ -1001,12 +1075,15 @@ export function useEncounters() {
     fetchEncounters,
     fetchEncounter,
     createEncounter,
+    duplicateEncounter,
     updateEncounter,
     deleteEncounter,
     // Combat management
     createParticipant,
     addParticipant,
     removeParticipant,
+    rebuildTurnOrder,
+    isGroupedUnderTamer,
     startCombat,
     nextTurn,
     endCombat,

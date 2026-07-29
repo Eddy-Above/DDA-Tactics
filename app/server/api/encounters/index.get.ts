@@ -1,17 +1,25 @@
-import { eq } from 'drizzle-orm'
+import { and, desc, eq, type SQL } from 'drizzle-orm'
 import { db, encounters } from '../../db'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const campaignId = query.campaignId as string | undefined
+  // Player pages pass this so hidden (GM-staged) encounters never reach the client at all.
+  const visibleOnly = query.visibleToPlayers === 'true'
+
+  const filters: SQL[] = []
+  if (campaignId) filters.push(eq(encounters.campaignId, campaignId))
+  if (visibleOnly) filters.push(eq(encounters.visibleToPlayers, true))
 
   let queryBuilder = db.select().from(encounters)
 
-  if (campaignId) {
-    queryBuilder = queryBuilder.where(eq(encounters.campaignId, campaignId)) as typeof queryBuilder
+  if (filters.length > 0) {
+    queryBuilder = queryBuilder.where(and(...filters)) as typeof queryBuilder
   }
 
-  const allEncounters = await queryBuilder
+  // Newest activity first — without an explicit order Postgres returns rows in an
+  // arbitrary order, which made "which encounter am I in?" resolution non-deterministic.
+  const allEncounters = await queryBuilder.orderBy(desc(encounters.updatedAt))
 
   return allEncounters.map((encounter) => ({
     ...encounter,

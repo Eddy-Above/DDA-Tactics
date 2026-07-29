@@ -5,12 +5,15 @@ definePageMeta({
 })
 
 const { campaignId } = useCampaignContext()
-const { encounters, loading, error, fetchEncounters, createEncounter, deleteEncounter } = useEncounters()
+const { encounters, loading, error, fetchEncounters, createEncounter, duplicateEncounter, updateEncounter, deleteEncounter } = useEncounters()
 
 const showNewModal = ref(false)
 const newEncounterName = ref('')
 const newEncounterDescription = ref('')
 const newDayLoading = ref(false)
+const duplicateSource = ref<{ id: string; name: string } | null>(null)
+const duplicating = ref(false)
+const togglingVisibilityId = ref<string | null>(null)
 
 onMounted(() => {
   fetchEncounters(campaignId.value)
@@ -43,6 +46,30 @@ async function handleCreate() {
 async function handleDelete(id: string, name: string) {
   if (confirm(`Are you sure you want to delete "${name}"?`)) {
     await deleteEncounter(id)
+  }
+}
+
+async function handleDuplicate(mode: 'fresh' | 'snapshot', name: string) {
+  if (!duplicateSource.value || duplicating.value) return
+  duplicating.value = true
+  try {
+    const copy = await duplicateEncounter(duplicateSource.value.id, { mode, name })
+    duplicateSource.value = null
+    if (copy) await navigateTo(`/campaigns/${campaignId.value}/encounters/${copy.id}`)
+  } finally {
+    duplicating.value = false
+  }
+}
+
+// Players see nothing of an encounter until this is on — it's what lets a GM stage the
+// next fight while the current one is still running.
+async function toggleVisibility(id: string, current: boolean) {
+  if (togglingVisibilityId.value) return
+  togglingVisibilityId.value = id
+  try {
+    await updateEncounter(id, { visibleToPlayers: !current } as any)
+  } finally {
+    togglingVisibilityId.value = null
   }
 }
 
@@ -122,6 +149,21 @@ function getPhaseColor(phase: string) {
               <span :class="['text-xs px-2 py-0.5 rounded uppercase font-semibold', getPhaseColor(encounter.phase)]">
                 {{ encounter.phase }}
               </span>
+              <button
+                :disabled="togglingVisibilityId === encounter.id"
+                :class="[
+                  'text-xs px-2 py-0.5 rounded font-semibold border transition-colors disabled:opacity-50',
+                  (encounter as any).visibleToPlayers
+                    ? 'bg-green-900/30 border-green-600 text-green-400 hover:bg-green-900/50'
+                    : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-400 hover:text-white'
+                ]"
+                :title="(encounter as any).visibleToPlayers
+                  ? 'Players can see this encounter and receive its prompts. Click to hide.'
+                  : 'Hidden from players — they see nothing of it and receive no prompts. Click to publish.'"
+                @click.prevent="toggleVisibility(encounter.id, !!(encounter as any).visibleToPlayers)"
+              >
+                {{ (encounter as any).visibleToPlayers ? '👁 Visible' : '🚫 Hidden' }}
+              </button>
             </div>
             <p v-if="encounter.description" class="text-digimon-dark-400 text-sm mb-3">
               {{ encounter.description }}
@@ -134,16 +176,34 @@ function getPhaseColor(phase: string) {
               </span>
             </div>
           </div>
-          <button
-            class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50
-                   text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
-            @click.prevent="handleDelete(encounter.id, encounter.name)"
-          >
-            Delete
-          </button>
+          <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
+                     text-digimon-dark-200 rounded transition-colors"
+              title="Create a copy of this encounter"
+              @click.prevent="duplicateSource = { id: encounter.id, name: encounter.name }"
+            >
+              ⧉ Duplicate
+            </button>
+            <button
+              class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50
+                     text-red-400 rounded transition-colors"
+              @click.prevent="handleDelete(encounter.id, encounter.name)"
+            >
+              Delete
+            </button>
+          </div>
         </div>
       </NuxtLink>
     </div>
+
+    <DuplicateEncounterModal
+      v-if="duplicateSource"
+      :encounter-name="duplicateSource.name"
+      :busy="duplicating"
+      @confirm="handleDuplicate"
+      @cancel="duplicateSource = null"
+    />
 
     <!-- New Encounter Modal -->
     <Teleport to="body">

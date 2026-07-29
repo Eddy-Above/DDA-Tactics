@@ -44,6 +44,8 @@ const {
   createRequest,
   respondToRequest,
   cancelRequest,
+  duplicateEncounter,
+  rebuildTurnOrder,
   getMyPendingRequests,
   getUnprocessedResponses,
   performAttack,
@@ -70,8 +72,8 @@ const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
 const selectedNpcEvoLineId = ref<string>('')
 const addQuantity = ref(1)
-const showRequestPanel = ref(false)
-const selectedTamerForRequest = ref('')
+const showDuplicateModal = ref(false)
+const togglingVisibility = ref(false)
 
 // Attack execution state
 const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
@@ -254,9 +256,20 @@ const pendingSetupTamers = computed(() => {
   return participants.filter(p => p.type === 'tamer' && p.initiative < 0)
 })
 
+// Also available during combat so a late-joining tamer can be brought in through the full
+// digimon-pick → initiative flow (a bare initiative request never creates their partner).
 const canEngageCombat = computed(() =>
-  currentEncounter.value?.phase === 'setup' && pendingSetupTamers.value.length > 0
+  (currentEncounter.value?.phase === 'setup' || currentEncounter.value?.phase === 'combat') &&
+  pendingSetupTamers.value.length > 0
 )
+
+// Does this tamer already have an outstanding setup prompt?
+function hasSetupRequest(tamerEntityId: string): boolean {
+  return pendingRequests.value.some((r: any) =>
+    r.targetTamerId === tamerEntityId &&
+    (r.type === 'digimon-selection' || r.type === 'initiative-roll')
+  )
+}
 
 // Get display name with numbering for duplicate digimon
 function getDisplayName(participant: CombatParticipant): string {
@@ -1395,34 +1408,85 @@ async function handleAddParticipant() {
 // Remove participant
 async function handleRemoveParticipant(participantId: string) {
   if (!currentEncounter.value) return
-  if (confirm('Remove this participant from the encounter?')) {
-    await removeParticipant(currentEncounter.value.id, participantId, digimonMap.value, houseRules.value)
+  if (!confirm('Remove this participant from the encounter?')) return
+
+  const participant = (currentEncounter.value.participants as CombatParticipant[])
+    ?.find(p => p.id === participantId)
+
+  await removeParticipant(currentEncounter.value.id, participantId, digimonMap.value, houseRules.value)
+
+  // Removing a tamer must also retire their outstanding setup conversation. Left behind,
+  // the auto-created initiative-roll request keeps its modal open on the player's screen
+  // (covering any fresh digimon picker) and pins this card on "Init pending…".
+  if (participant?.type === 'tamer') {
+    await clearSetupExchangeForTamer(participant.entityId)
   }
 }
 
-// Request digimon selection from a tamer
-async function requestDigimonSelection() {
-  if (!currentEncounter.value || !selectedTamerForRequest.value) return
+// Drop a tamer's pending setup prompts and any answer the GM hasn't processed yet.
+// Uses the atomic request/response endpoints rather than a whole-array PUT so a
+// concurrent client can't be clobbered.
+async function clearSetupExchangeForTamer(tamerEntityId: string) {
+  if (!currentEncounter.value) return
+  const encounterId = currentEncounter.value.id
 
-  await createRequest(
-    currentEncounter.value.id,
-    'digimon-selection',
-    selectedTamerForRequest.value
+  const staleRequests = pendingRequests.value.filter((r: any) =>
+    r.targetTamerId === tamerEntityId &&
+    (r.type === 'digimon-selection' || r.type === 'initiative-roll')
   )
+  const staleRequestIds = new Set(staleRequests.map((r: any) => r.id))
+  const staleResponses = unprocessedResponses.value.filter((r: any) => staleRequestIds.has(r.requestId))
 
-  showRequestPanel.value = false
-  selectedTamerForRequest.value = ''
+  for (const response of staleResponses) {
+    await deleteResponse(encounterId, response.id)
+  }
+  for (const request of staleRequests) {
+    await cancelRequest(encounterId, request.id)
+  }
 }
 
-// Request initiative roll from a tamer
+// Send a tamer through the full setup flow: pick a digimon (or fight solo) → roll
+// initiative. This is what actually creates their partner digimon participant, so it's
+// the right entry point both at setup and for someone joining mid-combat.
+async function requestSetupForTamer(tamerId: string) {
+  if (!currentEncounter.value) return
+  await ensureVisibleToPlayers()
+  await createRequest(currentEncounter.value.id, 'digimon-selection', tamerId)
+}
+
+// Request initiative roll from a tamer (re-roll for someone already set up — no digimon
+// selection step, so it must not be used for a tamer who hasn't joined yet)
 async function requestInitiativeRoll(tamerId: string) {
   if (!currentEncounter.value) return
+  await ensureVisibleToPlayers()
+  await createRequest(currentEncounter.value.id, 'initiative-roll', tamerId)
+}
 
-  await createRequest(
-    currentEncounter.value.id,
-    'initiative-roll',
-    tamerId
-  )
+// Players can't answer a prompt for an encounter they can't see. Offer to publish before
+// sending one into the void.
+async function ensureVisibleToPlayers(): Promise<void> {
+  if (!currentEncounter.value || (currentEncounter.value as any).visibleToPlayers) return
+  if (!confirm('This encounter is hidden from players, so they will not receive the prompt.\n\nMake it visible now?')) return
+  await updateEncounter(currentEncounter.value.id, { visibleToPlayers: true } as any)
+}
+
+async function toggleVisibleToPlayers() {
+  if (!currentEncounter.value || togglingVisibility.value) return
+  togglingVisibility.value = true
+  try {
+    await updateEncounter(currentEncounter.value.id, {
+      visibleToPlayers: !(currentEncounter.value as any).visibleToPlayers,
+    } as any)
+  } finally {
+    togglingVisibility.value = false
+  }
+}
+
+async function handleDuplicate(mode: 'fresh' | 'snapshot', name: string) {
+  if (!currentEncounter.value) return
+  const copy = await duplicateEncounter(currentEncounter.value.id, { mode, name })
+  showDuplicateModal.value = false
+  if (copy) await navigateTo(`/campaigns/${campaignId.value}/encounters/${copy.id}`)
 }
 
 async function handleSaveInitiative(participantId: string) {
@@ -1441,16 +1505,9 @@ async function handleSaveInitiative(participantId: string) {
     return p
   })
 
-  const newTurnOrder = [...updated]
-    .sort((a, b) => b.initiative - a.initiative)
-    .filter(p => {
-      if (p.type === 'tamer') return true
-      const d = digimonMap.value.get(p.entityId)
-      return !d?.partnerId
-    })
-    .map(p => p.id)
+  const { turnOrder, currentTurnIndex } = rebuildTurnOrder(updated, digimonMap.value, activeParticipant.value?.id)
 
-  await updateEncounter(currentEncounter.value.id, { participants: updated, turnOrder: newTurnOrder })
+  await updateEncounter(currentEncounter.value.id, { participants: updated, turnOrder, currentTurnIndex })
   editingInitiativeId.value = null
 }
 
@@ -1488,7 +1545,11 @@ async function processResponse(response: any) {
   try {
     const request = pendingRequests.value.find((r: any) => r.id === response.requestId)
     if (!request && response.response.type !== 'dodge-rolled') {
-      console.error('Request not found:', response.requestId)
+      // The prompt is gone (already processed, or superseded by a re-sent one). Discard the
+      // orphan rather than leaving it in the list — an unprocessable response blocks
+      // canStartCombat forever.
+      console.warn('Discarding response for missing request:', response.requestId)
+      await deleteResponse(currentEncounter.value.id, response.id)
       return
     }
 
@@ -1506,13 +1567,7 @@ async function processResponse(response: any) {
 
         // Clear the original digimon selection request
         await cancelRequest(currentEncounter.value.id, request.id)
-
-        // Remove response from list
-        const currentResponses = currentEncounter.value.requestResponses || []
-        const updatedResponses = currentResponses.filter(r => r.id !== response.id)
-        await updateEncounter(currentEncounter.value.id, {
-          requestResponses: updatedResponses
-        })
+        await deleteResponse(currentEncounter.value.id, response.id)
         return
       }
 
@@ -1535,13 +1590,7 @@ async function processResponse(response: any) {
 
       // Clear the original digimon selection request
       await cancelRequest(currentEncounter.value.id, request.id)
-
-      // Remove response from list
-      const currentResponsesForDigimon = currentEncounter.value.requestResponses || []
-      const updatedResponsesForDigimon = currentResponsesForDigimon.filter(r => r.id !== response.id)
-      await updateEncounter(currentEncounter.value.id, {
-        requestResponses: updatedResponsesForDigimon
-      })
+      await deleteResponse(currentEncounter.value.id, response.id)
     } else if (response.response.type === 'initiative-rolled') {
       // Check if this initiative request has a digimonId (from digimon selection flow)
       if (request.data?.digimonId) {
@@ -1604,38 +1653,58 @@ async function processResponse(response: any) {
             ? { ...p, initiative: response.response.initiative, initiativeRoll: response.response.initiativeRoll, maxWounds: tamerParticipant.maxWounds }
             : p
           )
-          updatedParticipants = [...updatedParticipants, digimonParticipant]
         } else {
-          updatedParticipants = [...participants, digimonParticipant, tamerParticipant]
+          updatedParticipants = [...participants, tamerParticipant]
         }
 
-        // Create turnOrder with ONLY tamer (not partner digimon)
-        // Partner digimon act on their tamer's turn
-        const turnOrder = updatedParticipants
-          .sort((a, b) => b.initiative - a.initiative)
-          .filter(p => {
-            // Include tamer and non-partnered digimon
-            if (p.type === 'tamer') return true
-            // For digimon, only include if not a partner (no partnerId match)
-            const d = digimonMap.value.get(p.entityId)
-            return !d?.partnerId
-          })
-          .map(p => p.id)
+        // Reconcile this tamer's partner digimon rather than blindly appending one. A
+        // digimon added to the encounter on its own (before its tamer joined) is already
+        // here — appending would give the tamer two copies of the same partner. A tamer
+        // brings exactly one partner into play, so any other partner of theirs is dropped.
+        const chosenPartnerIdx = updatedParticipants.findIndex(p =>
+          p.type === 'digimon' && p.entityId === digimon.id
+        )
+
+        if (chosenPartnerIdx >= 0) {
+          // Keep the existing participant id so any map position already placed for it survives
+          updatedParticipants = updatedParticipants.map((p, i) => i === chosenPartnerIdx
+            ? {
+                ...p,
+                initiative: response.response.initiative,
+                initiativeRoll: response.response.initiativeRoll,
+                maxWounds: digimonParticipant.maxWounds,
+                ...(digimonParticipant.totalHealth !== undefined ? { totalHealth: digimonParticipant.totalHealth } : {}),
+                ...(matchingEvoLine?.id ? { evolutionLineId: matchingEvoLine.id } : {}),
+              }
+            : p
+          )
+        } else {
+          updatedParticipants = [...updatedParticipants, digimonParticipant]
+        }
+
+        // Drop any *other* partner digimon of this tamer left over from an earlier setup
+        const keptPartnerEntityId = digimon.id
+        updatedParticipants = updatedParticipants.filter(p => {
+          if (p.type !== 'digimon') return true
+          if (digimonMap.value.get(p.entityId)?.partnerId !== tamer.id) return true
+          return p.entityId === keptPartnerEntityId
+        })
+
+        const { turnOrder, currentTurnIndex } = rebuildTurnOrder(
+          updatedParticipants,
+          digimonMap.value,
+          activeParticipant.value?.id,
+        )
 
         const result = await updateEncounter(currentEncounter.value.id, {
           participants: updatedParticipants,
-          turnOrder
+          turnOrder,
+          currentTurnIndex,
         })
 
         if (result) {
           await cancelRequest(currentEncounter.value.id, request.id)
-
-          // Remove response from list
-          const respForInitiative = currentEncounter.value.requestResponses || []
-          const updatedRespForInitiative = respForInitiative.filter(r => r.id !== response.id)
-          await updateEncounter(currentEncounter.value.id, {
-            requestResponses: updatedRespForInitiative
-          })
+          await deleteResponse(currentEncounter.value.id, response.id)
         }
       } else {
         // This is for a standalone tamer participant (if needed)
@@ -1652,13 +1721,7 @@ async function processResponse(response: any) {
             const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
-
-              // Remove response from list
-              const respForTamer = currentEncounter.value.requestResponses || []
-              const updatedRespForTamer = respForTamer.filter(r => r.id !== response.id)
-              await updateEncounter(currentEncounter.value.id, {
-                requestResponses: updatedRespForTamer
-              })
+              await deleteResponse(currentEncounter.value.id, response.id)
             }
           } else {
             const updated = participants.map((p: any) => {
@@ -1678,25 +1741,19 @@ async function processResponse(response: any) {
               return p
             })
             // Rebuild turnOrder with updated initiative so tamer sorts correctly
-            const updatedTurnOrder = [...updated]
-              .sort((a: any, b: any) => b.initiative - a.initiative)
-              .filter((p: any) => {
-                if (p.type === 'gm') return false
-                if (p.type === 'tamer') return true
-                const d = digimonMap.value.get(p.entityId)
-                return !d?.partnerId
-              })
-              .map((p: any) => p.id)
-            const result = await updateEncounter(currentEncounter.value.id, { participants: updated, turnOrder: updatedTurnOrder })
+            const { turnOrder, currentTurnIndex } = rebuildTurnOrder(
+              updated,
+              digimonMap.value,
+              activeParticipant.value?.id,
+            )
+            const result = await updateEncounter(currentEncounter.value.id, {
+              participants: updated,
+              turnOrder,
+              currentTurnIndex,
+            })
             if (result) {
               await cancelRequest(currentEncounter.value.id, request.id)
-
-              // Remove response from list
-              const respForTamerExisting = currentEncounter.value.requestResponses || []
-              const updatedRespForTamerExisting = respForTamerExisting.filter(r => r.id !== response.id)
-              await updateEncounter(currentEncounter.value.id, {
-                requestResponses: updatedRespForTamerExisting
-              })
+              await deleteResponse(currentEncounter.value.id, response.id)
             }
           }
         } else {
@@ -1756,8 +1813,10 @@ async function handleStartCombat() {
 // Engage Combat — send digimon-selection requests to all queued (initiative=-1) tamer participants
 async function handleEngageCombat() {
   if (!currentEncounter.value) return
-  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
-  const pendingTamers = participants.filter(p => p.type === 'tamer' && p.initiative < 0)
+  await ensureVisibleToPlayers()
+  // Skip anyone already mid-conversation, so a double-click doesn't restart their prompt
+  // (the server also replaces rather than stacks — this just avoids the pointless churn).
+  const pendingTamers = pendingSetupTamers.value.filter(p => !hasSetupRequest(p.entityId))
   for (const pt of pendingTamers) {
     await createRequest(currentEncounter.value.id, 'digimon-selection', pt.entityId)
   }
@@ -3343,6 +3402,27 @@ function onMapAttackCancelled() {
           <span v-if="currentEncounter.phase === 'combat'" class="text-white font-semibold">
             Round {{ currentEncounter.round }}
           </span>
+          <!-- Player visibility: players see nothing of this encounter until it's on -->
+          <button
+            :disabled="togglingVisibility"
+            class="text-sm px-3 py-1 rounded border font-semibold transition-colors disabled:opacity-50"
+            :class="(currentEncounter as any).visibleToPlayers
+              ? 'bg-green-900/30 border-green-600 text-green-400 hover:bg-green-900/50'
+              : 'bg-digimon-dark-800 border-digimon-dark-600 text-digimon-dark-400 hover:text-white'"
+            :title="(currentEncounter as any).visibleToPlayers
+              ? 'Players can see this encounter and receive its prompts. Click to hide.'
+              : 'Hidden from players — they see nothing of it and receive no prompts. Click to publish.'"
+            @click="toggleVisibleToPlayers"
+          >
+            {{ (currentEncounter as any).visibleToPlayers ? '👁 Visible' : '🚫 Hidden' }}
+          </button>
+          <button
+            class="text-sm px-3 py-1 rounded border border-digimon-dark-600 bg-digimon-dark-800 text-digimon-dark-300 hover:text-white transition-colors font-semibold"
+            title="Create a copy of this encounter"
+            @click="showDuplicateModal = true"
+          >
+            ⧉ Duplicate
+          </button>
           <!-- Map view toggle -->
           <button
             v-if="(currentEncounter as any).mapId"
@@ -3508,10 +3588,10 @@ function onMapAttackCancelled() {
               <button
                 v-if="canEngageCombat"
                 class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                title="Send initiative requests to all queued tamers"
+                title="Send setup prompts (pick a digimon, then roll initiative) to every queued tamer"
                 @click="handleEngageCombat"
               >
-                ⚔ Engage Combat
+                ⚔ Engage {{ pendingSetupTamers.length }} Tamer{{ pendingSetupTamers.length === 1 ? '' : 's' }}
               </button>
               <button
                 v-if="currentEncounter.phase === 'setup'"
@@ -3571,7 +3651,7 @@ function onMapAttackCancelled() {
                 ⚠️ Need at least 2 participants
               </span>
               <span v-else-if="pendingSetupTamers.length > 0 && pendingRequests.length === 0 && unprocessedResponses.length === 0">
-                ⚔️ {{ pendingSetupTamers.length }} tamer(s) queued — press Engage Combat to send initiative requests
+                ⚔️ {{ pendingSetupTamers.length }} tamer(s) queued — press Engage to send their setup prompts
               </span>
               <span v-else-if="pendingRequests.length > 0">
                 ⏳ Waiting for {{ pendingRequests.length }} player response(s)
@@ -3582,6 +3662,20 @@ function onMapAttackCancelled() {
               <span v-else>
                 ⚠️ Some participants missing initiative
               </span>
+            </div>
+
+            <!-- Prompts are outstanding but players can't see this encounter to answer them -->
+            <div
+              v-if="!(currentEncounter as any).visibleToPlayers && pendingRequests.length > 0"
+              class="text-xs text-yellow-300 mt-3 p-2 bg-yellow-900/20 border border-yellow-700 rounded flex items-center justify-between gap-3"
+            >
+              <span>🚫 Hidden from players — they can't see this encounter, so they'll never get the {{ pendingRequests.length }} pending prompt(s).</span>
+              <button
+                class="shrink-0 px-2 py-1 rounded bg-yellow-700 hover:bg-yellow-600 text-white font-semibold"
+                @click="toggleVisibleToPlayers"
+              >
+                Make visible
+              </button>
             </div>
           </div>
 
@@ -3962,6 +4056,18 @@ function onMapAttackCancelled() {
                     </button>
                   </div>
                   <div v-else-if="currentEncounter.phase === 'setup'" class="flex flex-col gap-2">
+                    <!-- Re-send the whole setup prompt. Replaces whatever this tamer had
+                         outstanding, so a mis-tapped digimon/solo choice can be redone. -->
+                    <button
+                      v-if="item.participant.type === 'tamer'"
+                      class="text-xs bg-yellow-700 hover:bg-yellow-600 text-white px-2 py-1 rounded whitespace-nowrap"
+                      :title="item.participant.initiative < 0
+                        ? 'Ask this player to pick a digimon and roll initiative'
+                        : 'Re-send setup — lets the player change their digimon / solo choice'"
+                      @click="requestSetupForTamer(item.participant.entityId)"
+                    >
+                      {{ item.participant.initiative < 0 ? '⚔ Engage' : '↻ Re-setup' }}
+                    </button>
                     <button
                       class="text-xs bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-2 py-1 rounded"
                       @click="rerollInitiative(item.participant.id)"
@@ -3979,14 +4085,24 @@ function onMapAttackCancelled() {
                     v-else-if="isDm && currentEncounter.phase === 'combat' && item.participant.type === 'tamer'"
                     class="flex flex-col gap-2"
                   >
+                    <span v-if="hasSetupRequest(item.participant.entityId)" class="text-xs text-digimon-dark-400 whitespace-nowrap">Setup pending…</span>
+                    <!-- Never set up (added mid-combat): needs the digimon pick too, or their
+                         partner never joins the fight. Already set up: a plain re-roll. -->
                     <button
-                      v-if="!pendingRequests.some((r: any) => r.type === 'initiative-roll' && r.targetTamerId === item.participant.entityId)"
+                      v-else-if="item.participant.initiative < 0"
+                      class="text-xs bg-yellow-700 hover:bg-yellow-600 text-white px-2 py-1 rounded whitespace-nowrap"
+                      title="Ask this player to pick a digimon and roll initiative to join the fight"
+                      @click="requestSetupForTamer(item.participant.entityId)"
+                    >
+                      ⚔ Engage
+                    </button>
+                    <button
+                      v-else
                       class="text-xs bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-2 py-1 rounded whitespace-nowrap"
                       @click="requestInitiativeRoll(item.participant.entityId)"
                     >
                       🎲 Init
                     </button>
-                    <span v-else class="text-xs text-digimon-dark-400 whitespace-nowrap">Init pending…</span>
                   </div>
                 </div>
               </div>
@@ -4840,6 +4956,14 @@ function onMapAttackCancelled() {
           </div>
         </div>
       </Teleport>
+
+      <!-- Duplicate Encounter Modal -->
+      <DuplicateEncounterModal
+        v-if="showDuplicateModal"
+        :encounter-name="currentEncounter.name"
+        @confirm="handleDuplicate"
+        @cancel="showDuplicateModal = false"
+      />
 
       <!-- Add Participant Modal -->
       <Teleport to="body">

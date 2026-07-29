@@ -178,6 +178,18 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // Setup prompts are answered once. Two tabs of the same player (or a double-tap) could
+  // otherwise submit two responses to one request: the GM processes the first, which
+  // cancels the request, and the second becomes an orphan that can never be cleared —
+  // permanently blocking Start Combat. Treat the repeat as a no-op.
+  // (`digimon-selected` is already single-shot — it deletes its own request below, so a
+  // repeat 404s on the request lookup above.)
+  if (body.response.type === 'initiative-rolled') {
+    if (currentResponses.some((r: any) => r.requestId === body.requestId)) {
+      return encounter
+    }
+  }
+
   // Auto-process digimon-selected: immediately create initiative-roll request
   if (body.response.type === 'digimon-selected') {
     // Remove the original digimon-selection request

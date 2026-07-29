@@ -416,7 +416,9 @@ async function loadData() {
       fetchTamer(tamerId.value),
       loadCampaign(),
       fetchTamers(campaignId.value),
-      fetchEncounters(campaignId.value),
+      // Only GM-published encounters. Anything the GM is still staging is invisible here,
+      // which is what makes running several encounters in parallel safe.
+      fetchEncounters(campaignId.value, { visibleToPlayers: true }),
     ])
     tamer.value = fetchedTamer
     allTamers.value = allTamersFromComposable.value
@@ -429,8 +431,10 @@ async function loadData() {
       ])
       partnerDigimon.value = digimonList.value.filter((d: Digimon) => d.partnerId === fetchedTamer.id)
 
-      // Find an active encounter that this tamer is relevant to.
-      const active = encounters.value.find((e) => {
+      // Every published encounter this tamer belongs to. A tamer can legitimately be
+      // queued into more than one, so pick deliberately instead of taking whichever
+      // happened to come back first.
+      const candidates = encounters.value.filter((e) => {
         if (e.phase !== 'combat' && e.phase !== 'setup' && e.phase !== 'initiative') return false
         const pts = (e.participants as CombatParticipant[]) || []
         const isParticipant = pts.some(
@@ -442,6 +446,16 @@ async function loadData() {
         const hasPendingRequests = reqs.some((r) => r.targetTamerId === fetchedTamer.id)
         return isParticipant || hasPendingRequests
       })
+
+      // Whatever is actually waiting on this player wins; then a live fight; then the
+      // most recently touched (the list arrives ordered by updatedAt).
+      const awaitingMe = (e: Encounter) =>
+        ((e.pendingRequests as any[]) || []).some((r) => r.targetTamerId === fetchedTamer.id)
+      const active =
+        candidates.find(awaitingMe) ??
+        candidates.find((e) => e.phase === 'combat') ??
+        candidates[0]
+
       if (active) {
         // Fetch all digimon in the encounter (partner and enemy)
         const participants = active.participants as CombatParticipant[]
@@ -998,10 +1012,6 @@ watch(() => currentCounterattackRequest.value?.id, () => {
   counterattackActOfInspirationEnabled.value = false
 })
 
-watch(() => currentDigimonRequest.value?.id, () => {
-  selectedDigimonId.value = null
-})
-
 // Check if request has already been responded to (hide modal if response exists)
 const hasUnrespondedDigimonRequest = computed(() => {
   if (!activeEncounter.value || !tamer.value) return false
@@ -1019,6 +1029,12 @@ const hasUnrespondedDigimonRequest = computed(() => {
 const hasUnrespondedInitiativeRequest = computed(() => {
   if (!activeEncounter.value || !tamer.value) return false
 
+  // The digimon picker comes first. Both modals are full-screen at the same z-index, so
+  // whichever renders later in the template simply covers the other — without this guard a
+  // leftover initiative prompt hides a freshly re-sent picker and the player can only
+  // confirm their previous choice.
+  if (hasUnrespondedDigimonRequest.value) return false
+
   const initiativeRequest = currentInitiativeRequest.value
   if (!initiativeRequest) return false
 
@@ -1026,6 +1042,12 @@ const hasUnrespondedInitiativeRequest = computed(() => {
   const hasResponse = responses.some((r) => r.requestId === initiativeRequest.id && r.tamerId === tamer.value!.id)
 
   return !hasResponse
+})
+
+// Clear any previous pick whenever the picker (re)opens, so a re-sent prompt starts blank
+// rather than showing the last choice as already selected.
+watch([() => currentDigimonRequest.value?.id, hasUnrespondedDigimonRequest], () => {
+  selectedDigimonId.value = null
 })
 
 const hasUnrespondedDodgeRequest = computed(() => {

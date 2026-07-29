@@ -621,6 +621,7 @@ export interface Encounter {
   battleLog: BattleLogEntry[]
   hazards: EnvironmentHazard[]
   mapId?: string | null
+  visibleToPlayers: boolean      // GM-controlled: players see nothing of this encounter until true
   participantPositions: Record<string, Vec3>   // participantId → Vec3
   destructibleStates: DestructibleState[]
   createdAt: Date

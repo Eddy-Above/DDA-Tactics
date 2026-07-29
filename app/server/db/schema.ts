@@ -388,6 +388,10 @@ export const encounters = pgTable('encounters', {
   campaignId: text('campaign_id').references(() => campaigns.id),
   mapId: text('map_id'),  // FK to maps.id (added via migration; FK constraint omitted to avoid circular ref at schema load time)
 
+  // GM-controlled: player pages only ever see encounters with this set, letting a GM
+  // stage several encounters in parallel without players latching onto a half-built one
+  visibleToPlayers: boolean('visible_to_players').notNull().default(false),
+
   // Map state: participant positions and breakable structure states
   participantPositions: jsonb('participant_positions').notNull().default({}).$type<Record<string, { x: number; y: number; z: number }>>(),
   destructibleStates: jsonb('destructible_states').notNull().default([]).$type<Array<{ structureId: string; currentWounds: number }>>(),
