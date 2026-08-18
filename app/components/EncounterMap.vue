@@ -81,8 +81,26 @@
 
       <!-- Overlay: Placement panel (left side) -->
       <div v-if="showPanel" class="overlay overlay-left">
-        <div class="placement-panel">
-          <div class="placement-panel-title">{{ placementPanelTitle }}</div>
+        <!-- Collapsed: mid-fight the roster shouldn't sit over the board. Still surfaces how
+             many are waiting, and who is armed for placement, so it stays discoverable. -->
+        <button
+          v-if="placementCollapsed"
+          class="placement-collapsed"
+          :class="{ armed: !!selectedId }"
+          @click="placementCollapsed = false"
+        >
+          <span class="placement-collapsed-icon">📍</span>
+          <span class="placement-collapsed-label">
+            {{ selectedParticipant ? `Placing ${getNameForParticipant(selectedParticipant)}` : placementPanelTitle }}
+          </span>
+          <span class="placement-collapsed-count">{{ eligibleParticipants.length }}</span>
+        </button>
+
+        <div v-else class="placement-panel">
+          <div class="placement-panel-title">
+            <span>{{ placementPanelTitle }}</span>
+            <button class="placement-collapse-btn" title="Collapse" @click="placementCollapsed = true">−</button>
+          </div>
           <div
             v-for="p in eligibleParticipants"
             :key="p.id"
@@ -416,6 +434,25 @@ const placementPanelTitle = computed(() => {
   if (!props.isDm) return 'Place Your Digimon'
   return isSetupPlacement.value ? 'Place Units' : 'Deploy to Map'
 })
+
+// Placement is the main activity during setup, so the roster sits open. Once the fight is
+// running it's an occasional errand (a reserve deploy, a late joiner) and shouldn't cover the
+// board — start collapsed. Keyed off isSetupPlacement rather than a separate phase test so it
+// can't drift from the sibling full-roster/unplaced-only behaviour above.
+//
+// `immediate` collapses it from the very first render when the map is opened mid-combat, and
+// re-running on phase change means Start Combat tucks the panel away by itself. A manual
+// toggle therefore lasts until the next phase change, which is the right lifetime for it.
+const placementCollapsed = ref(false)
+watch(isSetupPlacement, (isSetup) => { placementCollapsed.value = !isSetup }, { immediate: true })
+
+// Shown on the collapsed pill: collapsing while a unit is armed leaves MapCanvas in placing
+// mode (:placing-participant-id), and that state would otherwise be invisible.
+const selectedParticipant = computed(() =>
+  selectedId.value
+    ? props.encounter.participants.find(p => p.id === selectedId.value) ?? null
+    : null
+)
 
 const eligibleParticipants = computed(() => {
   const mine = props.myParticipantIds ?? []
@@ -954,7 +991,59 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
   padding-bottom: 5px;
   border-bottom: 1px solid #334;
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
+.placement-collapse-btn {
+  background: none;
+  border: none;
+  color: #667;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.placement-collapse-btn:hover { color: #fff; }
+
+/* Collapsed pill. .overlay-left is pointer-events: none, so this must re-enable them. */
+.placement-collapsed {
+  pointer-events: auto;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(10, 12, 25, 0.92);
+  border: 1px solid #334;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: #8899aa;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: border-color 0.12s, color 0.12s;
+}
+.placement-collapsed:hover { border-color: #446; color: #fff; }
+.placement-collapsed.armed { border-color: #f97316; color: #fff; }
+.placement-collapsed-icon { font-size: 13px; line-height: 1; }
+.placement-collapsed-label { white-space: nowrap; }
+.placement-collapsed-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #223;
+  color: #aabbcc;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.placement-collapsed.armed .placement-collapsed-count { background: #f97316; color: #1a1e30; }
 .placement-card {
   padding: 5px 8px;
   border-radius: 5px;
