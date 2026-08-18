@@ -792,14 +792,39 @@ const currentPartnerDigimon = computed(() => {
   return partnerDigimon.value.filter((d) => currentStageIds.has(d.id))
 })
 
+// Everything in this encounter I'm allowed to see. Enemy reserves the GM is staging are
+// filtered out so they can't leak into target lists — my own reserved characters stay, so I
+// can be told they're waiting to join.
+//
+// NOTE: this is client-side redaction only. The WS room has no per-peer identity, so every
+// peer receives the same buildEncounterPayload() result and a staged enemy IS present in the
+// payload this browser holds — it is simply never rendered. Same trade-off MapBattleLog
+// already makes when it redacts NPC dice from players.
+const visibleParticipants = computed(() => {
+  if (!activeEncounter.value || !tamer.value) return []
+  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  return participants.filter((p) => !p.inReserve || isMine(p))
+})
+
+function isMine(p: CombatParticipant): boolean {
+  if (!tamer.value) return false
+  if (p.type === 'tamer') return p.entityId === tamer.value.id
+  return partnerDigimon.value.some((d) => d.id === p.entityId)
+}
+
+// Characters I control that are actually in the fight. Reserves are excluded so they can't
+// act, don't count towards isMyTurn, and stay out of the HUD and action panels.
 const myParticipants = computed(() => {
   if (!activeEncounter.value || !tamer.value) return []
   const participants = activeEncounter.value.participants as CombatParticipant[]
-  return participants.filter(
-    (p) =>
-      (p.type === 'tamer' && p.entityId === tamer.value!.id) ||
-      (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
-  )
+  return participants.filter((p) => isMine(p) && !p.inReserve)
+})
+
+// Mine, but staged by the GM — shown greyed so the player knows they're waiting, not missing
+const myReservedParticipants = computed(() => {
+  if (!activeEncounter.value || !tamer.value) return []
+  const participants = activeEncounter.value.participants as CombatParticipant[]
+  return participants.filter((p) => isMine(p) && p.inReserve)
 })
 
 const myTamerParticipant = computed(() =>
@@ -1788,8 +1813,7 @@ function openPlayerDirectTargetSelector(bolstered: boolean) {
 // Get eligible digimon targets for Direct (from player's perspective)
 function getPlayerDirectTargets(): CombatParticipant[] {
   if (!activeEncounter.value) return []
-  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
-  return participants.filter(p => p.type === 'digimon')
+  return visibleParticipants.value.filter(p => p.type === 'digimon' && !p.inReserve)
 }
 
 // Confirm direct action on selected digimon
@@ -2110,10 +2134,13 @@ function getHealthPercentage(participant: CombatParticipant): number {
 
 function getEnemyTargets(): CombatParticipant[] {
   if (!activeEncounter.value) return []
-  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
+  // visibleParticipants drops staged enemies; the !inReserve check also excludes any of my
+  // own characters the GM hasn't deployed yet
   const myParticipantIds = new Set(myParticipants.value.map((p) => p.id))
 
-  return participants.filter((p) => !myParticipantIds.has(p.id) && p.type !== 'gm')
+  return visibleParticipants.value.filter(
+    (p) => !myParticipantIds.has(p.id) && p.type !== 'gm' && !p.inReserve
+  )
 }
 
 const isAreaAttack = computed(() =>
@@ -3887,8 +3914,8 @@ function openClashTargetSelector(participantId: string) {
 function getClashTargets(): CombatParticipant[] {
   if (!activeEncounter.value) return []
   const myIds = new Set(myParticipants.value.map(p => p.id))
-  return (activeEncounter.value.participants as CombatParticipant[]).filter(
-    p => !myIds.has(p.id) && p.type !== 'gm' && !(p as any).clash
+  return visibleParticipants.value.filter(
+    p => !myIds.has(p.id) && p.type !== 'gm' && !p.inReserve && !(p as any).clash
   )
 }
 
@@ -4190,10 +4217,16 @@ watch(
   }
 )
 
-const playerPlacementMode = computed(() =>
-  ['setup', 'initiative'].includes(activeEncounter.value?.phase ?? '') &&
-  !!(activeEncounter.value as any)?.mapId
-)
+// Also open mid-combat while one of my characters is still off the board — that's how a
+// player positions someone the GM has just deployed from reserve.
+const playerPlacementMode = computed(() => {
+  if (!(activeEncounter.value as any)?.mapId) return false
+  const phase = activeEncounter.value?.phase ?? ''
+  if (['setup', 'initiative'].includes(phase)) return true
+  if (phase !== 'combat') return false
+  const positions = ((activeEncounter.value as any)?.participantPositions ?? {}) as Record<string, unknown>
+  return myParticipants.value.some(p => !positions[p.id])
+})
 
 
 const tamerMapForMap = computed(() => {
@@ -4769,6 +4802,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
             </div>
           </div>
 
+          <!-- Mine, staged by the GM: in the encounter but not yet in the fight -->
+          <div
+            v-if="myReservedParticipants.length > 0"
+            class="mt-4 rounded-lg border border-dashed border-digimon-dark-600 bg-digimon-dark-800/50 p-3"
+          >
+            <div class="text-xs uppercase tracking-wide text-digimon-dark-500 font-semibold mb-2">
+              ⏸ Waiting to join
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <span
+                v-for="participant in myReservedParticipants"
+                :key="participant.id"
+                class="text-sm text-digimon-dark-400 bg-digimon-dark-900/60 rounded px-2 py-1"
+              >
+                {{ getParticipantName(participant) }}
+              </span>
+            </div>
+            <p class="text-xs text-digimon-dark-500 mt-2">
+              The GM will bring them in when the moment comes — you can't act with them yet.
+            </p>
+          </div>
+
           <!-- My participants in combat -->
           <div v-if="myParticipants.length > 0" class="mt-4 grid gap-3">
             <div
@@ -5072,7 +5127,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
                     <div class="space-y-2 max-h-60 overflow-y-auto">
                       <button
-                        v-for="p in (activeEncounter?.participants as CombatParticipant[] || []).filter(p => p.id !== participant.id && p.type !== 'gm')"
+                        v-for="p in visibleParticipants.filter(p => p.id !== participant.id && p.type !== 'gm' && !p.inReserve)"
                         :key="p.id"
                         class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
                         @click="handleUseSpecialOrder(participant, 'Enemy Scan', p.id); showPlayerSpecialOrdersModal = false"
@@ -7741,7 +7796,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </p>
         <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
           <button
-            v-for="p in (activeEncounter.participants as any[]).filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant!.id)"
+            v-for="p in (visibleParticipants as any[]).filter((p: any) => p.type !== 'gm' && !p.inReserve && p.id !== myTamerParticipant!.id)"
             :key="p.id"
             class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
             @click="intercedeOptionsSelections.has(p.id)

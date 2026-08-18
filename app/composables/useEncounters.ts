@@ -43,6 +43,7 @@ export interface CombatParticipant {
   lastHugePowerRound?: number
   lastHugePowerRank2Round?: number
   isEnemy?: boolean
+  inReserve?: boolean  // Staged by the GM: excluded from turn order, the map and target lists until deployed
   airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears (future jump-to-air feature)
   battery?: number
   usedSignatureMoveThisTurn?: boolean
@@ -399,7 +400,9 @@ export function useEncounters() {
     if (participant.type !== 'digimon' || !digimonMap) return false
     const partnerId = digimonMap.get(participant.entityId)?.partnerId
     if (!partnerId) return false
-    return participants.some((p: any) => p.type === 'tamer' && p.entityId === partnerId)
+    // A reserved tamer isn't in the turn order, so it can't host a partner's turn — a
+    // deployed partner whose tamer is still in reserve keeps its own slot.
+    return participants.some((p: any) => p.type === 'tamer' && p.entityId === partnerId && !p.inReserve)
   }
 
   // Who the rebuilt turn order should keep pointing at. `isActive` is a clean single flag
@@ -415,9 +418,13 @@ export function useEncounters() {
   }
 
   // Single source of truth for turn order. Sorts by initiative (highest first), drops the
-  // GM metadata row and tamer-grouped partner digimon, and — crucially — reports where the
-  // currently-active participant landed, so adding someone mid-combat doesn't silently
-  // hand the turn to whoever the old index now points at.
+  // GM metadata row, reserved (not yet deployed) participants and tamer-grouped partner
+  // digimon, and — crucially — reports where the currently-active participant landed, so
+  // adding someone mid-combat doesn't silently hand the turn to whoever the old index now
+  // points at.
+  //
+  // Excluding reserves here is what keeps them out of everything downstream: sortedParticipants,
+  // the GM participant list, the turn tracker and the map HUD are all turn-order-derived.
   function rebuildTurnOrder(
     participants: any[],
     digimonMap?: Map<string, any>,
@@ -427,6 +434,7 @@ export function useEncounters() {
       .sort((a, b) => b.initiative - a.initiative)
       .filter((p) => {
         if (p.type === 'gm') return false
+        if (p.inReserve) return false
         return !isGroupedUnderTamer(p, participants, digimonMap)
       })
       .map((p) => p.id)

@@ -271,6 +271,7 @@ export const encounters = pgTable('encounters', {
     lastHugePowerRound?: number
     lastHugePowerRank2Round?: number
     isEnemy?: boolean
+    inReserve?: boolean
     battery?: number
     usedSignatureMoveThisTurn?: boolean
     combatMonsterBonus?: number

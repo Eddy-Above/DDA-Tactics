@@ -26,7 +26,7 @@
         <MapCanvas
           v-if="map"
           :map="map"
-          :participants="encounter.participants"
+          :participants="liveParticipants"
           :participant-positions="positions"
           :destructible-states="encounter.destructibleStates ?? []"
           :tamer-map="tamerMapForCanvas"
@@ -82,7 +82,7 @@
       <!-- Overlay: Placement panel (left side) -->
       <div v-if="showPanel" class="overlay overlay-left">
         <div class="placement-panel">
-          <div class="placement-panel-title">{{ isDm ? 'Place Units' : 'Place Your Digimon' }}</div>
+          <div class="placement-panel-title">{{ placementPanelTitle }}</div>
           <div
             v-for="p in eligibleParticipants"
             :key="p.id"
@@ -117,7 +117,7 @@
       <!-- Overlay: Player HUD (bottom-left) -->
       <div class="overlay overlay-bottom-left">
         <MapPlayerHUD
-          :participants="encounter.participants"
+          :participants="liveParticipants"
           :tamer-map="tamerMapForCanvas"
           :digimon-map="digimonMapForCanvas"
           :is-dm="isDm"
@@ -279,10 +279,18 @@ const editor = useMapEditor(map)
 const movement = useMapMovement()
 
 // ── Auth/identity ──────────────────────────────────────────────────────────
+// Everyone actually in the fight. Reserves are staged by the GM and have no business on the
+// map — no token, no HUD row, no reticule — until they're deployed. (The occupancy and
+// battle-log helpers below don't need filtering: they already skip participants with no
+// position, and a reserve never has one.)
+const liveParticipants = computed(() =>
+  props.encounter.participants.filter(p => !(p as any).inReserve)
+)
+
 const myParticipantIds = computed(() =>
   props.myParticipantIds?.length
     ? props.myParticipantIds
-    : props.encounter.participants
+    : liveParticipants.value
         .filter(p => p.type === 'tamer' && p.entityId === props.myTamerId)
         .map(p => p.id)
 )
@@ -387,14 +395,37 @@ const mapSelectedAttack = computed(() =>
   isChargeAttack.value && chargeMode.value === null && !chargeAttackInFlight.value ? null : props.selectedAttack
 )
 
+// The GM can place units at any point in a live encounter, not just during setup —
+// reinforcements deployed from reserve (and anyone who joined mid-combat) need a way onto
+// the board. Hidden once the encounter has ended.
 const showPanel = computed(() =>
   !props.editorMode &&
-  ((props.isDm && props.encounter.phase === 'setup') || (props.playerPlacementMode ?? false))
+  ((props.isDm && props.encounter.phase !== 'ended' && eligibleParticipants.value.length > 0) ||
+    (props.playerPlacementMode ?? false))
 )
 
+// During setup the whole roster is listed and cards can be clicked to pick a unit back up and
+// re-place it. Once combat is underway that would silently yank a placed unit off the board
+// (selectParticipant deletes its position), so only unplaced units are offered — repositioning
+// a placed one is what GM free-move is for.
+const isSetupPlacement = computed(() =>
+  props.encounter.phase === 'setup' || props.encounter.phase === 'initiative'
+)
+
+const placementPanelTitle = computed(() => {
+  if (!props.isDm) return 'Place Your Digimon'
+  return isSetupPlacement.value ? 'Place Units' : 'Deploy to Map'
+})
+
 const eligibleParticipants = computed(() => {
-  if (props.isDm) return props.encounter.participants.filter(p => (p as any).isEnemy)
-  return props.encounter.participants.filter(p => (props.myParticipantIds ?? []).includes(p.id))
+  const mine = props.myParticipantIds ?? []
+  const roster = props.encounter.participants.filter(p => {
+    if ((p as any).inReserve) return false          // not deployed yet
+    if (props.isDm) return true                     // GM places anyone, not just enemies
+    return mine.includes(p.id)
+  })
+  if (isSetupPlacement.value) return roster
+  return roster.filter(p => !positions.value[p.id])
 })
 
 function getNameForParticipant(p: CombatParticipant) {

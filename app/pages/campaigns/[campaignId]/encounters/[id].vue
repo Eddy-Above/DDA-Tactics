@@ -72,6 +72,8 @@ const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
 const selectedNpcEvoLineId = ref<string>('')
 const addQuantity = ref(1)
+const addToReserve = ref(false)
+const deployingId = ref<string | null>(null)
 const showDuplicateModal = ref(false)
 const togglingVisibility = ref(false)
 
@@ -240,21 +242,48 @@ const canStartCombat = computed(() => {
   // Check if there are any unprocessed responses (waiting for GM)
   if (unprocessedResponses.value.length > 0) return false
 
-  // Check if all participants have initiative set (initiative -1 = pending setup)
+  // Check if all participants have initiative set (initiative -1 = pending setup).
+  // Reserves deliberately sit at -1 until deployed — they must not block the start.
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
   const allHaveInitiative = participants.every(p =>
-    typeof p.initiative === 'number' && p.initiative >= 0
+    p.inReserve || (typeof p.initiative === 'number' && p.initiative >= 0)
   )
   if (!allHaveInitiative) return false
 
   return true
 })
 
+// Tamers queued for setup. Reserves are excluded — prompting a player for a character the
+// GM hasn't deployed yet would show them a modal for a fight they're not in.
 const pendingSetupTamers = computed(() => {
   if (!currentEncounter.value) return []
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
-  return participants.filter(p => p.type === 'tamer' && p.initiative < 0)
+  return participants.filter(p => p.type === 'tamer' && p.initiative < 0 && !p.inReserve)
 })
+
+const reservedParticipants = computed(() => {
+  if (!currentEncounter.value) return []
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  // Partner digimon are shown nested under their reserved tamer, not as their own row
+  return participants.filter(p => {
+    if (!p.inReserve) return false
+    if (p.type !== 'digimon') return true
+    const partnerId = digimonMap.value.get(p.entityId)?.partnerId
+    if (!partnerId) return true
+    return !participants.some(t => t.type === 'tamer' && t.entityId === partnerId && t.inReserve)
+  })
+})
+
+// The reserved partner digimon that deploys alongside a reserved tamer (if any)
+function reservedPartnerFor(tamerParticipant: CombatParticipant): CombatParticipant | null {
+  if (tamerParticipant.type !== 'tamer' || !currentEncounter.value) return null
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  return participants.find(p =>
+    p.type === 'digimon' &&
+    p.inReserve &&
+    digimonMap.value.get(p.entityId)?.partnerId === tamerParticipant.entityId
+  ) ?? null
+}
 
 // Also available during combat so a late-joining tamer can be brought in through the full
 // digimon-pick → initiative flow (a bare initiative request never creates their partner).
@@ -887,6 +916,7 @@ function getAttackTargets(attackerId: string, attack?: any): CombatParticipant[]
   // Target anyone except GM; self only allowed for area attacks
   return participants.filter(p => {
     if (p.type === 'gm') return false
+    if (p.inReserve) return false  // Not on the board yet — can't be hit
     if (p.id === attackerId) {
       const isAreaAttack = attack?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
       const isMeleeSupportSingle = attack?.type === 'support' && attack?.range === 'melee' && !isAreaAttack
@@ -1331,10 +1361,12 @@ async function handleAddParticipant() {
       ? (tamer.inspiration ?? 1) + (tamer.grantedInspiration ?? 0) + ((tamer.xpBonuses?.inspiration) ?? 0)
       : 1
     const participant = createParticipant('tamer', selectedEntityId.value, -1, 0, maxWounds, undefined, undefined, initialWounds, undefined, initialInspiration)
+    if (addToReserve.value) (participant as any).inReserve = true
     await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
     showAddParticipant.value = false
     selectedEntityId.value = ''
     addQuantity.value = 1
+    addToReserve.value = false
     return
   }
 
@@ -1350,9 +1382,15 @@ async function handleAddParticipant() {
     if (selectedEntityType.value === 'digimon' || selectedEntityType.value === 'enemy') {
       const digimon = digimonMap.value.get(selectedEntityId.value)
       if (digimon) {
-        const result = rollDigimonInitiative(digimon)
-        initiative = result.total
-        initiativeRoll = result.roll
+        // Reserves roll on deploy, not now — park them at -1 like a queued tamer
+        if (addToReserve.value) {
+          initiative = -1
+          initiativeRoll = 0
+        } else {
+          const result = rollDigimonInitiative(digimon)
+          initiative = result.total
+          initiativeRoll = result.roll
+        }
         const derived = calcDigimonStats(digimon)
         maxWounds = derived.woundBoxes
         digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
@@ -1396,13 +1434,16 @@ async function handleAddParticipant() {
       if (evoLine) (participant as any).npcStageIndex = evoLine.currentStageIndex
     }
 
-    const result = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
+    if (addToReserve.value) (participant as any).inReserve = true
+
+    await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
   }
 
   showAddParticipant.value = false
   selectedEntityId.value = ''
   selectedNpcEvoLineId.value = ''
   addQuantity.value = 1
+  addToReserve.value = false
 }
 
 // Remove participant
@@ -1442,6 +1483,62 @@ async function clearSetupExchangeForTamer(tamerEntityId: string) {
   }
   for (const request of staleRequests) {
     await cancelRequest(encounterId, request.id)
+  }
+}
+
+// Deploy a reserved participant into the combat proper. A tamer goes through the normal
+// setup prompt (which is what creates their partner and their initiative); a digimon/NPC
+// rolls initiative here and slots straight into the turn order. Either way they arrive
+// unplaced, so they show up in the map's placement panel for the GM to position.
+async function handleDeployReserve(participantId: string) {
+  if (!currentEncounter.value || deployingId.value) return
+  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  const participant = participants.find(p => p.id === participantId)
+  if (!participant?.inReserve) return
+
+  deployingId.value = participantId
+  try {
+    // A tamer and their partner are one unit in the turn order — deploy them together
+    const partner = reservedPartnerFor(participant)
+    const deployIds = new Set([participantId, ...(partner ? [partner.id] : [])])
+
+    const updated = participants.map(p => {
+      if (!deployIds.has(p.id)) return p
+      const { inReserve: _dropped, ...rest } = p as any
+      // Tamers roll as part of their setup prompt below, not here
+      if (p.type === 'tamer') return rest as CombatParticipant
+      // A partner deploying alongside its tamer picks up their initiative during setup
+      if (partner && p.id === partner.id) return rest as CombatParticipant
+
+      const digimon = digimonMap.value.get(p.entityId)
+      if (!digimon) return rest as CombatParticipant
+
+      // A partner digimon whose tamer is already in the fight acts on that tamer's turn, so
+      // it takes their initiative rather than rolling one that would never be used.
+      const partnerTamer = digimon.partnerId
+        ? participants.find(t => t.type === 'tamer' && t.entityId === digimon.partnerId && !t.inReserve)
+        : undefined
+      if (partnerTamer) {
+        return { ...rest, initiative: partnerTamer.initiative, initiativeRoll: partnerTamer.initiativeRoll } as CombatParticipant
+      }
+
+      const roll = rollDigimonInitiative(digimon)
+      return { ...rest, initiative: roll.total, initiativeRoll: roll.roll } as CombatParticipant
+    })
+
+    const { turnOrder, currentTurnIndex } = rebuildTurnOrder(
+      updated,
+      digimonMap.value,
+      activeParticipant.value?.id,
+    )
+    await updateEncounter(currentEncounter.value.id, { participants: updated, turnOrder, currentTurnIndex })
+
+    // Tamers still need to pick a digimon and roll — hand them to the existing setup flow
+    if (participant.type === 'tamer') {
+      await requestSetupForTamer(participant.entityId)
+    }
+  } finally {
+    deployingId.value = null
   }
 }
 
@@ -1666,26 +1763,31 @@ async function processResponse(response: any) {
         )
 
         if (chosenPartnerIdx >= 0) {
-          // Keep the existing participant id so any map position already placed for it survives
-          updatedParticipants = updatedParticipants.map((p, i) => i === chosenPartnerIdx
-            ? {
-                ...p,
-                initiative: response.response.initiative,
-                initiativeRoll: response.response.initiativeRoll,
-                maxWounds: digimonParticipant.maxWounds,
-                ...(digimonParticipant.totalHealth !== undefined ? { totalHealth: digimonParticipant.totalHealth } : {}),
-                ...(matchingEvoLine?.id ? { evolutionLineId: matchingEvoLine.id } : {}),
-              }
-            : p
-          )
+          // Keep the existing participant id so any map position already placed for it survives.
+          // `inReserve` is cleared here too: the tamer's setup completing means their partner
+          // is in the fight, whatever staging state the participant was carrying.
+          updatedParticipants = updatedParticipants.map((p, i) => {
+            if (i !== chosenPartnerIdx) return p
+            const { inReserve: _deployed, ...rest } = p as any
+            return {
+              ...rest,
+              initiative: response.response.initiative,
+              initiativeRoll: response.response.initiativeRoll,
+              maxWounds: digimonParticipant.maxWounds,
+              ...(digimonParticipant.totalHealth !== undefined ? { totalHealth: digimonParticipant.totalHealth } : {}),
+              ...(matchingEvoLine?.id ? { evolutionLineId: matchingEvoLine.id } : {}),
+            } as CombatParticipant
+          })
         } else {
           updatedParticipants = [...updatedParticipants, digimonParticipant]
         }
 
-        // Drop any *other* partner digimon of this tamer left over from an earlier setup
+        // Drop any *other* partner digimon of this tamer left over from an earlier setup.
+        // Reserved ones are left alone — they're staged for a later deploy, not leftovers.
         const keptPartnerEntityId = digimon.id
         updatedParticipants = updatedParticipants.filter(p => {
           if (p.type !== 'digimon') return true
+          if (p.inReserve) return true
           if (digimonMap.value.get(p.entityId)?.partnerId !== tamer.id) return true
           return p.entityId === keptPartnerEntityId
         })
@@ -3239,13 +3341,8 @@ const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticip
 const showMapPicker = ref(false)
 const { maps: availableMaps, fetchMaps } = useMap()
 
-const playerPlacementMode = computed(() =>
-  !isDm.value &&
-  ['setup', 'initiative'].includes(currentEncounter.value?.phase ?? '') &&
-  !!(currentEncounter.value as any)?.mapId
-)
-
-
+// (This page's <EncounterMap> passes :player-placement-mode="false" — the GM map is always in
+// GM placement mode. Player-side placement lives on player/[tamerId].vue.)
 
 async function openMapPicker() {
   await fetchMaps(campaignId.value)
@@ -4318,6 +4415,63 @@ function onMapAttackCancelled() {
               No participants yet. Add Tamers and Digimon to begin.
             </div>
           </div>
+
+          <!-- Reserve: staged characters, outside the turn order and off the map until deployed -->
+          <div
+            v-if="reservedParticipants.length > 0"
+            class="bg-digimon-dark-800 rounded-xl p-4 border border-dashed border-digimon-dark-600"
+          >
+            <h3 class="font-display text-lg font-semibold text-digimon-dark-300 mb-1 flex items-center gap-2">
+              <span>⏸</span> Reserve
+              <span class="text-xs font-normal text-digimon-dark-500">({{ reservedParticipants.length }})</span>
+            </h3>
+            <p class="text-xs text-digimon-dark-500 mb-3">
+              Not in the turn order and not on the map. Deploy to bring them into the fight.
+            </p>
+
+            <div class="space-y-2">
+              <div
+                v-for="p in reservedParticipants"
+                :key="p.id"
+                class="bg-digimon-dark-900/60 rounded-lg p-3 flex items-center gap-3"
+              >
+                <div class="w-9 h-9 rounded bg-digimon-dark-700 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                  <img
+                    v-if="getEntityDetails(p)?.spriteUrl"
+                    :src="getEntityDetails(p)!.spriteUrl!"
+                    class="w-full h-full object-cover opacity-60"
+                  />
+                  <span v-else class="text-digimon-dark-400 text-sm font-bold">{{ getDisplayName(p)[0] }}</span>
+                </div>
+
+                <div class="flex-1 min-w-0">
+                  <div class="text-digimon-dark-200 font-medium truncate">{{ getDisplayName(p) }}</div>
+                  <div class="text-xs text-digimon-dark-500">
+                    <span v-if="p.type === 'tamer'">
+                      Tamer<span v-if="reservedPartnerFor(p)"> + {{ getDisplayName(reservedPartnerFor(p)!) }}</span>
+                      — will pick a digimon and roll on deploy
+                    </span>
+                    <span v-else-if="p.isEnemy">Enemy — rolls initiative on deploy</span>
+                    <span v-else>Digimon — rolls initiative on deploy</span>
+                  </div>
+                </div>
+
+                <button
+                  :disabled="deployingId === p.id"
+                  class="text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white px-3 py-1.5 rounded font-semibold whitespace-nowrap"
+                  @click="handleDeployReserve(p.id)"
+                >
+                  {{ deployingId === p.id ? 'Deploying…' : '▶ Deploy' }}
+                </button>
+                <button
+                  class="text-xs bg-red-900/30 hover:bg-red-900/50 text-red-400 px-2 py-1.5 rounded"
+                  @click="handleRemoveParticipant(p.id)"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Right sidebar -->
@@ -4970,7 +5124,7 @@ function onMapAttackCancelled() {
         <div
           v-if="showAddParticipant"
           class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-          @click.self="showAddParticipant = false"
+          @click.self="showAddParticipant = false; addToReserve = false"
         >
           <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
             <h2 class="font-display text-xl font-semibold text-white mb-4">Add Participant</h2>
@@ -5069,9 +5223,11 @@ function onMapAttackCancelled() {
                 </button>
               </div>
               <p class="text-xs text-digimon-dark-400 mt-2">
-                {{ selectedEntityType === 'tamer'
-                  ? 'Tamers must respond with digimon selection before rolling initiative'
-                  : 'Each will roll initiative separately (3d6 + Agility)' }}
+                {{ addToReserve
+                  ? 'Held in reserve — initiative is rolled when you deploy them'
+                  : selectedEntityType === 'tamer'
+                    ? 'Tamers must respond with digimon selection before rolling initiative'
+                    : 'Each will roll initiative separately (3d6 + Agility)' }}
               </p>
             </div>
 
@@ -5093,6 +5249,25 @@ function onMapAttackCancelled() {
               </p>
             </div>
 
+            <!-- Reserve: stage them instead of dropping them straight into the fight -->
+            <label
+              :class="[
+                'flex items-start gap-3 mb-6 rounded-lg border p-3 cursor-pointer transition-colors',
+                addToReserve
+                  ? 'border-digimon-orange-500 bg-digimon-orange-900/20'
+                  : 'border-digimon-dark-600 hover:border-digimon-dark-500'
+              ]"
+            >
+              <input v-model="addToReserve" type="checkbox" class="mt-0.5 accent-digimon-orange-500" />
+              <span>
+                <span class="text-white text-sm font-semibold">⏸ Add to reserve</span>
+                <span class="block text-xs text-digimon-dark-400 mt-0.5">
+                  Held out of the turn order and off the map until you deploy them.
+                  Initiative is rolled at that point, not now.
+                </span>
+              </span>
+            </label>
+
             <div class="flex gap-3">
               <button
                 :disabled="!selectedEntityId"
@@ -5107,7 +5282,7 @@ function onMapAttackCancelled() {
               <button
                 class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2
                        rounded-lg font-semibold transition-colors"
-                @click="showAddParticipant = false"
+                @click="showAddParticipant = false; addToReserve = false"
               >
                 Cancel
               </button>
