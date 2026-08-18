@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
+import { db, encounters, digimon, evolutionLines, campaigns, type Encounter } from '../../db'
 import { getRoomSnapshot } from '../../utils/encounterRoom'
 import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
+import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -88,6 +89,23 @@ export default defineEventHandler(async (event) => {
     }
 
     updateData.participants = participants
+  }
+
+  // Encounter-start triggers: [Challenger] grants temp wounds (via Shield) to eligible partner
+  // digimon the moment the encounter's phase transitions into 'combat' for the first time.
+  const isCombatStart = existing.phase !== 'combat' && body.phase === 'combat'
+  if (isCombatStart) {
+    let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
+    let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+    if (existing.campaignId) {
+      const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
+      if (campaign) {
+        campaignLevel = campaign.level
+        houseRules = (campaign.rulesSettings || {}).houseRules
+      }
+    }
+    const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
+    updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
   }
 
   await db.update(encounters).set(updateData).where(eq(encounters.id, id))
