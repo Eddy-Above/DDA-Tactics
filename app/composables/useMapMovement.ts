@@ -63,7 +63,7 @@ export function useMapMovement() {
       if (k === vec3Key(origin)) continue
       const [x, y, z] = k.split(',').map(Number)
       const pos = { x, y, z }
-      if (!canLandOn(pos, caps, map, blockedPositions)) continue
+      if (!canLandOn(pos, caps, map, blockedPositions, origin)) continue
       const overlaps = getFootprintCells(pos, moverDims).some(cell => {
         const ck = vec3Key(cell)
         return blockedPositions.has(ck) || passableOnlyPositions.has(ck)

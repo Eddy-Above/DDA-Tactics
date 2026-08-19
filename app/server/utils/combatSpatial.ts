@@ -75,6 +75,12 @@ export function getMovementProfile(
 
 // Builds the fall profile (CPU/RAM + Tumbler/adv-jumper/Flight + airborneByJump) for a participant,
 // consumed by `resolveFall`. Digimon pull CPU/RAM from derived stats; tamers use CPU 1.
+//
+// airborneByJump is derived rather than persisted: every displacement path (pushPull, clash throw,
+// intercede throw) calls `resolveFall` immediately at the point of displacement, so a thrown or
+// knocked unit is already settled on the ground before end-of-turn gravity runs. Anything still
+// airborne by then got there under its own movement — i.e. by jumping — so a Jumper takes no fall
+// damage on the way down. An explicit flag on the participant still wins when set.
 export async function getFallerProfile(
   participant: any,
   digimonById: Map<string, any>,
@@ -89,7 +95,7 @@ export async function getFallerProfile(
       hasTumbler: quals.some((q: any) => q.id === 'tumbler'),
       hasAdvJumper: quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-jumper'),
       canFly: detectCapabilities(quals, 0, 0, 0).canFly,
-      airborneByJump,
+      airborneByJump: airborneByJump || quals.some((q: any) => q.id === 'extra-movement' && q.choiceId === 'jumper'),
     }
   }
   // Tamer (or unknown): CPU 1, no qualities.

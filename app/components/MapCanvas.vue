@@ -140,7 +140,6 @@ import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePas
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
-import { detectCapabilities } from '~/composables/useMapMovement'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
@@ -164,6 +163,7 @@ const props = defineProps<{
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2
+  attackerCaps: MovementCapabilities  // built by EncounterMap (real movement/RAM/CPU) for [Pass] landing checks
   reachableCells: Set<string>
   activePath: Vec3[]
   placingParticipantId: string | null
@@ -474,25 +474,13 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
   })
 }
 
-// Movement capabilities of a Pass attacker, for landing-support validation (canFly etc.).
-// Movement/RAM/CPU args only affect jumpRange/jumpHeight, which landing checks don't use.
-function getAttackerCapabilities(participantId: string | null | undefined): MovementCapabilities {
-  const empty: MovementCapabilities = { canFly: false, canJump: false, jumpRange: 0, jumpHeight: 0, canClimb: false, canSwim: false, canDig: false }
-  if (!participantId) return empty
-  const p = props.participants.find(pp => pp.id === participantId)
-  if (!p || p.type !== 'digimon') return empty
-  const dg = props.digimonMap[p.entityId]
-  if (!dg) return empty
-  return detectCapabilities(dg.qualities ?? [], 0, 0, 0)
-}
-
 // A [Pass] landing is valid if the attacker's footprint at `anchor` doesn't overlap any
 // other participant, and the anchor cell itself is supported terrain/voxel/stairs (or
-// open air the attacker can fly in).
-function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities): boolean {
+// open air the attacker can fly in, or jump into from `attackerPos`).
+function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities, attackerPos: Vec3): boolean {
   if (footprintOccupied(anchor, dims, attackerId)) return false
   if (!props.map) return true
-  return canLandOn(anchor, caps, props.map, new Set())
+  return canLandOn(anchor, caps, props.map, new Set(), attackerPos)
 }
 
 // Whether ANY ram value in [0, ramMax] yields a valid landing for this (attackerPos, dir,
@@ -501,7 +489,7 @@ function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: strin
 // pillar computed from `movement` remains valid for targeting enemies caught in it.
 function anyPassLandingValid(attackerPos: Vec3, dir: Vec3, movement: number, ramMax: number, dims: FootprintDims, attackerId: string, caps: MovementCapabilities): boolean {
   for (let ram = 0; ram <= ramMax; ram++) {
-    if (isPassLandingValid(computePassLanding(attackerPos, dir, movement, ram), dims, attackerId, caps)) return true
+    if (isPassLandingValid(computePassLanding(attackerPos, dir, movement, ram), dims, attackerId, caps, attackerPos)) return true
   }
   return false
 }
@@ -1644,7 +1632,7 @@ function computeAndRenderAoe(event: MouseEvent) {
         bit: attack.bit, ram: 0, movement: movementLen,
         attackerDims: dims,
       }
-      const caps = getAttackerCapabilities(effectiveAttackerId.value)
+      const caps = props.attackerCaps
       const landingAnchor = computePassLanding(attackerPos, dir, movementLen, 0)
       passLandingValid = anyPassLandingValid(attackerPos, dir, movementLen, attack.ram ?? 0, dims, effectiveAttackerId.value!, caps)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
@@ -1660,9 +1648,9 @@ function computeAndRenderAoe(event: MouseEvent) {
         bit: attack.bit, ram: extra, movement: passMovementLength,
         attackerDims: dims,
       }
-      const caps = getAttackerCapabilities(effectiveAttackerId.value)
+      const caps = props.attackerCaps
       const landingAnchor = computePassLanding(attackerPos, nd, passMovementLength, extra)
-      passLandingValid = isPassLandingValid(landingAnchor, dims, effectiveAttackerId.value!, caps)
+      passLandingValid = isPassLandingValid(landingAnchor, dims, effectiveAttackerId.value!, caps, attackerPos)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
       updateAoeHighlight(los ? cells : [], los ? [] : cells)
       return

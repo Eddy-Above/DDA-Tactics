@@ -238,12 +238,22 @@ export function canPassThrough(
   return false
 }
 
-// Can a unit land (end its turn) at `pos`?
+// Whether a jumper can reach `pos` in the air from `origin`. Descending and level jumps pass
+// trivially (dy <= 0); climbing is capped at jumpHeight. Without an `origin` there is nothing to
+// measure against, so jumping is not considered.
+function canJumpTo(pos: Vec3, origin: Vec3 | undefined, caps: MovementCapabilities): boolean {
+  return !!origin && caps.canJump && (pos.y - origin.y) <= caps.jumpHeight
+}
+
+// Can a unit land (end its turn) at `pos`? Pass `origin` (the cell the unit is moving/jumping
+// from) to let jumpers finish in mid-air within their jump height — omitting it keeps the
+// stricter fliers-only behaviour.
 export function canLandOn(
   pos: Vec3,
   caps: MovementCapabilities,
   map: GameMap,
   occupiedPositions: Set<string>,  // positions already occupied by units that block
+  origin?: Vec3,
 ): boolean {
   if (occupiedPositions.has(key(pos))) return false
   if (mapVoxelBlocksMovement(map, pos)) return false
@@ -260,16 +270,17 @@ export function canLandOn(
   if (spaceTile) {
     if (spaceTile.spaceType === 'water') return caps.canSwim
     if (spaceTile.spaceType === 'earth') return caps.canDig
-    // Air tile — can land if flying or hovering
-    return caps.canFly
+    // Air tile — can land if flying/hovering, or jumping up to jump height
+    return caps.canFly || canJumpTo(pos, origin, caps)
   }
 
   // Empty cell directly above a solid voxel or stair is a valid landing surface.
   if (hasSolidVoxelSupport(map, pos)) return true
   if (hasSolidStairSupport(map, pos)) return true
 
-  // Open (unpainted) air — fliers can hover/land within the map footprint.
-  if (caps.canFly && isWithinMapFootprint(map, pos)) return true
+  // Open (unpainted) air — fliers hover/land within the map footprint; jumpers may finish here
+  // up to their jump height (they fall to the ground at end of turn, taking no damage).
+  if ((caps.canFly || canJumpTo(pos, origin, caps)) && isWithinMapFootprint(map, pos)) return true
 
   return false
 }

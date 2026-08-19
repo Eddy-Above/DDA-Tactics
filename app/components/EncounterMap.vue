@@ -43,6 +43,7 @@
           :attacker-range="attackerStats.range"
           :attacker-effective-limit="attackerStats.effectiveLimit"
           :attacker-melee-range="attackerStats.meleeRange"
+          :attacker-caps="attackerCaps"
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
@@ -198,6 +199,7 @@ import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composabl
 import { useMapEditor } from '~/composables/useMapEditor'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
+import type { MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { chebyshev } from '~/utils/pathfinding'
 
@@ -375,6 +377,14 @@ const attackerStats = computed(() => {
     effectiveLimit: derived.effectiveLimit,
     meleeRange: reachRanks > 0 ? reachRanks * 2 : 1,
   }
+})
+
+// Movement capabilities of the current attacker, for [Pass] landing validation in MapCanvas.
+// Reuses npcMoveCaps so the Pass landing rule and the movement-range rule agree by construction
+// (real stance-adjusted movement + stage bonus, so jumpRange/jumpHeight are correct).
+const attackerCaps = computed<MovementCapabilities>(() => {
+  const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
+  return npcMoveCaps(attackerId ?? '')?.caps ?? detectCapabilities([], 0, 0, 0)
 })
 
 // ── Canvas-ready maps ───────────────────────────────────────────────────────
