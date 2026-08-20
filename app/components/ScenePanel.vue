@@ -102,6 +102,14 @@ const isDm = computed(() => {
 
 const myTamerId = computed(() => {
   if (!campaignId.value || isDm.value) return null
+  // A player reaching their own sheet directly (bookmarked/shared link into
+  // /player/[tamerId] or a sub-route) never passes through the hub's
+  // selection click, so the cookie below is often unset — especially for
+  // unowned, shared-pool characters with no account tying them to a browser.
+  // The route param is just as good an identity signal here as it is
+  // everywhere else in the app (player/[tamerId].vue has no stronger check).
+  const routeTamerId = route.params.tamerId as string | undefined
+  if (routeTamerId) return routeTamerId
   const cookie = useCookie<string | null>(`player-tamer-id-${campaignId.value}`)
   return cookie.value || null
 })
