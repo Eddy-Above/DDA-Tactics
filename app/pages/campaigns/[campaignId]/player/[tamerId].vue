@@ -496,16 +496,23 @@ async function loadData() {
 }
 
 // Page/navigation-level gating only, mirroring the character-select hub
-// (player/index.vue) — an account scoped to one specific tamer can't reach
-// a different tamer's dashboard by navigating to its URL directly, unless
-// it also holds DM-tier access.
+// (player/index.vue) — a tamer's dashboard is reachable if it's public,
+// DM-tier access, or this account was explicitly granted it. Runs before
+// loadData() populates `tamer`, so it fetches the tamer itself (in parallel
+// with my-access) purely to read publicAccess — loadData() re-fetches it
+// moments later; the small duplicate GET is an acceptable trade-off against
+// restructuring this page's load order.
 async function enforceSpecificTamerScope() {
   try {
-    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; playerScope: 'all' | 'specific' | null; playerTamerId: string | null }>(
-      `/api/campaigns/${campaignId.value}/my-access`,
-    )
+    const [access, t] = await Promise.all([
+      $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; accessibleTamerIds: string[] }>(
+        `/api/campaigns/${campaignId.value}/my-access`,
+      ),
+      fetchTamer(tamerId.value),
+    ])
     const hasDmTier = access.isOwner || access.isCoOwner || access.isCoDm
-    if (!hasDmTier && access.playerScope === 'specific' && access.playerTamerId !== tamerId.value) {
+    const canAccess = hasDmTier || !!t?.publicAccess || access.accessibleTamerIds.includes(tamerId.value)
+    if (!canAccess) {
       await navigateTo(`/campaigns/${campaignId.value}/player`)
     }
   } catch {

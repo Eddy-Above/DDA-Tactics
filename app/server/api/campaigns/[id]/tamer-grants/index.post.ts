@@ -1,15 +1,15 @@
 import { and, eq } from 'drizzle-orm'
-import { db, campaigns, users, campaignAccessGrants, type NewCampaignAccessGrantRow } from '../../../../db'
+import { db, campaigns, tamers, users, tamerAccessGrants, type NewTamerAccessGrantRow } from '../../../../db'
 import { generateId } from '../../../../utils/id'
 import { requireOwnerOrCoOwner } from '../../../../utils/campaignAuth'
 
 interface GrantBody {
+  tamerId: string
   userId: string
-  dmRole?: 'co-dm' | 'co-owner' | null
 }
 
-// Create-or-update (upsert on the campaignId+userId unique index) so the
-// Settings UI can use the same call for "add account" and "edit grant".
+// Grants one account access to one tamer. Idempotent — re-adding an
+// already-granted account is a harmless no-op (unique on tamerId+userId).
 export default defineEventHandler(async (event) => {
   const campaignId = getRouterParam(event, 'id')
   if (!campaignId) {
@@ -27,11 +27,13 @@ export default defineEventHandler(async (event) => {
   await requireOwnerOrCoOwner(event, campaignId)
 
   const body = await readBody<GrantBody>(event)
-  if (!body.userId) {
-    throw createError({ statusCode: 400, message: 'userId is required' })
+  if (!body.tamerId || !body.userId) {
+    throw createError({ statusCode: 400, message: 'tamerId and userId are required' })
   }
-  if (body.userId === campaign.ownerId) {
-    throw createError({ statusCode: 400, message: 'The campaign owner already has full access' })
+
+  const [tamer] = await db.select().from(tamers).where(and(eq(tamers.id, body.tamerId), eq(tamers.campaignId, campaignId)))
+  if (!tamer) {
+    throw createError({ statusCode: 400, message: 'That tamer does not belong to this campaign' })
   }
 
   const [grantee] = await db.select().from(users).where(eq(users.id, body.userId))
@@ -39,30 +41,24 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Account not found' })
   }
 
-  const dmRole = body.dmRole ?? null
   const now = new Date()
-
-  const values: NewCampaignAccessGrantRow = {
+  const values: NewTamerAccessGrantRow = {
     id: generateId(),
-    campaignId,
+    tamerId: body.tamerId,
     userId: body.userId,
-    dmRole,
     createdAt: now,
     updatedAt: now,
   }
 
   await db
-    .insert(campaignAccessGrants)
+    .insert(tamerAccessGrants)
     .values(values)
-    .onConflictDoUpdate({
-      target: [campaignAccessGrants.campaignId, campaignAccessGrants.userId],
-      set: { dmRole, updatedAt: now },
-    })
+    .onConflictDoNothing({ target: [tamerAccessGrants.tamerId, tamerAccessGrants.userId] })
 
   const [saved] = await db
     .select()
-    .from(campaignAccessGrants)
-    .where(and(eq(campaignAccessGrants.campaignId, campaignId), eq(campaignAccessGrants.userId, body.userId)))
+    .from(tamerAccessGrants)
+    .where(and(eq(tamerAccessGrants.tamerId, body.tamerId), eq(tamerAccessGrants.userId, body.userId)))
 
-  return { ...saved, username: grantee.username }
+  return { ...saved, username: grantee.username, tamerName: tamer.name }
 })

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, campaigns, campaignAccessGrants, users } from '../../../../db'
+import { db, campaigns, tamerAccessGrants, users, tamers } from '../../../../db'
 import { requireOwnerOrCoOwner } from '../../../../utils/campaignAuth'
 
 export default defineEventHandler(async (event) => {
@@ -14,24 +14,23 @@ export default defineEventHandler(async (event) => {
   }
 
   if (!campaign.ownerId) {
-    return { grants: [], ownerUsername: null }
+    return { grants: [] }
   }
 
   await requireOwnerOrCoOwner(event, campaignId)
 
-  const [owner] = await db.select({ username: users.username }).from(users).where(eq(users.id, campaign.ownerId))
-
   const grants = await db
     .select({
-      id: campaignAccessGrants.id,
-      campaignId: campaignAccessGrants.campaignId,
-      userId: campaignAccessGrants.userId,
+      id: tamerAccessGrants.id,
+      tamerId: tamerAccessGrants.tamerId,
+      tamerName: tamers.name,
+      userId: tamerAccessGrants.userId,
       username: users.username,
-      dmRole: campaignAccessGrants.dmRole,
     })
-    .from(campaignAccessGrants)
-    .innerJoin(users, eq(users.id, campaignAccessGrants.userId))
-    .where(eq(campaignAccessGrants.campaignId, campaignId))
+    .from(tamerAccessGrants)
+    .innerJoin(users, eq(users.id, tamerAccessGrants.userId))
+    .innerJoin(tamers, eq(tamers.id, tamerAccessGrants.tamerId))
+    .where(eq(tamers.campaignId, campaignId))
 
-  return { grants, ownerUsername: owner?.username ?? null }
+  return { grants }
 })

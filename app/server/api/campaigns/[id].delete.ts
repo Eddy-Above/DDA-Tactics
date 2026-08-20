@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm'
-import { db, campaigns, tamers, digimon, encounters, evolutionLines, campaignAccessGrants } from '../../db'
+import { eq, inArray } from 'drizzle-orm'
+import { db, campaigns, tamers, digimon, encounters, evolutionLines, campaignAccessGrants, tamerAccessGrants } from '../../db'
 import { requireOwnerOrCoOwner } from '../../utils/campaignAuth'
 
 export default defineEventHandler(async (event) => {
@@ -31,6 +31,15 @@ export default defineEventHandler(async (event) => {
   await db.delete(evolutionLines).where(eq(evolutionLines.campaignId, id))
   await db.delete(digimon).where(eq(digimon.campaignId, id))
   await db.delete(encounters).where(eq(encounters.campaignId, id))
+
+  // tamerAccessGrants has no campaignId column, so it can only be filtered
+  // via tamerId — must run before the tamers themselves are deleted below.
+  const campaignTamers = await db.select({ id: tamers.id }).from(tamers).where(eq(tamers.campaignId, id))
+  const campaignTamerIds = campaignTamers.map((t) => t.id)
+  if (campaignTamerIds.length > 0) {
+    await db.delete(tamerAccessGrants).where(inArray(tamerAccessGrants.tamerId, campaignTamerIds))
+  }
+
   await db.delete(tamers).where(eq(tamers.campaignId, id))
   await db.delete(campaignAccessGrants).where(eq(campaignAccessGrants.campaignId, id))
   await db.delete(campaigns).where(eq(campaigns.id, id))

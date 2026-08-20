@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, tamers, digimon, evolutionLines } from '../../db'
+import { db, tamers, digimon, evolutionLines, tamerAccessGrants } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
 export default defineEventHandler(async (event) => {
@@ -29,6 +29,9 @@ export default defineEventHandler(async (event) => {
 
   // Delete all evolution lines associated with this tamer
   await db.delete(evolutionLines).where(eq(evolutionLines.partnerId, id))
+
+  // Delete any per-tamer access grants (no DB-level FK, so this is manual)
+  await db.delete(tamerAccessGrants).where(eq(tamerAccessGrants.tamerId, id))
 
   // Delete tamer
   await db.delete(tamers).where(eq(tamers.id, id))

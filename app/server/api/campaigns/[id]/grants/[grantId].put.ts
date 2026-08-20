@@ -1,11 +1,9 @@
 import { and, eq } from 'drizzle-orm'
-import { db, campaigns, campaignAccessGrants, tamers, users } from '../../../../db'
+import { db, campaigns, campaignAccessGrants, users } from '../../../../db'
 import { requireOwnerOrCoOwner } from '../../../../utils/campaignAuth'
 
 interface UpdateGrantBody {
   dmRole?: 'co-dm' | 'co-owner' | null
-  playerScope?: 'all' | 'specific' | null
-  playerTamerId?: string | null
 }
 
 export default defineEventHandler(async (event) => {
@@ -32,26 +30,12 @@ export default defineEventHandler(async (event) => {
 
   const body = await readBody<UpdateGrantBody>(event)
 
-  const playerScope = body.playerScope !== undefined ? body.playerScope : existing.playerScope
-  let playerTamerId = body.playerTamerId !== undefined ? body.playerTamerId : existing.playerTamerId
-  if (playerScope === 'specific') {
-    if (!playerTamerId) {
-      throw createError({ statusCode: 400, message: 'playerTamerId is required when playerScope is "specific"' })
-    }
-    const [tamer] = await db.select().from(tamers).where(and(eq(tamers.id, playerTamerId), eq(tamers.campaignId, campaignId)))
-    if (!tamer) {
-      throw createError({ statusCode: 400, message: 'That tamer does not belong to this campaign' })
-    }
-  } else {
-    playerTamerId = null
-  }
-
   const dmRole = body.dmRole !== undefined ? body.dmRole : existing.dmRole
   const now = new Date()
 
   await db
     .update(campaignAccessGrants)
-    .set({ dmRole, playerScope, playerTamerId, updatedAt: now })
+    .set({ dmRole, updatedAt: now })
     .where(eq(campaignAccessGrants.id, grantId))
 
   const [updated] = await db.select().from(campaignAccessGrants).where(eq(campaignAccessGrants.id, grantId))

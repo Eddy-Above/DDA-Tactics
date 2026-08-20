@@ -12,10 +12,10 @@ export default defineNuxtRouteMiddleware(async (to) => {
   // request's cookies to this internal call.
   try {
     const requestFetch = useRequestFetch()
-    const access = await requestFetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; playerScope: 'all' | 'specific' | null }>(
+    const access = await requestFetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; accessibleTamerIds: string[] }>(
       `/api/campaigns/${campaignId}/my-access`,
     )
-    if (access.isOwner || access.isCoOwner || access.isCoDm || access.playerScope) {
+    if (access.isOwner || access.isCoOwner || access.isCoDm || access.accessibleTamerIds.length > 0) {
       useCookie(`campaign-access-${campaignId}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
       return
     }

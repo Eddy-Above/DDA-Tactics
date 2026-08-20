@@ -446,6 +446,7 @@ export interface Tamer {
   creationRules?: CreationRules | null  // sandbox (workshop) characters: rules snapshot they were built under
   ownerId?: string | null               // account that created the record (accounts feature)
   hidden?: boolean                      // workshop-only: owner hid this character from other users
+  publicAccess?: boolean                // in-campaign access: anyone with campaign access can view/edit if true
   createdAt: Date
   updatedAt: Date
 }
@@ -684,9 +685,16 @@ export interface CampaignAccessGrant {
   userId: string
   username: string  // joined in for display
   dmRole: 'co-dm' | 'co-owner' | null
-  playerScope: 'all' | 'specific' | null
-  playerTamerId: string | null
-  playerTamerName?: string | null  // joined in for display when playerScope = 'specific'
+}
+
+// Per-tamer player access grant — one row per (tamer, account); a tamer can
+// have many, and an account can hold grants on many tamers.
+export interface TamerAccessGrant {
+  id: string
+  tamerId: string
+  tamerName: string  // joined in for display
+  userId: string
+  username: string   // joined in for display
 }
 
 // The current viewer's access to a specific campaign (session + grant + ownership resolved server-side)
@@ -695,8 +703,7 @@ export interface MyCampaignAccess {
   isOwner: boolean
   isCoOwner: boolean
   isCoDm: boolean
-  playerScope: 'all' | 'specific' | null
-  playerTamerId: string | null
+  accessibleTamerIds: string[]
 }
 
 // === Utility Functions ===

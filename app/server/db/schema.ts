@@ -107,6 +107,12 @@ export const tamers = pgTable('tamers', {
   // Workshop-only visibility: owner can hide a sandbox character from other
   // users' Workshop lists (meaningless without an owner — filter ignores it)
   hidden: boolean('hidden').notNull().default(false),
+  // In-campaign access (distinct from `hidden` above): when true, anyone with
+  // campaign access — including password-only sessions with no account — can
+  // view/edit this tamer. When false, only DM-tier accounts or accounts with
+  // an explicit tamerAccessGrants row can. Defaults true so existing tamers
+  // keep working exactly as before this feature shipped (migration 0020).
+  publicAccess: boolean('public_access').notNull().default(true),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -585,17 +591,28 @@ export const sessions = pgTable('sessions', {
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
 })
 
-// One row per (campaign, account). Holds two independent grant axes at
-// once so a single account can e.g. be a co-dm AND scoped to one specific
-// player tamer simultaneously.
+// One row per (campaign, account): DM-tier role grant only. Per-tamer player
+// access moved to tamerAccessGrants below (migration 0020) — an account can
+// hold both a DM role here and any number of tamer grants simultaneously.
 export const campaignAccessGrants = pgTable('campaign_access_grants', {
   id: text('id').primaryKey(),
   campaignId: text('campaign_id').notNull(),
   userId: text('user_id').notNull(),
 
   dmRole: text('dm_role').$type<'co-dm' | 'co-owner' | null>(),
-  playerScope: text('player_scope').$type<'all' | 'specific' | null>(),
-  playerTamerId: text('player_tamer_id'),
+
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+// Many-to-many: per-tamer player access. A tamer is reachable by DM-tier
+// accounts, any account with a row here, or anyone if tamers.publicAccess is
+// true. Unique index on (tamer_id, user_id) lives in migration 0020 by hand
+// (not declared here), matching this schema's convention for campaignAccessGrants/users.
+export const tamerAccessGrants = pgTable('tamer_access_grants', {
+  id: text('id').primaryKey(),
+  tamerId: text('tamer_id').notNull(),
+  userId: text('user_id').notNull(),
 
   createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(() => new Date()),
@@ -691,3 +708,6 @@ export type NewSessionRow = typeof sessions.$inferInsert
 
 export type CampaignAccessGrantRow = typeof campaignAccessGrants.$inferSelect
 export type NewCampaignAccessGrantRow = typeof campaignAccessGrants.$inferInsert
+
+export type TamerAccessGrantRow = typeof tamerAccessGrants.$inferSelect
+export type NewTamerAccessGrantRow = typeof tamerAccessGrants.$inferInsert

@@ -21,20 +21,20 @@ interface MyAccess {
   isOwner: boolean
   isCoOwner: boolean
   isCoDm: boolean
-  playerScope: 'all' | 'specific' | null
-  playerTamerId: string | null
+  accessibleTamerIds: string[]
 }
 const myAccess = ref<MyAccess | null>(null)
 function hasDmTierAccess(a: MyAccess) { return a.isOwner || a.isCoOwner || a.isCoDm }
+function canAccessTamer(a: MyAccess, t: { id: string; publicAccess?: boolean }) {
+  return hasDmTierAccess(a) || !!t.publicAccess || a.accessibleTamerIds.includes(t.id)
+}
 
 // Page/navigation-level gating only (matches the rest of the app's existing
-// client-side access model) — an account scoped to one specific tamer only
-// ever sees/selects that tamer here, unless it also holds DM-tier access.
+// client-side access model) — a tamer is visible if it's public, DM-tier
+// access, or this account was explicitly granted it.
 const visibleTamers = computed(() => {
-  if (!myAccess.value || hasDmTierAccess(myAccess.value) || myAccess.value.playerScope !== 'specific') {
-    return tamers.value
-  }
-  return tamers.value.filter((t) => t.id === myAccess.value?.playerTamerId)
+  if (!myAccess.value) return tamers.value
+  return tamers.value.filter((t) => canAccessTamer(myAccess.value!, t))
 })
 
 onMounted(async () => {
@@ -44,11 +44,11 @@ onMounted(async () => {
   } catch {
     myAccess.value = null
   }
-  if (
-    myAccess.value && !hasDmTierAccess(myAccess.value) && myAccess.value.playerScope === 'specific'
-    && selectedTamerId.value && selectedTamerId.value !== myAccess.value.playerTamerId
-  ) {
-    selectedTamerId.value = null
+  if (myAccess.value && selectedTamerId.value) {
+    const selected = tamers.value.find((t) => t.id === selectedTamerId.value)
+    if (!selected || !canAccessTamer(myAccess.value, selected)) {
+      selectedTamerId.value = null
+    }
   }
   loading.value = false
 })

@@ -55,10 +55,10 @@ async function openCampaign(campaign: any) {
   // as "you belong here" and skips the password prompt entirely — mirrors
   // the bypass condition in middleware/campaign-access.ts.
   try {
-    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; playerScope: 'all' | 'specific' | null }>(
+    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean; accessibleTamerIds: string[] }>(
       `/api/campaigns/${campaign.id}/my-access`,
     )
-    if (access.isOwner || access.isCoOwner || access.isCoDm || access.playerScope) {
+    if (access.isOwner || access.isCoOwner || access.isCoDm || access.accessibleTamerIds.length > 0) {
       useCookie(`campaign-access-${campaign.id}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
       navigateTo(`/campaigns/${campaign.id}`)
       return

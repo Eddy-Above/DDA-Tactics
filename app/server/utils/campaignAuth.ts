@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 import type { H3Event } from 'h3'
-import { db, campaigns, campaignAccessGrants } from '../db'
+import { db, campaigns, campaignAccessGrants, tamerAccessGrants, tamers } from '../db'
 import { getSessionUser } from './session'
 
 export interface MyCampaignAccessResult {
@@ -8,8 +8,7 @@ export interface MyCampaignAccessResult {
   isOwner: boolean
   isCoOwner: boolean
   isCoDm: boolean
-  playerScope: 'all' | 'specific' | null
-  playerTamerId: string | null
+  accessibleTamerIds: string[]
 }
 
 const EMPTY_ACCESS: MyCampaignAccessResult = {
@@ -17,8 +16,7 @@ const EMPTY_ACCESS: MyCampaignAccessResult = {
   isOwner: false,
   isCoOwner: false,
   isCoDm: false,
-  playerScope: null,
-  playerTamerId: null,
+  accessibleTamerIds: [],
 }
 
 // Single source of truth for "what can the current session do on this
@@ -41,13 +39,24 @@ export async function getMyCampaignAccess(event: H3Event, campaignId: string): P
   const isCoOwner = isOwner || grant?.dmRole === 'co-owner'
   const isCoDm = isCoOwner || grant?.dmRole === 'co-dm'
 
+  // DM-tier accounts bypass per-tamer checks everywhere this list is
+  // consulted, so there's no need to compute it for them.
+  let accessibleTamerIds: string[] = []
+  if (!isCoDm) {
+    const rows = await db
+      .select({ tamerId: tamerAccessGrants.tamerId })
+      .from(tamerAccessGrants)
+      .innerJoin(tamers, eq(tamers.id, tamerAccessGrants.tamerId))
+      .where(and(eq(tamers.campaignId, campaignId), eq(tamerAccessGrants.userId, user.id)))
+    accessibleTamerIds = rows.map((r) => r.tamerId)
+  }
+
   return {
     userId: user.id,
     isOwner,
     isCoOwner,
     isCoDm,
-    playerScope: grant?.playerScope ?? null,
-    playerTamerId: grant?.playerTamerId ?? null,
+    accessibleTamerIds,
   }
 }
 
