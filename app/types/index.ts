@@ -190,6 +190,7 @@ export type WebSocketMapMessage =
   | { type: 'encounter-updated'; encounterId: string }
   | { type: 'encounter-state';  encounterId: string; encounter: Encounter; version: number }
   | { type: 'roll-logged';      campaignId: string; entry: RollLogEntry }
+  | { type: 'scene-updated';    campaignId: string; sceneImageUrl: string | null; sceneImageCaption: string | null }
 
 export type Stance = 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
 

@@ -18,6 +18,7 @@ useHead({
     <NuxtPage />
   </NuxtLayout>
   <RollLogPanel />
+  <ScenePanel />
   <AccountWidget v-if="route.meta.layout === 'player' || route.meta.layout === false" />
 </template>
 

@@ -415,6 +415,10 @@ export const campaigns = pgTable('campaigns', {
   dmPasswordHash: text('dm_password_hash'),
   rulesSettings: jsonb('rules_settings').notNull().default({}).$type<Record<string, any>>(),
 
+  // GM-set ambient scene image (roleplay visual aid, unrelated to the combat map).
+  sceneImageUrl: text('scene_image_url'),
+  sceneImageCaption: text('scene_image_caption'),
+
   // Stamped only at creation time if the creator was logged in; never
   // reassigned afterward (no ownership transfer/retroactive claiming).
   ownerId: text('owner_id'),
