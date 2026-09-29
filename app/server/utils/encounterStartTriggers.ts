@@ -5,14 +5,17 @@ import { getUnlockedSpecialOrders } from '../../utils/specialOrders'
 import { STAGE_ORDER } from '../../data/qualities'
 
 /**
- * Applied once, the moment an encounter's phase transitions into 'combat' — i.e. "the
- * beginning of the battle" for passives like [Challenger] that key off that moment.
- * Unlike round-start triggers, this only ever fires a single time per encounter.
+ * Applied the moment an encounter's phase transitions into 'combat' — i.e. "the beginning
+ * of the battle" for passives like [Challenger] that key off that moment. Also re-applied,
+ * restricted to just the newly-added participants via `onlyParticipantIds`, when a partner
+ * digimon joins an already-running combat (see [id].put.ts), so reinforcements aren't
+ * silently skipped.
  */
 export async function applyEncounterStartTriggers(
   participants: any[],
   campaignLevel: 'standard' | 'enhanced' | 'extreme',
-  houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
+  houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean },
+  onlyParticipantIds?: Set<string>
 ): Promise<any[]> {
   const digimonParticipants = participants.filter((p) => p.type === 'digimon')
   if (digimonParticipants.length === 0) return participants
@@ -24,10 +27,11 @@ export async function applyEncounterStartTriggers(
     if (d) digimonRows.set(p.entityId, d)
   }
 
-  // Main enemy = highest-stage enemy digimon present at the start of the encounter
+  // Main enemy = highest-stage enemy digimon present at the start of the encounter.
+  // Enemies still in reserve aren't actually on the board yet, so they don't count.
   let mainEnemyStageIdx = -1
   for (const p of digimonParticipants) {
-    if (!p.isEnemy) continue
+    if (!p.isEnemy || p.inReserve) continue
     const d = digimonRows.get(p.entityId)
     if (!d) continue
     const idx = STAGE_ORDER.indexOf(d.stage as any)
@@ -40,6 +44,11 @@ export async function applyEncounterStartTriggers(
   const updated: any[] = []
   for (const p of participants) {
     if (p.type !== 'digimon' || p.isEnemy) {
+      updated.push(p)
+      continue
+    }
+
+    if (onlyParticipantIds && !onlyParticipantIds.has(p.id)) {
       updated.push(p)
       continue
     }

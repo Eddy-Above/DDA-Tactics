@@ -92,20 +92,44 @@ export default defineEventHandler(async (event) => {
   }
 
   // Encounter-start triggers: [Challenger] grants temp wounds (via Shield) to eligible partner
-  // digimon the moment the encounter's phase transitions into 'combat' for the first time.
+  // digimon the moment the encounter's phase transitions into 'combat' for the first time, and
+  // again to any partner digimon added as reinforcements after combat has already begun.
   const isCombatStart = existing.phase !== 'combat' && body.phase === 'combat'
-  if (isCombatStart) {
-    let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
-    let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
-    if (existing.campaignId) {
-      const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
-      if (campaign) {
-        campaignLevel = campaign.level
-        houseRules = (campaign.rulesSettings || {}).houseRules
+  const isReinforcement = !isCombatStart && existing.phase === 'combat' && !!body.participants
+
+  if (isCombatStart || isReinforcement) {
+    const getCampaignRules = async () => {
+      let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
+      let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+      if (existing.campaignId) {
+        const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
+        if (campaign) {
+          campaignLevel = campaign.level
+          houseRules = (campaign.rulesSettings || {}).houseRules
+        }
+      }
+      return { campaignLevel, houseRules }
+    }
+
+    if (isCombatStart) {
+      const { campaignLevel, houseRules } = await getCampaignRules()
+      const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
+      updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
+    } else {
+      const existingIds = new Set(((existing.participants as any[]) || []).map((p) => p.id))
+      const newParticipants = (updateData.participants as any[]).filter(
+        (p) => p.type === 'digimon' && !p.isEnemy && !existingIds.has(p.id)
+      )
+      if (newParticipants.length > 0) {
+        const { campaignLevel, houseRules } = await getCampaignRules()
+        updateData.participants = await applyEncounterStartTriggers(
+          updateData.participants as any[],
+          campaignLevel,
+          houseRules,
+          new Set(newParticipants.map((p) => p.id))
+        )
       }
     }
-    const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
-    updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
   }
 
   await db.update(encounters).set(updateData).where(eq(encounters.id, id))
