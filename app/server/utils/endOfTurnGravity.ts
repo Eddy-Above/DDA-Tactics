@@ -3,6 +3,7 @@ import { getRoomPositions, broadcastPositionPatch } from './encounterRoom'
 import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
+import { applyGuidingLightAuras } from './guidingLight'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
 // wounds in place and returns the position patch + battle-log entries. Flyers hover (skipped
@@ -59,6 +60,8 @@ export async function applyEndOfTurnGravity(
   mapId: string | null | undefined,
   participants: any[],
   round: number,
+  campaignLevel?: 'standard' | 'enhanced' | 'extreme',
+  houseRules?: { stunMaxDuration1?: boolean },
 ): Promise<{ participants: any[]; logEntries: any[] }> {
   if (!mapId) return { participants, logEntries: [] }
 
@@ -72,7 +75,14 @@ export async function applyEndOfTurnGravity(
 
   const { patch, logEntries } = await computeGravityDrops(positions, participants, map, digimonById, round)
 
-  if (Object.keys(patch).length > 0) await broadcastPositionPatch(encounterId, patch)
+  if (Object.keys(patch).length > 0) {
+    await broadcastPositionPatch(encounterId, patch)
+    // [Guiding Light]: a fall can move a unit across an aura's burst radius. Fold the recompute
+    // into the returned `participants` — the caller still has to persist it, so a standalone
+    // recompute here would race that later write.
+    const auraResult = await applyGuidingLightAuras(participants, { ...positions, ...patch }, campaignLevel ?? 'standard', houseRules)
+    if (auraResult.changed) participants = auraResult.participants
+  }
 
   return { participants, logEntries }
 }

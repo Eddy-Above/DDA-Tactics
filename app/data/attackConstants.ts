@@ -17,6 +17,8 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Vigilance': 'P',
   'Swiftness': 'P',
   'Regenerate': 'P',
+  'Guiding Light': 'P',
+  'Guiding Light (Focus)': 'P',
   // Negative [N] — debuffs on enemies
   'Poison': 'N',
   'Confuse': 'N',
@@ -60,7 +62,7 @@ export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal'])
 /**
  * Permanent effects — no round duration; persist until replaced or removed by game event
  */
-export const PERMANENT_EFFECTS = new Set(['Shield', 'Demoralize'])
+export const PERMANENT_EFFECTS = new Set(['Shield', 'Demoralize', 'Guiding Light', 'Guiding Light (Focus)'])
 
 /**
  * Duration caps/floors per effect
@@ -138,6 +140,8 @@ export const EFFECT_STAT_MODIFIERS: Record<string, { accuracy?: number; damage?:
   'Swiftness': { dodge: 1, accuracy: 1 },
   'Vigilance': { dodge: 1, armor: 1 },
   'Vigor': { dodge: 1 },
+  'Guiding Light': { accuracy: 2 },          // [Guiding Light] aura: +2 Accuracy to allies in the owner's burst radius
+  'Guiding Light (Focus)': { dodge: 1 },     // [Guiding Light] aura: owner gets +1 Dodge per ally in its burst radius (potency = ally count)
   // Boss effects
   'Frenzy': { damage: 1 },   // BIT½ damage buff; potency stored as Math.floor(BIT/2) via special case below
   // Debuffs

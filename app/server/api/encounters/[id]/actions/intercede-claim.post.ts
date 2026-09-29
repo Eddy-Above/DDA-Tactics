@@ -25,6 +25,7 @@ import { calculateDigimonDerivedStats } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
 
@@ -619,6 +620,9 @@ export default defineEventHandler(async (event) => {
 
     if (updatedParticipantPositions) {
       await broadcastPositionPatch(encounterId, updatedParticipantPositions)
+      // [Guiding Light]: participants were already persisted above, so this recompute is safe —
+      // awaited before the re-select below so the response also reflects any aura change.
+      await recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[intercede-claim] Guiding Light recompute failed:', e))
     }
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
@@ -848,6 +852,9 @@ export default defineEventHandler(async (event) => {
 
   if (updatedParticipantPositions) {
     await broadcastPositionPatch(encounterId, updatedParticipantPositions)
+    // [Guiding Light]: participants were already persisted above, so this recompute is safe —
+    // awaited before the re-select below so the response also reflects any aura change.
+    await recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[intercede-claim] Guiding Light recompute failed:', e))
   }
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))

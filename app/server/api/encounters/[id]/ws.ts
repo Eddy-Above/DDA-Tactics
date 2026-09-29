@@ -7,6 +7,7 @@ import {
   joinRoom,
   leaveRoom,
 } from '../../../utils/encounterRoom'
+import { recomputeGuidingLightForEncounter } from '../../../utils/guidingLight'
 
 export default defineWebSocketHandler({
   async open(peer) {
@@ -45,6 +46,10 @@ export default defineWebSocketHandler({
     if (msg.type === 'unit-moved') {
       const version = await applyUnitMoved(encounterId, msg.participantId, msg.position)
       broadcast(encounterId, { ...msg, version }, peer)
+      // Live [Guiding Light] aura: recompute who's in radius now that a unit moved. Broadcasts
+      // its own 'encounter-state' message (with the fuller updated participants) only if something
+      // actually entered or left a radius, so a plain move with no aura change stays a no-op.
+      recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[ws] Guiding Light recompute failed:', e))
     } else if (msg.type === 'door-toggled') {
       broadcast(encounterId, msg, peer)
     } else if (msg.type === 'element-painted' || msg.type === 'map-edited') {

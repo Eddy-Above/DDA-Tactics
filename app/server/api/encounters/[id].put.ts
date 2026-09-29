@@ -4,6 +4,7 @@ import { getRoomSnapshot } from '../../utils/encounterRoom'
 import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
+import { applyGuidingLightAuras } from '../../utils/guidingLight'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -45,6 +46,21 @@ export default defineEventHandler(async (event) => {
   const incomingRound = typeof body.round === 'number' ? body.round : existingRound
   const isNewRound = incomingRound > existingRound
 
+  // Campaign level + house rules, used by end-of-turn gravity (Guiding Light recompute), the
+  // combat-start triggers, and the Guiding Light combat-start pass below.
+  const getCampaignRules = async () => {
+    let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
+    let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+    if (existing.campaignId) {
+      const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
+      if (campaign) {
+        campaignLevel = campaign.level
+        houseRules = (campaign.rulesSettings || {}).houseRules
+      }
+    }
+    return { campaignLevel, houseRules }
+  }
+
   if (body.participants) {
     let participants = body.participants as any[]
 
@@ -53,7 +69,9 @@ export default defineEventHandler(async (event) => {
     const isTurnAdvance = typeof body.currentTurnIndex === 'number'
       && (body.currentTurnIndex !== existing.currentTurnIndex || incomingRound > existingRound)
     if (isTurnAdvance) {
-      const gravity = await applyEndOfTurnGravity(id, (existing as any).mapId, participants, incomingRound)
+      const { campaignLevel, houseRules } = await getCampaignRules()
+      const gravity = await applyEndOfTurnGravity(id, (existing as any).mapId, participants, incomingRound, campaignLevel, houseRules)
+      participants = gravity.participants
       if (gravity.logEntries.length > 0) {
         updateData.battleLog = [...(((body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...gravity.logEntries]
       }
@@ -98,19 +116,6 @@ export default defineEventHandler(async (event) => {
   const isReinforcement = !isCombatStart && existing.phase === 'combat' && !!body.participants
 
   if (isCombatStart || isReinforcement) {
-    const getCampaignRules = async () => {
-      let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
-      let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
-      if (existing.campaignId) {
-        const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
-        if (campaign) {
-          campaignLevel = campaign.level
-          houseRules = (campaign.rulesSettings || {}).houseRules
-        }
-      }
-      return { campaignLevel, houseRules }
-    }
-
     if (isCombatStart) {
       const { campaignLevel, houseRules } = await getCampaignRules()
       const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
@@ -129,6 +134,20 @@ export default defineEventHandler(async (event) => {
           new Set(newParticipants.map((p) => p.id))
         )
       }
+    }
+
+    // [Guiding Light]: apply the initial aura the moment combat begins, so allies already in
+    // radius are buffed before anyone has to move (subsequent moves recompute it live over WS).
+    if (isCombatStart) {
+      const { campaignLevel, houseRules } = await getCampaignRules()
+      const { participantPositions } = await getRoomSnapshot(id)
+      const auraResult = await applyGuidingLightAuras(
+        updateData.participants as any[],
+        participantPositions,
+        campaignLevel,
+        houseRules
+      )
+      if (auraResult.changed) updateData.participants = auraResult.participants
     }
   }
 

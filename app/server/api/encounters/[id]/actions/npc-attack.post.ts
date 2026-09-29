@@ -54,10 +54,12 @@ export default defineEventHandler(async (event) => {
 
   // Fetch house rules from campaign
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       houseRules = campaign.rulesSettings.houseRules
+      if (campaign.level) campaignLevel = campaign.level
     }
   }
 
@@ -262,6 +264,8 @@ export default defineEventHandler(async (event) => {
         targetParticipantId: body.targetId,
         effect: appliedEffectName,
         distance: potency,
+        campaignLevel,
+        houseRules,
       })
       supportParticipants = disp.participants
       supportPushLogNote = disp.logNote
@@ -454,6 +458,8 @@ export default defineEventHandler(async (event) => {
       targetParticipantId: body.targetId,
       effect: appliedEffectName,
       distance: potency,
+      campaignLevel,
+      houseRules,
     })
     finalParticipants = disp.participants
     npcPushLogNote = disp.logNote
@@ -602,7 +608,10 @@ export default defineEventHandler(async (event) => {
         (encounter as any).mapId,
         finalParticipantsAfterDefeat,
         npcDefeatNextRound ?? encounter.round ?? 0,
+        campaignLevel,
+        houseRules,
       )
+      finalParticipantsAfterDefeat = npcGravity.participants
       gravityLogEntries = npcGravity.logEntries
     } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
       // The active participant shifted left by one slot; same person remains active

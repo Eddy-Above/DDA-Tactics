@@ -25,6 +25,7 @@ import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
+import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
@@ -549,7 +550,7 @@ export default defineEventHandler(async (event) => {
           if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
           else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
           else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-          else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
+          else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
           if (supportResult) {
             participants = supportResult.participants
             battleLog = supportResult.battleLog
@@ -584,6 +585,11 @@ export default defineEventHandler(async (event) => {
           if (result.nextRound !== undefined) areaAutoAdvanceRound = result.nextRound
           if (result.positionPatch) {
             await broadcastPositionPatch(encounterId, result.positionPatch)
+            // [Guiding Light]: fold the recompute into the in-memory `participants` this handler
+            // still has to persist below (a standalone recompute here would race the later write).
+            const positions = await getRoomPositions(encounterId)
+            const auraResult = await applyGuidingLightAuras(participants, positions, campaignLevel as any, houseRules)
+            if (auraResult.changed) participants = auraResult.participants
           }
         }
       }
@@ -871,7 +877,7 @@ export default defineEventHandler(async (event) => {
       } else if (resolutionType === 'negative') {
         supportResult = await resolveNegativeSupportNpc(supportParams)
       } else if (resolutionType === 'instant') {
-        supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
+        supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
       }
 
       if (supportResult?.resolved) {
@@ -1298,7 +1304,7 @@ export default defineEventHandler(async (event) => {
         if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
         else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
         else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-        else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
+        else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
 
         if (supportResult) {
           await db.update(encounters).set({
@@ -1337,6 +1343,11 @@ export default defineEventHandler(async (event) => {
 
         if (result.positionPatch) {
           await broadcastPositionPatch(encounterId, result.positionPatch)
+          // [Guiding Light]: fold the recompute into `result.participants`, which the write just
+          // below still has to persist (a standalone recompute here would race that later write).
+          const positions = await getRoomPositions(encounterId)
+          const auraResult = await applyGuidingLightAuras(result.participants, positions, campaignLevel as any, houseRules)
+          if (auraResult.changed) result.participants = auraResult.participants
         }
 
         await db.update(encounters).set({

@@ -66,11 +66,13 @@ export default defineEventHandler(async (event) => {
 
   // Fetch campaign house rules
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
+      if (campaign.level) campaignLevel = campaign.level
     }
   }
 
@@ -867,6 +869,8 @@ export default defineEventHandler(async (event) => {
           targetParticipantId: request.targetParticipantId,
           effect: appliedEffectName as 'Knockback' | 'Pull',
           distance: damageEffectPotency,
+          campaignLevel,
+          houseRules,
         })
         participants = disp.participants
         pushPullLogNote = disp.logNote

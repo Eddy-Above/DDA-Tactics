@@ -4,6 +4,7 @@ import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './co
 import { getFootprintDimsForParticipant, buildFootprintOccupiedSet, findPushPullLandingCell } from './mapMovement'
 import { resolveFall } from '../../utils/movementRules'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
+import { applyGuidingLightAuras } from './guidingLight'
 
 // Pure core for Knockback (push) / Pull displacement: walks the target away from / toward the
 // attacker by `distance` cells (findPushPullLandingCell), settles it to the ground (resolveFall,
@@ -72,6 +73,8 @@ export async function applyPushPullDisplacement(args: {
   targetParticipantId: string
   effect: 'Knockback' | 'Pull'
   distance: number
+  campaignLevel?: 'standard' | 'enhanced' | 'extreme'
+  houseRules?: { stunMaxDuration1?: boolean }
 }): Promise<{ participants: any[]; logNote: string | null }> {
   const { encounterId, mapId } = args
   if (!mapId) return { participants: args.participants, logNote: null }
@@ -81,7 +84,7 @@ export async function applyPushPullDisplacement(args: {
   const positions = await getRoomPositions(encounterId)
   const digimonById = await loadParticipantDigimon(args.participants)
 
-  const { participants, patch, logNote } = await computePushPull({
+  let { participants, patch, logNote } = await computePushPull({
     map,
     positions,
     digimonById,
@@ -92,7 +95,14 @@ export async function applyPushPullDisplacement(args: {
     distance: args.distance,
   })
 
-  if (patch) await broadcastPositionPatch(encounterId, patch)
+  if (patch) {
+    await broadcastPositionPatch(encounterId, patch)
+    // [Guiding Light]: Knockback/Pull can move a unit across an aura's burst radius. Fold the
+    // recompute into the returned `participants` — the caller still has to persist it, so a
+    // standalone recompute here would race that later write.
+    const auraResult = await applyGuidingLightAuras(participants, { ...positions, ...patch }, args.campaignLevel ?? 'standard', args.houseRules)
+    if (auraResult.changed) participants = auraResult.participants
+  }
   return { participants, logNote }
 }
 
@@ -114,6 +124,8 @@ export async function resolveInstantSupportEffect(params: {
   encounterId: string
   mapId: string | null | undefined
   turnOrder?: string[]
+  campaignLevel?: 'standard' | 'enhanced' | 'extreme'
+  houseRules?: { stunMaxDuration1?: boolean }
 }): Promise<{ participants: any[]; battleLog: any[]; pendingRequests: any[]; turnOrder?: string[]; resolved: boolean }> {
   const effect = params.attackDef?.effect
   if (effect !== 'Knockback' && effect !== 'Pull') {
@@ -132,6 +144,8 @@ export async function resolveInstantSupportEffect(params: {
     targetParticipantId: params.targetParticipantId,
     effect,
     distance: potency,
+    campaignLevel: params.campaignLevel,
+    houseRules: params.houseRules,
   })
 
   const battleLog = [...params.battleLog, {

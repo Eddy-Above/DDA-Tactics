@@ -11,6 +11,7 @@ import {
   computeFallDamage,
 } from '~/server/utils/mapMovement'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
+import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
@@ -393,6 +394,10 @@ export default defineEventHandler(async (event) => {
     if (updatedTargetPosition) {
       const patch = { [target.id]: updatedTargetPosition }
       await broadcastPositionPatch(encounterId, patch)
+      // [Guiding Light]: Clash Throw can move a unit across an aura's burst radius; participants
+      // were already persisted above, so this is a separate, safe recompute (nothing else writes
+      // participants again in this request).
+      recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[clash-action] Guiding Light recompute failed:', e))
     }
 
   } else if (body.actionType === 'attack') {

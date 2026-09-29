@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
+import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
 import { loadEncounterMap } from '~/server/utils/combatSpatial'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
@@ -40,11 +41,13 @@ export default defineEventHandler(async (event) => {
 
   // Fetch campaign house rules
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
+      if (campaign.level) campaignLevel = campaign.level
     }
   }
 
@@ -272,7 +275,7 @@ export default defineEventHandler(async (event) => {
             if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
             else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
             else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-            else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId })
+            else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel })
 
             if (supportResult) {
               updateData.participants = supportResult.participants
@@ -300,6 +303,12 @@ export default defineEventHandler(async (event) => {
 
             if (result.positionPatch) {
               await broadcastPositionPatch(encounterId, result.positionPatch)
+              // [Guiding Light]: fold the recompute into `result.participants`, which the
+              // single `db.update` below still has to persist (a standalone recompute here
+              // would race that later write).
+              const positions = await getRoomPositions(encounterId)
+              const auraResult = await applyGuidingLightAuras(result.participants, positions, campaignLevel, houseRules)
+              if (auraResult.changed) result.participants = auraResult.participants
             }
 
             updateData.participants = result.participants
