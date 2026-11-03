@@ -4703,11 +4703,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
               />
               <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
-            <!-- Floating Inspiration panel — always available during combat in map view -->
+            <!-- Floating Inspiration panel — always available during combat in map view. Clicking
+                 "✦ Inspiration" minimises it to a ✦ n/m chip; no min-width, or the chip would stretch to it. -->
             <InspirationPanel
               v-if="activeEncounter?.phase === 'combat' && myTamerParticipant"
+              minimizable
               class="fixed z-50 shadow-xl max-h-[60vh] overflow-y-auto"
-              style="bottom: 120px; right: 16px; min-width: 280px; max-width: 380px;"
+              style="bottom: 120px; right: 16px; max-width: 380px;"
               :current-inspiration="currentCombatInspiration"
               :max-inspiration="maxCombatInspiration"
               :act-of-inspiration-cost="actOfInspirationCost"

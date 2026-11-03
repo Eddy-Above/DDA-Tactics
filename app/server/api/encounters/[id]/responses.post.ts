@@ -10,6 +10,8 @@ import { applyStanceToDodge } from '../../../../utils/stanceModifiers'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from '../../../utils/selectiveTargeting'
 import { getDigizoidArmorBonus, getReflectArmorRange } from '../../../utils/digizoidArmor'
 import { getOutsideClashArmorBonus } from '../../../utils/clashArmor'
+import { isImmuneToEffect } from '../../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../utils/enemyKnockouts'
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 
 interface SubmitResponseBody {
@@ -390,7 +392,8 @@ export default defineEventHandler(async (event) => {
           }
 
           const supportAlignment = attackDef?.effect ? EFFECT_ALIGNMENT[attackDef.effect] : undefined
-          if (hit && attackDef?.effect && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, supportAlignment)) {
+          if (hit && attackDef?.effect && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, supportAlignment)
+            && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
             const effectDuration = Math.max(1, netSuccesses)
             const alignment = supportAlignment
             const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
@@ -488,12 +491,14 @@ export default defineEventHandler(async (event) => {
               houseRules,
               turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
+              encounterId,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
             updateData.participants = participants
             updateData.battleLog = battleLog
             updateData.pendingRequests = caResult.pendingRequests
+            if (caResult.turnOrder) updateData.turnOrder = caResult.turnOrder
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
@@ -799,8 +804,8 @@ export default defineEventHandler(async (event) => {
               )
             }
 
-            // Auto-apply effect if attack has one and conditions are met
-            if (attackDef?.effect) {
+            // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
+            if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
               const alignment = EFFECT_ALIGNMENT[attackDef.effect]
               const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
                 && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
@@ -979,15 +984,38 @@ export default defineEventHandler(async (event) => {
               houseRules,
               turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
+              encounterId,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
             updateData.participants = participants
             updateData.battleLog = battleLog
             updateData.pendingRequests = caResult.pendingRequests
+            if (caResult.turnOrder) updateData.turnOrder = caResult.turnOrder
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
+        }
+      }
+
+      // Digizoid Armor's reflected damage can knock out an enemy attacker: it leaves the encounter,
+      // and if it was the active participant its turn ends. (A miss reflects nothing, so this never
+      // follows a counterattack above.)
+      if (hit && reflectDamageToAttacker > 0 && !knockedOutEnemyIds(encounter.participants).includes(request.data.attackerParticipantId)) {
+        const knockout = await resolveEnemyKnockouts({
+          participants,
+          turnOrder,
+          currentTurnIndex,
+          round: encounter.round ?? 0,
+        }, [request.data.attackerParticipantId], { encounterId, houseRules, campaignLevel, mapId: encounter.mapId, gravity: 'room' })
+        if (knockout.changed) {
+          participants = knockout.participants
+          battleLog = [...battleLog, ...knockout.logEntries]
+          updateData.participants = participants
+          updateData.battleLog = battleLog
+          updateData.turnOrder = knockout.turnOrder
+          updateData.currentTurnIndex = knockout.currentTurnIndex
+          updateData.round = knockout.round
         }
       }
 
@@ -1262,6 +1290,7 @@ export default defineEventHandler(async (event) => {
         currentTurnIndex: encounter.currentTurnIndex ?? 0,
         houseRules,
         counterattack: true,
+        encounterId,
       })
 
       await db.update(encounters).set({

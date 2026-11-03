@@ -2,13 +2,15 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../../db'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
-import type { DigimonStage } from '../../../../../types'
+import type { DigimonStage, EddySoulRules } from '../../../../../types'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
 import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
+import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect, damageOverTimeRules } from '../../../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
 
 interface NpcAttackBody {
   participantId: string
@@ -54,16 +56,21 @@ export default defineEventHandler(async (event) => {
 
   // Fetch house rules from campaign
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let eddySoulRules: EddySoulRules | undefined
   let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       houseRules = campaign.rulesSettings.houseRules
+      eddySoulRules = campaign.rulesSettings.eddySoulRules
       if (campaign.level) campaignLevel = campaign.level
     }
   }
 
   const participants = encounter.participants || []
+  // Enemies already knocked out when the request arrived, which the knockout check before the save
+  // leaves alone. Taken here: the round wrap below mutates participant objects in place.
+  const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
   const turnOrder = encounter.turnOrder || []
   const battleLog = encounter.battleLog || []
 
@@ -414,8 +421,8 @@ export default defineEventHandler(async (event) => {
         )
       }
 
-      // Auto-apply effect if attack has one and conditions are met
-      if (npcAttackDef?.effect) {
+      // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
+      if (npcAttackDef?.effect && !isImmuneToEffect(npcAttackDef.effect, targetDigimon?.qualities)) {
         const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
         if (shouldApply) {
           const effectDuration = Math.max(1, netSuccesses)
@@ -519,6 +526,7 @@ export default defineEventHandler(async (event) => {
   let npcDefeatNextTurnIndex: number | undefined
   let npcDefeatNextRound: number | undefined
   let gravityLogEntries: any[] = []
+  let roundEndLogEntries: any[] = []
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.isEnemy &&
@@ -543,6 +551,17 @@ export default defineEventHandler(async (event) => {
       npcDefeatNextRound = isRoundWrap ? (encounter.round ?? 0) + 1 : undefined
 
       if (isRoundWrap) {
+        // Round end: Poison/Burn for the round that just finished, before the reset
+        const dotRules = damageOverTimeRules({ houseRules, eddySoulRules })
+        const roundEnd = await applyRoundEndEffects({
+          participants: finalParticipantsAfterDefeat,
+          endingRound: encounter.round ?? 0,
+          rules: dotRules,
+          positions: await loadStationaryBurnPositions(encounterId, (encounter as any).mapId, finalParticipantsAfterDefeat, dotRules),
+        })
+        finalParticipantsAfterDefeat = roundEnd.participants
+        roundEndLogEntries = roundEnd.logEntries
+
         finalParticipantsAfterDefeat.forEach((p: any) => {
           const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
           const hasteGrantsNextRound = !!(hasteEffect && hasteEffect.potency === 1
@@ -699,15 +718,24 @@ export default defineEventHandler(async (event) => {
     hit: hit,
   }
 
-  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...gravityLogEntries]
+  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...roundEndLogEntries, ...gravityLogEntries]
+
+  // Any other enemy this request knocked out (Burn on the Knockback, the wrap's Poison/Burn, the
+  // fall at the turn change) leaves the encounter too
+  const knockout = await resolveEnemyKnockouts({
+    participants: finalParticipantsAfterDefeat,
+    turnOrder: updatedTurnOrder,
+    currentTurnIndex: npcDefeatNextTurnIndex ?? (encounter.currentTurnIndex ?? 0),
+    round: npcDefeatNextRound ?? (encounter.round ?? 0),
+  }, knockedOutEnemyIds(finalParticipantsAfterDefeat).filter((pid) => !knockedOutBefore.has(pid)),
+  { encounterId, houseRules, campaignLevel, mapId: (encounter as any).mapId, gravity: 'room' })
+  const turnStateChanged = !!npcDefeatedLog || knockout.changed
 
   // Update encounter
   const updateData: any = {
-    participants: finalParticipantsAfterDefeat,
-    battleLog: updatedBattleLog,
-    ...(npcDefeatedLog ? { turnOrder: updatedTurnOrder } : {}),
-    ...(npcDefeatNextTurnIndex !== undefined ? { currentTurnIndex: npcDefeatNextTurnIndex } : {}),
-    ...(npcDefeatNextRound !== undefined ? { round: npcDefeatNextRound } : {}),
+    participants: knockout.participants,
+    battleLog: [...updatedBattleLog, ...knockout.logEntries],
+    ...(turnStateChanged ? { turnOrder: knockout.turnOrder, currentTurnIndex: knockout.currentTurnIndex, round: knockout.round } : {}),
     updatedAt: new Date(),
   }
 

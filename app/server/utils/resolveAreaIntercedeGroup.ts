@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { resolveParticipantName } from './participantName'
 import { applyEffectToParticipant } from '~/server/utils/applyEffect'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
@@ -240,6 +241,22 @@ export async function resolveAreaIntercedeGroup({
     updatedBattleLog.push(logEntry)
   }
 
+  // Enemy interceptors knocked out by the hit leave the encounter. An interceptor isn't the active
+  // participant (the attacker is), so at most the turn index shifts.
+  const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
+  const knockout = await resolveEnemyKnockouts(
+    { participants: updatedParticipants, turnOrder: updatedTurnOrder, currentTurnIndex, round },
+    claims.map(c => c.interceptorParticipantId).filter(id => !knockedOutBefore.has(id)),
+    { encounterId, houseRules },
+  )
+  if (knockout.changed) {
+    updatedParticipants = knockout.participants
+    updatedTurnOrder = knockout.turnOrder
+    updatedBattleLog.push(...knockout.logEntries)
+    if (knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex) groupNextTurnIndex = knockout.currentTurnIndex
+    if (knockout.round !== round) groupNextRound = knockout.round
+  }
+
   // Targets that were not claimed by any interceptor
   const uncoveredIds = originalTargetIds.filter(id => !claimedTargetIds.has(id))
 
@@ -392,6 +409,7 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         clashAttack: groupData.clashAttack,
         totalTargetCount: originalTargetIds.length,
+        encounterId,
       })
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog

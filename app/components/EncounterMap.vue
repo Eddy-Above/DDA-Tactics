@@ -527,25 +527,36 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
     return
   }
 
-  const doorPath = movePathTo(participantId, position, path)
+  const movePath = movePathTo(participantId, position, path)
+  const distance = moveDistance(participantId, position, movePath)
   positions.value = { ...positions.value, [participantId]: position }
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path, version: 0 })
-  openDoorsAlong(participantId, doorPath)
+  openDoorsAlong(participantId, movePath)
 
   if (chargeMoveParticipantId.value === participantId) {
     chargeMoveParticipantId.value = null
     movement.clearMovement()
+    postMove(participantId, distance, true)  // the Charge already paid for this move
     return
   }
 
   if (npcMoveParticipantId.value === participantId) {
     npcMoveParticipantId.value = null
     movement.clearMovement()
-    $fetch(`/api/encounters/${props.encounter.id}/actions/move`, {
-      method: 'POST',
-      body: { participantId },
-    }).catch((e: unknown) => console.error('move action deduct failed', e))
+    postMove(participantId, distance, false)
   }
+}
+
+// Reports a combat move to the server: spends a simple action (unless the move is part of a
+// Charge or Pass) and applies [Burn]'s movement damage. Resolves once saved, so a Charge or Pass
+// can wait for it before its attack and the two server writes can't overwrite each other.
+// `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
+type MoveResult = { success: boolean; defeated?: boolean } | void
+function postMove(participantId: string, distance: number, noActionCost: boolean): Promise<MoveResult> {
+  return $fetch<{ success: boolean; defeated?: boolean }>(`/api/encounters/${props.encounter.id}/actions/move`, {
+    method: 'POST',
+    body: { participantId, distance, ...(noActionCost ? { noActionCost: true } : {}) },
+  }).catch((e: unknown) => console.error('move action failed', e))
 }
 
 // GM free-move: enter reposition mode for a participant (cancels any other move mode). The GM then
@@ -582,17 +593,26 @@ async function setDoorsOpen(doorIds: string[], isOpen: boolean) {
   }
 }
 
-// The mover's path to `destination`, for opening doors: the drawn path when it ends there, else one
-// derived the way hover pathing does. Call before the mover's position is updated.
+// The mover's path to `destination` (for opening doors and measuring the move): the drawn path when
+// it ends there, else one derived the way hover pathing does. Call before the mover's position is
+// updated.
 function movePathTo(participantId: string, destination: Vec3, drawn: Vec3[] = []): Vec3[] {
-  if (!map.value?.doors?.length) return []  // no doors to open
   if (drawn.length > 1 && sameVec3(drawn[drawn.length - 1], destination)) return drawn
+  if (!map.value) return []
   const ctx = npcMoveCaps(participantId)
   if (!ctx) return []
   const shown = movement.activePath.value  // computePath also sets the drawn path; keep it as is
   const path = movement.computePath(ctx.pos, destination, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
   movement.activePath.value = shown
   return path ?? []
+}
+
+// Cells moved: the path's steps (pathing is uniform-cost 26-neighbour), or the straight-line distance
+// when no path could be derived. Call before the mover's position is updated.
+function moveDistance(participantId: string, destination: Vec3, path: Vec3[]): number {
+  if (path.length > 1) return path.length - 1
+  const from = positions.value[participantId]
+  return from ? chebyshev(from, destination) : 0
 }
 
 // Moving through a closed door opens it. `path` is the mover's anchor cells, start first.
@@ -697,17 +717,26 @@ function startChargeBefore() {
   chargeMode.value = 'before'
 }
 
-function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
+async function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
+  let moveSaved: Promise<MoveResult> | null = null
   if (!sameVec3(positions.value[attackerId], destination)) {
-    const doorPath = movePathTo(attackerId, destination)  // the charge path isn't drawn
+    const movePath = movePathTo(attackerId, destination)  // the charge path isn't drawn
+    const distance = moveDistance(attackerId, destination, movePath)
     positions.value = { ...positions.value, [attackerId]: destination }
     ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [], version: 0 })
-    openDoorsAlong(attackerId, doorPath)
+    openDoorsAlong(attackerId, movePath)
+    moveSaved = postMove(attackerId, distance, true)
   }
   chargeMode.value = null
   movement.clearMovement()
   if (targetId) {
     chargeAttackInFlight.value = true
+    const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Charge move's
+    if (moved?.defeated) {
+      // Burn on the way in knocked the attacker out: there's no attack
+      emit('attack-cancelled')
+      return
+    }
     emit('target-selected', targetId)
   }
 }
@@ -721,15 +750,18 @@ function onTargetSelected(targetId: string) {
   emit('target-selected', targetId)
 }
 
-function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
+async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
+  let moveSaved: Promise<MoveResult> | null = null
   if (areaShapeData?.shape === 'pass') {
     const newPos = computePassLanding(areaShapeData.attackerPos, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
     const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     if (attackerId && !sameVec3(positions.value[attackerId], newPos)) {
+      const distance = chebyshev(positions.value[attackerId] ?? areaShapeData.attackerPos, newPos)
       positions.value = { ...positions.value, [attackerId]: newPos }
       ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: newPos, path: [], version: 0 })
       // A [Pass] moves in a straight line, so it opens any closed door on that line.
       openDoorsAlong(attackerId, segmentCells(areaShapeData.attackerPos, newPos))
+      moveSaved = postMove(attackerId, distance, true)
     }
   }
 
@@ -737,6 +769,13 @@ function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
     chargeAttackInFlight.value = true
+  }
+  const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Pass move's
+  if (moved?.defeated) {
+    // Burn on the Pass move knocked the attacker out: no attack, and no move after it
+    chargeAfterAttackerId.value = null
+    emit('attack-cancelled')
+    return
   }
   emit('area-attack-confirmed', targetIds, areaShapeData)
 }

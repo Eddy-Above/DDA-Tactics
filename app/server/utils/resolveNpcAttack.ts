@@ -6,11 +6,10 @@ import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { computeAttackDamage } from './computeAttackDamage'
-import { getDigimonDerivedStats } from './resolveSupportAttack'
-import { computeGravityDrops } from './endOfTurnGravity'
 import { loadParticipantDigimon } from './combatSpatial'
 import { computePushPull } from './pushPull'
-import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
+import { loadDamageOverTimeRules } from './damageOverTime'
+import { hasUnusedTimeControl, knockedOutEnemyIds, resolveEnemyKnockouts, triggerTimeControl } from './enemyKnockouts'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 
@@ -34,6 +33,7 @@ interface ResolveNpcAttackParams {
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
   mapRecord?: GameMap           // If provided, enables push/pull displacement
   participantPositions?: Record<string, Vec3>
+  encounterId?: string          // Loads the campaign's EddySoul rules for Poison/Burn (round wrap, Burn on Knockback/Pull)
 }
 
 /**
@@ -79,6 +79,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   if (!attacker || !target) {
     return { participants, battleLog, hit: false }
   }
+
+  // Enemies already knocked out before this attack (see the defeat check below)
+  const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
 
   // --- Target quality vars (used in dodge pool and participant update below) ---
   let targetHasPositiveReinforcement = false
@@ -358,7 +361,6 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // --- Push/Pull map displacement (map mode only) ---
   let positionPatch: Record<string, Vec3> | undefined
   let pushPullLogNote: string | null = null
-  let gravityLogEntries: any[] = []
   if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && params.mapRecord && params.participantPositions) {
     const disp = await computePushPull({
       map: params.mapRecord,
@@ -369,6 +371,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       targetParticipantId: params.targetParticipantId,
       effect: appliedEffectName as 'Knockback' | 'Pull',
       distance: damageCalc.effectData?.potency ?? 0,
+      burn: { round: params.round, rules: await loadDamageOverTimeRules(params.encounterId, participants) },
     })
     participants = disp.participants
     if (disp.patch) positionPatch = disp.patch
@@ -419,171 +422,39 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // --- Boss quality: Time Control — intercept first KO, restore wounds + stat bonus ---
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
-      damagedTarget.isEnemy &&
       !autoDevolveLog &&
-      !(damagedTarget as any).timeControlUsed &&
-      targetQualities.some((q: any) => q.id === 'time-control')) {
-    const stageBonus = 3  // Default stage bonus; covers most boss stages
-    const tcDerived = await getDigimonDerivedStats(damagedTarget.entityId)
-    const bitBonus = tcDerived?.bit ?? 0
-    const restoredWounds = Math.max(0, damagedTarget.maxWounds - stageBonus)
-
-    // Mutate directly so the defeat check below sees the restored wounds (same pattern as auto-devolve)
-    damagedTarget.currentWounds = restoredWounds
-    damagedTarget.timeControlUsed = true
-
-    participants = participants.map((p: any) => {
-      if (p.id !== params.targetParticipantId) return p
-      return {
-        ...p,
-        currentWounds: restoredWounds,
-        timeControlUsed: true,
-        activeEffects: applyEffectToParticipant(p.activeEffects || [], {
-          name: 'Time Control',
-          type: 'buff',
-          duration: 999,
-          source: 'Time Control',
-          description: `+${bitBonus} to all stats for the rest of combat.`,
-          potency: bitBonus,
-          potencyStat: 'bit',
-        }, params.houseRules, []),
-      }
-    })
-    battleLog.push({
-      id: `log-${Date.now()}-timecontrol`,
-      timestamp: new Date().toISOString(),
+      hasUnusedTimeControl(damagedTarget, targetQualities)) {
+    const timeControl = await triggerTimeControl(participants, params.targetParticipantId, {
       round: params.round,
-      actorId: damagedTarget.id,
-      actorName: resolveParticipantName(damagedTarget, params.participants, '', damagedTarget.isEnemy),
-      action: 'activates Time Control — the clock rewinds!',
-      target: null,
-      result: `Restored to ${restoredWounds} wounds. Gains +${bitBonus} to all stats.`,
-      damage: null,
-      effects: ['Time Control'],
+      houseRules: params.houseRules,
+      name: params.targetName,
     })
+    participants = timeControl.participants
+    battleLog.push(timeControl.logEntry)
   }
 
-  // --- Remove defeated NPC from encounter ---
-  let defeatedLog: any = null
-  let nextTurnIndex: number | undefined
-  let nextRound: number | undefined
-  if (damagedTarget && hit &&
-      damagedTarget.currentWounds >= damagedTarget.maxWounds &&
-      damagedTarget.isEnemy &&
-      !autoDevolveLog) {
-    const defeatedIndexInTurnOrder = params.turnOrder ? params.turnOrder.indexOf(params.targetParticipantId) : -1
-    const defeatedWasCurrentTurn = defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder === currentTurnIndex
-
-    participants = participants.filter((p: any) => p.id !== params.targetParticipantId)
-    // Clear clash state for any participant whose opponent was just removed
-    participants = participants.map((p: any) =>
-      p.clash?.opponentParticipantId === params.targetParticipantId ? { ...p, clash: null } : p
-    )
-    if (params.turnOrder) {
-      params.turnOrder = params.turnOrder.filter((id: string) => id !== params.targetParticipantId)
-    }
-
-    // If the defeated NPC was the active turn participant, auto-advance to the next
-    if (defeatedWasCurrentTurn && params.turnOrder) {
-      const newTurnOrderLength = params.turnOrder.length
-      if (newTurnOrderLength > 0) {
-        // After removal, currentTurnIndex either points to the next participant (shifted left)
-        // or it was the last element and we need to wrap to 0 (round reset)
-        const isRoundWrap = currentTurnIndex >= newTurnOrderLength
-        nextTurnIndex = isRoundWrap ? 0 : currentTurnIndex
-        nextRound = isRoundWrap ? params.round + 1 : undefined
-
-        if (isRoundWrap) {
-          // Round reset: restore all participants' actions
-          const PERMANENT_EFFECTS = new Set(['Clash', 'Burn', 'Poison', 'Haste', 'Stun', 'Regen'])
-          participants.forEach((p: any) => {
-            const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
-            const hasteGrantsNextRound = !!(hasteEffect && hasteEffect.potency === 1
-              && (p.actionsRemaining?.simple ?? 0) > 0)
-            p.actionsRemaining = { simple: 2 }
-            p.hasActed = false
-            p.usedAttackIds = []
-            p.hasAttemptedDigivolve = false
-            if (!p.stunActionReducedThisRound) {
-              const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
-              if (stunEffect) p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - 1)
-            }
-            p.stunActionReducedThisRound = false
-            if (hasteGrantsNextRound) p.actionsRemaining.simple += 1
-            if (p.clash) {
-              const opponent = participants.find((o: any) => o.id === p.clash?.opponentParticipantId)
-              const eitherPinned = p.clash.isPinned || opponent?.clash?.isPinned
-              p.clash.clashCheckNeeded = !eitherPinned
-              p.clash.isPinned = false
-            }
-            p.usedFreeClashThisRound = false
-          })
-
-          // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
-          participants = await applyRoundStartQualityTriggers(participants)
-        }
-
-        // Activate the next participant
-        const nextParticipantId = params.turnOrder[nextTurnIndex]
-        const nextParticipant = participants.find((p: any) => p.id === nextParticipantId)
-        if (nextParticipant) {
-          nextParticipant.isActive = true
-          nextParticipant.dodgePenalty = 0
-          nextParticipant.hasDirectedThisTurn = false
-          if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
-            nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
-            nextParticipant.actionsRemaining.simple = Math.max(
-              0,
-              nextParticipant.actionsRemaining.simple - nextParticipant.pendingSimpleActionPenalty,
-            )
-            nextParticipant.pendingSimpleActionPenalty = 0
-          }
-          if (nextParticipant.type === 'tamer') {
-            for (const p of participants.filter((p: any) => p.type === 'digimon')) {
-              const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
-              if (dig?.partnerId === nextParticipant.entityId) {
-                p.dodgePenalty = 0
-                if (p.interceptPenalty) {
-                  p.actionsRemaining = p.actionsRemaining || { simple: 2 }
-                  p.actionsRemaining.simple = Math.max(0, p.actionsRemaining.simple - p.interceptPenalty)
-                  p.interceptPenalty = 0
-                }
-                p.hasActed = false
-                break
-              }
-            }
-          }
-        }
-
-        // True turn boundary: the defeated NPC's turn ended and a new participant is active.
-        // Apply end-of-turn gravity (pure) when the map + positions are available, using positions
-        // merged with any push/pull displacement so a just-moved target isn't double-dropped.
-        if (params.mapRecord && params.participantPositions) {
-          const gById = await loadParticipantDigimon(participants)
-          const gPositions = { ...params.participantPositions, ...(positionPatch ?? {}) }
-          const g = await computeGravityDrops(gPositions, participants, params.mapRecord, gById, nextRound ?? params.round)
-          if (Object.keys(g.patch).length > 0) positionPatch = { ...(positionPatch ?? {}), ...g.patch }
-          gravityLogEntries = g.logEntries
-        }
-      }
-    } else if (defeatedIndexInTurnOrder !== -1 && defeatedIndexInTurnOrder < currentTurnIndex) {
-      // The active participant shifted left by one slot; same person remains active
-      nextTurnIndex = currentTurnIndex - 1
-    }
-
-    defeatedLog = {
-      id: `log-${Date.now()}-defeated`,
-      timestamp: new Date().toISOString(),
-      round: params.round,
-      actorId: params.targetParticipantId,
-      actorName: params.targetName,
-      action: 'was defeated and removed from the encounter!',
-      target: null,
-      result: 'Defeated',
-      damage: null,
-      effects: ['Defeated'],
-    }
-  }
+  // --- Defeated enemies leave the encounter (resolveEnemyKnockouts) ---
+  // The target on a hit, and an attacker knocked out by Digizoid Armor's reflected damage. Removing
+  // the active participant starts the next one's turn (wrapping the round past the last slot), with
+  // end-of-turn gravity when the map was passed.
+  const knockout = await resolveEnemyKnockouts(
+    { participants, turnOrder: params.turnOrder ?? [], currentTurnIndex, round: params.round },
+    [params.targetParticipantId, params.attackerParticipantId].filter((id) =>
+      (id === params.targetParticipantId && hit) || !knockedOutBefore.has(id)),
+    {
+      encounterId: params.encounterId,
+      houseRules: params.houseRules,
+      names: { [params.targetParticipantId]: params.targetName, [params.attackerParticipantId]: params.attackerName },
+      ...(params.mapRecord && params.participantPositions
+        ? { gravity: { map: params.mapRecord, positions: { ...params.participantPositions, ...(positionPatch ?? {}) } } }
+        : {}),
+    },
+  )
+  participants = knockout.participants
+  if (knockout.positionPatch) positionPatch = { ...(positionPatch ?? {}), ...knockout.positionPatch }
+  const turnMoved = knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex
+  const nextTurnIndex = params.turnOrder && turnMoved ? knockout.currentTurnIndex : undefined
+  const nextRound = knockout.round !== params.round ? knockout.round : undefined
 
   // --- Battle log ---
   const dodgeLogEntry = {
@@ -618,7 +489,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     dodgeSuccesses,
   }
 
-  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : []), ...gravityLogEntries]
+  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...knockout.logEntries]
 
-  return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound, positionPatch }
+  return { participants, battleLog, turnOrder: params.turnOrder ? knockout.turnOrder : undefined, hit, nextTurnIndex, nextRound, positionPatch }
 }

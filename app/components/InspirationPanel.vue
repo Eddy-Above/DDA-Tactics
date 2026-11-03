@@ -5,6 +5,7 @@ interface Props {
   actOfInspirationCost: number
   fatefulInterventionCost: number
   loading: boolean
+  minimizable?: boolean
 }
 
 defineProps<Props>()
@@ -13,15 +14,31 @@ const emit = defineEmits<{
   'spend-inspiration': [{ spendType: 'act-of-inspiration' | 'fateful-intervention'; amount: number }]
 }>()
 
+// Map Mode only (minimizable): the "✦ Inspiration" heading collapses the panel to a ✦ n/m chip that reopens it.
+const minimized = ref(false)
+
 function spend(spendType: 'act-of-inspiration' | 'fateful-intervention', amount: number) {
   emit('spend-inspiration', { spendType, amount })
 }
 </script>
 
 <template>
-  <div class="rounded-xl p-4 border-2 border-yellow-600/50 bg-yellow-900/10">
+  <button
+    v-if="minimized"
+    type="button"
+    title="Show Inspiration"
+    class="flex items-center gap-2 rounded-xl px-3 py-1.5 border-2 border-yellow-600/50 bg-yellow-900/10 hover:border-yellow-500"
+    @click="minimized = false"
+  >
+    <span class="font-display text-lg font-semibold leading-none text-yellow-400">✦</span>
+    <span class="text-yellow-300 font-semibold text-sm">{{ currentInspiration }}/{{ maxInspiration }}</span>
+  </button>
+  <div v-else class="rounded-xl p-4 border-2 border-yellow-600/50 bg-yellow-900/10">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="font-display text-lg font-semibold text-yellow-400">✦ Inspiration</h3>
+      <h3 class="font-display text-lg font-semibold text-yellow-400">
+        <button v-if="minimizable" type="button" title="Minimise" class="hover:text-yellow-300" @click="minimized = true">✦ Inspiration</button>
+        <template v-else>✦ Inspiration</template>
+      </h3>
       <span class="text-yellow-300 font-semibold text-sm">
         {{ currentInspiration }}/{{ maxInspiration }}
       </span>

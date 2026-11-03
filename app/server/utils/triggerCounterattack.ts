@@ -13,12 +13,15 @@ interface TriggerCounterattackParams {
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   turnOrder?: string[]
   currentTurnIndex?: number
+  encounterId?: string
 }
 
 export async function triggerCounterattack(params: TriggerCounterattackParams): Promise<{
   participants: any[]
   battleLog: any[]
   pendingRequests: any[]
+  /** Set when the counterattack resolved: without the original attacker if it was defeated */
+  turnOrder?: string[]
   nextTurnIndex?: number
   nextRound?: number
 }> {
@@ -244,6 +247,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
       currentTurnIndex: params.currentTurnIndex,
       houseRules: params.houseRules,
       counterattack: true,
+      encounterId: params.encounterId,
     })
     participants = result.participants
     battleLog = result.battleLog
@@ -273,7 +277,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
       }
     }
 
-    return { participants, battleLog, pendingRequests, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
+    return { participants, battleLog, pendingRequests, turnOrder: result.turnOrder, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
   }
 
   return { participants, battleLog, pendingRequests }

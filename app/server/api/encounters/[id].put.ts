@@ -5,6 +5,8 @@ import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 import { applyGuidingLightAuras } from '../../utils/guidingLight'
+import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions, damageOverTimeRules, type DamageOverTimeRules } from '../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnockouts'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -50,23 +52,38 @@ export default defineEventHandler(async (event) => {
   const incomingRound = typeof body.round === 'number' ? body.round : existingRound
   const isNewRound = incomingRound > existingRound
 
-  // Campaign level + house rules, used by end-of-turn gravity (Guiding Light recompute), the
-  // combat-start triggers, and the Guiding Light combat-start pass below.
+  // Campaign level + house rules + Poison/Burn rules, used by end-of-turn gravity (Guiding Light
+  // recompute), Poison/Burn, the combat-start triggers, and the Guiding Light combat-start pass below.
   const getCampaignRules = async () => {
     let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
     let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+    let dotRules: DamageOverTimeRules | undefined
     if (existing.campaignId) {
       const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
       if (campaign) {
         campaignLevel = campaign.level
         houseRules = (campaign.rulesSettings || {}).houseRules
+        dotRules = damageOverTimeRules(campaign.rulesSettings)
       }
     }
-    return { campaignLevel, houseRules }
+    return { campaignLevel, houseRules, dotRules }
   }
 
   if (body.participants) {
     let participants = body.participants as any[]
+
+    // lastMovedRound is only ever written server-side (the movement paths), so a client copy that
+    // hasn't caught up with a move's broadcast must not roll it back — Burn's stationary check
+    // below reads it.
+    const existingById = new Map(((existing.participants as any[]) || []).map((p: any) => [p.id, p]))
+    participants = participants.map((p: any) => {
+      const stamp = existingById.get(p.id)?.lastMovedRound
+      return typeof stamp === 'number' && !(p.lastMovedRound >= stamp) ? { ...p, lastMovedRound: stamp } : p
+    })
+
+    // Enemies the client sent already knocked out are the GM's call (the GM page removes the ones it
+    // knocks out itself); only the ones this request knocks out are resolved below.
+    const knockedOutInBody = new Set(knockedOutEnemyIds(participants))
 
     // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
     // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
@@ -78,6 +95,45 @@ export default defineEventHandler(async (event) => {
       participants = gravity.participants
       if (gravity.logEntries.length > 0) {
         updateData.battleLog = [...(((body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...gravity.logEntries]
+      }
+    }
+
+    // Poison/Burn (damage over time): first the turn that just ended (EddySoul turn-end Poison),
+    // then the round that just ended. A turn has ended only when the active participant changes
+    // (or the round advances) — rebuildTurnOrder() re-anchors on whoever is active, so adding or
+    // re-sorting participants doesn't count — and the outgoing participant is still here (removing
+    // the active participant ends nobody's turn). Runs before the KO/auto-devolve check below so a
+    // partner knocked out by Poison devolves in this same request.
+    if (existing.phase === 'combat') {
+      const prevTurnOrder = (existing.turnOrder as string[]) || []
+      const outgoingId = prevTurnOrder[existing.currentTurnIndex ?? 0]
+      const nextTurnOrder = (body.turnOrder as string[] | undefined) ?? prevTurnOrder
+      const incomingActiveId = typeof body.currentTurnIndex === 'number' ? nextTurnOrder[body.currentTurnIndex] : outgoingId
+      const turnEnded = typeof body.currentTurnIndex === 'number'
+        && !!outgoingId
+        && (incomingActiveId !== outgoingId || isNewRound)
+        && participants.some((p: any) => p.id === outgoingId)
+      const roundEnded = isNewRound && existingRound >= 1
+
+      if (turnEnded || roundEnded) {
+        const { dotRules } = await getCampaignRules()
+        const dotLogEntries: any[] = []
+        if (turnEnded) {
+          const turnEnd = await applyTurnEndEffects({
+            participants, endedParticipantId: outgoingId!, turnOrder: nextTurnOrder, round: existingRound, rules: dotRules,
+          })
+          participants = turnEnd.participants
+          dotLogEntries.push(...turnEnd.logEntries)
+        }
+        if (roundEnded) {
+          const positions = await loadStationaryBurnPositions(id, (existing as any).mapId, participants, dotRules)
+          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: dotRules, positions })
+          participants = roundEnd.participants
+          dotLogEntries.push(...roundEnd.logEntries)
+        }
+        if (dotLogEntries.length > 0) {
+          updateData.battleLog = [...((updateData.battleLog ?? (body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...dotLogEntries]
+        }
       }
     }
 
@@ -105,6 +161,29 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    // Enemies knocked out by this turn change (the fall, Poison, Burn) leave the encounter. If the
+    // incoming participant is one of them, the next one's turn starts instead. No gravity: it already
+    // ran for this turn change above.
+    if (existing.phase === 'combat') {
+      const knockedOut = knockedOutEnemyIds(participants).filter((pid) => !knockedOutInBody.has(pid))
+      if (knockedOut.length > 0) {
+        const { houseRules } = await getCampaignRules()
+        const knockout = await resolveEnemyKnockouts({
+          participants,
+          turnOrder: (body.turnOrder as string[] | undefined) ?? (existing.turnOrder as string[]) ?? [],
+          currentTurnIndex: typeof body.currentTurnIndex === 'number' ? body.currentTurnIndex : (existing.currentTurnIndex ?? 0),
+          round: incomingRound,
+        }, knockedOut, { encounterId: id, houseRules })
+        participants = knockout.participants
+        if (knockout.changed) {
+          updateData.turnOrder = knockout.turnOrder
+          updateData.currentTurnIndex = knockout.currentTurnIndex
+          updateData.round = knockout.round
+          updateData.battleLog = [...((updateData.battleLog ?? (body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...knockout.logEntries]
+        }
+      }
+    }
+
     // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
     if (isNewRound) {
       participants = await applyRoundStartQualityTriggers(participants)
@@ -122,7 +201,9 @@ export default defineEventHandler(async (event) => {
   if (isCombatStart || isReinforcement) {
     if (isCombatStart) {
       const { campaignLevel, houseRules } = await getCampaignRules()
-      const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
+      // A fresh combat restarts at round 1: movement stamps from an earlier one mean nothing to Burn
+      const basisParticipants = ((updateData.participants as any[] | undefined) ?? (existing.participants as any[]))
+        .map(({ lastMovedRound: _previousCombat, ...p }: any) => p)
       updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
     } else {
       const existingIds = new Set(((existing.participants as any[]) || []).map((p) => p.id))

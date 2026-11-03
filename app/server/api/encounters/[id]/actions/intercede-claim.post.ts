@@ -21,13 +21,15 @@ import {
   hasValidThrowOutOfAreaCell,
   computeFallDamage,
 } from '~/server/utils/mapMovement'
-import { calculateDigimonDerivedStats } from '~/types'
+import { calculateDigimonDerivedStats, type EddySoulRules } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
+import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -102,13 +104,15 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  // Fetch campaign house rules
+  // Fetch campaign house rules (+ EddySoul rules, for Burn)
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let eddySoulRules: EddySoulRules | undefined
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
+      eddySoulRules = rulesSettings.eddySoulRules
     }
   }
 
@@ -205,6 +209,16 @@ export default defineEventHandler(async (event) => {
   // Determine if interceptor's turn has already happened this round
   let turnOrder = encounter.turnOrder || []
   const currentTurnIndex = encounter.currentTurnIndex || 0
+
+  // Enemies this claim knocks out leave the encounter (just before each save below): the
+  // interceptor (the hit, its fall, Burn on the way in), the target it moved (Burn, a throw's fall)
+  // and the attacker (Digizoid Armor reflect).
+  const knockedOutBefore = new Set(knockedOutEnemyIds(encounter.participants || []))
+  const resolveClaimKnockouts = (ids: string[], turnIndex: number, round: number) => resolveEnemyKnockouts(
+    { participants, turnOrder, currentTurnIndex: turnIndex, round },
+    ids.filter((pid) => !knockedOutBefore.has(pid)),
+    { encounterId, houseRules, mapId: (encounter as any).mapId, gravity: 'room' },
+  )
   let turnHasGone = false
 
   if (interceptor.type === 'tamer') {
@@ -467,6 +481,19 @@ export default defineEventHandler(async (event) => {
   const netSuccesses = damageCalc.netSuccesses
   // hit is always true for intercede (dodgeSuccesses = 0, so netSuccesses >= 0)
 
+  // [Burn]: the claim's repositioning (the interceptor moving in, the target displaced or thrown)
+  // counts as movement: stamps lastMovedRound and deals Burn's movement damage. Applied before the
+  // hit, so an attack that burns the interceptor doesn't also charge it for the move it just made.
+  if (updatedParticipantPositions) {
+    const moved = applyMovementBurn(participants, movesFromPositions(participantPositions, updatedParticipantPositions), {
+      round: encounter.round || 0,
+      digimonById,
+      rules: eddySoulRules,
+    })
+    participants = moved.participants
+    battleLog = [...battleLog, ...moved.logEntries]
+  }
+
   // --- Support attack: no damage, apply N effect only ---
   if (isSupportAttack) {
     let appliedEffectName: string | null = null
@@ -607,6 +634,19 @@ export default defineEventHandler(async (event) => {
         dodgeSuccesses: 0,
       }
       battleLog = [...battleLog, intercedeLog]
+    }
+
+    const knockout = await resolveClaimKnockouts(
+      [body.interceptorParticipantId, effectiveTargetId],
+      claimNextTurnIndex ?? currentTurnIndex,
+      claimNextRound ?? (encounter.round || 0),
+    )
+    if (knockout.changed) {
+      participants = knockout.participants
+      battleLog = [...battleLog, ...knockout.logEntries]
+      turnOrder = knockout.turnOrder
+      claimNextTurnIndex = knockout.currentTurnIndex
+      claimNextRound = knockout.round
     }
 
     await db.update(encounters).set({
@@ -842,6 +882,19 @@ export default defineEventHandler(async (event) => {
       dodgeSuccesses: 0,
     }
     battleLog = [...battleLog, intercedeLog, ...(autoDevolveLog ? [autoDevolveLog] : [])]
+  }
+
+  const knockout = await resolveClaimKnockouts(
+    [body.interceptorParticipantId, effectiveTargetId, request.data.attackerId],
+    claimNextTurnIndex ?? currentTurnIndex,
+    claimNextRound ?? (encounter.round || 0),
+  )
+  if (knockout.changed) {
+    participants = knockout.participants
+    battleLog = [...battleLog, ...knockout.logEntries]
+    turnOrder = knockout.turnOrder
+    claimNextTurnIndex = knockout.currentTurnIndex
+    claimNextRound = knockout.round
   }
 
   await db.update(encounters).set({

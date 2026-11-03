@@ -3,7 +3,7 @@ import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
 import type { AreaShapeData } from '../utils/areaShapes'
-import { PERMANENT_EFFECTS } from '../data/attackConstants'
+import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
 
 export interface CombatParticipant {
   id: string
@@ -45,6 +45,7 @@ export interface CombatParticipant {
   isEnemy?: boolean
   inReserve?: boolean  // Staged by the GM: excluded from turn order, the map and target lists until deployed
   airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears. Optional — getFallerProfile derives it from the Jumper quality when unset
+  lastMovedRound?: number  // Round this unit last moved — set server-side by every movement path; Burn's stationary penalty reads it
   battery?: number
   usedSignatureMoveThisTurn?: boolean
   combatMonsterBonus?: number
@@ -178,6 +179,14 @@ function applyRoundReset(
       }
     })
   }
+}
+
+// End-of-turn duration countdown for one participant. Permanent effects never count down;
+// Poison/Burn count down server-side together with their damage (server/utils/damageOverTime.ts).
+function tickTurnEffects(participant: CombatParticipant) {
+  participant.activeEffects = (participant.activeEffects || [])
+    .map((e) => PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
+    .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name))
 }
 
 // Marks a participant as the active one for their turn: resets dodge penalty,
@@ -560,7 +569,7 @@ export function useEncounters() {
     }
 
     let newRound = encounter.round
-    const poisonLogEntries: any[] = []
+    const endOfTurnLogEntries: any[] = []
 
     // If we've wrapped around, start a new round
     if (crossedZero) {
@@ -575,32 +584,7 @@ export function useEncounters() {
       currentParticipant.hasActed = true
       currentParticipant.isActive = false
 
-      // Apply Poison damage at end of this participant's turn (before duration tick removes it)
-      const poisonEffect = (currentParticipant.activeEffects || []).find((e: any) => e.name === 'Poison')
-      if (poisonEffect) {
-        const dmg = (poisonEffect as any).potency ?? 1
-        const tempAvailable = currentParticipant.currentTempWounds ?? 0
-        const tempAbsorb = Math.min(tempAvailable, dmg)
-        const remainder = dmg - tempAbsorb
-        currentParticipant.currentTempWounds = tempAvailable - tempAbsorb
-        if (tempAbsorb > 0 && currentParticipant.currentTempWounds === 0) {
-          currentParticipant.activeEffects = (currentParticipant.activeEffects || []).filter((e: any) => e.name !== 'Shield')
-        }
-        currentParticipant.currentWounds = Math.min(currentParticipant.maxWounds, (currentParticipant.currentWounds || 0) + remainder)
-
-        poisonLogEntries.push({
-          id: `log-poison-${currentParticipant.id}-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          round: encounter.round,
-          actorId: currentParticipant.id,
-          actorName: currentParticipant.id,
-          action: 'Poison',
-          target: currentParticipant.id,
-          result: `${dmg} poison damage`,
-          damage: dmg,
-          effects: ['Poison'],
-        })
-      }
+      // Poison/Burn damage is applied by the server when this turn/round ends ([id].put.ts → damageOverTime)
 
       // Boss quality: Data Absorb — heal at end of this participant's turn
       if (currentParticipant.dataAbsorbActive) {
@@ -610,7 +594,7 @@ export function useEncounters() {
         if (dataAbsorbHeal > 0) {
           currentParticipant.currentWounds = Math.max(0, (currentParticipant.currentWounds || 0) - dataAbsorbHeal)
         }
-        poisonLogEntries.push({
+        endOfTurnLogEntries.push({
           id: `log-data-absorb-${currentParticipant.id}-${Date.now()}`,
           timestamp: new Date().toISOString(),
           round: encounter.round,
@@ -624,10 +608,8 @@ export function useEncounters() {
         })
       }
 
-      // Decrement effect durations at end of this participant's turn; skip permanent effects
-      currentParticipant.activeEffects = (currentParticipant.activeEffects || [])
-        .map((e) => PERMANENT_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
-        .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name))
+      // Decrement effect durations at end of this participant's turn
+      tickTurnEffects(currentParticipant)
     }
 
     // At tamer turn-end: mark partner digimon as having acted and open post-turn intercede window
@@ -642,6 +624,15 @@ export function useEncounters() {
         const stunEffect = (partnerDigi.activeEffects || []).find((e: any) => e.name === 'Stun')
         partnerDigi.maxPostTurnIntercedes = stunEffect ? 1 : 2
       }
+
+      // Partner digimon grouped under this tamer (no turn-order slot of their own) act on the
+      // tamer's turn, so their effects count down with it. After the Stun check above, so the
+      // post-turn intercede cap still sees this round's Stun.
+      for (const p of participants) {
+        if (p.type !== 'digimon' || p.inReserve || turnOrder.includes(p.id)) continue
+        if (digimonMap.get(p.entityId)?.partnerId !== currentParticipant.entityId) continue
+        tickTurnEffects(p)
+      }
     }
 
     // Mark next participant as active
@@ -652,7 +643,7 @@ export function useEncounters() {
     }
 
     const updatePayload: Partial<Encounter> = { participants, currentTurnIndex: nextIndex, round: newRound }
-    const logEntries = [...poisonLogEntries]
+    const logEntries = [...endOfTurnLogEntries]
     if (getEntityName && nextParticipant) {
       const name = getEntityName(nextParticipant)
       if (name) {

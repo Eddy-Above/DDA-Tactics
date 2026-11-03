@@ -6,6 +6,7 @@ import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from './selectiveTargeting'
 import { getDigizoidArmorBonus, getReflectArmorRange } from './digizoidArmor'
 import { getOutsideClashArmorBonus } from './clashArmor'
+import { isImmuneToEffect } from './damageOverTime'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
@@ -174,6 +175,7 @@ export async function computeAttackDamage(
   let targetHasPositiveReinforcement = false
   let targetHealthStat = 0
   let targetDigizoidChoiceId: string | undefined
+  let targetQualities: any[] = []
   const targetMoodValue: number = targetParticipant.moodValue ?? 3
 
   if (targetParticipant.type === 'digimon') {
@@ -192,6 +194,7 @@ export async function computeAttackDamage(
       targetHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
       const qualities = targetDigimon.qualities
+      targetQualities = qualities || []
       targetHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       const dataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
@@ -304,7 +307,8 @@ export async function computeAttackDamage(
     }
   }
 
-  if (attackDef?.effect) {
+  // Naturewalk: Fire can't be [Burned]
+  if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualities)) {
     const alignment = EFFECT_ALIGNMENT[attackDef.effect]
     const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
       && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)

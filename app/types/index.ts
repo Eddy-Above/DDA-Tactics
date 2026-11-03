@@ -250,6 +250,8 @@ export interface EddySoulRules {
   enemyDoubleWounds?: boolean
   directRangeOverrides?: { direct?: number; bolsterDirect?: number; digivolve?: number }
   modeChangeFreeSwapsPerCombat?: boolean
+  poisonTicksAtTurnEnd?: boolean  // Poison damages at the end of the poisoned unit's own turn (partner digimon: its Tamer's turn) instead of at the end of each round
+  burnPerTwoSpacesMoved?: boolean  // Burn deals 1 damage per 2 spaces moved, ignoring Armor, and nothing to a burned Digimon that stays still all round
 }
 
 export interface HouseRules {
@@ -261,6 +263,7 @@ export interface HouseRules {
   allowFlexCPSplits?: boolean
   giganticMaxSize?: { x: number; y: number; z: number } | null
   skillOrders?: boolean
+  burnStationaryIgnoresArmor?: boolean  // Burn's Stage Bonus × 2 for a round without moving isn't reduced by Armor (default: reduced, minimum 1)
 }
 
 export const STAGE_BATTERY_CAPACITY: Partial<Record<DigimonStage, number>> = {
@@ -581,6 +584,7 @@ export interface CombatParticipant {
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
   airborneByJump?: boolean  // Set when a unit intentionally jumped onto an air tile: at end of its turn it still falls to the ground but takes 0 fall damage, then the flag clears on landing. Optional — getFallerProfile derives it from the Jumper quality when unset
+  lastMovedRound?: number  // Round this unit last moved (map move, Charge, Pass, Knockback/Pull, throw, intercede). Burn's stationary penalty hits a burned Digimon whose stamp isn't the round that just ended
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
   modeChangeFreeSwapsUsed?: number  // Mode Change X.0 Rank 2 EddySoul rule: free swaps used this combat (0-3)
   currentInspiration?: number       // Tamer-only: live pool tracked during combat, initialized from DB totals
