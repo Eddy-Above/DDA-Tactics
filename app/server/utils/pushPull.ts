@@ -99,7 +99,7 @@ export async function applyPushPullDisplacement(args: {
 
   const positions = await getRoomPositions(encounterId)
   const digimonById = await loadParticipantDigimon(args.participants)
-  const { round, eddySoulRules } = await loadEncounterRules(encounterId)
+  const { round, rules } = await loadEncounterRules(encounterId)
 
   let { participants, patch, logNote } = await computePushPull({
     map,
@@ -110,7 +110,7 @@ export async function applyPushPullDisplacement(args: {
     targetParticipantId: args.targetParticipantId,
     effect: args.effect,
     distance: args.distance,
-    burn: { round, rules: eddySoulRules },
+    burn: { round, rules },
   })
 
   if (patch) {

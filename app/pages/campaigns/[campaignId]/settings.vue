@@ -225,6 +225,7 @@ const form = reactive({
     allowFlexCPSplits: false,
     giganticMaxSize: { x: null as number | null, y: null as number | null, z: null as number | null },
     skillOrders: false,
+    burnStationaryIgnoresArmor: false,
   },
   skillRenames: {} as Record<string, string>,
   eddySoulRules: {
@@ -285,6 +286,7 @@ onMounted(async () => {
       const gms = houseRules.giganticMaxSize as any
       form.houseRules.giganticMaxSize = { x: gms?.x ?? null, y: gms?.y ?? null, z: gms?.z ?? null }
       form.houseRules.skillOrders = houseRules.skillOrders ?? false
+      form.houseRules.burnStationaryIgnoresArmor = houseRules.burnStationaryIgnoresArmor ?? false
     }
 
     // Load skill renames
@@ -355,7 +357,7 @@ async function handleSave() {
   )
 
   data.rulesSettings = {
-    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits || form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z || form.houseRules.skillOrders) && {
+    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits || form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z || form.houseRules.skillOrders || form.houseRules.burnStationaryIgnoresArmor) && {
       houseRules: {
         ...(form.houseRules.stunMaxDuration1 && { stunMaxDuration1: true }),
         ...(form.houseRules.maxTempWoundsRule && { maxTempWoundsRule: true }),
@@ -371,6 +373,7 @@ async function handleSave() {
           },
         }),
         ...(form.houseRules.skillOrders && { skillOrders: true }),
+        ...(form.houseRules.burnStationaryIgnoresArmor && { burnStationaryIgnoresArmor: true }),
       },
     }),
     tormentRequirements: {
@@ -772,6 +775,17 @@ async function handleDelete() {
           </label>
           <label class="flex items-start gap-3 cursor-pointer">
             <input
+              v-model="form.houseRules.burnStationaryIgnoresArmor"
+              type="checkbox"
+              class="w-4 h-4 rounded mt-1 shrink-0"
+            />
+            <div>
+              <span class="text-digimon-dark-300">Burn: Standing-Still Damage Ignores Armor</span>
+              <p class="text-xs text-digimon-dark-500">Default: a burned Digimon that doesn't move all round takes its Stage Bonus × 2 at the end of the round, reduced by Armor to a minimum of 1. With this rule, Armor doesn't reduce it. No effect while the EddySoul rule "Burn: 1 Damage per 2 Spaces Moved" is on.</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input
               v-model="form.houseRules.signatureMoveBattery"
               type="checkbox"
               class="w-4 h-4 rounded mt-1 shrink-0"
@@ -1131,7 +1145,7 @@ async function handleDelete() {
             <input v-model="form.eddySoulRules.burnPerTwoSpacesMoved" type="checkbox" class="w-4 h-4 rounded mt-1 shrink-0" />
             <div>
               <span class="text-digimon-dark-300">Burn: 1 Damage per 2 Spaces Moved</span>
-              <p class="text-xs text-digimon-dark-500">Default: a burned Digimon takes 1 damage per meter it moves (by choice, Knockback/Pull or being thrown), reduced by Armor to a minimum of 1, and Stage Bonus × 2 at the end of a round in which it didn't move. With this rule, it takes 1 damage per 2 spaces moved, ignoring Armor, and nothing for standing still.</p>
+              <p class="text-xs text-digimon-dark-500">Default: a burned Digimon takes 1 damage per meter it moves (by choice, Knockback/Pull or being thrown) and Stage Bonus × 2 at the end of a round in which it didn't move, each reduced by Armor to a minimum of 1. With this rule, it takes 1 damage per 2 spaces moved, ignoring Armor, and nothing for standing still.</p>
             </div>
           </label>
           <!-- Direct / Bolster Direct / Digivolve Range Overrides -->

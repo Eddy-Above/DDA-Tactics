@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, campaigns } from '../db'
-import { STAGE_CONFIG, type EddySoulRules, type Vec3 } from '../../types'
+import { STAGE_CONFIG, type CampaignRulesSettings, type EddySoulRules, type HouseRules, type Vec3 } from '../../types'
 import { DAMAGE_OVER_TIME_EFFECTS, getEffectStatModifiers } from '../../data/attackConstants'
 import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
@@ -19,7 +19,8 @@ import { chebyshev } from './gridDistance'
 //   a partner digimon grouped under its Tamer ticks at the end of the Tamer's turn.
 // - Burn (DDA 1.4): 1 damage per meter moved — by choice, Knockback/Pull or being thrown — reduced
 //   by Armor, minimum 1 (applyMovementBurn, called by every movement path). A burned digimon that
-//   didn't move all round takes Stage Bonus × 2 at the end of the round. EddySoul
+//   didn't move all round takes Stage Bonus × 2 at the end of the round, also reduced by Armor to
+//   a minimum of 1 (house rule `burnStationaryIgnoresArmor`: flat). EddySoul
 //   `burnPerTwoSpacesMoved`: 1 damage per 2 spaces moved, ignoring Armor, and nothing for standing
 //   still. Movement needs a map, so in a theatre-of-mind encounter Burn only counts down.
 //   Naturewalk: Fire is immune (isImmuneToEffect, checked where attacks apply their effect).
@@ -27,7 +28,18 @@ import { chebyshev } from './gridDistance'
 // Only digimon take the damage: the rules key on CPU / Stage Bonus / "the Digimon". A Tamer's
 // Poison/Burn still counts down on the same schedule.
 
-type DamageOverTimeRules = Pick<EddySoulRules, 'poisonTicksAtTurnEnd' | 'burnPerTwoSpacesMoved'>
+/** The campaign rules Poison/Burn read: two EddySoul rules and a house rule. */
+export type DamageOverTimeRules = Pick<EddySoulRules, 'poisonTicksAtTurnEnd' | 'burnPerTwoSpacesMoved'>
+  & Pick<HouseRules, 'burnStationaryIgnoresArmor'>
+
+/** The Poison/Burn rules out of a campaign's rules settings. */
+export function damageOverTimeRules(settings: Pick<CampaignRulesSettings, 'eddySoulRules' | 'houseRules'> | null | undefined): DamageOverTimeRules {
+  return {
+    poisonTicksAtTurnEnd: settings?.eddySoulRules?.poisonTicksAtTurnEnd,
+    burnPerTwoSpacesMoved: settings?.eddySoulRules?.burnPerTwoSpacesMoved,
+    burnStationaryIgnoresArmor: settings?.houseRules?.burnStationaryIgnoresArmor,
+  }
+}
 
 interface TickContext {
   participants: any[]
@@ -229,14 +241,17 @@ async function tickPoison(p: any, ctx: TickContext): Promise<void> {
 }
 
 // Burn at the end of a round: under the core rule a positioned digimon that didn't move this
-// round takes its Stage Bonus × 2 (Armor doesn't reduce it), then the countdown.
+// round takes its Stage Bonus × 2, reduced by Armor to a minimum of 1 (house rule
+// `burnStationaryIgnoresArmor`: flat), then the countdown.
 function tickBurnAtRoundEnd(p: any, ctx: TickContext, positions: Record<string, Vec3> | null | undefined, rules?: DamageOverTimeRules): void {
   const stationary = !rules?.burnPerTwoSpacesMoved
     && p.type === 'digimon'
     && !!positions?.[p.id]
     && p.lastMovedRound !== ctx.round
   const record = ctx.digimonById.get(p.entityId)
-  const damage = stationary ? (STAGE_CONFIG[record?.stage as keyof typeof STAGE_CONFIG]?.stageBonus ?? 0) * 2 : 0
+  const penalty = stationary ? (STAGE_CONFIG[record?.stage as keyof typeof STAGE_CONFIG]?.stageBonus ?? 0) * 2 : 0
+  const armor = penalty > 0 && !rules?.burnStationaryIgnoresArmor ? getBurnArmor(p, record) : 0
+  const damage = armor > 0 ? Math.max(1, penalty - armor) : penalty
   applyWoundDamage(p, damage)
   const remaining = countDown(p, 'Burn')
   if (damage <= 0) return
@@ -249,7 +264,7 @@ function tickBurnAtRoundEnd(p: any, ctx: TickContext, positions: Record<string, 
     actorName: displayName(p, ctx.participants, ctx.digimonById),
     action: 'Burn',
     target: null,
-    result: `${damage} Burn damage (didn't move this round: Stage Bonus × 2)${roundsLeftNote('Burn', remaining)}`,
+    result: `${damage} Burn damage (didn't move this round: Stage Bonus × 2${armor > 0 ? `, ${armor} Armor` : ''})${roundsLeftNote('Burn', remaining)}`,
     damage,
     effects: ['Burn'],
   })
@@ -332,31 +347,31 @@ export async function loadStationaryBurnPositions(
   return getRoomPositions(encounterId)
 }
 
-/** A campaign's EddySoul rules (undefined for an encounter with no campaign). */
-export async function loadCampaignEddySoulRules(campaignId: string | null | undefined): Promise<EddySoulRules | undefined> {
+/** A campaign's Poison/Burn rules (undefined for an encounter with no campaign). */
+export async function loadCampaignDamageOverTimeRules(campaignId: string | null | undefined): Promise<DamageOverTimeRules | undefined> {
   if (!campaignId) return undefined
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
-  return campaign?.rulesSettings?.eddySoulRules
+  return campaign ? damageOverTimeRules(campaign.rulesSettings) : undefined
 }
 
 /**
- * Current round, map and the campaign's EddySoul rules for an encounter — for server-side round
+ * Current round, map and the campaign's Poison/Burn rules for an encounter — for server-side round
  * wraps and movement paths that run outside a request which already loaded the campaign.
  */
-export async function loadEncounterRules(encounterId: string): Promise<{ round: number; mapId?: string | null; eddySoulRules?: EddySoulRules }> {
+export async function loadEncounterRules(encounterId: string): Promise<{ round: number; mapId?: string | null; rules?: DamageOverTimeRules }> {
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) return { round: 0 }
   return {
     round: encounter.round ?? 0,
     mapId: (encounter as any).mapId,
-    eddySoulRules: await loadCampaignEddySoulRules(encounter.campaignId),
+    rules: await loadCampaignDamageOverTimeRules(encounter.campaignId),
   }
 }
 
-/** Loads the EddySoul rules only when there is Poison/Burn to resolve. */
-export async function loadDamageOverTimeRules(encounterId: string | undefined, participants: any[]): Promise<EddySoulRules | undefined> {
+/** Loads the Poison/Burn rules only when there is Poison/Burn to resolve. */
+export async function loadDamageOverTimeRules(encounterId: string | undefined, participants: any[]): Promise<DamageOverTimeRules | undefined> {
   if (!encounterId || !hasDamageOverTime(participants)) return undefined
-  return (await loadEncounterRules(encounterId)).eddySoulRules
+  return (await loadEncounterRules(encounterId)).rules
 }
 
 /**
@@ -368,11 +383,11 @@ export async function loadRoundEndContext(
   encounterId: string | undefined,
   participants: any[],
   positions?: Record<string, Vec3> | null,
-): Promise<{ rules?: EddySoulRules; positions: Record<string, Vec3> | null }> {
+): Promise<{ rules?: DamageOverTimeRules; positions: Record<string, Vec3> | null }> {
   if (!encounterId || !hasDamageOverTime(participants)) return { positions: positions ?? null }
-  const { mapId, eddySoulRules } = await loadEncounterRules(encounterId)
+  const { mapId, rules } = await loadEncounterRules(encounterId)
   return {
-    rules: eddySoulRules,
-    positions: positions !== undefined ? positions : await loadStationaryBurnPositions(encounterId, mapId, participants, eddySoulRules),
+    rules,
+    positions: positions !== undefined ? positions : await loadStationaryBurnPositions(encounterId, mapId, participants, rules),
   }
 }

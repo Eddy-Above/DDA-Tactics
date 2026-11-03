@@ -13,7 +13,7 @@ import {
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
-import { applyMovementBurn, loadCampaignEddySoulRules } from '~/server/utils/damageOverTime'
+import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '~/server/utils/damageOverTime'
 import { chebyshev } from '~/server/utils/gridDistance'
 import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
@@ -358,7 +358,7 @@ export default defineEventHandler(async (event) => {
       const moved = applyMovementBurn(participants, [{ participantId: target.id, meters: thrownMeters }], {
         round: encounter.round || 0,
         digimonById: new Map(targetDigimonEntity ? [[target.entityId, targetDigimonEntity]] : []),
-        rules: await loadCampaignEddySoulRules(encounter.campaignId),
+        rules: await loadCampaignDamageOverTimeRules(encounter.campaignId),
       })
       participants = moved.participants
       burnDamageApplied = moved.damageById[target.id] ?? 0

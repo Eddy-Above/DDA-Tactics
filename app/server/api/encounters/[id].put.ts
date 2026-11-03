@@ -5,8 +5,7 @@ import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 import { applyGuidingLightAuras } from '../../utils/guidingLight'
-import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions } from '../../utils/damageOverTime'
-import type { EddySoulRules } from '../../../types'
+import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions, damageOverTimeRules, type DamageOverTimeRules } from '../../utils/damageOverTime'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -52,21 +51,21 @@ export default defineEventHandler(async (event) => {
   const incomingRound = typeof body.round === 'number' ? body.round : existingRound
   const isNewRound = incomingRound > existingRound
 
-  // Campaign level + house rules + EddySoul rules, used by end-of-turn gravity (Guiding Light
+  // Campaign level + house rules + Poison/Burn rules, used by end-of-turn gravity (Guiding Light
   // recompute), Poison/Burn, the combat-start triggers, and the Guiding Light combat-start pass below.
   const getCampaignRules = async () => {
     let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
     let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
-    let eddySoulRules: EddySoulRules | undefined
+    let dotRules: DamageOverTimeRules | undefined
     if (existing.campaignId) {
       const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
       if (campaign) {
         campaignLevel = campaign.level
         houseRules = (campaign.rulesSettings || {}).houseRules
-        eddySoulRules = (campaign.rulesSettings || {}).eddySoulRules
+        dotRules = damageOverTimeRules(campaign.rulesSettings)
       }
     }
-    return { campaignLevel, houseRules, eddySoulRules }
+    return { campaignLevel, houseRules, dotRules }
   }
 
   if (body.participants) {
@@ -112,18 +111,18 @@ export default defineEventHandler(async (event) => {
       const roundEnded = isNewRound && existingRound >= 1
 
       if (turnEnded || roundEnded) {
-        const { eddySoulRules } = await getCampaignRules()
+        const { dotRules } = await getCampaignRules()
         const dotLogEntries: any[] = []
         if (turnEnded) {
           const turnEnd = await applyTurnEndEffects({
-            participants, endedParticipantId: outgoingId!, turnOrder: nextTurnOrder, round: existingRound, rules: eddySoulRules,
+            participants, endedParticipantId: outgoingId!, turnOrder: nextTurnOrder, round: existingRound, rules: dotRules,
           })
           participants = turnEnd.participants
           dotLogEntries.push(...turnEnd.logEntries)
         }
         if (roundEnded) {
-          const positions = await loadStationaryBurnPositions(id, (existing as any).mapId, participants, eddySoulRules)
-          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: eddySoulRules, positions })
+          const positions = await loadStationaryBurnPositions(id, (existing as any).mapId, participants, dotRules)
+          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: dotRules, positions })
           participants = roundEnd.participants
           dotLogEntries.push(...roundEnd.logEntries)
         }

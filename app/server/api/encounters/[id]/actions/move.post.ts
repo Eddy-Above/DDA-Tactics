@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../../db'
-import { applyMovementBurn, loadCampaignEddySoulRules } from '../../../../utils/damageOverTime'
+import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '../../../../utils/damageOverTime'
 import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
 
 interface MoveBody {
@@ -52,7 +52,7 @@ export default defineEventHandler(async (event) => {
     const moved = applyMovementBurn(updatedParticipants, [{ participantId: body.participantId, meters: distance }], {
       round: encounter.round ?? 0,
       digimonById: await loadParticipantDigimon([mover]),
-      rules: await loadCampaignEddySoulRules(encounter.campaignId),
+      rules: await loadCampaignDamageOverTimeRules(encounter.campaignId),
     })
     updatedParticipants = moved.participants
     if (moved.logEntries.length > 0) battleLog = [...(encounter.battleLog ?? []), ...moved.logEntries]

@@ -263,6 +263,7 @@ export interface HouseRules {
   allowFlexCPSplits?: boolean
   giganticMaxSize?: { x: number; y: number; z: number } | null
   skillOrders?: boolean
+  burnStationaryIgnoresArmor?: boolean  // Burn's Stage Bonus × 2 for a round without moving isn't reduced by Armor (default: reduced, minimum 1)
 }
 
 export const STAGE_BATTERY_CAPACITY: Partial<Record<DigimonStage, number>> = {

@@ -9,7 +9,7 @@ import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../util
 import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
-import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect } from '../../../../utils/damageOverTime'
+import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect, damageOverTimeRules } from '../../../../utils/damageOverTime'
 
 interface NpcAttackBody {
   participantId: string
@@ -548,11 +548,12 @@ export default defineEventHandler(async (event) => {
 
       if (isRoundWrap) {
         // Round end: Poison/Burn for the round that just finished, before the reset
+        const dotRules = damageOverTimeRules({ houseRules, eddySoulRules })
         const roundEnd = await applyRoundEndEffects({
           participants: finalParticipantsAfterDefeat,
           endingRound: encounter.round ?? 0,
-          rules: eddySoulRules,
-          positions: await loadStationaryBurnPositions(encounterId, (encounter as any).mapId, finalParticipantsAfterDefeat, eddySoulRules),
+          rules: dotRules,
+          positions: await loadStationaryBurnPositions(encounterId, (encounter as any).mapId, finalParticipantsAfterDefeat, dotRules),
         })
         finalParticipantsAfterDefeat = roundEnd.participants
         roundEndLogEntries = roundEnd.logEntries
