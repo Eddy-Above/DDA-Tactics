@@ -45,6 +45,7 @@ export interface CombatParticipant {
   isEnemy?: boolean
   inReserve?: boolean  // Staged by the GM: excluded from turn order, the map and target lists until deployed
   airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears. Optional — getFallerProfile derives it from the Jumper quality when unset
+  lastMovedRound?: number  // Round this unit last moved — set server-side by every movement path; Burn's stationary penalty reads it
   battery?: number
   usedSignatureMoveThisTurn?: boolean
   combatMonsterBonus?: number

@@ -5,7 +5,7 @@ import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 import { applyGuidingLightAuras } from '../../utils/guidingLight'
-import { applyTurnEndEffects, applyRoundEndEffects } from '../../utils/damageOverTime'
+import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions } from '../../utils/damageOverTime'
 import type { EddySoulRules } from '../../../types'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
@@ -72,6 +72,15 @@ export default defineEventHandler(async (event) => {
   if (body.participants) {
     let participants = body.participants as any[]
 
+    // lastMovedRound is only ever written server-side (the movement paths), so a client copy that
+    // hasn't caught up with a move's broadcast must not roll it back — Burn's stationary check
+    // below reads it.
+    const existingById = new Map(((existing.participants as any[]) || []).map((p: any) => [p.id, p]))
+    participants = participants.map((p: any) => {
+      const stamp = existingById.get(p.id)?.lastMovedRound
+      return typeof stamp === 'number' && !(p.lastMovedRound >= stamp) ? { ...p, lastMovedRound: stamp } : p
+    })
+
     // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
     // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
     const isTurnAdvance = typeof body.currentTurnIndex === 'number'
@@ -113,7 +122,8 @@ export default defineEventHandler(async (event) => {
           dotLogEntries.push(...turnEnd.logEntries)
         }
         if (roundEnded) {
-          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: eddySoulRules })
+          const positions = await loadStationaryBurnPositions(id, (existing as any).mapId, participants, eddySoulRules)
+          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: eddySoulRules, positions })
           participants = roundEnd.participants
           dotLogEntries.push(...roundEnd.logEntries)
         }
@@ -164,7 +174,9 @@ export default defineEventHandler(async (event) => {
   if (isCombatStart || isReinforcement) {
     if (isCombatStart) {
       const { campaignLevel, houseRules } = await getCampaignRules()
-      const basisParticipants = (updateData.participants as any[] | undefined) ?? (existing.participants as any[])
+      // A fresh combat restarts at round 1: movement stamps from an earlier one mean nothing to Burn
+      const basisParticipants = ((updateData.participants as any[] | undefined) ?? (existing.participants as any[]))
+        .map(({ lastMovedRound: _previousCombat, ...p }: any) => p)
       updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
     } else {
       const existingIds = new Set(((existing.participants as any[]) || []).map((p) => p.id))

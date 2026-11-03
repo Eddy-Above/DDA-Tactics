@@ -5,12 +5,17 @@ import { getFootprintDimsForParticipant, buildFootprintOccupiedSet, findPushPull
 import { resolveFall } from '../../utils/movementRules'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
 import { applyGuidingLightAuras } from './guidingLight'
+import { applyMovementBurn, loadEncounterRules } from './damageOverTime'
+import { chebyshev } from './gridDistance'
+import type { EddySoulRules } from '../../types'
 
 // Pure core for Knockback (push) / Pull displacement: walks the target away from / toward the
 // attacker by `distance` cells (findPushPullLandingCell), settles it to the ground (resolveFall,
 // flyers hover), applies any fall wounds into the RETURNED participants array, and returns the
 // position patch + a battle-log note. No DB / room side effects — used by resolveNpcAttack, which
-// merges the patch into its own returned positionPatch.
+// merges the patch into its own returned positionPatch. With `burn` (combat), the displacement
+// counts as the target moving: it stamps lastMovedRound and a burned target takes Burn's movement
+// damage for the cells it was moved (measured before any fall).
 export async function computePushPull(args: {
   map: GameMap
   positions: Record<string, Vec3>
@@ -20,6 +25,7 @@ export async function computePushPull(args: {
   targetParticipantId: string
   effect: 'Knockback' | 'Pull'
   distance: number
+  burn?: { round: number; rules?: Pick<EddySoulRules, 'burnPerTwoSpacesMoved'> }
 }): Promise<{ participants: any[]; patch: Record<string, Vec3> | null; logNote: string | null }> {
   const { map, positions, digimonById, attackerParticipantId, targetParticipantId, effect, distance } = args
   let participants = args.participants
@@ -57,8 +63,18 @@ export async function computePushPull(args: {
     )
   }
 
+  let burnDamage = 0
+  if (args.burn) {
+    const moved = applyMovementBurn(participants, [{ participantId: targetParticipantId, meters: chebyshev(targetPos, landingCell) }], {
+      round: args.burn.round, digimonById, rules: args.burn.rules,
+    })
+    participants = moved.participants
+    burnDamage = moved.damageById[targetParticipantId] ?? 0
+  }
+
   const fallNote = damage > 0 ? ` + ${damage} fall damage` : ''
-  const logNote = `${effect}: displaced ${distance} cell(s)${fallNote}`
+  const burnNote = burnDamage > 0 ? ` + ${burnDamage} Burn damage` : ''
+  const logNote = `${effect}: displaced ${distance} cell(s)${fallNote}${burnNote}`
   return { participants, patch: { [targetParticipantId]: landingPos }, logNote }
 }
 
@@ -83,6 +99,7 @@ export async function applyPushPullDisplacement(args: {
 
   const positions = await getRoomPositions(encounterId)
   const digimonById = await loadParticipantDigimon(args.participants)
+  const { round, eddySoulRules } = await loadEncounterRules(encounterId)
 
   let { participants, patch, logNote } = await computePushPull({
     map,
@@ -93,6 +110,7 @@ export async function applyPushPullDisplacement(args: {
     targetParticipantId: args.targetParticipantId,
     effect: args.effect,
     distance: args.distance,
+    burn: { round, rules: eddySoulRules },
   })
 
   if (patch) {

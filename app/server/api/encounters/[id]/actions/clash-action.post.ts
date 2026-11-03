@@ -13,6 +13,8 @@ import {
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
+import { applyMovementBurn, loadCampaignEddySoulRules } from '~/server/utils/damageOverTime'
+import { chebyshev } from '~/server/utils/gridDistance'
 import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
 import type { Vec3 } from '~/types'
@@ -249,6 +251,7 @@ export default defineEventHandler(async (event) => {
     // Positioning & displacement: resolve a player-aimed landing cell, with fall damage
     let updatedTargetPosition: Vec3 | null = null
     let fallDamageApplied = 0
+    let thrownMeters = 0
     let wasDisplaced = false
     let landingParticipantPositions: Record<string, Vec3> | null = null
 
@@ -288,6 +291,7 @@ export default defineEventHandler(async (event) => {
             const { landingPos, damage: fallDamage } = resolveFall(landingCell, targetDims, throwMapRecord, targetProfile)
             fallDamageApplied = fallDamage
             damageDealt += fallDamage
+            thrownMeters = chebyshev(targetPos, landingCell)
             wasDisplaced = true
             updatedTargetPosition = landingPos
           }
@@ -347,6 +351,19 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    // [Burn]: being thrown counts as moving. Stamps the target, and a burned target takes Burn's
+    // movement damage for the cells it flew (measured before any fall), logged with the throw.
+    let burnDamageApplied = 0
+    if (thrownMeters > 0) {
+      const moved = applyMovementBurn(participants, [{ participantId: target.id, meters: thrownMeters }], {
+        round: encounter.round || 0,
+        digimonById: new Map(targetDigimonEntity ? [[target.entityId, targetDigimonEntity]] : []),
+        rules: await loadCampaignEddySoulRules(encounter.campaignId),
+      })
+      participants = moved.participants
+      burnDamageApplied = moved.damageById[target.id] ?? 0
+    }
+
     participants = participants.map((p: any) => {
       if (p.id === body.participantId) {
         const { clash, ...rest } = p
@@ -367,8 +384,9 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
+    const totalDamage = damageDealt + burnDamageApplied
     const throwResult = wasDisplaced
-      ? `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`
+      ? `${actorName} throws ${targetName}, dealing ${totalDamage} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage` : ''}${burnDamageApplied > 0 ? ` + ${burnDamageApplied} Burn damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`
       : `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1). Clash ends.`
 
     battleLog = [...battleLog, {
@@ -380,7 +398,7 @@ export default defineEventHandler(async (event) => {
       action: 'Clash Throw',
       target: targetName,
       result: throwResult,
-      damage: damageDealt,
+      damage: totalDamage,
       effects: ['Clash Throw', 'Clash Ended'],
     }]
 

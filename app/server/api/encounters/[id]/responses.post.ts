@@ -10,6 +10,7 @@ import { applyStanceToDodge } from '../../../../utils/stanceModifiers'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from '../../../utils/selectiveTargeting'
 import { getDigizoidArmorBonus, getReflectArmorRange } from '../../../utils/digizoidArmor'
 import { getOutsideClashArmorBonus } from '../../../utils/clashArmor'
+import { isImmuneToEffect } from '../../../utils/damageOverTime'
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 
 interface SubmitResponseBody {
@@ -390,7 +391,8 @@ export default defineEventHandler(async (event) => {
           }
 
           const supportAlignment = attackDef?.effect ? EFFECT_ALIGNMENT[attackDef.effect] : undefined
-          if (hit && attackDef?.effect && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, supportAlignment)) {
+          if (hit && attackDef?.effect && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, supportAlignment)
+            && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
             const effectDuration = Math.max(1, netSuccesses)
             const alignment = supportAlignment
             const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
@@ -800,8 +802,8 @@ export default defineEventHandler(async (event) => {
               )
             }
 
-            // Auto-apply effect if attack has one and conditions are met
-            if (attackDef?.effect) {
+            // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
+            if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
               const alignment = EFFECT_ALIGNMENT[attackDef.effect]
               const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
                 && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)

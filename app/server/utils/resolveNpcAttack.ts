@@ -11,7 +11,7 @@ import { computeGravityDrops } from './endOfTurnGravity'
 import { loadParticipantDigimon } from './combatSpatial'
 import { computePushPull } from './pushPull'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
-import { applyRoundEndEffects, loadDamageOverTimeRules } from './damageOverTime'
+import { applyRoundEndEffects, loadDamageOverTimeRules, loadRoundEndContext } from './damageOverTime'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 
@@ -35,7 +35,7 @@ interface ResolveNpcAttackParams {
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
   mapRecord?: GameMap           // If provided, enables push/pull displacement
   participantPositions?: Record<string, Vec3>
-  encounterId?: string          // Loads the campaign's EddySoul rules for Poison/Burn when this attack wraps the round
+  encounterId?: string          // Loads the campaign's EddySoul rules for Poison/Burn (round wrap, Burn on Knockback/Pull)
 }
 
 /**
@@ -371,6 +371,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       targetParticipantId: params.targetParticipantId,
       effect: appliedEffectName as 'Knockback' | 'Pull',
       distance: damageCalc.effectData?.potency ?? 0,
+      burn: { round: params.round, rules: await loadDamageOverTimeRules(params.encounterId, participants) },
     })
     participants = disp.participants
     if (disp.patch) positionPatch = disp.patch
@@ -497,12 +498,15 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         nextRound = isRoundWrap ? params.round + 1 : undefined
 
         if (isRoundWrap) {
-          // Round end: Poison/Burn for the round that just finished, before the reset
-          const roundEnd = await applyRoundEndEffects({
+          // Round end: Poison/Burn for the round that just finished, before the reset. Burn's
+          // stationary penalty reads positions merged with any push/pull displacement above, or
+          // the room's when the caller didn't pass the map.
+          const dot = await loadRoundEndContext(
+            params.encounterId,
             participants,
-            endingRound: params.round,
-            rules: await loadDamageOverTimeRules(params.encounterId, participants),
-          })
+            params.mapRecord && params.participantPositions ? { ...params.participantPositions, ...(positionPatch ?? {}) } : undefined,
+          )
+          const roundEnd = await applyRoundEndEffects({ participants, endingRound: params.round, rules: dot.rules, positions: dot.positions })
           participants = roundEnd.participants
           roundEndLogEntries = roundEnd.logEntries
 

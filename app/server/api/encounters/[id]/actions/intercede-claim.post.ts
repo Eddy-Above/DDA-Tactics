@@ -21,13 +21,14 @@ import {
   hasValidThrowOutOfAreaCell,
   computeFallDamage,
 } from '~/server/utils/mapMovement'
-import { calculateDigimonDerivedStats } from '~/types'
+import { calculateDigimonDerivedStats, type EddySoulRules } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
+import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -102,13 +103,15 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  // Fetch campaign house rules
+  // Fetch campaign house rules (+ EddySoul rules, for Burn)
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let eddySoulRules: EddySoulRules | undefined
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
+      eddySoulRules = rulesSettings.eddySoulRules
     }
   }
 
@@ -466,6 +469,19 @@ export default defineEventHandler(async (event) => {
   const damageDealt = damageCalc.damageDealt
   const netSuccesses = damageCalc.netSuccesses
   // hit is always true for intercede (dodgeSuccesses = 0, so netSuccesses >= 0)
+
+  // [Burn]: the claim's repositioning (the interceptor moving in, the target displaced or thrown)
+  // counts as movement: stamps lastMovedRound and deals Burn's movement damage. Applied before the
+  // hit, so an attack that burns the interceptor doesn't also charge it for the move it just made.
+  if (updatedParticipantPositions) {
+    const moved = applyMovementBurn(participants, movesFromPositions(participantPositions, updatedParticipantPositions), {
+      round: encounter.round || 0,
+      digimonById,
+      rules: eddySoulRules,
+    })
+    participants = moved.participants
+    battleLog = [...battleLog, ...moved.logEntries]
+  }
 
   // --- Support attack: no damage, apply N effect only ---
   if (isSupportAttack) {

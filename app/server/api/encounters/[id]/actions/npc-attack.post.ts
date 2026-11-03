@@ -9,7 +9,7 @@ import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../util
 import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
-import { applyRoundEndEffects } from '../../../../utils/damageOverTime'
+import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect } from '../../../../utils/damageOverTime'
 
 interface NpcAttackBody {
   participantId: string
@@ -417,8 +417,8 @@ export default defineEventHandler(async (event) => {
         )
       }
 
-      // Auto-apply effect if attack has one and conditions are met
-      if (npcAttackDef?.effect) {
+      // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
+      if (npcAttackDef?.effect && !isImmuneToEffect(npcAttackDef.effect, targetDigimon?.qualities)) {
         const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
         if (shouldApply) {
           const effectDuration = Math.max(1, netSuccesses)
@@ -552,6 +552,7 @@ export default defineEventHandler(async (event) => {
           participants: finalParticipantsAfterDefeat,
           endingRound: encounter.round ?? 0,
           rules: eddySoulRules,
+          positions: await loadStationaryBurnPositions(encounterId, (encounter as any).mapId, finalParticipantsAfterDefeat, eddySoulRules),
         })
         finalParticipantsAfterDefeat = roundEnd.participants
         roundEndLogEntries = roundEnd.logEntries
