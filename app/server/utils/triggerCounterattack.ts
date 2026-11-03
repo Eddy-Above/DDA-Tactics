@@ -20,6 +20,8 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   participants: any[]
   battleLog: any[]
   pendingRequests: any[]
+  /** Set when the counterattack resolved: without the original attacker if it was defeated */
+  turnOrder?: string[]
   nextTurnIndex?: number
   nextRound?: number
 }> {
@@ -275,7 +277,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
       }
     }
 
-    return { participants, battleLog, pendingRequests, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
+    return { participants, battleLog, pendingRequests, turnOrder: result.turnOrder, nextTurnIndex: result.nextTurnIndex, nextRound: result.nextRound }
   }
 
   return { participants, battleLog, pendingRequests }

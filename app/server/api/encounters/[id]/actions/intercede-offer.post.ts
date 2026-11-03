@@ -1382,6 +1382,7 @@ export default defineEventHandler(async (event) => {
               participants: caResult.participants,
               battleLog: caResult.battleLog,
               pendingRequests: caResult.pendingRequests,
+              ...(caResult.turnOrder ? { turnOrder: caResult.turnOrder } : {}),
               ...(caResult.nextTurnIndex !== undefined ? { currentTurnIndex: caResult.nextTurnIndex } : {}),
               ...(caResult.nextRound !== undefined ? { round: caResult.nextRound } : {}),
               updatedAt: new Date(),

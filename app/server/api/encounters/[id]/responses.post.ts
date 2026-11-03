@@ -497,6 +497,7 @@ export default defineEventHandler(async (event) => {
             updateData.participants = participants
             updateData.battleLog = battleLog
             updateData.pendingRequests = caResult.pendingRequests
+            if (caResult.turnOrder) updateData.turnOrder = caResult.turnOrder
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
@@ -989,6 +990,7 @@ export default defineEventHandler(async (event) => {
             updateData.participants = participants
             updateData.battleLog = battleLog
             updateData.pendingRequests = caResult.pendingRequests
+            if (caResult.turnOrder) updateData.turnOrder = caResult.turnOrder
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
