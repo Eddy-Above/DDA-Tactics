@@ -75,6 +75,13 @@
         <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
         <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
         <button v-if="isDm" class="npc-radial-btn gm-move" @click="gmMove(npcRadialId!)">GM Move</button>
+        <div v-if="npcDoorButtons.length" class="npc-radial-door-group">
+          <button
+            v-for="d in npcDoorButtons" :key="d.id" class="npc-radial-btn door"
+            @mouseenter="highlightDoor(d.id)" @mouseleave="highlightDoor(null)"
+            @click="radialToggleDoor(d.id, !d.isOpen)"
+          >{{ d.label }}</button>
+        </div>
       </template>
     </div>
     <!-- GM-only radial: free-reposition any character on any turn (no action cost, no distance limit) -->
@@ -120,6 +127,13 @@
           <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
           <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
         </template>
+        <div v-if="playerDoorButtons.length" class="npc-radial-door-group player">
+          <button
+            v-for="d in playerDoorButtons" :key="d.id" class="npc-radial-btn door"
+            @mouseenter="highlightDoor(d.id)" @mouseleave="highlightDoor(null)"
+            @click="radialToggleDoor(d.id, !d.isOpen)"
+          >{{ d.label }}</button>
+        </div>
       </template>
     </div>
   </div>
@@ -140,6 +154,8 @@ import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
+import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
+import { doorsAdjacentTo } from '~/utils/mapDoors'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
@@ -196,6 +212,7 @@ const emit = defineEmits<{
   (e: 'movement-cancelled'): void
   (e: 'wall-selected', wallId: string): void
   (e: 'map-changed'): void
+  (e: 'door-toggle', doorId: string, isOpen: boolean): void
 }>()
 
 // ── Participant display names matching encounter page getDisplayName logic ───
@@ -346,6 +363,20 @@ const modeChangeDisabled = computed(() => {
   }
   return true
 })
+// Doors the radial's unit stands beside — opening or closing one is a free action.
+function radialDoorButtons(participantId: string | null): { id: string; isOpen: boolean; label: string }[] {
+  const pos = participantId ? props.participantPositions[participantId] : null
+  if (!props.map || !pos) return []
+  const destroyed = new Set(props.destructibleStates.filter(s => s.currentWounds <= 0).map(s => s.structureId))
+  const doors = doorsAdjacentTo(props.map, pos, getParticipantFootprintDims(participantId), destroyed)
+  return doors.map((d, i) => ({
+    id: d.id,
+    isOpen: d.isOpen,
+    label: `${d.isOpen ? 'Close' : 'Open'} Door${doors.length > 1 ? ` ${i + 1}` : ''}`,
+  }))
+}
+const npcDoorButtons = computed(() => radialDoorButtons(npcRadialId.value))
+const playerDoorButtons = computed(() => radialDoorButtons(playerRadialId.value))
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
@@ -396,6 +427,9 @@ let buildMeshes: THREE.Object3D[] = []
 let spawnMeshes: THREE.Object3D[] = []
 let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
 let voxelMeshes: THREE.Mesh[] = []
+let doorMeshes = new Map<string, THREE.Mesh>()  // doorId → door panel
+// Game-rules line of sight (single-target reticules + area shapes), rebuilt with the scene.
+let losIndex: LosIndex | null = null
 let reticuleGroup: THREE.Group
 let aoeGroup: THREE.Group
 let passRangeGroup: THREE.Group
@@ -418,10 +452,8 @@ const keysHeld = new Set<string>()
 const clipY = ref(20)
 const ghostWalls = ref(false)
 const TILE_SIZE = 1
-const TILE_H = 0.12
-const WALL_H = 1
-const WINDOW_H = 0.6
-const WINDOW_FRAME = (WALL_H - WINDOW_H) / 2
+// Shared with the line-of-sight model (utils/lineOfSight.ts) so targeting matches what's drawn.
+const { TILE_H, WALL_H, WINDOW_H, WINDOW_FRAME } = MAP_GEOMETRY
 // tileCount = tiles occupied (floor footprint + volume box)
 // imageScale = visual portrait size in world units (tiny/small/medium share 1-tile space but smaller images)
 function getSizeParams(size: DigimonSize, gig?: { width: number; height: number; depth: number } | null) {
@@ -679,6 +711,7 @@ function makeBlendTexture(center: number, n?: number, s?: number, e?: number, w?
 
 // ── Map building ───────────────────────────────────────────────────────────
 function buildMap() {
+  losIndex = null
   if (!props.map) return
   const map = props.map
   const destroyedIds = new Set(props.destructibleStates.filter(s => s.currentWounds <= 0).map(s => s.structureId))
@@ -801,9 +834,7 @@ function buildMap() {
   // Walls — frame-only when a window or door is present
   const walledWindowIds = new Set(map.windows.map(w => w.wallId))
   const walledDoorIds   = new Set(map.doors.map(d => d.wallId))
-  const DOOR_H   = WALL_H * 0.9
-  const DOOR_W   = TILE_SIZE * 0.7
-  const PILLAR_W = (TILE_SIZE - DOOR_W) / 2      // 0.15
+  const { DOOR_H, DOOR_W, PILLAR_W } = MAP_GEOMETRY
   const DOOR_HDR = WALL_H - DOOR_H               // 0.1
 
   function addWallMesh(geo: THREE.BoxGeometry, mat: THREE.MeshLambertMaterial, wx: number, wy: number, wz: number, wallId: string, dx: number, dy: number, dz: number) {
@@ -826,7 +857,7 @@ function buildMap() {
     const mat = new THREE.MeshLambertMaterial({ color })
     const xOff = wall.face === 'east' ? 1 : wall.face === 'west' ? 0 : 0.5
     const zOff = wall.face === 'south' ? 1 : wall.face === 'north' ? 0 : 0.5
-    const D = 0.1  // wall depth
+    const D = MAP_GEOMETRY.WALL_D  // wall depth
 
     if (walledWindowIds.has(wall.id)) {
       // Sill (bottom strip)
@@ -881,28 +912,39 @@ function buildMap() {
     const wall = map.walls.find(w => w.id === door.wallId)
     if (!wall) continue
     const isNS = wall.face === 'north' || wall.face === 'south'
-    const geo = isNS ? new THREE.BoxGeometry(DOOR_W, DOOR_H, 0.08) : new THREE.BoxGeometry(0.08, DOOR_H, DOOR_W)
+    const PANEL_D = 0.08
+    const geo = isNS ? new THREE.BoxGeometry(DOOR_W, DOOR_H, PANEL_D) : new THREE.BoxGeometry(PANEL_D, DOOR_H, DOOR_W)
     const mat = new THREE.MeshLambertMaterial({ color: door.isOpen ? 0x886644 : 0x553311 })
     const mesh = new THREE.Mesh(geo, mat)
     const xOff = wall.face === 'east' ? 1 : wall.face === 'west' ? 0 : 0.5
     const zOff = wall.face === 'south' ? 1 : wall.face === 'north' ? 0 : 0.5
-    mesh.position.set(wall.x + xOff, wall.y * TILE_SIZE + DOOR_H / 2, wall.z + zOff)
-    if (door.isOpen) mesh.rotation.y = Math.PI / 2
+    const py = wall.y * TILE_SIZE + DOOR_H / 2
+    if (door.isOpen) {
+      // Swung 90° on its hinge jamb into the wall's own cell, leaving the doorway clear.
+      const hinge = PILLAR_W + PANEL_D / 2   // along the wall, from the cell's min-x/min-z edge
+      const into = DOOR_W / 2                // away from the wall plane, into the cell
+      mesh.rotation.y = Math.PI / 2
+      if (isNS) mesh.position.set(wall.x + hinge, py, wall.z + zOff + (wall.face === 'north' ? into : -into))
+      else mesh.position.set(wall.x + xOff + (wall.face === 'west' ? into : -into), py, wall.z + hinge)
+    } else {
+      mesh.position.set(wall.x + xOff, py, wall.z + zOff)
+    }
     mesh.userData = { type: 'door', id: door.id, floorY: wall.y }
     scene.add(mesh)
     buildMeshes.push(mesh)
+    doorMeshes.set(door.id, mesh)
   }
 
   // Ceilings
   for (const ceiling of map.ceilings) {
     if (destroyedIds.has(ceiling.id)) continue
-    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.1, TILE_SIZE)
+    const geo = new THREE.BoxGeometry(TILE_SIZE, MAP_GEOMETRY.CEILING_H, TILE_SIZE)
     const state = props.destructibleStates.find(s => s.structureId === ceiling.id)
     const woundPct = ceiling.woundBoxes !== undefined && state ? state.currentWounds / ceiling.woundBoxes : 1
     const color = new THREE.Color().setHSL(woundPct * 0.25, 0.5, 0.45)
     const mat = new THREE.MeshLambertMaterial({ color })
     const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(ceiling.x + 0.5, ceiling.y * TILE_SIZE + TILE_SIZE + 0.05, ceiling.z + 0.5)
+    mesh.position.set(ceiling.x + 0.5, ceiling.y * TILE_SIZE + TILE_SIZE + MAP_GEOMETRY.CEILING_H / 2, ceiling.z + 0.5)
     mesh.userData = { type: 'ceiling', id: ceiling.id, floorY: ceiling.y }
     scene.add(mesh)
     buildMeshes.push(mesh)
@@ -947,6 +989,10 @@ function buildMap() {
       mat.needsUpdate = true
     }
   }
+
+  // Built from map data (not meshes), so the Y-clip/ghost view aids never change targeting.
+  losIndex = buildLosIndex(map, destroyedIds)
+  lastAttackKey = ''  // re-check reticules against the new geometry (doors, edits)
 }
 
 // ── Character footprints + HTML token overlays ───────────────────────────────
@@ -1161,6 +1207,28 @@ function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-orde
   playerRadialScreen.value = null
 }
 
+// Tints the door a radial door button refers to, so neighbouring doors can be told apart.
+let highlightedDoorId: string | null = null
+function highlightDoor(doorId: string | null) {
+  const tint = (id: string | null, hex: number) => {
+    const mat = id ? doorMeshes.get(id)?.material : undefined
+    if (mat instanceof THREE.MeshLambertMaterial) mat.emissive.setHex(hex)
+  }
+  tint(highlightedDoorId, 0x000000)
+  highlightedDoorId = doorId
+  tint(doorId, 0x664400)
+}
+
+// Open/close a door from the radial (a free action), then close the radial like any other action.
+function radialToggleDoor(doorId: string, isOpen: boolean) {
+  highlightDoor(null)
+  emit('door-toggle', doorId, isOpen)
+  npcRadialId.value = null
+  npcRadialScreen.value = null
+  playerRadialId.value = null
+  playerRadialScreen.value = null
+}
+
 // ── Animation loop ─────────────────────────────────────────────────────────
 function applyKeyMovement() {
   if (!keysHeld.size) return
@@ -1305,6 +1373,7 @@ function updateReticules() {
   const aoeCellSet = (aoeActive || isAreaTargeting.value)
     ? new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
     : null
+  const attackerDims = getParticipantFootprintDims(effectiveAttackerId.value)
 
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
@@ -1316,7 +1385,6 @@ function updateReticules() {
       if (!footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), aoeCellSet)) continue
     } else if (isMelee) {
       // Melee: min Chebyshev distance across all footprint cell pairs (handles large digimon + diagonals)
-      const attackerDims = getParticipantFootprintDims(effectiveAttackerId.value)
       const targetDims = getParticipantFootprintDims(p.id)
       let inRange = meleeInRange(attackerPos, pos, attackerDims, targetDims, maxDist)
       if (!inRange && props.chargeMode === 'before') {
@@ -1326,12 +1394,14 @@ function updateReticules() {
       }
       if (!inRange) continue
     } else {
-      // Ranged: 3D Euclidean distance from anchor to anchor
+      // Ranged: 3D Euclidean distance from anchor to anchor, and some part of the target in view
+      // (same blockers as area shapes: walls, floors, closed doors, all but water/air voxels)
       const dx = pos.x - attackerPos.x
       const dy = pos.y - attackerPos.y
       const dz = pos.z - attackerPos.z
       const dist3d = Math.sqrt(dx * dx + dy * dy + dz * dz)
       if (dist3d > maxDist) continue
+      if (losIndex && !canSeeFootprint(losIndex, attackerPos, attackerDims, pos, getParticipantFootprintDims(p.id))) continue
     }
 
     ids.push(p.id)
@@ -1517,38 +1587,15 @@ function renderBlastFromStoredCenter() {
   updateAoeHighlight(hitCells, blockedCells)
 }
 
+// Line of sight between two cells' centres, against the map's blockers (utils/lineOfSight.ts —
+// shared with single-target reticules so both always agree). No map → always clear.
 function hasLineOfSight(from: Vec3, to: Vec3): boolean {
-  const fromW = new THREE.Vector3(from.x + 0.5, from.y * TILE_SIZE + TILE_H + 0.5, from.z + 0.5)
-  const toW   = new THREE.Vector3(to.x   + 0.5, to.y   * TILE_SIZE + TILE_H + 0.5, to.z   + 0.5)
-  const dir = toW.clone().sub(fromW)
-  const dist = dir.length()
-  if (dist < 0.1) return true
-  dir.normalize()
-  const los = new THREE.Raycaster(fromW, dir, 0.1, dist - 0.1)
-  // Filter to solid Mesh objects only — LineSegments (tile edges) have large default precision
-  // and cause false LoS blocks for any ray passing within ~1 world unit of an edge.
-  const solidMeshes = [...buildMeshes, ...voxelMeshes].filter(obj => obj instanceof THREE.Mesh)
-  const hits = los.intersectObjects(solidMeshes, true)
-  return hits.length === 0
+  return !losIndex || losClear(losIndex, from, to)
 }
 
+// The cell where the line from→to first hits a blocker (or `to` if it's clear).
 function clipToLos(from: Vec3, to: Vec3): Vec3 {
-  const fromW = new THREE.Vector3(from.x + 0.5, from.y * TILE_SIZE + TILE_H + 0.5, from.z + 0.5)
-  const toW   = new THREE.Vector3(to.x   + 0.5, to.y   * TILE_SIZE + TILE_H + 0.5, to.z   + 0.5)
-  const dir = toW.clone().sub(fromW)
-  const dist = dir.length()
-  if (dist < 0.1) return to
-  dir.normalize()
-  const raycaster = new THREE.Raycaster(fromW, dir, 0.1, dist - 0.1)
-  const solidMeshes = [...buildMeshes, ...voxelMeshes].filter(obj => obj instanceof THREE.Mesh)
-  const hits = raycaster.intersectObjects(solidMeshes, true)
-  if (hits.length === 0) return to
-  const hitW = hits[0].point
-  return {
-    x: Math.floor(hitW.x),
-    y: Math.floor((hitW.y - TILE_H) / TILE_SIZE),
-    z: Math.floor(hitW.z),
-  }
+  return losIndex ? losClip(losIndex, from, to) : to
 }
 
 function classifyCellsByLos(
@@ -2359,13 +2406,17 @@ watch(() => props.map, () => {
   if (!scene) return
   buildMeshes.forEach(m => scene.remove(m))
   buildMeshes = []; tileMeshes = []; wallMeshes = []; voxelMeshes = []; spawnMeshes = []
+  doorMeshes = new Map(); highlightedDoorId = null
   blendTextureCache = new Map()
   buildMap()
 }, { deep: true })
 
 watch(
   () => JSON.stringify(props.participantPositions),
-  () => { if (scene) buildSprites() }
+  () => {
+    lastAttackKey = ''  // a target moving changes range and line of sight
+    if (scene) buildSprites()
+  }
 )
 
 watch(() => props.digimonMap, () => { if (scene) buildSprites() }, { deep: true })
@@ -2718,4 +2769,20 @@ defineExpose({ movingParticipantId })
    standalone GM radial it is centered by the clash-group flex layout (position: static). */
 .npc-radial-btn.gm-move { top: 62px; left: 0; background: #3a1a4a; border-color: #cc66ff; white-space: nowrap; }
 .npc-radial-btn.gm-move:hover:not(:disabled) { background: #4a2560; }
+/* Open/Close Door (free action), stacked under the fan: below GM Move in the NPC radial,
+   below Clash in the player radial. */
+.npc-radial-door-group {
+  position: absolute;
+  top: 94px;
+  left: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.npc-radial-door-group.player { top: 62px; }
+.npc-radial-door-group .npc-radial-btn { position: static; transform: none; }
+.npc-radial-btn.door { background: #3a2a10; border-color: #cc9944; }
+.npc-radial-btn.door:hover:not(:disabled) { background: #4a3818; }
 </style>

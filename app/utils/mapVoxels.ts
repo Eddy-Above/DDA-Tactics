@@ -58,11 +58,12 @@ export const MAP_VOXEL_MATERIALS: readonly MapVoxelMaterialDefinition[] = [
     blocksSightDefault: true,
   }),
   elementMaterial('steel', 'Steel Block', ['solid', 'metal']),
+  // Non-solid, but too bright to see (or target) through.
   elementMaterial('light', 'Light Block', ['elemental'], {
     transparent: true,
     opacity: 0.58,
     blocksMovementDefault: false,
-    blocksSightDefault: false,
+    blocksSightDefault: true,
   }),
   {
     id: 'glass',
@@ -123,6 +124,13 @@ export function voxelBlocksSight(voxel: MapVoxel): boolean {
   if (voxel.feature === 'window') return false
   const def = getVoxelMaterialDefinition(voxel)
   return voxel.blocksSight ?? def.blocksSightDefault ?? true
+}
+
+// Whether a voxel stops targeting, both into it and through it. Only non-solid, see-through
+// volumes (water, air currents) let attacks and area effects pass; solid blocks (glass and ice
+// included) and opaque volumes (darkness, light) block.
+export function voxelBlocksTargeting(voxel: MapVoxel): boolean {
+  return voxelBlocksMovement(voxel) || voxelBlocksSight(voxel)
 }
 
 export function vec3MatchesVoxel(pos: Vec3, voxel: Pick<MapVoxel, 'x' | 'y' | 'z'>): boolean {

@@ -168,8 +168,12 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   function applyDoor(wallId: string) {
     if (!currentMap.value) return
     pushUndo()
-    const already = currentMap.value.doors.some(d => d.wallId === wallId)
-    if (already) return
+    // Using the Door tool on an existing door opens/closes it (how the GM sets or resets door state).
+    const existing = currentMap.value.doors.find(d => d.wallId === wallId)
+    if (existing) {
+      existing.isOpen = !existing.isOpen
+      return
+    }
     currentMap.value.doors.push({ id: generateId(), wallId, isOpen: false })
   }
 

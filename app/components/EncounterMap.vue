@@ -71,6 +71,7 @@
           @cell-hovered="onCellHovered"
           @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; gmMoveParticipantId = null; movement.clearMovement() }"
           @wall-selected="onWallSelected"
+          @door-toggle="(doorId, isOpen) => setDoorsOpen([doorId], isOpen)"
         />
         <div v-else class="no-map">
           <div class="no-map-msg">
@@ -202,6 +203,8 @@ import { applyStanceToMovement } from '~/utils/stanceModifiers'
 import type { MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { chebyshev } from '~/utils/pathfinding'
+import { closedDoorsCrossedByPath } from '~/utils/mapDoors'
+import { segmentCells } from '~/utils/lineOfSight'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
@@ -524,8 +527,10 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
     return
   }
 
+  const doorPath = movePathTo(participantId, position, path)
   positions.value = { ...positions.value, [participantId]: position }
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path, version: 0 })
+  openDoorsAlong(participantId, doorPath)
 
   if (chargeMoveParticipantId.value === participantId) {
     chargeMoveParticipantId.value = null
@@ -557,6 +562,47 @@ function onGmMove(participantId: string, position: Vec3) {
   positions.value = { ...positions.value, [participantId]: position }
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path: [], version: 0 })
   gmMoveParticipantId.value = null
+}
+
+// ── Doors ──────────────────────────────────────────────────────────────────
+// Door state lives on the map record, like in-encounter map edits: update it locally (MapCanvas
+// rebuilds the scene and its line-of-sight model), save it, then tell other viewers to refetch.
+async function setDoorsOpen(doorIds: string[], isOpen: boolean) {
+  const mapId = props.encounter.mapId
+  if (!map.value || !mapId || doorIds.length === 0) return
+  const ids = new Set(doorIds)
+  map.value.doors = map.value.doors.map(d => (ids.has(d.id) ? { ...d, isOpen } : d))
+  try {
+    await mapStore.updateMap(mapId, { doors: map.value.doors })
+    for (const doorId of doorIds) ws.send({ type: 'door-toggled', encounterId: props.encounter.id, doorId, isOpen })
+  } catch (e) {
+    console.error('door toggle failed', e)
+    const fresh = await mapStore.fetchMap(mapId)  // resync; null means the fetch failed too
+    if (fresh) map.value = fresh
+  }
+}
+
+// The mover's path to `destination`, for opening doors: the drawn path when it ends there, else one
+// derived the way hover pathing does. Call before the mover's position is updated.
+function movePathTo(participantId: string, destination: Vec3, drawn: Vec3[] = []): Vec3[] {
+  if (!map.value?.doors?.length) return []  // no doors to open
+  if (drawn.length > 1 && sameVec3(drawn[drawn.length - 1], destination)) return drawn
+  const ctx = npcMoveCaps(participantId)
+  if (!ctx) return []
+  const shown = movement.activePath.value  // computePath also sets the drawn path; keep it as is
+  const path = movement.computePath(ctx.pos, destination, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
+  movement.activePath.value = shown
+  return path ?? []
+}
+
+// Moving through a closed door opens it. `path` is the mover's anchor cells, start first.
+function openDoorsAlong(participantId: string, path: Vec3[]) {
+  if (!map.value || path.length < 2) return
+  const p = props.encounter.participants.find(x => x.id === participantId)
+  const dInfo = p?.type === 'digimon' ? (digimonMapForCanvas.value[p.entityId] as any) : null
+  const dims = getFootprintDimensions(dInfo?.size ?? 'medium', dInfo?.giganticDimensions ?? null)
+  const doorIds = closedDoorsCrossedByPath(map.value, path, dims, destroyedIds())
+  if (doorIds.length) setDoorsOpen(doorIds, true)
 }
 
 function destroyedIds(): Set<string> {
@@ -653,8 +699,10 @@ function startChargeBefore() {
 
 function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
   if (!sameVec3(positions.value[attackerId], destination)) {
+    const doorPath = movePathTo(attackerId, destination)  // the charge path isn't drawn
     positions.value = { ...positions.value, [attackerId]: destination }
     ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [], version: 0 })
+    openDoorsAlong(attackerId, doorPath)
   }
   chargeMode.value = null
   movement.clearMovement()
@@ -680,6 +728,8 @@ function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData
     if (attackerId && !sameVec3(positions.value[attackerId], newPos)) {
       positions.value = { ...positions.value, [attackerId]: newPos }
       ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: newPos, path: [], version: 0 })
+      // A [Pass] moves in a straight line, so it opens any closed door on that line.
+      openDoorsAlong(attackerId, segmentCells(areaShapeData.attackerPos, newPos))
     }
   }
 
