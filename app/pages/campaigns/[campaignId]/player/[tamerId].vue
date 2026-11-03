@@ -18,6 +18,7 @@ import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts'
+import { evolutionFormsKey } from '~/utils/evolutionForms'
 
 definePageMeta({
   layout: 'player',
@@ -311,12 +312,16 @@ encounterWs.onMessage((msg) => {
     }
     if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
     lastEncounterStateVersion = msg.version
+    // A digivolve/devolve from another client (e.g. the GM's Manage modal) moves the
+    // evolution line's currentStageIndex, which the Digivolve/Devolve options read
+    const formsChanged = evolutionFormsKey(activeEncounter.value) !== evolutionFormsKey(msg.encounter)
     activeEncounter.value = msg.encounter as any
     // Keep the composable's currentEncounter in sync too — nextTurn() and other
     // composable methods compute from it, and a stale base caused the player's
     // End Turn to over-advance the initiative each round (mirrors the GM page).
     currentEncounter.value = msg.encounter as any
     syncEncounterDigimon()
+    if (formsChanged && tamer.value) fetchEvolutionLines(tamer.value.id, campaignId.value)
     if (tamer.value) {
       myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
       reconstructAttackResults(activeEncounter.value!, tamer.value)
@@ -2109,6 +2114,25 @@ function rollWillpower() {
   const total = rolls.reduce((a, b) => a + b, 0) + willpower
   willpowerRollResult.value = { rolls, total }
   hasRolledWillpower.value = true
+}
+
+// Failed Willpower check: spend 1 Inspiration to re-roll it
+async function rerollWillpowerWithInspiration() {
+  if (!activeEncounter.value || !myTamerParticipant.value || !willpowerRollResult.value) return
+  if (currentCombatInspiration.value < 1) return
+  inspirationSpendLoading.value = true
+  try {
+    // spendInspiration returns null on failure rather than throwing — only re-roll once it's paid
+    const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, 'reroll', 1)
+    if (!result) {
+      alert('Failed to spend Inspiration')
+      return
+    }
+    rollWillpower()
+    await loadData()
+  } finally {
+    inspirationSpendLoading.value = false
+  }
 }
 
 async function submitWillpowerRoll() {
@@ -7701,18 +7725,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </div>
 
         <div class="flex gap-2">
+          <!-- Once rolled the check must be resolved: no Cancel. A failure can be re-rolled with Inspiration. -->
           <button
+            v-if="!hasRolledWillpower"
             @click="showWillpowerRollModal = false; pendingDigivolve = null; pendingWarpChoice = null"
             class="flex-1 bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            :disabled="hasRolledWillpower"
           >
             Cancel
           </button>
           <button
-            :disabled="!willpowerRollResult"
+            v-else-if="willpowerRollResult && willpowerRollResult.total < DIGIVOLVE_WILLPOWER_DC[campaignLevel] && myTamerParticipant && currentCombatInspiration >= 1"
+            :disabled="inspirationSpendLoading"
+            @click="rerollWillpowerWithInspiration"
+            class="flex-1 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+          >
+            ✦ Spend Inspiration
+            <span class="block text-xs font-normal text-yellow-200/70">Re-roll · {{ currentCombatInspiration }} left</span>
+          </button>
+          <button
+            :disabled="!willpowerRollResult || inspirationSpendLoading"
             @click="submitWillpowerRoll"
             :class="[
-              'flex-1 text-white px-4 py-2 rounded-lg font-semibold transition-colors',
+              'flex-1 text-white px-4 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
               !willpowerRollResult ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' :
               willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? (pendingWarpChoice ? 'bg-violet-600 hover:bg-violet-700' : 'bg-green-600 hover:bg-green-700') : 'bg-red-600 hover:bg-red-700'
             ]"
