@@ -6006,24 +6006,57 @@ async function handleBreakClash(participantId: string, clashId: string) {
             <div class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700">
               <h3 class="font-display text-lg font-semibold text-white mb-3">Quick Reference</h3>
               <div class="space-y-2 text-sm">
-                <div class="flex justify-between">
+                <div class="flex justify-between gap-3">
                   <span class="text-digimon-dark-400">Simple Actions</span>
-                  <span class="text-white">2 per turn</span>
+                  <span class="text-white text-right">2 per turn</span>
                 </div>
-                <div class="flex justify-between">
-                  <span class="text-digimon-dark-400">Complex Actions</span>
-                  <span class="text-white">1 per turn</span>
+                <div class="flex justify-between gap-3">
+                  <span class="text-digimon-dark-400">Complex Action</span>
+                  <span class="text-white text-right">Uses both Simple</span>
                 </div>
-                <div class="flex justify-between">
-                  <span class="text-digimon-dark-400">Movement</span>
-                  <span class="text-white">= Simple Action</span>
+                <div class="flex justify-between gap-3">
+                  <span class="text-digimon-dark-400">Move</span>
+                  <span class="text-white text-right">1 Simple · up to Movement</span>
+                </div>
+                <div class="flex justify-between gap-3">
+                  <span class="text-digimon-dark-400">Attack / Direct</span>
+                  <span class="text-white text-right">1 Simple</span>
+                </div>
+                <div class="flex justify-between gap-3">
+                  <span class="text-digimon-dark-400">Bolster (Attack or Direct)</span>
+                  <span class="text-white text-right">Complex</span>
+                </div>
+                <div class="flex justify-between gap-3">
+                  <span class="text-digimon-dark-400">Intercede</span>
+                  <span class="text-white text-right">1 Simple</span>
                 </div>
                 <div class="border-t border-digimon-dark-600 my-2" />
                 <div class="text-digimon-dark-400">
-                  <strong class="text-white">Attack:</strong> 3d6 + Accuracy vs 3d6 + Dodge
+                  <strong class="text-white">Attack:</strong> Roll Accuracy d6 vs Dodge d6; each 5 or 6 is a success
                 </div>
                 <div class="text-digimon-dark-400">
-                  <strong class="text-white">Damage:</strong> Net Successes + Damage - Armor
+                  <strong class="text-white">Hit:</strong> Accuracy successes ≥ Dodge successes (ties hit)
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Damage:</strong> Damage + Net Successes − Armor (min 1)
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Effects:</strong> Land on a hit (damage attacks need 2+ damage); last Net Successes turns (min 1)
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Dodge:</strong> −1 die per attack against you since your last turn
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Bolster Attack:</strong> +2 Accuracy & Damage, or +1 BIT/CPU; twice per combat
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Direct:</strong> +Charisma dice to a Digimon's next Accuracy or Dodge (+2 if Bolstered)
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Intercede:</strong> Take an ally's hit with no dodge; if you've already acted, it costs an action from your next turn
+                </div>
+                <div class="text-digimon-dark-400">
+                  <strong class="text-white">Tamer checks:</strong> 3d6 + Attribute + Skill vs TN
                 </div>
               </div>
             </div>
