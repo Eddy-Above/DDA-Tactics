@@ -389,6 +389,9 @@ let rafId: number
 let blendTextureCache: Map<string, THREE.CanvasTexture> = new Map()
 let occludeRaycaster: THREE.Raycaster
 let spriteGroups: Map<string, THREE.Group>  // participantId → group
+const borderMaterials = new Map<string, THREE.LineBasicMaterial>()  // participantId → volume-outline material
+// Participant whose volume outline is tinted green because a click under the cursor would target it.
+let hoveredTargetId: string | null = null
 let tileMeshes: THREE.Mesh[] = []
 let buildMeshes: THREE.Object3D[] = []
 let spawnMeshes: THREE.Object3D[] = []
@@ -522,6 +525,7 @@ onMounted(() => {
   canvasRef.value!.addEventListener('mousemove', onMouseMove)
   canvasRef.value!.addEventListener('mousedown', onMouseDown)
   canvasRef.value!.addEventListener('mouseup', onMouseUp)
+  canvasRef.value!.addEventListener('mouseleave', () => setHoveredTarget(null))
   canvasRef.value!.addEventListener('contextmenu', e => e.preventDefault())
   // Intercept wheel on canvas directly so OrbitControls never zooms during movement or blast-aim mode
   canvasRef.value!.addEventListener('wheel', (e) => {
@@ -954,6 +958,7 @@ const reticuleParticipantIds = ref<string[]>([])
 function buildSprites() {
   for (const [, group] of spriteGroups) scene.remove(group)
   spriteGroups.clear()
+  borderMaterials.clear()
 
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
@@ -988,15 +993,32 @@ function buildSprites() {
     group.add(hitboxMesh)
 
     // Occupied volume outline
-    const isHighlighted = p.id === props.activeParticipantId || p.id === props.secondaryActiveParticipantId
     const borderEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(footprint * 0.92, charHeight, footprint * 0.92))
-    const borderMat = new THREE.LineBasicMaterial({ color: isHighlighted ? 0xff8800 : 0x334466, depthTest: false })
+    const borderMat = new THREE.LineBasicMaterial({ color: participantBorderColor(p.id), depthTest: false })
+    borderMaterials.set(p.id, borderMat)
     const borderLines = new THREE.LineSegments(borderEdges, borderMat)
     borderLines.position.y = charHeight / 2
     group.add(borderLines)
 
     scene.add(group)
     spriteGroups.set(p.id, group)
+  }
+}
+
+// Volume-outline color: green while hovered as a valid target, orange for whose turn it is.
+function participantBorderColor(participantId: string): number {
+  if (participantId === hoveredTargetId) return 0x33ff66
+  const isActive = participantId === props.activeParticipantId || participantId === props.secondaryActiveParticipantId
+  return isActive ? 0xff8800 : 0x334466
+}
+
+// Moves the green hover outline to `participantId` (null clears it), recoloring only the two affected outlines.
+function setHoveredTarget(participantId: string | null) {
+  if (participantId === hoveredTargetId) return
+  const prev = hoveredTargetId
+  hoveredTargetId = participantId
+  for (const id of [prev, participantId]) {
+    if (id) borderMaterials.get(id)?.color.setHex(participantBorderColor(id))
   }
 }
 
@@ -1879,6 +1901,8 @@ function onMouseMove(event: MouseEvent) {
     return
   }
 
+  updateTargetHover(event)
+
   // Movement mode — ghost + distance label + path preview
   // Use plane intersection at npcMoveY so scroll wheel controls the target floor,
   // preventing upper-floor geometry from blocking clicks on lower-floor tiles.
@@ -2001,6 +2025,53 @@ function tryChargeMove(targetId: string): boolean {
   if (!best) return false
   emit('charge-target-selected', attackerId, best, targetId)
   return true
+}
+
+// The participant a click on these raycast hits would pick as a single-target attack/intercede target:
+// a direct hit on a reticuled participant's character token (sprite hitbox) wins, else a reticuled
+// participant whose footprint covers the clicked ground/voxel tile — so Large/Huge/Gigantic digimon
+// can be targeted by clicking any footprint tile, not just the anchor.
+function reticuleTargetFromHits(hits: THREE.Intersection[]): string | null {
+  const singleTargetAttack = !!props.selectedAttack && !getAreaShape(props.selectedAttack.tags)
+
+  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
+  if (spriteHit && (singleTargetAttack || props.selectableParticipantIds?.length)) {
+    const participantId: string = spriteHit.object.userData.participantId
+    if (reticuleParticipantIds.value.includes(participantId)) return participantId
+  }
+
+  const surfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
+  if ((singleTargetAttack || (props.selectableParticipantIds?.length && !props.selectedAttack)) && surfaceHit) {
+    const hitType = surfaceHit.object.userData.type
+    const tile = surfaceHit.object.userData.tile as { y: number } | undefined
+    const voxel = surfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
+    const cell: Vec3 = hitType === 'voxel' && voxel
+      ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
+      : { x: Math.floor(surfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(surfaceHit.point.z) }
+    const cellSet = new Set([`${cell.x},${cell.y},${cell.z}`])
+    const targetParticipant = props.participants.find(p => {
+      if (p.id === effectiveAttackerId.value) return false
+      const pos = props.participantPositions[p.id]
+      if (!pos) return false
+      if (!reticuleParticipantIds.value.includes(p.id)) return false
+      return footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), cellSet)
+    })
+    if (targetParticipant) return targetParticipant.id
+  }
+
+  return null
+}
+
+// Tints green the volume outline of whichever participant a click at the cursor would target.
+// Skips the raycast (clearing the tint) while nothing is targetable or onCanvasClick would handle
+// the click before reaching target selection (map editing, movement, area aiming, placement/GM move).
+function updateTargetHover(event: MouseEvent) {
+  const canTarget = reticuleParticipantIds.value.length > 0
+    && !movingParticipantId.value
+    && !isAreaTargeting.value
+    && !(props.isDm && props.activeTool !== 'select')
+    && !props.placingParticipantId && !props.gmMoveParticipantId
+  setHoveredTarget(canTarget ? reticuleTargetFromHits(getIntersection(event)) : null)
 }
 
 // Selects `participantId` as the attack/intercede target if it currently has a reticule.
@@ -2150,37 +2221,12 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
-
-  // Single-target attack or intercede target selection: a direct hit on a participant's
-  // character token (sprite hitbox) takes priority over the ground/shadow-tile fallback below
-  if (spriteHit && ((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || props.selectableParticipantIds?.length)) {
-    if (tryReticuleTarget(spriteHit.object.userData.participantId)) return
-  }
-
-  // Single-target attack or intercede target selection: clicking a ground/voxel tile within a valid target's footprint
-  // Allows targeting Large/Huge/Gigantic digimon by clicking any footprint tile, not just the anchor
-  if (((props.selectedAttack && !getAreaShape(props.selectedAttack.tags)) || (props.selectableParticipantIds?.length && !props.selectedAttack)) && placementSurfaceHit) {
-    const hitType = placementSurfaceHit.object.userData.type
-    const tile = placementSurfaceHit.object.userData.tile as { y: number } | undefined
-    const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
-    const cell: Vec3 = hitType === 'voxel' && voxel
-      ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
-      : { x: Math.floor(placementSurfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(placementSurfaceHit.point.z) }
-    const cellSet = new Set([`${cell.x},${cell.y},${cell.z}`])
-    const targetParticipant = props.participants.find(p => {
-      if (p.id === effectiveAttackerId.value) return false
-      const pos = props.participantPositions[p.id]
-      if (!pos) return false
-      if (!reticuleParticipantIds.value.includes(p.id)) return false
-      return footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), cellSet)
-    })
-    if (targetParticipant) {
-      if (tryReticuleTarget(targetParticipant.id)) return
-    }
-  }
+  // Single-target attack or intercede target selection (the same lookup drives the green hover outline)
+  const reticuleTargetId = reticuleTargetFromHits(hits)
+  if (reticuleTargetId && tryReticuleTarget(reticuleTargetId)) return
 
   // Check sprite click
+  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
   if (spriteHit) {
     const participantId: string = spriteHit.object.userData.participantId
     const p = props.participants.find(p => p.id === participantId)
@@ -2329,6 +2375,11 @@ watch(
 
 watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () => {
   if (scene) buildSprites()
+})
+
+// Drop the green hover outline once its participant stops being targetable (attack confirmed/cancelled, out of range)
+watch(reticuleParticipantIds, ids => {
+  if (hoveredTargetId && !ids.includes(hoveredTargetId)) setHoveredTarget(null)
 })
 
 watch(() => props.activeTool, (tool) => {
