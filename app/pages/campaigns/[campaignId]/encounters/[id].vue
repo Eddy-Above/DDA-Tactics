@@ -12,6 +12,7 @@ import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } fr
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
+import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import type { Vec3 } from '~/types'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
@@ -787,20 +788,10 @@ function getGmIntercedeOptions(request: any): any[] {
 }
 
 // GM intercede opt-outs (targets the GM never wants to be queried about)
-const gmIntercedeOptOuts = computed<string[]>(() => {
-  if (!currentEncounter.value) return []
-  const participants = (currentEncounter.value.participants as any[]) || []
-  const gmP = participants.find((p: any) => p.id === 'gm')
-  return gmP?.intercedeOptOuts || []
-})
+const gmIntercedeOptOuts = computed<string[]>(() => getTargetOptOuts(currentEncounter.value, GM_OPT_OUT_OWNER))
 
-// Get GM character opt-outs from participant data
-const gmCharacterOptOuts = computed(() => {
-  if (!currentEncounter.value) return {} as Record<string, string[]>
-  const participants = (currentEncounter.value.participants as any[]) || []
-  const gmP = participants.find((p: any) => p.id === 'gm')
-  return (gmP?.gmCharacterOptOuts || {}) as Record<string, string[]>
-})
+// GM per-target "never intercede with these characters" checklists
+const gmCharacterOptOuts = computed(() => getGmCharacterOptOuts(currentEncounter.value))
 
 // All GM intercede options (unfiltered, for opt-out selection view)
 const gmIntercedeAllOptions = computed(() => {
@@ -865,14 +856,29 @@ watch(gmIntercedeOffer, (newVal) => {
   }
 })
 
+// Offers already being auto-skipped. The watcher above can fire again for the same offer (a WS
+// push replaces the whole encounter object) before the skip lands, and a second skip would 404.
+const autoSkippedGmOfferIds = new Set<string>()
+function autoSkipGmOffer(requestId: string) {
+  if (autoSkippedGmOfferIds.has(requestId)) return
+  autoSkippedGmOfferIds.add(requestId)
+  handleGmIntercedeSkip(requestId).catch((e) => console.error('Auto-skip of GM intercede offer failed:', e))
+}
+
 function openGmIntercedeModal(request: any) {
   gmIntercedeRequest.value = request
   gmIntercedeAreaChosenTarget.value = null
   gmIntercedeView.value = request.data?.isAreaAttack ? 'select-area-target' : 'main'
   gmOptOutSelections.value = new Set()
+  // Never prompt about a target the GM opted out of. The server already filters these out and
+  // clears queued ones on save; this catches an offer created in the same instant as a save.
+  if (isOfferFullyOptedOut(request, gmIntercedeOptOuts.value)) {
+    autoSkipGmOffer(request.id)
+    return
+  }
   // Auto-skip if no eligible interceptors exist — no need to show the modal
   if (!request.data?.isAreaAttack && gmIntercedeOptionsWithNames.value.length === 0) {
-    handleGmIntercedeSkip(request.id)
+    autoSkipGmOffer(request.id)
     return
   }
   showGmIntercedeModal.value = true
@@ -1274,6 +1280,33 @@ async function handleGmIntercedeSkip(requestId: string, optOut = false) {
   }
 }
 
+// "Never intercede for X": stop asking the GM about this target for the rest of the encounter.
+// The server also clears any other GM prompt already queued for them. An area offer that still
+// has other targets stays open, and the offer watcher sends the modal back to the target picker.
+async function handleGmIntercedeOptOut() {
+  const request = gmIntercedeRequest.value
+  if (!currentEncounter.value || !request) return
+  const targetId = request.data?.isAreaAttack ? gmIntercedeAreaChosenTarget.value : request.data?.targetId
+  if (!targetId) return
+  gmIntercedeLoading.value = true
+  try {
+    const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
+      method: 'POST',
+      body: { requestId: request.id, optOut: true, optOutTargetIds: [targetId] },
+    })
+    const stillOpen = ((result?.pendingRequests as any[]) || []).some((r: any) => r.id === request.id)
+    if (!stillOpen) {
+      showGmIntercedeModal.value = false
+      gmIntercedeRequest.value = null
+    }
+    if (result) currentEncounter.value = result as any
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to opt out of interceding')
+  } finally {
+    gmIntercedeLoading.value = false
+  }
+}
+
 // Quick Reaction: player tamer uses Quick Reaction order for their partner digimon
 async function handleQuickReaction(request: any) {
   if (!currentEncounter.value) return
@@ -1333,18 +1366,32 @@ async function handleGmSaveCharacterOptOuts() {
   } finally {
     gmIntercedeLoading.value = false
   }
+  // Every character the GM could pick is now opted out — nothing left to ask about
+  const request = gmIntercedeRequest.value
+  if (request && !request.data?.isAreaAttack && gmIntercedeOptionsWithNames.value.length === 0) {
+    autoSkipGmOffer(request.id)
+  }
 }
 
-// Save GM intercede opt-outs (which targets the GM doesn't want to be queried about)
+function openGmIntercedeTargets() {
+  intercedeOptOutSelections.value = new Set(gmIntercedeOptOuts.value)
+  showIntercedeOptOuts.value = true
+}
+
+// Save GM intercede opt-outs (which targets the GM doesn't want to be queried about). The server
+// also clears any GM prompt already queued for a target that was just unchecked.
 async function handleSaveGmIntercedeOptOuts() {
   if (!currentEncounter.value) return
-  const optOuts = Array.from(intercedeOptOutSelections.value)
-  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-optouts`, {
-    method: 'POST',
-    body: { participantId: 'gm', intercedeOptOuts: optOuts },
-  })
-  await fetchEncounter(currentEncounter.value.id)
-  showIntercedeOptOuts.value = false
+  try {
+    const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-optouts`, {
+      method: 'POST',
+      body: { ownerId: GM_OPT_OUT_OWNER, intercedeOptOuts: Array.from(intercedeOptOutSelections.value) },
+    })
+    if (result) currentEncounter.value = result as any
+    showIntercedeOptOuts.value = false
+  } catch (e: any) {
+    alert(e?.data?.message || 'Failed to save intercede targets')
+  }
 }
 
 // Add participant handler - supports adding multiple of the same entity
@@ -3600,6 +3647,10 @@ function onMapAttackCancelled() {
               >Next Turn</button>
               <button
                 class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                @click="openGmIntercedeTargets"
+              >Intercede Targets</button>
+              <button
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
                 @click="showMapView = false"
               >✕ Close Map</button>
             </div>
@@ -3744,7 +3795,7 @@ function onMapAttackCancelled() {
               </button>
               <button
                 class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                @click="intercedeOptOutSelections = new Set(gmIntercedeOptOuts); showIntercedeOptOuts = true"
+                @click="openGmIntercedeTargets"
               >
                 Intercede Targets
               </button>
@@ -5994,6 +6045,15 @@ function onMapAttackCancelled() {
                 {{ gmIntercedeLoading ? 'Processing...' : 'Skip' }}
               </button>
               <button
+                :disabled="gmIntercedeLoading"
+                @click="handleGmIntercedeOptOut"
+                class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
+              >
+                {{ gmIntercedeLoading ? 'Processing...' : `Never intercede for ${gmIntercedeRequest.data?.isAreaAttack
+                  ? (getParticipantName(gmIntercedeAreaChosenTarget as string) || gmIntercedeAreaChosenTarget)
+                  : gmIntercedeRequest.data?.targetName}` }}
+              </button>
+              <button
                 v-if="!gmIntercedeRequest.data?.isAreaAttack"
                 :disabled="gmIntercedeLoading"
                 @click="() => {
@@ -6002,9 +6062,9 @@ function onMapAttackCancelled() {
                   gmOptOutSelections = new Set(existing)
                   gmIntercedeView = 'select-optout'
                 }"
-                class="w-full bg-red-800/50 hover:bg-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed text-red-300 px-4 py-2 rounded-lg text-sm transition-colors"
+                class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-digimon-dark-300 px-4 py-2 rounded-lg text-sm transition-colors"
               >
-                Never Intercede
+                Choose characters…
               </button>
               <button
                 v-if="gmIntercedeRequest.data?.isAreaAttack"
@@ -6058,7 +6118,7 @@ function onMapAttackCancelled() {
           <!-- Select Opt-Out View -->
           <template v-else-if="gmIntercedeView === 'select-optout'">
             <h2 class="font-display text-xl font-semibold text-yellow-400 mb-4">
-              Never Intercede
+              Choose Characters
             </h2>
 
             <div class="mb-4 p-3 bg-yellow-900/20 rounded-lg">

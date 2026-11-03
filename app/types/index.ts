@@ -2,6 +2,8 @@
 // Digimon Digital Adventure 1.4 Types
 // =====================================
 
+import type { EncounterIntercedeOptOuts } from '../utils/intercedeOptOuts'
+
 // === Enums ===
 
 export type DigimonStage =
@@ -626,6 +628,7 @@ export interface Encounter {
   hazards: EnvironmentHazard[]
   mapId?: string | null
   visibleToPlayers: boolean      // GM-controlled: players see nothing of this encounter until true
+  intercedeOptOuts: EncounterIntercedeOptOuts  // "Never intercede" lists — read via ~/utils/intercedeOptOuts
   participantPositions: Record<string, Vec3>   // participantId → Vec3
   destructibleStates: DestructibleState[]
   createdAt: Date

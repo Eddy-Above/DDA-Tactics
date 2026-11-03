@@ -36,8 +36,12 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Intercede opt-outs are written only by the intercede-optouts/intercede-skip endpoints (under a
+  // row lock). Ignore them here so a client PUT built from an older copy can't revert them.
+  const { intercedeOptOuts: _managedByOptOutEndpoints, ...updatableFields } = body
+
   const updateData: Partial<Encounter> = {
-    ...body,
+    ...updatableFields,
     updatedAt: new Date(),
   }
 

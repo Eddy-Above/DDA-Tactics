@@ -1,6 +1,7 @@
 import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import type { CreationRules } from '../../types'
+import type { EncounterIntercedeOptOuts } from '../../utils/intercedeOptOuts'
 
 // =====================================
 // Tamers Table
@@ -269,6 +270,7 @@ export const encounters = pgTable('encounters', {
     usedSpecialOrders?: string[]
     usedSkillOrders?: string[]
     interceptPenalty?: number
+    // Legacy: read-only fallback for encounters saved before the `intercede_opt_outs` column
     intercedeOptOuts?: string[]
     gmCharacterOptOuts?: Record<string, string[]>
     hasDirectedThisTurn?: boolean
@@ -399,6 +401,10 @@ export const encounters = pgTable('encounters', {
   // GM-controlled: player pages only ever see encounters with this set, letting a GM
   // stage several encounters in parallel without players latching onto a half-built one
   visibleToPlayers: boolean('visible_to_players').notNull().default(false),
+
+  // "Never intercede" opt-outs. Kept out of `participants` so the many endpoints that rewrite
+  // that array can't revert them; only the opt-out endpoints write this (under a row lock).
+  intercedeOptOuts: jsonb('intercede_opt_outs').notNull().default({}).$type<EncounterIntercedeOptOuts>(),
 
   // Map state: participant positions and breakable structure states
   participantPositions: jsonb('participant_positions').notNull().default({}).$type<Record<string, { x: number; y: number; z: number }>>(),

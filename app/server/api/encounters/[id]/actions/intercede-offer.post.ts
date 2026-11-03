@@ -30,6 +30,7 @@ import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpati
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
+import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 
 interface IntercedeOfferBody {
@@ -389,7 +390,7 @@ export default defineEventHandler(async (event) => {
 
       // Filter this tamer's (and their partner digimon's) area-intercede eligible
       // targets (Rules 1-3 already applied) by this tamer's opt-outs
-      const tamerOptOuts: string[] = p.intercedeOptOuts || []
+      const tamerOptOuts = getTargetOptOuts(encounter, p.entityId)
       const tamerAreaTargetIds = (areaIntercedeEligibility.get(p.id) ?? []).filter(tid => !tamerOptOuts.includes(tid))
       const digimonAreaTargetIds = partnerParticipantId
         ? (areaIntercedeEligibility.get(partnerParticipantId) ?? []).filter(tid => !tamerOptOuts.includes(tid))
@@ -463,8 +464,7 @@ export default defineEventHandler(async (event) => {
 
     // GM intercede offer — covers every NPC (enemy digimon) participant that is
     // spatially eligible per Rules 1-3
-    const gmParticipant = participants.find((p: any) => p.id === 'gm')
-    const gmOptOuts: string[] = gmParticipant?.intercedeOptOuts || []
+    const gmOptOuts = getTargetOptOuts(encounter, GM_OPT_OUT_OWNER)
     const npcAreaEligibility: Record<string, string[]> = {}
     for (const p of participants) {
       if (p.type !== 'digimon') continue
@@ -966,7 +966,7 @@ export default defineEventHandler(async (event) => {
     if (p.type !== 'tamer') continue
 
     // Check opt-out: skip tamers who opted out of interceding for this target
-    if (p.intercedeOptOuts?.includes(body.targetId)) continue
+    if (getTargetOptOuts(encounter, p.entityId).includes(body.targetId!)) continue
 
     // Verify they actually have a partner digimon in encounter
     let partnerParticipant: any = null
@@ -1146,21 +1146,25 @@ export default defineEventHandler(async (event) => {
   }
 
   // GM always gets intercede modal unless explicitly opted out via "Never Intercede"
-  const gmParticipant = participants.find((p: any) => p.id === 'gm')
-  const gmOptOuts: string[] = gmParticipant?.intercedeOptOuts || []
-  let gmEligible = !gmOptOuts.includes(body.targetId)
+  let gmEligible = !getTargetOptOuts(encounter, GM_OPT_OUT_OWNER).includes(body.targetId!)
 
-  // Check per-character opt-outs: if GM has opted out all possible interceptors for this target, skip
+  // Per-character opt-outs: skip the GM prompt when every character the GM could actually pick
+  // for this target is on its "never intercede" checklist. Same candidate rules as the GM
+  // modal's option list (getGmIntercedeOptions in encounters/[id].vue) — comparing against every
+  // tamer/digimon in the encounter meant characters out of actions, or that attack's attacker,
+  // were never on the list and the prompt kept coming back.
   if (gmEligible) {
-    const gmCharacterOptOuts: Record<string, string[]> = gmParticipant?.gmCharacterOptOuts || {}
-    const optedOutForTarget = gmCharacterOptOuts[body.targetId!] || []
-    const possibleInterceptors = participants.filter((p: any) =>
-      (p.type === 'tamer' || p.type === 'digimon') &&
-      p.id !== body.attackerId &&
-      p.id !== body.targetId
-    )
-    if (possibleInterceptors.length > 0 && possibleInterceptors.every((p: any) => optedOutForTarget.includes(p.id))) {
-      gmEligible = false
+    const optedOutForTarget = getGmCharacterOptOuts(encounter)[body.targetId!] || []
+    if (optedOutForTarget.length > 0) {
+      const gmCandidates = participants.filter((p: any) =>
+        (p.type === 'tamer' || p.type === 'digimon') &&
+        p.id !== body.attackerId &&
+        p.id !== body.targetId &&
+        hasEligibleInterceptor(p)
+      )
+      if (gmCandidates.every((p: any) => optedOutForTarget.includes(p.id))) {
+        gmEligible = false
+      }
     }
   }
 

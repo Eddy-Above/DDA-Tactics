@@ -106,6 +106,8 @@ export default defineEventHandler(async (event) => {
     pendingRequests: [],
     requestResponses: [],
     visibleToPlayers: false,
+    // Participant ids are kept verbatim (above), so the opt-out lists stay valid as-is
+    intercedeOptOuts: structuredClone(source.intercedeOptOuts ?? {}),
 
     participantPositions: room.participantPositions,
     destructibleStates: room.destructibleStates,

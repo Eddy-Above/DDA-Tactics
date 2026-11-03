@@ -17,6 +17,7 @@ import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
+import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts'
 
 definePageMeta({
   layout: 'player',
@@ -839,6 +840,9 @@ const myTamerParticipant = computed(() =>
   myParticipants.value.find((p) => p.type === 'tamer') ?? null
 )
 
+// Targets I've said I never want to be asked to intercede for (this encounter)
+const myIntercedeOptOuts = computed(() => getTargetOptOuts(activeEncounter.value as any, tamer.value?.id))
+
 const currentCombatInspiration = computed(() => {
   const inCombat = myTamerParticipant.value
   if (inCombat && (inCombat as any).currentInspiration !== undefined) return (inCombat as any).currentInspiration as number
@@ -991,8 +995,14 @@ watch(() => currentDodgeRequest.value?.id, () => {
 watch(() => currentIntercedeRequest.value?.id, (newId) => {
   playerIntercedeAreaChosenTarget.value = null
   if (!newId) return
-  // Auto-skip if the player has no eligible interceptors for this offer
   const req = currentIntercedeRequest.value
+  // Never prompt about a target I opted out of. The server already filters these out and clears
+  // queued ones on save; this catches an offer created in the same instant as a save.
+  if (req && isOfferFullyOptedOut(req, myIntercedeOptOuts.value)) {
+    handleIntercedeSkip()
+    return
+  }
+  // Auto-skip if the player has no eligible interceptors for this offer
   if (req && !req.data?.isAreaAttack && intercedeOptions.value.length === 0) {
     handleIntercedeSkip()
   }
@@ -3430,17 +3440,23 @@ async function handleIntercedeSkip() {
   }
 }
 
-// Intercede: Opt-out (never intercede for this target again)
+// Intercede: Opt-out (never intercede for this target again). For an area attack only the
+// target I picked is opted out — the offer stays open for the others. The server also clears
+// any other prompt already queued for me about this target.
 async function handleIntercedeOptOut() {
-  if (!activeEncounter.value || !currentIntercedeRequest.value) return
+  const request = currentIntercedeRequest.value
+  if (!activeEncounter.value || !request) return
+  const targetId = request.data?.isAreaAttack ? playerIntercedeAreaChosenTarget.value : request.data?.targetId
+  if (!targetId) return
 
   intercedeLoading.value = true
   try {
     await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
-        requestId: currentIntercedeRequest.value.id,
+        requestId: request.id,
         optOut: true,
+        optOutTargetIds: [targetId],
       },
     })
     await loadData()
@@ -3452,8 +3468,20 @@ async function handleIntercedeOptOut() {
   }
 }
 
+// Everyone except me (and the GM metadata row), minus the targets I've already opted out of
+function openIntercedeOptions() {
+  if (!activeEncounter.value) return
+  intercedeOptionsSelections.value = new Set(
+    (activeEncounter.value.participants as any[])
+      .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant.value?.id)
+      .map((p: any) => p.id)
+      .filter((id: string) => !myIntercedeOptOuts.value.includes(id))
+  )
+  showIntercedeOptionsModal.value = true
+}
+
 async function handleSaveIntercedeOptions() {
-  if (!activeEncounter.value || !myTamerParticipant.value) return
+  if (!activeEncounter.value || !myTamerParticipant.value || !tamer.value) return
   savingIntercedeOptions.value = true
   try {
     const participants = (activeEncounter.value.participants as any[]) || []
@@ -3461,29 +3489,13 @@ async function handleSaveIntercedeOptions() {
       .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant.value!.id)
       .map((p: any) => p.id)
     const optOuts = allIds.filter(id => !intercedeOptionsSelections.value.has(id))
+    // The server also clears any prompt already queued for me about a target I just unchecked
+    // (area prompts lose just those targets), in the same request.
     await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
       method: 'POST',
-      body: { participantId: myTamerParticipant.value.id, intercedeOptOuts: optOuts },
+      body: { ownerId: tamer.value.id, intercedeOptOuts: optOuts },
     })
     await loadData()
-
-    // Auto-skip pending intercede offers for targets the player just opted out of
-    const pendingIntercedes = myRequests.value.filter((r: any) => r.type === 'intercede-offer')
-    let skippedAny = false
-    for (const request of pendingIntercedes) {
-      const targetIds: string[] = request.data?.isAreaAttack
-        ? getAreaProtectTargetIds(request.data)
-        : [request.data?.targetId].filter(Boolean)
-      const allOptedOut = targetIds.length > 0 && targetIds.every((id: string) => optOuts.includes(id))
-      if (allOptedOut) {
-        await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
-          method: 'POST',
-          body: { requestId: request.id },
-        })
-        skippedAny = true
-      }
-    }
-    if (skippedAny) await loadData()
 
     showIntercedeOptionsModal.value = false
   } catch (e: any) {
@@ -4566,6 +4578,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     {{ endingTurn ? 'Ending...' : 'End Turn' }}
                   </button>
                   <button
+                    v-if="myTamerParticipant"
+                    class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
+                    @click="openIntercedeOptions"
+                  >Intercede Options</button>
+                  <button
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
                     @click="showMapView = false; mapDirectMode = null; showDirectChoicePicker = false"
                   >✕ Close Map</button>
@@ -5310,12 +5327,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
               <button
                 class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
-                @click="intercedeOptionsSelections = new Set(
-                  (activeEncounter!.participants as any[])
-                    .filter((p: any) => p.type !== 'gm' && p.id !== myTamerParticipant?.id)
-                    .map((p: any) => p.id)
-                    .filter((id: string) => !(myTamerParticipant?.intercedeOptOuts || []).includes(id))
-                ); showIntercedeOptionsModal = true"
+                @click="openIntercedeOptions"
               >
                 Intercede Options
               </button>

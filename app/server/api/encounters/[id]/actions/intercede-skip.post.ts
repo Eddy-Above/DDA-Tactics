@@ -1,17 +1,19 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
-import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
-import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
-import { loadEncounterMap } from '~/server/utils/combatSpatial'
-import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
-import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
-import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
-import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
-import { getEffectResolutionType } from '~/data/attackConstants'
+import { db, encounters } from '../../../../db'
+import {
+  loadIntercedeDecisionContext,
+  initialDecisionState,
+  persistDecisionState,
+  resolveIntercedeGroupIfDecided,
+  pruneOptedOutOffers,
+} from '~/server/utils/intercedeDecision'
+import { updateTargetOptOuts, updateGmCharacterOptOuts } from '~/server/utils/intercedeOptOuts'
+import { getOfferTargetIds, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 
 interface IntercedeSkipBody {
   requestId: string
-  optOut?: boolean // If true, permanently opt out of interceding for this target
+  optOut?: boolean // If true, never be asked to intercede for these target(s) again this encounter
+  optOutTargetIds?: string[] // Which of the offer's targets to opt out of (default: all of them)
   characterOptOuts?: string[] // GM-only: participant IDs to never intercede with for this target
 }
 
@@ -28,306 +30,50 @@ export default defineEventHandler(async (event) => {
   }
 
   // Fetch encounter
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  let [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }
 
-  // Load map + positions for push/pull displacement (only if this encounter uses a map)
-  const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
-  const mapRecord: any = ((encounter as any).mapId && Object.keys(participantPositions).length > 0)
-    ? await loadEncounterMap((encounter as any).mapId)
-    : null
-
-  // Fetch campaign house rules
-  let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
-  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
-  if (encounter.campaignId) {
-    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
-    if (campaign) {
-      const rulesSettings = campaign.rulesSettings || {}
-      houseRules = rulesSettings.houseRules
-      if (campaign.level) campaignLevel = campaign.level
-    }
-  }
-
-  let participants = encounter.participants
-  let pendingRequests = encounter.pendingRequests
-  let battleLog = encounter.battleLog
-  let turnOrder = encounter.turnOrder
-
   // Find the request
-  const request = pendingRequests.find((r: any) => r.id === body.requestId)
+  const request = (encounter.pendingRequests as any[]).find((r: any) => r.id === body.requestId)
   if (!request || request.type !== 'intercede-offer') {
     throw createError({ statusCode: 404, message: 'Intercede offer not found' })
   }
 
-  const isAreaAttack = !!request.data.isAreaAttack
-  const intercedeGroupId = request.data.intercedeGroupId
-
-  // Handle per-character opt-outs (GM-only): save which interceptors should never intercede for this target
-  if (body.characterOptOuts && request.targetTamerId === 'GM') {
-    const gmP = participants.find((p: any) => p.id === 'gm')
-    if (gmP) {
-      gmP.gmCharacterOptOuts = {
-        ...(gmP.gmCharacterOptOuts || {}),
-        [request.data.targetId]: body.characterOptOuts,
-      }
-    } else {
-      participants.push({
-        id: 'gm',
-        type: 'gm',
-        intercedeOptOuts: [],
-        gmCharacterOptOuts: { [request.data.targetId]: body.characterOptOuts },
-      } as any)
-    }
-
-    // Save participants but do NOT remove the pending request
-    await db.update(encounters).set({
-      participants,
-      updatedAt: new Date(),
-    }).where(eq(encounters.id, encounterId))
-
+  // Per-character opt-outs (GM-only): save which interceptors should never intercede for this
+  // target. A preference edit only — the offer stays open.
+  if (body.characterOptOuts && request.targetTamerId === GM_OPT_OUT_OWNER) {
+    await updateGmCharacterOptOuts(encounterId, request.data.targetId, body.characterOptOuts)
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
     return updated
   }
 
-  // Handle opt-out: save target(s) to tamer's or GM's intercedeOptOuts
   if (body.optOut) {
-    const optOutTargets: string[] = isAreaAttack
-      ? request.targetTamerId === 'GM'
-        ? (request.data.gmAreaTargetIds || [])
-        : [...(request.data.tamerAreaTargetIds || []), ...(request.data.digimonAreaTargetIds || [])]
-      : [request.data.targetId]
+    // Opt out of just the chosen target(s) — for an area attack, the one the recipient picked,
+    // not everyone in the blast. Only the offer's own targets are accepted here.
+    const offerTargetIds = getOfferTargetIds(request)
+    const chosen = (body.optOutTargetIds || []).filter((id) => offerTargetIds.includes(id))
+    const optOutTargetIds = chosen.length > 0 ? chosen : offerTargetIds
+    const ownerId = request.targetTamerId as string
 
-    if (request.targetTamerId === 'GM') {
-      const gmP = participants.find((p: any) => p.id === 'gm')
-      if (gmP) {
-        gmP.intercedeOptOuts = [...(gmP.intercedeOptOuts || []), ...optOutTargets]
-      } else {
-        participants.push({ id: 'gm', type: 'gm', intercedeOptOuts: optOutTargets } as any)
-      }
-    } else {
-      const tamerParticipant = participants.find(
-        (p: any) => p.type === 'tamer' && p.entityId === request.targetTamerId
-      )
-      if (tamerParticipant) {
-        tamerParticipant.intercedeOptOuts = [
-          ...(tamerParticipant.intercedeOptOuts || []),
-          ...optOutTargets,
-        ]
-      }
-    }
-  }
+    const ownerOptOuts = await updateTargetOptOuts(encounterId, ownerId, (current) => [...current, ...optOutTargetIds])
 
-  // Remove this specific request
-  pendingRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
-
-  const updateData: any = {
-    pendingRequests,
-    updatedAt: new Date(),
-  }
-
-  if (isAreaAttack) {
-    // All decisions are now deferred — check if this skip was the last one
-    const groupState = pendingRequests.find(
-      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
-    )
-    if (groupState && allAreaTargetsDecided(groupState, pendingRequests, intercedeGroupId)) {
-      const resolved = await resolveAreaIntercedeGroup({
-        groupState,
-        participants,
-        battleLog,
-        pendingRequests,
-        turnOrder,
-        round: encounter.round || 0,
-        currentTurnIndex: encounter.currentTurnIndex || 0,
-        houseRules,
-        encounterId: encounterId!,
-      })
-      participants = resolved.participants
-      battleLog = resolved.battleLog
-      pendingRequests = resolved.pendingRequests
-      turnOrder = resolved.turnOrder
-      if (resolved.nextTurnIndex !== undefined) updateData.currentTurnIndex = resolved.nextTurnIndex
-      if (resolved.nextRound !== undefined) updateData.round = resolved.nextRound
-    }
-
-    updateData.pendingRequests = pendingRequests
-    updateData.participants = participants
-    updateData.battleLog = battleLog
-    if (turnOrder) updateData.turnOrder = turnOrder
+    // Clear every prompt already queued for this owner about an opted-out target — including
+    // the one clicked. An area offer with targets left stays open so they can pick another.
+    ;[encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    const ctx = await loadIntercedeDecisionContext(encounter)
+    const initial = initialDecisionState(encounter)
+    const state = await pruneOptedOutOffers(ctx, initial, ownerId, ownerOptOuts)
+    if (state !== initial) await persistDecisionState(encounter, state)
   } else {
-    // Single-target path: check if all eligible tamers have now skipped
-    const remainingGroupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
-
-    // If all skipped, resolve the attack
-    if (remainingGroupRequests.length === 0) {
-      const target = participants.find((p: any) => p.id === request.data.targetId)
-      if (target) {
-        // Check if target is player-controlled or NPC
-        let isPlayerTarget = false
-        if (target.type === 'tamer') {
-          isPlayerTarget = true
-        } else if (target.type === 'digimon') {
-          const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-          isPlayerTarget = !!dig?.partnerId
-        }
-
-        const isSupportAttack = request.data.isSupportAttack || false
-        const attackDef = request.data.attackData || null
-
-        if (isPlayerTarget) {
-          const positiveResolutionType = getPositiveSupportResolutionType(isSupportAttack, attackDef)
-          if (positiveResolutionType) {
-            const supportParams = {
-              participants,
-              battleLog,
-              pendingRequests,
-              attackerParticipantId: request.data.attackerId,
-              targetParticipantId: request.data.targetId,
-              attackDef,
-              accuracySuccesses: request.data.accuracySuccesses,
-              accuracyDice: request.data.accuracyDice,
-              round: encounter.round || 0,
-              attackerName: request.data.attackerName,
-              targetName: request.data.targetName,
-              encounterId: encounterId!,
-              turnOrder,
-              houseRules,
-              isSignatureMove: request.data.isSignatureMove || false,
-              batteryCount: request.data.batteryCount ?? 0,
-            }
-            const supportResult = positiveResolutionType === 'positive-auto'
-              ? await resolvePositiveAuto(supportParams)
-              : await resolvePositiveHealth(supportParams)
-
-            updateData.participants = supportResult.participants
-            updateData.battleLog = supportResult.battleLog
-            updateData.pendingRequests = supportResult.pendingRequests
-            if (supportResult.turnOrder) updateData.turnOrder = supportResult.turnOrder
-          } else {
-          // Player target — create dodge request
-          let targetTamerId = 'GM'
-          if (target.type === 'tamer') {
-            targetTamerId = target.entityId
-          } else if (target.type === 'digimon') {
-            const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-            if (dig?.partnerId) targetTamerId = dig.partnerId
-          }
-
-          const dodgeRequest = {
-            id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'dodge-roll',
-            targetTamerId,
-            targetParticipantId: request.data.targetId,
-            timestamp: new Date().toISOString(),
-            data: {
-              attackerName: request.data.attackerName,
-              targetName: request.data.targetName,
-              attackName: request.data.attackName || 'Attack',
-              accuracySuccesses: request.data.accuracySuccesses,
-              accuracyDice: request.data.accuracyDice,
-              attackId: request.data.attackId,
-              attackData: request.data.attackData,
-              attackerEntityId: participants.find((p: any) => p.id === request.data.attackerId)?.entityId,
-              attackerParticipantId: request.data.attackerId,
-              targetEntityId: target.entityId,
-              dodgePenalty: target.dodgePenalty ?? 0,
-              // Pass through bolster bonuses from intercede-offer
-              bolstered: request.data.bolstered || false,
-              bolsterType: request.data.bolsterType || null,
-              bolsterDamageBonus: request.data.bolsterDamageBonus || 0,
-              bolsterBitCpuBonus: request.data.bolsterBitCpuBonus || 0,
-              // Support attack flag — downstream handlers skip damage
-              isSupportAttack: request.data.isSupportAttack || false,
-            },
-          }
-
-          const updatedRequests = [...pendingRequests, dodgeRequest]
-          updateData.pendingRequests = updatedRequests
-
-          updateData.participants = participants
-          }
-        } else {
-          // NPC target — auto-resolve based on attack type
-          if (isSupportAttack && attackDef) {
-            const resolutionType = getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support')
-            const supportParams = {
-              participants,
-              battleLog,
-              pendingRequests,
-              attackerParticipantId: request.data.attackerId,
-              targetParticipantId: request.data.targetId,
-              attackDef,
-              accuracySuccesses: request.data.accuracySuccesses,
-              accuracyDice: request.data.accuracyDice,
-              round: encounter.round || 0,
-              attackerName: request.data.attackerName,
-              targetName: request.data.targetName,
-              encounterId: encounterId!,
-              turnOrder,
-              houseRules,
-              isSignatureMove: request.data.isSignatureMove || false,
-              batteryCount: request.data.batteryCount ?? 0,
-            }
-            let supportResult: any = null
-            if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
-            else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
-            else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-            else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel })
-
-            if (supportResult) {
-              updateData.participants = supportResult.participants
-              updateData.battleLog = supportResult.battleLog
-              updateData.pendingRequests = supportResult.pendingRequests
-              if (supportResult.turnOrder) updateData.turnOrder = supportResult.turnOrder
-            }
-          } else {
-            // Damage attack — auto-resolve (roll dodge, calculate damage)
-            const result = await resolveNpcAttack({
-              participants, battleLog,
-              attackerParticipantId: request.data.attackerId,
-              targetParticipantId: request.data.targetId,
-              attackId: request.data.attackId,
-              accuracySuccesses: request.data.accuracySuccesses,
-              accuracyDice: request.data.accuracyDice,
-              round: encounter.round || 0,
-              attackerName: request.data.attackerName,
-              targetName: request.data.targetName,
-              turnOrder,
-              currentTurnIndex: encounter.currentTurnIndex || 0,
-              mapRecord: mapRecord ?? undefined,
-              participantPositions: participantPositions ?? undefined,
-            })
-
-            if (result.positionPatch) {
-              await broadcastPositionPatch(encounterId, result.positionPatch)
-              // [Guiding Light]: fold the recompute into `result.participants`, which the
-              // single `db.update` below still has to persist (a standalone recompute here
-              // would race that later write).
-              const positions = await getRoomPositions(encounterId)
-              const auraResult = await applyGuidingLightAuras(result.participants, positions, campaignLevel, houseRules)
-              if (auraResult.changed) result.participants = auraResult.participants
-            }
-
-            updateData.participants = result.participants
-            updateData.battleLog = result.battleLog
-            if (result.turnOrder) {
-              updateData.turnOrder = result.turnOrder
-            }
-            if (result.nextTurnIndex !== undefined) updateData.currentTurnIndex = result.nextTurnIndex
-            if (result.nextRound !== undefined) updateData.round = result.nextRound
-          }
-        }
-      }
-    } else {
-      // Not all skipped yet, but still save participant changes (opt-out)
-      updateData.participants = participants
-    }
+    // Plain skip: drop this offer, then resolve the attack if that was the last open decision
+    const ctx = await loadIntercedeDecisionContext(encounter)
+    let state = initialDecisionState(encounter)
+    state = { ...state, pendingRequests: state.pendingRequests.filter((r: any) => r.id !== body.requestId) }
+    state = await resolveIntercedeGroupIfDecided(ctx, state, request)
+    await persistDecisionState(encounter, state)
   }
-
-  await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 

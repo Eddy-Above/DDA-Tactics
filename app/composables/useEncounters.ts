@@ -36,7 +36,7 @@ export interface CombatParticipant {
   usedSpecialOrders?: string[]
   usedSkillOrders?: string[]
   interceptPenalty?: number
-  intercedeOptOuts?: string[]
+  intercedeOptOuts?: string[]  // legacy — opt-outs now live on encounter.intercedeOptOuts (~/utils/intercedeOptOuts)
   hasDirectedThisTurn?: boolean
   digimonBolsterCount?: number
   lastBitCpuBolsterRound?: number
