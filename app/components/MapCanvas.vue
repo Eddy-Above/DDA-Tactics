@@ -45,7 +45,6 @@
         <img v-if="ov.spriteUrl" :src="ov.spriteUrl" class="char-token-img" />
         <div v-else class="char-token-fallback">{{ ov.initial }}</div>
         <div v-if="ov.woundFilter" class="char-token-wound-filter" :class="ov.woundFilter" />
-        <div v-if="reticuleParticipantIds.includes(String(pid))" class="target-reticule" />
       </div>
     </div>
     <!-- Movement distance label -->
@@ -1005,9 +1004,11 @@ function buildSprites() {
   }
 }
 
-// Volume-outline color: green while hovered as a valid target, orange for whose turn it is.
+// Volume-outline color: green while hovered as a valid target, red while targetable (has a reticule),
+// orange for whose turn it is.
 function participantBorderColor(participantId: string): number {
   if (participantId === hoveredTargetId) return 0x33ff66
+  if (reticuleParticipantIds.value.includes(participantId)) return 0xff2222
   const isActive = participantId === props.activeParticipantId || participantId === props.secondaryActiveParticipantId
   return isActive ? 0xff8800 : 0x334466
 }
@@ -1020,6 +1021,11 @@ function setHoveredTarget(participantId: string | null) {
   for (const id of [prev, participantId]) {
     if (id) borderMaterials.get(id)?.color.setHex(participantBorderColor(id))
   }
+}
+
+// Re-applies participantBorderColor to every outline (e.g. when the targetable set changes).
+function refreshBorderColors() {
+  for (const [id, mat] of borderMaterials) mat.color.setHex(participantBorderColor(id))
 }
 
 function updateCharacterOverlays() {
@@ -2377,9 +2383,11 @@ watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () 
   if (scene) buildSprites()
 })
 
-// Drop the green hover outline once its participant stops being targetable (attack confirmed/cancelled, out of range)
+// Outlines follow the targetable set (red), and the green hover drops once its participant stops
+// being targetable (attack confirmed/cancelled, out of range)
 watch(reticuleParticipantIds, ids => {
-  if (hoveredTargetId && !ids.includes(hoveredTargetId)) setHoveredTarget(null)
+  if (hoveredTargetId && !ids.includes(hoveredTargetId)) hoveredTargetId = null
+  refreshBorderColors()
 })
 
 watch(() => props.activeTool, (tool) => {
@@ -2644,17 +2652,6 @@ defineExpose({ movingParticipantId })
 }
 .char-token-wound-filter.red {
   background: rgba(255, 0, 0, 0.2);
-}
-.target-reticule {
-  position: absolute;
-  width: 50%;
-  height: 50%;
-  top: 25%;
-  left: 25%;
-  border: 2px solid #ff2222;
-  border-radius: 50%;
-  pointer-events: none;
-  box-shadow: 0 0 8px rgba(255, 34, 34, 0.7);
 }
 .move-distance-label {
   position: absolute;
