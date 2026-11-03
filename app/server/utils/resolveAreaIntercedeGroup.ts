@@ -320,7 +320,6 @@ export async function resolveAreaIntercedeGroup({
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
         clashAttack: groupData.clashAttack || false,
-        outsideClashCpuPenalty: groupData.outsideClashCpuPenalty ?? 0,
         totalTargetCount: originalTargetIds.length,
       },
     })
@@ -392,7 +391,6 @@ export async function resolveAreaIntercedeGroup({
         currentTurnIndex: groupNextTurnIndex ?? currentTurnIndex,
         houseRules,
         clashAttack: groupData.clashAttack,
-        outsideClashCpuPenalty: groupData.outsideClashCpuPenalty,
         totalTargetCount: originalTargetIds.length,
       })
       updatedParticipants = result.participants

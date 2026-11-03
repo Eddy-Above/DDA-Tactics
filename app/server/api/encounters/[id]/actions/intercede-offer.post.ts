@@ -30,6 +30,7 @@ import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpati
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
+import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -50,7 +51,6 @@ interface IntercedeOfferBody {
   batteryCount?: number
   clashAttack?: boolean         // If true, target's dodge pool is halved (clash controller attack)
   clashNoInterceptTargetId?: string  // Area clash attack (Pass): this one target (the clash opponent) cannot be interceded
-  outsideClashCpuPenalty?: number  // Damage penalty when attacker is outside target's active clash
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
 
@@ -160,9 +160,9 @@ export default defineEventHandler(async (event) => {
 
   // While clashing, a participant cannot Dodge attacks from OUTSIDE the clash. An attack from the
   // participant's own clash opponent (same clashId) is a Clash Attack and uses the half-dodge
-  // `clashAttack` flag instead, so it is NOT treated as "cannot dodge".
-  const targetCannotDodge = (t: any): boolean =>
-    !!(t?.clash?.clashId && (attacker as any)?.clash?.clashId !== t.clash.clashId)
+  // `clashAttack` flag instead, so it is NOT treated as "cannot dodge". (The dodge resolvers also
+  // re-derive this from live state; the flag set here is a snapshot.)
+  const targetCannotDodge = (t: any): boolean => isAttackedFromOutsideClash(attacker, t)
 
   // ========================
   // AREA ATTACK PATH
@@ -397,11 +397,12 @@ export default defineEventHandler(async (event) => {
       if (tamerAreaTargetIds.length === 0 && digimonAreaTargetIds.length === 0) continue
 
       // QR eligibility: can use if their partner is one of the area targets
+      // (and can actually dodge — a clasher hit from outside cannot, so QR would be wasted)
       let canUseQR = false
       let qrDiceCount = 0
       for (const tid of tamerAreaTargetIds) {
         const info = playerTargetInfo[tid]
-        if (info?.partnerId === p.entityId) {
+        if (info?.partnerId === p.entityId && !targetCannotDodge(participants.find((pp: any) => pp.id === tid))) {
           const tamerRecord = tamerById.get(p.entityId)
           if (tamerRecord) {
             const tamerAttrs = tamerRecord.attributes || {}
@@ -453,7 +454,6 @@ export default defineEventHandler(async (event) => {
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
           clashAttack: body.clashAttack || false,
-          outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
           canUseQuickReaction: canUseQR,
           quickReactionDiceCount: qrDiceCount,
           areaShapeData: body.areaShapeData ?? null,
@@ -507,7 +507,6 @@ export default defineEventHandler(async (event) => {
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
           clashAttack: body.clashAttack || false,
-          outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
           areaShapeData: body.areaShapeData ?? null,
         },
       })
@@ -572,7 +571,6 @@ export default defineEventHandler(async (event) => {
             currentTurnIndex: encounter.currentTurnIndex || 0,
             houseRules,
             clashAttack: body.clashAttack,
-            outsideClashCpuPenalty: body.outsideClashCpuPenalty,
             cannotDodge: targetCannotDodge(participants.find((p: any) => p.id === tid)),
             totalTargetCount,
             mapRecord: mapRecord ?? undefined,
@@ -659,7 +657,6 @@ export default defineEventHandler(async (event) => {
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
             clashAttack: body.clashAttack || false,
-            outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
             cannotDodge: targetCannotDodge(target),
             totalTargetCount,
             intercedeGroupId,
@@ -708,7 +705,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
-        outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         areaShapeData: body.areaShapeData ?? null,
         attackerHasSelectiveTargeting,
         attackerIsEnemy,
@@ -1124,8 +1120,9 @@ export default defineEventHandler(async (event) => {
   }
 
   // Per-tamer Quick Reaction eligibility: only if target is their partner and order not used today
+  // (and the target can actually dodge — a clasher hit from outside cannot, so QR would be wasted)
   const tamerQuickReactionMap: Record<string, { canUse: boolean; diceCount: number }> = {}
-  if (target.type === 'digimon') {
+  if (target.type === 'digimon' && !targetCannotDodge(target)) {
     const targetDig = digimonById.get(target.entityId)
     if (targetDig) {
       const stageBonus = (STAGE_CONFIG as any)[targetDig.stage]?.stageBonus ?? 0
@@ -1264,7 +1261,6 @@ export default defineEventHandler(async (event) => {
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
           // Clash modifiers
           clashAttack: body.clashAttack || false,
-          outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
           cannotDodge: targetCannotDodge(target),
         },
       }
@@ -1335,7 +1331,6 @@ export default defineEventHandler(async (event) => {
           currentTurnIndex: encounter.currentTurnIndex || 0,
           houseRules,
           clashAttack: body.clashAttack,
-          outsideClashCpuPenalty: body.outsideClashCpuPenalty,
           cannotDodge: targetCannotDodge(target),
           mapRecord: mapRecord ?? undefined,
           participantPositions: participantPositions ?? undefined,
@@ -1427,7 +1422,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
-        outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         isRangedIntercede: isRangedAttack,
       },
     }
@@ -1482,7 +1476,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
-        outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         canUseQuickReaction: qr.canUse,
         quickReactionDiceCount: qr.diceCount,
         // Spatial intercede data (null when no map)
@@ -1521,7 +1514,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
         clashAttack: body.clashAttack || false,
-        outsideClashCpuPenalty: body.outsideClashCpuPenalty ?? 0,
         isRangedIntercede: isRangedAttack,
       },
     })

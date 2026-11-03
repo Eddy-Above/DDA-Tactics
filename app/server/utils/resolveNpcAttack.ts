@@ -12,6 +12,7 @@ import { loadParticipantDigimon } from './combatSpatial'
 import { computePushPull } from './pushPull'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { getDigizoidArmorBonus } from './digizoidArmor'
+import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -30,7 +31,6 @@ interface ResolveNpcAttackParams {
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
   counterattack?: boolean      // If true, target's dodge pool is halved (Counterattack mechanic)
   cannotDodge?: boolean        // If true, target gets NO dodge (attacked from outside their clash)
-  outsideClashCpuPenalty?: number  // Damage reduction when attacker is outside target's active clash
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
   mapRecord?: GameMap           // If provided, enables push/pull displacement
   participantPositions?: Record<string, Vec3>
@@ -159,7 +159,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   dodgePool = Math.max(1, dodgePool)
 
   // Attacked from OUTSIDE the clash: the target gets no dodge at all (overrides the min-1 floor).
-  if (params.cannotDodge) {
+  // Derived from live clash state so every caller (intercede-skip, area group, counterattack) gets it;
+  // params.cannotDodge is the snapshot taken when the attack was declared.
+  const cannotDodge = !!params.cannotDodge || isAttackedFromOutsideClash(attacker, target)
+  if (cannotDodge) {
     dodgePool = 0
   }
 
@@ -173,7 +176,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   // Digizoid Armor: Brown's 1 automatic dodge success, resets once per round
   let brownArmorAutoDodgeConsumed = false
   const targetHasBrownArmor = targetQualities.some((q: any) => q.id === 'digizoid-armor' && q.choiceId === 'brown')
-  if (targetHasBrownArmor && (target as any).brownArmorAutoDodgeAvailable) {
+  if (!cannotDodge && targetHasBrownArmor && (target as any).brownArmorAutoDodgeAvailable) {
     dodgeSuccesses += 1
     brownArmorAutoDodgeConsumed = true
   }
@@ -182,11 +185,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   const damageCalc = await computeAttackDamage({
     attackerParticipant: attacker,
     targetParticipant: target,
+    participants,
     attackId: params.attackId,
     attackerName: params.attackerName,
     accuracySuccesses: params.accuracySuccesses,
     dodgeSuccesses,
-    outsideClashCpuPenalty: params.outsideClashCpuPenalty,
     totalTargetCount: params.totalTargetCount,
     houseRules: params.houseRules,
   })
@@ -203,6 +206,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   const targetArmor = damageCalc.targetArmor
   const damageDealt = damageCalc.damageDealt
   const effectiveArmor = damageCalc.effectiveArmor
+  const clashArmorBonus = damageCalc.outsideClashArmorBonus
 
   // --- Support attack: skip damage, apply effect only ---
   if (attackDef?.type === 'support') {
@@ -597,12 +601,14 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
       ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
       ...(hit && damageCalc.reflectDamageToAttacker > 0 ? [`Digizoid Armor: reflected ${damageCalc.reflectDamageToAttacker} damage to ${params.attackerName}`] : []),
+      ...(hit && clashArmorBonus > 0 ? [`Clash: +${clashArmorBonus} Armor (CPU)`] : []),
       ...(pushPullLogNote ? [pushPullLogNote] : []),
     ],
     attackerParticipantId: params.attackerParticipantId,
     baseDamage: attackBaseDamage,
     netSuccesses,
     targetArmor,
+    ...(hit && clashArmorBonus > 0 ? { clashArmorBonus } : {}),
     armorPiercing,
     effectiveArmor: hit ? effectiveArmor : undefined,
     finalDamage: hit ? damageDealt : 0,

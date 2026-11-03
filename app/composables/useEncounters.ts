@@ -94,6 +94,7 @@ export interface BattleLogEntry {
   baseDamage?: number
   netSuccesses?: number
   targetArmor?: number
+  clashArmorBonus?: number  // Clash CPU included in targetArmor (attacked from outside the clash)
   armorPiercing?: number
   effectiveArmor?: number
   finalDamage?: number

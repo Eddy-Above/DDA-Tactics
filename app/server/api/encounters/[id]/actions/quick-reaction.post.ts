@@ -203,7 +203,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: request.data.isSignatureMove || false,
         batteryCount: request.data.batteryCount ?? 0,
         clashAttack: request.data.clashAttack || false,
-        outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
       },
     }
     pendingRequests.push(qrDodgeRequest)
@@ -254,7 +253,6 @@ export default defineEventHandler(async (event) => {
               isSignatureMove: request.data.isSignatureMove || false,
               batteryCount: request.data.batteryCount ?? 0,
               clashAttack: request.data.clashAttack || false,
-              outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
             },
           }
           pendingRequests.push(dodgeRequest)
@@ -296,7 +294,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove: request.data.isSignatureMove || false,
         batteryCount: request.data.batteryCount ?? 0,
         clashAttack: request.data.clashAttack || false,
-        outsideClashCpuPenalty: request.data.outsideClashCpuPenalty ?? 0,
       },
     }
 

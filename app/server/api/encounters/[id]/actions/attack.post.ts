@@ -437,7 +437,6 @@ export default defineEventHandler(async (event) => {
         isSignatureMove,
         batteryCount,
         skipActionDeduction: true,
-        outsideClashCpuPenalty: 0,
         clashNoInterceptTargetId: body.clashNoInterceptTargetId,
         areaShapeData: body.areaShapeData ?? null,
       },
@@ -511,63 +510,9 @@ export default defineEventHandler(async (event) => {
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
-  // Detect outside-clash attack: target is in a clash, attacker is not part of it
-  let outsideClashCpuPenalty = 0
-  const freshParticipants = (await db.select().from(encounters).where(eq(encounters.id, encounterId)).then(r => r[0]))?.participants ?? []
-  const freshTarget = freshParticipants.find((p: any) => p.id === body.targetId)
-  const freshActor = freshParticipants.find((p: any) => p.id === body.participantId)
-
-  if (freshTarget?.clash?.clashId && freshActor?.clash?.clashId !== freshTarget.clash.clashId) {
-    // Attacker is outside the target's clash — compute CPU penalty
-    let targetCpu = 0
-    let opponentCpu = 0
-
-    if (freshTarget.type === 'digimon') {
-      const [tgtDigimon] = await db.select().from(digimon).where(eq(digimon.id, freshTarget.entityId))
-      if (tgtDigimon) {
-        const ds = tgtDigimon.derivedStats || {}
-        targetCpu = ds.cpu ?? 0
-      }
-    } else if (freshTarget.type === 'tamer') {
-      const [tgtTamer] = await db.select().from(tamers).where(eq(tamers.id, freshTarget.entityId))
-      if (tgtTamer) {
-        const attrs = tgtTamer.attributes || {}
-        targetCpu = attrs.body ?? 0
-      }
-    }
-
-    const clashOpponent = freshParticipants.find((p: any) => p.id === freshTarget.clash.opponentParticipantId)
-    if (clashOpponent) {
-      if (clashOpponent.type === 'digimon') {
-        const [oppDigimon] = await db.select().from(digimon).where(eq(digimon.id, clashOpponent.entityId))
-        if (oppDigimon) {
-          const ds = oppDigimon.derivedStats || {}
-          opponentCpu = ds.cpu ?? 0
-        }
-      } else if (clashOpponent.type === 'tamer') {
-        const [oppTamer] = await db.select().from(tamers).where(eq(tamers.id, clashOpponent.entityId))
-        if (oppTamer) {
-          const attrs = oppTamer.attributes || {}
-          opponentCpu = attrs.body ?? 0
-        }
-      }
-    }
-
-    // Check if attacker has Selective Targeting quality (reduces penalty to target CPU only)
-    let attackerHasSelectiveTargeting = false
-    if (freshActor?.type === 'digimon') {
-      const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, freshActor.entityId))
-      if (actorDigimon) {
-        const qualities = actorDigimon.qualities || []
-        attackerHasSelectiveTargeting = qualities.some((q: any) => q.id === 'selective-targeting')
-      }
-    }
-
-    outsideClashCpuPenalty = attackerHasSelectiveTargeting ? targetCpu : targetCpu + opponentCpu
-  }
-
   // Delegate to intercede-offer endpoint for intercede/dodge/NPC-resolve logic
   // skipActionDeduction=true since we already deducted actions above
+  // (clash armor for outside-clash targets is computed at damage time — see utils/clashArmor.ts)
   const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
     method: 'POST',
     body: {
@@ -588,7 +533,6 @@ export default defineEventHandler(async (event) => {
       isSignatureMove,
       batteryCount,
       skipActionDeduction: true,
-      outsideClashCpuPenalty: outsideClashCpuPenalty > 0 ? outsideClashCpuPenalty : undefined,
     },
   })
 

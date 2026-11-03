@@ -5,18 +5,20 @@ import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupport
 import { type StatBlock, applyStatSwaps } from '../../utils/statSwaps'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from './selectiveTargeting'
 import { getDigizoidArmorBonus, getReflectArmorRange } from './digizoidArmor'
+import { getOutsideClashArmorBonus } from './clashArmor'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
   /** The entity taking the hit — the attack target for dodge, the interceptor for intercede. */
   targetParticipant: any
+  /** All encounter participants (to find the target's clash opponent for clash armor). */
+  participants: any[]
   attackId: string
   attackerName: string
   accuracySuccesses: number
   dodgeSuccesses: number        // Pass 0 for intercede
   isSignatureMove?: boolean
   batteryCount?: number
-  outsideClashCpuPenalty?: number
   totalTargetCount?: number
   houseRules?: any
 }
@@ -25,6 +27,7 @@ export interface ComputeAttackDamageResult {
   attackBaseDamage: number
   armorPiercing: number
   targetArmor: number
+  outsideClashArmorBonus: number  // Clash CPU already included in targetArmor
   effectiveArmor: number
   netSuccesses: number
   hit: boolean
@@ -235,6 +238,12 @@ export async function computeAttackDamage(
     targetArmor -= 3 - targetMoodValue          // Mood 2 → –1, Mood 1 → –2
   }
 
+  // Clash: attacked from outside the target's clash → both clashers' CPU added to Armor
+  const outsideClashArmorBonus = await getOutsideClashArmorBonus(
+    attackerParticipant, targetParticipant, params.participants, attackerHasSelectiveTargeting,
+  )
+  targetArmor += outsideClashArmorBonus
+
   // Boss quality: Finesse — attacker ignores ranks points of target armor
   if (attackerFinesseRanks > 0) {
     targetArmor = Math.max(0, targetArmor - attackerFinesseRanks)
@@ -250,8 +259,6 @@ export async function computeAttackDamage(
   let damageDealt = 0
   if (hit && attackDef?.type !== 'support') {
     damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
-    const penalty = params.outsideClashCpuPenalty ?? 0
-    if (penalty > 0) damageDealt = Math.max(1, damageDealt - penalty)
   }
 
   // Boss quality: Smite — deal floor(baseDamage/2) even on a miss
@@ -331,6 +338,7 @@ export async function computeAttackDamage(
     attackBaseDamage,
     armorPiercing,
     targetArmor,
+    outsideClashArmorBonus,
     effectiveArmor,
     netSuccesses,
     hit,

@@ -222,7 +222,6 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
         isSignatureMove: false,
         batteryCount: 0,
         clashAttack: false,
-        outsideClashCpuPenalty: 0,
         halfDodge: true,
         isCounterattack: true,
       },

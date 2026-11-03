@@ -447,6 +447,7 @@ export default defineEventHandler(async (event) => {
   const damageCalc = await computeAttackDamage({
     attackerParticipant: attacker,
     targetParticipant: interceptor,
+    participants,
     attackId: request.data.attackId,
     attackerName: request.data.attackerName,
     accuracySuccesses,
@@ -814,6 +815,8 @@ export default defineEventHandler(async (event) => {
     const fallEffectsDmg = fallDamageToApply > 0
       ? [`Fell ${request.data.fallHeight} tiles (${fallDamageToApply} wound${fallDamageToApply !== 1 ? 's' : ''})`]
       : []
+    const clashArmorBonus = damageCalc.outsideClashArmorBonus
+    const clashArmorEffects = clashArmorBonus > 0 ? [`Clash: +${clashArmorBonus} Armor (CPU)`] : []
     const intercedeLog = {
       id: `log-${Date.now()}-intercede`,
       timestamp: new Date().toISOString(),
@@ -824,11 +827,12 @@ export default defineEventHandler(async (event) => {
       target: null,
       result: 'Takes hit with 0 dodge',
       damage: damageDealt + fallDamageToApply,
-      effects: [...(appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede']), ...fallEffectsDmg],
+      effects: [...(appliedEffectName ? ['Intercede', `Applied: ${appliedEffectName}`] : ['Intercede']), ...clashArmorEffects, ...fallEffectsDmg],
       attackerParticipantId: request.data.attackerId,
       baseDamage: attackBaseDamage,
       netSuccesses,
       targetArmor: interceptorArmor,
+      ...(clashArmorBonus > 0 ? { clashArmorBonus } : {}),
       armorPiercing,
       effectiveArmor,
       finalDamage: damageDealt + fallDamageToApply,

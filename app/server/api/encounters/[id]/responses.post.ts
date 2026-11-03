@@ -9,6 +9,8 @@ import { resolveNpcAttack } from '../../../utils/resolveNpcAttack'
 import { applyStanceToDodge } from '../../../../utils/stanceModifiers'
 import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveTargetingBlocksEffect } from '../../../utils/selectiveTargeting'
 import { getDigizoidArmorBonus, getReflectArmorRange } from '../../../utils/digizoidArmor'
+import { getOutsideClashArmorBonus } from '../../../utils/clashArmor'
+import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 
 interface SubmitResponseBody {
   requestId: string
@@ -280,9 +282,14 @@ export default defineEventHandler(async (event) => {
       targetQualitiesForDodge = targetDigimonForQualities?.qualities || []
     }
 
+    const attackerParticipant = participants.find((p: any) => p.id === request.data.attackerParticipantId)
+
     // Attacked from OUTSIDE the clash: the clashing target cannot dodge at all (server-enforced
-    // even if a dodge roll was somehow submitted).
-    if (request.data.cannotDodge) {
+    // even if a dodge roll was somehow submitted). Derived from live clash state so dodge-rolls
+    // created after an intercede window / Quick Reaction / counterattack are covered;
+    // request.data.cannotDodge is the snapshot taken when the attack was declared.
+    const cannotDodge = !!request.data.cannotDodge || isAttackedFromOutsideClash(attackerParticipant, targetParticipantForTurn)
+    if (cannotDodge) {
       dodgeSuccesses = 0
     } else if (request.data.clashAttack || request.data.halfDodge) {
       // Clash Attack / Counterattack halfDodge: target may only use half their dodge pool — recount successes from capped dice
@@ -317,7 +324,7 @@ export default defineEventHandler(async (event) => {
 
     // Digizoid Armor: Brown's 1 automatic dodge success, resets once per round
     let brownArmorAutoDodgeConsumed = false
-    if (!request.data.cannotDodge) {
+    if (!cannotDodge) {
       const targetHasBrownArmor = targetQualitiesForDodge.some((q: any) => q.id === 'digizoid-armor' && q.choiceId === 'brown')
       if (targetHasBrownArmor && (targetParticipantForTurn as any)?.brownArmorAutoDodgeAvailable) {
         dodgeSuccesses += 1
@@ -327,8 +334,6 @@ export default defineEventHandler(async (event) => {
 
     const netSuccesses = accuracySuccesses - dodgeSuccesses
     const hit = netSuccesses >= 0
-
-    const attackerParticipant = participants.find((p: any) => p.id === request.data.attackerParticipantId)
 
     // Look up attack definition
     let attackDef: any = null
@@ -626,8 +631,6 @@ export default defineEventHandler(async (event) => {
         attackBaseDamage += request.data.batteryCount
       }
 
-      // outsideClashCpuPenalty is applied after damage calculation below
-
       // Apply Combat Monster bonus to attacker's damage on hit
       if (hit && attackerHasCombatMonster && attackerCombatMonsterBonus > 0) {
         attackBaseDamage += attackerCombatMonsterBonus
@@ -647,15 +650,17 @@ export default defineEventHandler(async (event) => {
         targetArmor -= (3 - targetMoodValue)  // Mood 2 → –1, Mood 1 → –2
       }
 
+      // Clash: attacked from outside the target's clash → both clashers' CPU added to Armor
+      const clashArmorBonus = await getOutsideClashArmorBonus(
+        attackerParticipant, targetParticipant, participants, attackerHasSelectiveTargeting,
+      )
+      targetArmor += clashArmorBonus
+
       // Calculate final damage
       let damageDealt = 0
       if (hit) {
         const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
         damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
-        // Outside-clash penalty: outsider attacks deal reduced damage
-        if (request.data.outsideClashCpuPenalty && request.data.outsideClashCpuPenalty > 0) {
-          damageDealt = Math.max(1, damageDealt - request.data.outsideClashCpuPenalty)
-        }
         // Selective Targeting: area attacks don't damage allies
         if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
       }
@@ -935,12 +940,14 @@ export default defineEventHandler(async (event) => {
           ...(appliedEffectName ? [`Applied: ${appliedEffectName}`] : []),
           ...(lifestealHealAmount > 0 ? [`Lifesteal: healed ${lifestealHealAmount}`] : []),
           ...(hit && reflectDamageToAttacker > 0 ? [`Digizoid Armor: reflected ${reflectDamageToAttacker} damage to ${request.data.attackerName}`] : []),
+          ...(hit && clashArmorBonus > 0 ? [`Clash: +${clashArmorBonus} Armor (CPU)`] : []),
           ...(pushPullLogNote ? [pushPullLogNote] : []),
         ],
         attackerParticipantId: request.data.attackerParticipantId,
         baseDamage: attackBaseDamage,
         netSuccesses: netSuccesses,
         targetArmor: targetArmor,
+        ...(hit && clashArmorBonus > 0 ? { clashArmorBonus } : {}),
         armorPiercing: armorPiercing,
         effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
         finalDamage: hit ? damageDealt : 0,
@@ -1227,7 +1234,6 @@ export default defineEventHandler(async (event) => {
           isSignatureMove: false,
           batteryCount: 0,
           clashAttack: false,
-          outsideClashCpuPenalty: 0,
           halfDodge: true,
           isCounterattack: true,
         },

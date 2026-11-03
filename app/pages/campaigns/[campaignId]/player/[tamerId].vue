@@ -14,6 +14,7 @@ import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
+import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 
@@ -1094,6 +1095,18 @@ const hasUnrespondedDodgeRequest = computed(() => {
   return !hasResponse
 })
 
+// Attacked from outside the target's clash: the target cannot dodge at all. Checked against live
+// clash state too, since dodge-rolls created after an intercede window don't carry the flag.
+const dodgeBlockedByClash = computed(() => {
+  const request = currentDodgeRequest.value
+  if (!request) return false
+  if (request.data?.cannotDodge) return true
+  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
+  const attacker = participants.find((p) => p.id === request.data?.attackerParticipantId)
+  const target = participants.find((p) => p.id === request.targetParticipantId)
+  return isAttackedFromOutsideClash(attacker, target)
+})
+
 // Dodge dice pool for the target participant in a dodge request (reduced by successive dodge penalty)
 const dodgeDicePool = computed(() => {
   if (!activeEncounter.value || !currentDodgeRequest.value) return 3
@@ -1142,7 +1155,7 @@ const dodgeDicePool = computed(() => {
   }
 
   // Attacked from outside the clash: the target cannot dodge at all.
-  if (currentDodgeRequest.value?.data?.cannotDodge) {
+  if (dodgeBlockedByClash.value) {
     return 0
   }
 
@@ -2905,7 +2918,7 @@ async function submitInitiativeRoll() {
 async function rollDodgeDice() {
   if (hasRolledDodge.value) return
   let pool = dodgeDicePool.value
-  if (dodgeActOfInspirationEnabled.value) {
+  if (dodgeActOfInspirationEnabled.value && !dodgeBlockedByClash.value) {
     pool += 5
     await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
@@ -6241,7 +6254,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </p>
         </div>
 
-        <div v-if="currentDodgeRequest?.data?.cannotDodge" class="mb-4 p-3 bg-red-900/40 rounded-lg border border-red-600">
+        <div v-if="dodgeBlockedByClash" class="mb-4 p-3 bg-red-900/40 rounded-lg border border-red-600">
           <p class="text-red-300 text-sm font-medium">
             You're locked in a clash — you cannot dodge attacks from outside it. This attack hits automatically.
           </p>
@@ -6254,8 +6267,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </span>
         </p>
 
-        <!-- Act of Inspiration Toggle (pre-roll) -->
-        <div v-if="!hasRolledDodge" class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
+        <!-- Act of Inspiration Toggle (pre-roll; hidden when the dodge can't succeed anyway) -->
+        <div v-if="!hasRolledDodge && !dodgeBlockedByClash" class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
           <label class="flex items-center gap-2 cursor-pointer mb-2">
             <input
               type="checkbox"

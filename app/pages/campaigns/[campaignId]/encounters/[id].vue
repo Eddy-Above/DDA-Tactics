@@ -11,6 +11,7 @@ import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOr
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
+import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import type { Vec3 } from '~/types'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
@@ -2787,6 +2788,13 @@ async function handleGmDodgeRoll(request: any) {
       dodgePool = Math.max(1, Math.floor(dodgePool / 2))
     }
 
+    // Attacked from outside the target's clash: no dodge at all (live check covers dodge-rolls
+    // created after an intercede window, which don't carry the cannotDodge flag)
+    const attacker = participants.find(p => p.id === request.data?.attackerParticipantId)
+    if (request.data?.cannotDodge || isAttackedFromOutsideClash(attacker, target)) {
+      dodgePool = 0
+    }
+
     // Roll dice (count successes: 5+ = 1 success)
     const dodgeDiceResults = []
     for (let i = 0; i < dodgePool; i++) {
@@ -5038,6 +5046,10 @@ function onMapAttackCancelled() {
                     <div v-if="entry.targetArmor !== undefined && entry.targetArmor > 0" class="flex justify-between">
                       <span>Target Armor:</span>
                       <span class="text-white font-mono">{{ entry.targetArmor }}</span>
+                    </div>
+                    <div v-if="entry.clashArmorBonus" class="flex justify-between text-digimon-dark-400">
+                      <span class="pl-2">incl. Clash CPU:</span>
+                      <span class="text-amber-400 font-mono">+{{ entry.clashArmorBonus }}</span>
                     </div>
                     <div v-if="entry.armorPiercing !== undefined && entry.armorPiercing > 0" class="flex justify-between">
                       <span>Armor Piercing:</span>
