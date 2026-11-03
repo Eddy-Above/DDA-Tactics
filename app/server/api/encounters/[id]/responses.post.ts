@@ -488,6 +488,7 @@ export default defineEventHandler(async (event) => {
               houseRules,
               turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
+              encounterId,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
@@ -979,6 +980,7 @@ export default defineEventHandler(async (event) => {
               houseRules,
               turnOrder: encounter.turnOrder,
               currentTurnIndex: encounter.currentTurnIndex ?? 0,
+              encounterId,
             })
             participants = caResult.participants
             battleLog = caResult.battleLog
@@ -1262,6 +1264,7 @@ export default defineEventHandler(async (event) => {
         currentTurnIndex: encounter.currentTurnIndex ?? 0,
         houseRules,
         counterattack: true,
+        encounterId,
       })
 
       await db.update(encounters).set({

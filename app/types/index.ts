@@ -250,6 +250,7 @@ export interface EddySoulRules {
   enemyDoubleWounds?: boolean
   directRangeOverrides?: { direct?: number; bolsterDirect?: number; digivolve?: number }
   modeChangeFreeSwapsPerCombat?: boolean
+  poisonTicksAtTurnEnd?: boolean  // Poison damages at the end of the poisoned unit's own turn (partner digimon: its Tamer's turn) instead of at the end of each round
 }
 
 export interface HouseRules {

@@ -392,6 +392,7 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         clashAttack: groupData.clashAttack,
         totalTargetCount: originalTargetIds.length,
+        encounterId,
       })
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog

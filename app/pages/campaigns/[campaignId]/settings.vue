@@ -246,6 +246,7 @@ const form = reactive({
     bonusDPMinPerCategory: false,
     enemyDoubleWounds: false,
     modeChangeFreeSwapsPerCombat: false,
+    poisonTicksAtTurnEnd: false,
     directRangeOverrides: { direct: null as number | null, bolsterDirect: null as number | null, digivolve: null as number | null },
   },
 })
@@ -312,6 +313,7 @@ onMounted(async () => {
       form.eddySoulRules.bonusDPMinPerCategory = eddySoul.bonusDPMinPerCategory ?? false
       form.eddySoulRules.enemyDoubleWounds = eddySoul.enemyDoubleWounds ?? false
       form.eddySoulRules.modeChangeFreeSwapsPerCombat = eddySoul.modeChangeFreeSwapsPerCombat ?? false
+      form.eddySoulRules.poisonTicksAtTurnEnd = eddySoul.poisonTicksAtTurnEnd ?? false
       form.eddySoulRules.directRangeOverrides = {
         direct: eddySoul.directRangeOverrides?.direct ?? null,
         bolsterDirect: eddySoul.directRangeOverrides?.bolsterDirect ?? null,
@@ -382,7 +384,7 @@ async function handleSave() {
     ...(Object.keys(activeRenames).length > 0 && {
       skillRenames: activeRenames,
     }),
-    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds || form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect || form.eddySoulRules.directRangeOverrides.digivolve) && {
+    ...((form.eddySoulRules.accuracyIsAgilityAthletics || form.eddySoulRules.damageIsBodyFeatsOfStrength || form.eddySoulRules.armorIsWillpowerEndurance || form.eddySoulRules.baseStatRangesEnabled || form.eddySoulRules.chargeAttackCosts3DP || form.eddySoulRules.instinctBoostsDodgeArmorSpeed || form.eddySoulRules.hugeSizeRequiresMega || form.eddySoulRules.hugePowerOncePerTurn || form.eddySoulRules.agilityRank2RequiresUltimate || form.eddySoulRules.combatMonsterAreaAttackRequiresComplex || form.eddySoulRules.chromeWeaponNoWeaponRankRequired || form.eddySoulRules.digizoidArmourRequiresInstinct || form.eddySoulRules.buffingContested || form.eddySoulRules.digivolutionLimit5PerDay || form.eddySoulRules.warpEvolution || form.eddySoulRules.bonusDPMinPerCategory || form.eddySoulRules.enemyDoubleWounds || form.eddySoulRules.poisonTicksAtTurnEnd || form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect || form.eddySoulRules.directRangeOverrides.digivolve) && {
       eddySoulRules: {
         ...(form.eddySoulRules.accuracyIsAgilityAthletics && { accuracyIsAgilityAthletics: true }),
         ...(form.eddySoulRules.damageIsBodyFeatsOfStrength && { damageIsBodyFeatsOfStrength: true }),
@@ -402,6 +404,7 @@ async function handleSave() {
         ...(form.eddySoulRules.bonusDPMinPerCategory && { bonusDPMinPerCategory: true }),
         ...(form.eddySoulRules.enemyDoubleWounds && { enemyDoubleWounds: true }),
         ...(form.eddySoulRules.modeChangeFreeSwapsPerCombat && { modeChangeFreeSwapsPerCombat: true }),
+        ...(form.eddySoulRules.poisonTicksAtTurnEnd && { poisonTicksAtTurnEnd: true }),
         ...((form.eddySoulRules.directRangeOverrides.direct || form.eddySoulRules.directRangeOverrides.bolsterDirect || form.eddySoulRules.directRangeOverrides.digivolve) && {
           directRangeOverrides: {
             ...(form.eddySoulRules.directRangeOverrides.direct && { direct: form.eddySoulRules.directRangeOverrides.direct }),
@@ -1112,6 +1115,13 @@ async function handleDelete() {
             <div>
               <span class="text-digimon-dark-300">Mode Change X.0 Rank 2: 3 Free Swaps Per Combat</span>
               <p class="text-xs text-digimon-dark-500">Default: every Mode Change use costs 1 Simple Action. With this rule, digimon with Mode Change X.0 Rank 2 get their first 3 swaps each combat for free (no action cost).</p>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 cursor-pointer">
+            <input v-model="form.eddySoulRules.poisonTicksAtTurnEnd" type="checkbox" class="w-4 h-4 rounded mt-1 shrink-0" />
+            <div>
+              <span class="text-digimon-dark-300">Poison: Damage at the End of the Poisoned Unit's Turn</span>
+              <p class="text-xs text-digimon-dark-500">Default: Poison deals its damage (equal to CPU) at the end of each round. With this rule, it deals it at the end of the poisoned unit's own turn instead — a partner Digimon takes it at the end of its Tamer's turn.</p>
             </div>
           </label>
           <!-- Direct / Bolster Direct / Digivolve Range Overrides -->

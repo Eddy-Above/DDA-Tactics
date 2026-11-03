@@ -2,13 +2,14 @@ import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../../db'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
-import type { DigimonStage } from '../../../../../types'
+import type { DigimonStage, EddySoulRules } from '../../../../../types'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
 import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
+import { applyRoundEndEffects } from '../../../../utils/damageOverTime'
 
 interface NpcAttackBody {
   participantId: string
@@ -54,11 +55,13 @@ export default defineEventHandler(async (event) => {
 
   // Fetch house rules from campaign
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let eddySoulRules: EddySoulRules | undefined
   let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       houseRules = campaign.rulesSettings.houseRules
+      eddySoulRules = campaign.rulesSettings.eddySoulRules
       if (campaign.level) campaignLevel = campaign.level
     }
   }
@@ -519,6 +522,7 @@ export default defineEventHandler(async (event) => {
   let npcDefeatNextTurnIndex: number | undefined
   let npcDefeatNextRound: number | undefined
   let gravityLogEntries: any[] = []
+  let roundEndLogEntries: any[] = []
   if (damagedTarget && hit &&
       damagedTarget.currentWounds >= damagedTarget.maxWounds &&
       damagedTarget.isEnemy &&
@@ -543,6 +547,15 @@ export default defineEventHandler(async (event) => {
       npcDefeatNextRound = isRoundWrap ? (encounter.round ?? 0) + 1 : undefined
 
       if (isRoundWrap) {
+        // Round end: Poison/Burn for the round that just finished, before the reset
+        const roundEnd = await applyRoundEndEffects({
+          participants: finalParticipantsAfterDefeat,
+          endingRound: encounter.round ?? 0,
+          rules: eddySoulRules,
+        })
+        finalParticipantsAfterDefeat = roundEnd.participants
+        roundEndLogEntries = roundEnd.logEntries
+
         finalParticipantsAfterDefeat.forEach((p: any) => {
           const hasteEffect = (p.activeEffects || []).find((e: any) => e.name === 'Haste')
           const hasteGrantsNextRound = !!(hasteEffect && hasteEffect.potency === 1
@@ -699,7 +712,7 @@ export default defineEventHandler(async (event) => {
     hit: hit,
   }
 
-  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...gravityLogEntries]
+  const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...roundEndLogEntries, ...gravityLogEntries]
 
   // Update encounter
   const updateData: any = {

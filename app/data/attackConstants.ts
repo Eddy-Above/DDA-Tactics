@@ -65,6 +65,14 @@ export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal'])
 export const PERMANENT_EFFECTS = new Set(['Shield', 'Demoralize', 'Guiding Light', 'Guiding Light (Focus)'])
 
 /**
+ * Damage-over-time effects — their damage and their duration countdown are both resolved
+ * server-side (server/utils/damageOverTime.ts), at the end of each round, or for Poison under the
+ * EddySoul `poisonTicksAtTurnEnd` rule at the end of the poisoned unit's turn. The client's
+ * per-turn countdown in nextTurn() skips them.
+ */
+export const DAMAGE_OVER_TIME_EFFECTS = new Set(['Poison', 'Burn'])
+
+/**
  * Duration caps/floors per effect
  */
 export const EFFECT_DURATION_LIMITS: Record<string, { min?: number; max?: number }> = {

@@ -250,6 +250,7 @@ export async function resolveIntercedeGroupIfDecided(
     currentTurnIndex,
     mapRecord: mapRecord ?? undefined,
     participantPositions: participantPositions ?? undefined,
+    encounterId,
   })
 
   if (result.positionPatch) {

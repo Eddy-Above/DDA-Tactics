@@ -575,6 +575,7 @@ export default defineEventHandler(async (event) => {
             totalTargetCount,
             mapRecord: mapRecord ?? undefined,
             participantPositions: participantPositions ?? undefined,
+            encounterId,
           })
           participants = result.participants
           battleLog = result.battleLog
@@ -1338,6 +1339,7 @@ export default defineEventHandler(async (event) => {
           cannotDodge: targetCannotDodge(target),
           mapRecord: mapRecord ?? undefined,
           participantPositions: participantPositions ?? undefined,
+          encounterId,
         })
 
         if (result.positionPatch) {
@@ -1374,6 +1376,7 @@ export default defineEventHandler(async (event) => {
               houseRules,
               turnOrder: freshEnc.turnOrder,
               currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
+              encounterId,
             })
             await db.update(encounters).set({
               participants: caResult.participants,

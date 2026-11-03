@@ -486,6 +486,7 @@ export default defineEventHandler(async (event) => {
           houseRules,
           turnOrder: freshEnc.turnOrder,
           currentTurnIndex: freshEnc.currentTurnIndex ?? 0,
+          encounterId,
         })
         await db.update(encounters).set({
           participants: caResult.participants,

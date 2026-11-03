@@ -5,6 +5,8 @@ import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 import { applyGuidingLightAuras } from '../../utils/guidingLight'
+import { applyTurnEndEffects, applyRoundEndEffects } from '../../utils/damageOverTime'
+import type { EddySoulRules } from '../../../types'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -50,19 +52,21 @@ export default defineEventHandler(async (event) => {
   const incomingRound = typeof body.round === 'number' ? body.round : existingRound
   const isNewRound = incomingRound > existingRound
 
-  // Campaign level + house rules, used by end-of-turn gravity (Guiding Light recompute), the
-  // combat-start triggers, and the Guiding Light combat-start pass below.
+  // Campaign level + house rules + EddySoul rules, used by end-of-turn gravity (Guiding Light
+  // recompute), Poison/Burn, the combat-start triggers, and the Guiding Light combat-start pass below.
   const getCampaignRules = async () => {
     let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
     let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+    let eddySoulRules: EddySoulRules | undefined
     if (existing.campaignId) {
       const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, existing.campaignId))
       if (campaign) {
         campaignLevel = campaign.level
         houseRules = (campaign.rulesSettings || {}).houseRules
+        eddySoulRules = (campaign.rulesSettings || {}).eddySoulRules
       }
     }
-    return { campaignLevel, houseRules }
+    return { campaignLevel, houseRules, eddySoulRules }
   }
 
   if (body.participants) {
@@ -78,6 +82,44 @@ export default defineEventHandler(async (event) => {
       participants = gravity.participants
       if (gravity.logEntries.length > 0) {
         updateData.battleLog = [...(((body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...gravity.logEntries]
+      }
+    }
+
+    // Poison/Burn (damage over time): first the turn that just ended (EddySoul turn-end Poison),
+    // then the round that just ended. A turn has ended only when the active participant changes
+    // (or the round advances) — rebuildTurnOrder() re-anchors on whoever is active, so adding or
+    // re-sorting participants doesn't count — and the outgoing participant is still here (removing
+    // the active participant ends nobody's turn). Runs before the KO/auto-devolve check below so a
+    // partner knocked out by Poison devolves in this same request.
+    if (existing.phase === 'combat') {
+      const prevTurnOrder = (existing.turnOrder as string[]) || []
+      const outgoingId = prevTurnOrder[existing.currentTurnIndex ?? 0]
+      const nextTurnOrder = (body.turnOrder as string[] | undefined) ?? prevTurnOrder
+      const incomingActiveId = typeof body.currentTurnIndex === 'number' ? nextTurnOrder[body.currentTurnIndex] : outgoingId
+      const turnEnded = typeof body.currentTurnIndex === 'number'
+        && !!outgoingId
+        && (incomingActiveId !== outgoingId || isNewRound)
+        && participants.some((p: any) => p.id === outgoingId)
+      const roundEnded = isNewRound && existingRound >= 1
+
+      if (turnEnded || roundEnded) {
+        const { eddySoulRules } = await getCampaignRules()
+        const dotLogEntries: any[] = []
+        if (turnEnded) {
+          const turnEnd = await applyTurnEndEffects({
+            participants, endedParticipantId: outgoingId!, turnOrder: nextTurnOrder, round: existingRound, rules: eddySoulRules,
+          })
+          participants = turnEnd.participants
+          dotLogEntries.push(...turnEnd.logEntries)
+        }
+        if (roundEnded) {
+          const roundEnd = await applyRoundEndEffects({ participants, endingRound: existingRound, rules: eddySoulRules })
+          participants = roundEnd.participants
+          dotLogEntries.push(...roundEnd.logEntries)
+        }
+        if (dotLogEntries.length > 0) {
+          updateData.battleLog = [...((updateData.battleLog ?? (body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...dotLogEntries]
+        }
       }
     }
 

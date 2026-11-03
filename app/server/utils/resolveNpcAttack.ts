@@ -11,6 +11,7 @@ import { computeGravityDrops } from './endOfTurnGravity'
 import { loadParticipantDigimon } from './combatSpatial'
 import { computePushPull } from './pushPull'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
+import { applyRoundEndEffects, loadDamageOverTimeRules } from './damageOverTime'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 
@@ -34,6 +35,7 @@ interface ResolveNpcAttackParams {
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
   mapRecord?: GameMap           // If provided, enables push/pull displacement
   participantPositions?: Record<string, Vec3>
+  encounterId?: string          // Loads the campaign's EddySoul rules for Poison/Burn when this attack wraps the round
 }
 
 /**
@@ -465,6 +467,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   // --- Remove defeated NPC from encounter ---
   let defeatedLog: any = null
+  let roundEndLogEntries: any[] = []
   let nextTurnIndex: number | undefined
   let nextRound: number | undefined
   if (damagedTarget && hit &&
@@ -494,6 +497,15 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         nextRound = isRoundWrap ? params.round + 1 : undefined
 
         if (isRoundWrap) {
+          // Round end: Poison/Burn for the round that just finished, before the reset
+          const roundEnd = await applyRoundEndEffects({
+            participants,
+            endingRound: params.round,
+            rules: await loadDamageOverTimeRules(params.encounterId, participants),
+          })
+          participants = roundEnd.participants
+          roundEndLogEntries = roundEnd.logEntries
+
           // Round reset: restore all participants' actions
           const PERMANENT_EFFECTS = new Set(['Clash', 'Burn', 'Poison', 'Haste', 'Stun', 'Regen'])
           participants.forEach((p: any) => {
@@ -618,7 +630,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     dodgeSuccesses,
   }
 
-  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : []), ...gravityLogEntries]
+  battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(defeatedLog ? [defeatedLog] : []), ...roundEndLogEntries, ...gravityLogEntries]
 
   return { participants, battleLog, turnOrder: params.turnOrder, hit, nextTurnIndex, nextRound, positionPatch }
 }
