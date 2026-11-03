@@ -6,6 +6,7 @@ import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTri
 import { applyEncounterStartTriggers } from '../../utils/encounterStartTriggers'
 import { applyGuidingLightAuras } from '../../utils/guidingLight'
 import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions, damageOverTimeRules, type DamageOverTimeRules } from '../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnockouts'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -80,6 +81,10 @@ export default defineEventHandler(async (event) => {
       return typeof stamp === 'number' && !(p.lastMovedRound >= stamp) ? { ...p, lastMovedRound: stamp } : p
     })
 
+    // Enemies the client sent already knocked out are the GM's call (the GM page removes the ones it
+    // knocks out itself); only the ones this request knocks out are resolved below.
+    const knockedOutInBody = new Set(knockedOutEnemyIds(participants))
+
     // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
     // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
     const isTurnAdvance = typeof body.currentTurnIndex === 'number'
@@ -152,6 +157,29 @@ export default defineEventHandler(async (event) => {
           p.combatMonsterBonus = devolvedHasCombatMonster
             ? Math.min(p.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
             : 0
+        }
+      }
+    }
+
+    // Enemies knocked out by this turn change (the fall, Poison, Burn) leave the encounter. If the
+    // incoming participant is one of them, the next one's turn starts instead. No gravity: it already
+    // ran for this turn change above.
+    if (existing.phase === 'combat') {
+      const knockedOut = knockedOutEnemyIds(participants).filter((pid) => !knockedOutInBody.has(pid))
+      if (knockedOut.length > 0) {
+        const { houseRules } = await getCampaignRules()
+        const knockout = await resolveEnemyKnockouts({
+          participants,
+          turnOrder: (body.turnOrder as string[] | undefined) ?? (existing.turnOrder as string[]) ?? [],
+          currentTurnIndex: typeof body.currentTurnIndex === 'number' ? body.currentTurnIndex : (existing.currentTurnIndex ?? 0),
+          round: incomingRound,
+        }, knockedOut, { encounterId: id, houseRules })
+        participants = knockout.participants
+        if (knockout.changed) {
+          updateData.turnOrder = knockout.turnOrder
+          updateData.currentTurnIndex = knockout.currentTurnIndex
+          updateData.round = knockout.round
+          updateData.battleLog = [...((updateData.battleLog ?? (body.battleLog as any[]) ?? existing.battleLog ?? []) as any[]), ...knockout.logEntries]
         }
       }
     }

@@ -29,6 +29,7 @@ import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
 import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -208,6 +209,16 @@ export default defineEventHandler(async (event) => {
   // Determine if interceptor's turn has already happened this round
   let turnOrder = encounter.turnOrder || []
   const currentTurnIndex = encounter.currentTurnIndex || 0
+
+  // Enemies this claim knocks out leave the encounter (just before each save below): the
+  // interceptor (the hit, its fall, Burn on the way in), the target it moved (Burn, a throw's fall)
+  // and the attacker (Digizoid Armor reflect).
+  const knockedOutBefore = new Set(knockedOutEnemyIds(encounter.participants || []))
+  const resolveClaimKnockouts = (ids: string[], turnIndex: number, round: number) => resolveEnemyKnockouts(
+    { participants, turnOrder, currentTurnIndex: turnIndex, round },
+    ids.filter((pid) => !knockedOutBefore.has(pid)),
+    { encounterId, houseRules, mapId: (encounter as any).mapId, gravity: 'room' },
+  )
   let turnHasGone = false
 
   if (interceptor.type === 'tamer') {
@@ -625,6 +636,19 @@ export default defineEventHandler(async (event) => {
       battleLog = [...battleLog, intercedeLog]
     }
 
+    const knockout = await resolveClaimKnockouts(
+      [body.interceptorParticipantId, effectiveTargetId],
+      claimNextTurnIndex ?? currentTurnIndex,
+      claimNextRound ?? (encounter.round || 0),
+    )
+    if (knockout.changed) {
+      participants = knockout.participants
+      battleLog = [...battleLog, ...knockout.logEntries]
+      turnOrder = knockout.turnOrder
+      claimNextTurnIndex = knockout.currentTurnIndex
+      claimNextRound = knockout.round
+    }
+
     await db.update(encounters).set({
       participants,
       pendingRequests,
@@ -858,6 +882,19 @@ export default defineEventHandler(async (event) => {
       dodgeSuccesses: 0,
     }
     battleLog = [...battleLog, intercedeLog, ...(autoDevolveLog ? [autoDevolveLog] : [])]
+  }
+
+  const knockout = await resolveClaimKnockouts(
+    [body.interceptorParticipantId, effectiveTargetId, request.data.attackerId],
+    claimNextTurnIndex ?? currentTurnIndex,
+    claimNextRound ?? (encounter.round || 0),
+  )
+  if (knockout.changed) {
+    participants = knockout.participants
+    battleLog = [...battleLog, ...knockout.logEntries]
+    turnOrder = knockout.turnOrder
+    claimNextTurnIndex = knockout.currentTurnIndex
+    claimNextRound = knockout.round
   }
 
   await db.update(encounters).set({

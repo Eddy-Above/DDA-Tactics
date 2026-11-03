@@ -10,6 +10,7 @@ import { applyPushPullDisplacement } from '../../../../utils/pushPull'
 import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
 import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect, damageOverTimeRules } from '../../../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
 
 interface NpcAttackBody {
   participantId: string
@@ -67,6 +68,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const participants = encounter.participants || []
+  // Enemies already knocked out when the request arrived, which the knockout check before the save
+  // leaves alone. Taken here: the round wrap below mutates participant objects in place.
+  const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
   const turnOrder = encounter.turnOrder || []
   const battleLog = encounter.battleLog || []
 
@@ -716,13 +720,22 @@ export default defineEventHandler(async (event) => {
 
   const updatedBattleLog = [...battleLog, attackLogEntry, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...(npcDefeatedLog ? [npcDefeatedLog] : []), ...roundEndLogEntries, ...gravityLogEntries]
 
+  // Any other enemy this request knocked out (Burn on the Knockback, the wrap's Poison/Burn, the
+  // fall at the turn change) leaves the encounter too
+  const knockout = await resolveEnemyKnockouts({
+    participants: finalParticipantsAfterDefeat,
+    turnOrder: updatedTurnOrder,
+    currentTurnIndex: npcDefeatNextTurnIndex ?? (encounter.currentTurnIndex ?? 0),
+    round: npcDefeatNextRound ?? (encounter.round ?? 0),
+  }, knockedOutEnemyIds(finalParticipantsAfterDefeat).filter((pid) => !knockedOutBefore.has(pid)),
+  { encounterId, houseRules, campaignLevel, mapId: (encounter as any).mapId, gravity: 'room' })
+  const turnStateChanged = !!npcDefeatedLog || knockout.changed
+
   // Update encounter
   const updateData: any = {
-    participants: finalParticipantsAfterDefeat,
-    battleLog: updatedBattleLog,
-    ...(npcDefeatedLog ? { turnOrder: updatedTurnOrder } : {}),
-    ...(npcDefeatNextTurnIndex !== undefined ? { currentTurnIndex: npcDefeatNextTurnIndex } : {}),
-    ...(npcDefeatNextRound !== undefined ? { round: npcDefeatNextRound } : {}),
+    participants: knockout.participants,
+    battleLog: [...updatedBattleLog, ...knockout.logEntries],
+    ...(turnStateChanged ? { turnOrder: knockout.turnOrder, currentTurnIndex: knockout.currentTurnIndex, round: knockout.round } : {}),
     updatedAt: new Date(),
   }
 

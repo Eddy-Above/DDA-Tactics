@@ -11,6 +11,7 @@ import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveT
 import { getDigizoidArmorBonus, getReflectArmorRange } from '../../../utils/digizoidArmor'
 import { getOutsideClashArmorBonus } from '../../../utils/clashArmor'
 import { isImmuneToEffect } from '../../../utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../utils/enemyKnockouts'
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 
 interface SubmitResponseBody {
@@ -994,6 +995,27 @@ export default defineEventHandler(async (event) => {
             if (caResult.nextTurnIndex !== undefined) updateData.currentTurnIndex = caResult.nextTurnIndex
             if (caResult.nextRound !== undefined) updateData.round = caResult.nextRound
           }
+        }
+      }
+
+      // Digizoid Armor's reflected damage can knock out an enemy attacker: it leaves the encounter,
+      // and if it was the active participant its turn ends. (A miss reflects nothing, so this never
+      // follows a counterattack above.)
+      if (hit && reflectDamageToAttacker > 0 && !knockedOutEnemyIds(encounter.participants).includes(request.data.attackerParticipantId)) {
+        const knockout = await resolveEnemyKnockouts({
+          participants,
+          turnOrder,
+          currentTurnIndex,
+          round: encounter.round ?? 0,
+        }, [request.data.attackerParticipantId], { encounterId, houseRules, campaignLevel, mapId: encounter.mapId, gravity: 'room' })
+        if (knockout.changed) {
+          participants = knockout.participants
+          battleLog = [...battleLog, ...knockout.logEntries]
+          updateData.participants = participants
+          updateData.battleLog = battleLog
+          updateData.turnOrder = knockout.turnOrder
+          updateData.currentTurnIndex = knockout.currentTurnIndex
+          updateData.round = knockout.round
         }
       }
 

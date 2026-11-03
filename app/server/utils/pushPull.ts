@@ -6,6 +6,7 @@ import { resolveFall } from '../../utils/movementRules'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
 import { applyGuidingLightAuras } from './guidingLight'
 import { applyMovementBurn, loadEncounterRules } from './damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { chebyshev } from './gridDistance'
 import type { EddySoulRules } from '../../types'
 
@@ -142,9 +143,20 @@ export async function resolveInstantSupportEffect(params: {
   encounterId: string
   mapId: string | null | undefined
   turnOrder?: string[]
+  /** The active slot, for when Burn on the displacement knocks out an enemy target */
+  currentTurnIndex?: number
   campaignLevel?: 'standard' | 'enhanced' | 'extreme'
   houseRules?: { stunMaxDuration1?: boolean }
-}): Promise<{ participants: any[]; battleLog: any[]; pendingRequests: any[]; turnOrder?: string[]; resolved: boolean }> {
+}): Promise<{
+  participants: any[]
+  battleLog: any[]
+  pendingRequests: any[]
+  turnOrder?: string[]
+  /** Set when a knocked-out target's removal moved the turn index / wrapped the round */
+  nextTurnIndex?: number
+  nextRound?: number
+  resolved: boolean
+}> {
   const effect = params.attackDef?.effect
   if (effect !== 'Knockback' && effect !== 'Pull') {
     return { participants: params.participants, battleLog: params.battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, resolved: false }
@@ -179,5 +191,26 @@ export async function resolveInstantSupportEffect(params: {
     effects: [`Applied: ${effect}`, ...(logNote ? [logNote] : [])],
   }]
 
-  return { participants, battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, resolved: true }
+  // Burn on the displacement can knock out an enemy target: it leaves the encounter
+  const currentTurnIndex = params.currentTurnIndex ?? 0
+  const knockout = knockedOutEnemyIds(params.participants).includes(params.targetParticipantId)
+    ? null
+    : await resolveEnemyKnockouts(
+        { participants, turnOrder: params.turnOrder ?? [], currentTurnIndex, round: params.round },
+        [params.targetParticipantId],
+        { encounterId: params.encounterId, houseRules: params.houseRules, mapId: params.mapId, campaignLevel: params.campaignLevel, gravity: 'room' },
+      )
+  if (!knockout?.changed) {
+    return { participants, battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, resolved: true }
+  }
+
+  return {
+    participants: knockout.participants,
+    battleLog: [...battleLog, ...knockout.logEntries],
+    pendingRequests: params.pendingRequests,
+    turnOrder: params.turnOrder ? knockout.turnOrder : undefined,
+    ...(knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex ? { nextTurnIndex: knockout.currentTurnIndex } : {}),
+    ...(knockout.round !== params.round ? { nextRound: knockout.round } : {}),
+    resolved: true,
+  }
 }

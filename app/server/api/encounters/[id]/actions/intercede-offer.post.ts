@@ -549,12 +549,14 @@ export default defineEventHandler(async (event) => {
           if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
           else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
           else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-          else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
+          else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: areaAutoAdvanceTurnIndex ?? (encounter.currentTurnIndex || 0) })
           if (supportResult) {
             participants = supportResult.participants
             battleLog = supportResult.battleLog
             pendingRequests = supportResult.pendingRequests
             if (supportResult.turnOrder) turnOrder = supportResult.turnOrder
+            if (supportResult.nextTurnIndex !== undefined) areaAutoAdvanceTurnIndex = supportResult.nextTurnIndex
+            if (supportResult.nextRound !== undefined) areaAutoAdvanceRound = supportResult.nextRound
           }
         } else {
           const result = await resolveNpcAttack({
@@ -568,7 +570,7 @@ export default defineEventHandler(async (event) => {
             attackerName,
             targetName: npcTargetName,
             turnOrder,
-            currentTurnIndex: encounter.currentTurnIndex || 0,
+            currentTurnIndex: areaAutoAdvanceTurnIndex ?? (encounter.currentTurnIndex || 0),
             houseRules,
             clashAttack: body.clashAttack,
             cannotDodge: targetCannotDodge(participants.find((p: any) => p.id === tid)),
@@ -874,7 +876,7 @@ export default defineEventHandler(async (event) => {
       } else if (resolutionType === 'negative') {
         supportResult = await resolveNegativeSupportNpc(supportParams)
       } else if (resolutionType === 'instant') {
-        supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
+        supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: encounter.currentTurnIndex || 0 })
       }
 
       if (supportResult?.resolved) {
@@ -883,6 +885,8 @@ export default defineEventHandler(async (event) => {
           battleLog: supportResult.battleLog,
           pendingRequests: supportResult.pendingRequests,
           ...(supportResult.turnOrder ? { turnOrder: supportResult.turnOrder } : {}),
+          ...(supportResult.nextTurnIndex !== undefined ? { currentTurnIndex: supportResult.nextTurnIndex } : {}),
+          ...(supportResult.nextRound !== undefined ? { round: supportResult.nextRound } : {}),
           updatedAt: new Date(),
         }).where(eq(encounters.id, encounterId))
 
@@ -1305,7 +1309,7 @@ export default defineEventHandler(async (event) => {
         if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
         else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
         else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-        else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any })
+        else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: encounter.currentTurnIndex || 0 })
 
         if (supportResult) {
           await db.update(encounters).set({
@@ -1313,6 +1317,8 @@ export default defineEventHandler(async (event) => {
             battleLog: supportResult.battleLog,
             pendingRequests: supportResult.pendingRequests,
             ...(supportResult.turnOrder ? { turnOrder: supportResult.turnOrder } : {}),
+            ...(supportResult.nextTurnIndex !== undefined ? { currentTurnIndex: supportResult.nextTurnIndex } : {}),
+            ...(supportResult.nextRound !== undefined ? { round: supportResult.nextRound } : {}),
             updatedAt: new Date(),
           }).where(eq(encounters.id, encounterId))
 

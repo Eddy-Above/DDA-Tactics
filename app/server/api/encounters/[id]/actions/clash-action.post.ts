@@ -14,6 +14,7 @@ import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/ser
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
 import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '~/server/utils/damageOverTime'
+import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
 import { chebyshev } from '~/server/utils/gridDistance'
 import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
@@ -402,10 +403,25 @@ export default defineEventHandler(async (event) => {
       effects: ['Clash Throw', 'Clash Ended'],
     }]
 
+    // A thrown enemy knocked out by the throw, the fall or Burn leaves the encounter
+    const knockout = knockedOutEnemyIds(encounter.participants).includes(target.id)
+      ? null
+      : await resolveEnemyKnockouts({
+          participants,
+          turnOrder: encounter.turnOrder ?? [],
+          currentTurnIndex: encounter.currentTurnIndex ?? 0,
+          round: encounter.round ?? 0,
+        }, [target.id], { encounterId, mapId: (encounter as any).mapId, gravity: 'room' })
+    if (knockout?.changed) {
+      participants = knockout.participants
+      battleLog = [...battleLog, ...knockout.logEntries]
+    }
+
     await db.update(encounters).set({
       participants,
       battleLog,
       pendingRequests: throwImpactRequest ? [...encounter.pendingRequests, throwImpactRequest] : encounter.pendingRequests,
+      ...(knockout?.changed ? { turnOrder: knockout.turnOrder, currentTurnIndex: knockout.currentTurnIndex, round: knockout.round } : {}),
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 

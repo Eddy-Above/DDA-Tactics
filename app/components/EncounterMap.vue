@@ -550,8 +550,10 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
 // Reports a combat move to the server: spends a simple action (unless the move is part of a
 // Charge or Pass) and applies [Burn]'s movement damage. Resolves once saved, so a Charge or Pass
 // can wait for it before its attack and the two server writes can't overwrite each other.
-function postMove(participantId: string, distance: number, noActionCost: boolean): Promise<unknown> {
-  return $fetch(`/api/encounters/${props.encounter.id}/actions/move`, {
+// `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
+type MoveResult = { success: boolean; defeated?: boolean } | void
+function postMove(participantId: string, distance: number, noActionCost: boolean): Promise<MoveResult> {
+  return $fetch<{ success: boolean; defeated?: boolean }>(`/api/encounters/${props.encounter.id}/actions/move`, {
     method: 'POST',
     body: { participantId, distance, ...(noActionCost ? { noActionCost: true } : {}) },
   }).catch((e: unknown) => console.error('move action failed', e))
@@ -716,7 +718,7 @@ function startChargeBefore() {
 }
 
 async function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
-  let moveSaved: Promise<unknown> | null = null
+  let moveSaved: Promise<MoveResult> | null = null
   if (!sameVec3(positions.value[attackerId], destination)) {
     const movePath = movePathTo(attackerId, destination)  // the charge path isn't drawn
     const distance = moveDistance(attackerId, destination, movePath)
@@ -729,7 +731,12 @@ async function onChargeTargetSelected(attackerId: string, destination: Vec3, tar
   movement.clearMovement()
   if (targetId) {
     chargeAttackInFlight.value = true
-    if (moveSaved) await moveSaved  // the attack's server write must not race the Charge move's
+    const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Charge move's
+    if (moved?.defeated) {
+      // Burn on the way in knocked the attacker out: there's no attack
+      emit('attack-cancelled')
+      return
+    }
     emit('target-selected', targetId)
   }
 }
@@ -744,7 +751,7 @@ function onTargetSelected(targetId: string) {
 }
 
 async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
-  let moveSaved: Promise<unknown> | null = null
+  let moveSaved: Promise<MoveResult> | null = null
   if (areaShapeData?.shape === 'pass') {
     const newPos = computePassLanding(areaShapeData.attackerPos, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
     const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
@@ -763,7 +770,13 @@ async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaSha
     chargeMode.value = null
     chargeAttackInFlight.value = true
   }
-  if (moveSaved) await moveSaved  // the attack's server write must not race the Pass move's
+  const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Pass move's
+  if (moved?.defeated) {
+    // Burn on the Pass move knocked the attacker out: no attack, and no move after it
+    chargeAfterAttackerId.value = null
+    emit('attack-cancelled')
+    return
+  }
   emit('area-attack-confirmed', targetIds, areaShapeData)
 }
 

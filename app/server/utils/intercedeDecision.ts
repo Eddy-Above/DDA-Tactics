@@ -170,8 +170,9 @@ export async function resolveIntercedeGroupIfDecided(
     battleLog: supportResult.battleLog,
     pendingRequests: supportResult.pendingRequests,
     turnOrder: supportResult.turnOrder || turnOrder,
-    currentTurnIndex,
-    round,
+    // Set when the support effect knocked out an enemy target (Burn on a Knockback/Pull)
+    currentTurnIndex: supportResult.nextTurnIndex ?? currentTurnIndex,
+    round: supportResult.nextRound ?? round,
     resolved: true,
   })
 
@@ -231,7 +232,7 @@ export async function resolveIntercedeGroupIfDecided(
     if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
     else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
     else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
-    else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: ctx.mapId as any, campaignLevel })
+    else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: ctx.mapId as any, campaignLevel, currentTurnIndex })
     return supportResult ? withSupportResult(supportResult) : state
   }
 
