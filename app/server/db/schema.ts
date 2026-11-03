@@ -1,6 +1,6 @@
 import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
-import type { CreationRules } from '../../types'
+import type { CreationRules, ScenePreset } from '../../types'
 import type { EncounterIntercedeOptOuts } from '../../utils/intercedeOptOuts'
 
 // =====================================
@@ -432,6 +432,8 @@ export const campaigns = pgTable('campaigns', {
   // GM-set ambient scene image (roleplay visual aid, unrelated to the combat map).
   sceneImageUrl: text('scene_image_url'),
   sceneImageCaption: text('scene_image_caption'),
+  // GM-prepared scene tabs (max 10). GM prep only: never broadcast, never sent to players.
+  scenePresets: jsonb('scene_presets').notNull().default([]).$type<ScenePreset[]>(),
 
   // Stamped only at creation time if the creator was logged in; never
   // reassigned afterward (no ownership transfer/retroactive claiming).

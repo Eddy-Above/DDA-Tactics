@@ -181,6 +181,15 @@ export interface RollLogEntry {
   createdAt: string | Date
 }
 
+// One GM-prepared tab in the Scene editor (campaigns.scene_presets). Empty strings
+// mean an empty tab; only the scene the GM actually shows is ever sent to players.
+export interface ScenePreset {
+  imageUrl: string
+  caption: string
+}
+
+export const MAX_SCENE_PRESETS = 10
+
 export type WebSocketMapMessage =
   | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[]; version: number }
   | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
