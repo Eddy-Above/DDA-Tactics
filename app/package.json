@@ -6,6 +6,7 @@
   "scripts": {
     "build": "nuxt build",
     "typecheck": "nuxt typecheck",
+    "test": "node --test",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",

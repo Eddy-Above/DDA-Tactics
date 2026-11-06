@@ -4,7 +4,7 @@ import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/us
 import type { Digimon } from '~/server/db/schema'
 import type { Tamer } from '~/server/db/schema'
 import type { AreaShapeData } from '~/utils/areaShapes'
-import { computeAreaCellsFromData, getAreaShape } from '~/utils/areaShapes'
+import { computeAreaCellsFromData } from '~/utils/areaShapes'
 import { vec3Key } from '~/utils/mapGeometry'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
@@ -14,6 +14,9 @@ import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { evolutionFormsKey } from '~/utils/evolutionForms'
+import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
+import { useClashAttack } from '~/composables/useClashAttack'
+import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
 import type { Vec3 } from '~/types'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
@@ -102,13 +105,44 @@ const grantInspirationTargetId = ref<string | null>(null)
 const grantInspirationAmount = ref(1)
 const grantInspirationLoading = ref(false)
 
-// Willpower roll modal state for digivolution
-const showWillpowerRollModal = ref(false)
-const willpowerRollResult = ref<{ rolls: number[]; total: number } | null>(null)
-const hasRolledWillpower = ref(false)
-const pendingDigivolve = ref<{ participant: CombatParticipant; targetChainIndex: number; targetSpecies: string; tamer: Tamer } | null>(null)
-const pendingWarpChoice = ref<{ chainIndex: number; species: string } | null>(null)
-const willpowerRerollLoading = ref(false)
+// Digivolution check state and requests are shared by the GM and player views.
+const {
+  pendingDigivolve,
+  rollResult: willpowerRollResult,
+  warpChoice: pendingWarpChoice,
+  modifier: willpowerModifier,
+  dc: willpowerDC,
+  warpAvailable,
+  warpTargets: pendingDigivolveWarpTargets,
+  inspiration: willpowerInspiration,
+  loading: willpowerLoading,
+  open: openWillpower,
+  roll: rollWillpowerGM,
+  reroll: rerollWillpowerWithInspirationGM,
+  cancel: cancelWillpower,
+  submit: submitWillpowerRollGM,
+  toggleWarp: toggleWillpowerWarp,
+} = useDigivolveWillpower({
+  campaignLevel,
+  warpEnabled: () => !!eddySoulRules.value?.warpEvolution,
+  getEncounterId: () => currentEncounter.value?.id ?? null,
+  getTamerParticipant: (tamerId) => {
+    return (currentEncounter.value?.participants as CombatParticipant[] | undefined)
+      ?.find(p => p.type === 'tamer' && p.entityId === tamerId) ?? null
+  },
+  getWarpTargets: participant => getParticipantEvolutionOptions(participant).warpTargets ?? [],
+  spendInspiration: (encounterId, participantId) => spendInspiration(encounterId, participantId, 'reroll', 1),
+  refresh: async () => {
+    if (!currentEncounter.value) return
+    await Promise.all([
+      fetchEncounter(currentEncounter.value.id),
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+      fetchEvolutionLines(),
+      fetchTamers(campaignId.value),
+    ])
+  },
+  onError: message => alert(message),
+})
 
 // End Combat modal state
 const showEndCombatModal = ref(false)
@@ -664,22 +698,36 @@ const npcAttackOptions = computed(() => {
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
 })
 
-// Clash Attack: the controller picks one of their MELEE attacks (incl. Basic Melee) to use on
-// the clash opponent. `canUseAttack` bans clashing participants, so filter by melee range only.
-const clashAttackActorId = ref<string | null>(null)
-// Set when a Pass (area) attack is chosen as a Clash Attack: routes through the normal area-aim
-// flow (highlight + movement), then ends the clash once the area attack is submitted.
-const clashAreaAttack = ref<{ controllerId: string; opponentId: string } | null>(null)
-// Set when a Charge (non-area) attack is chosen as a Clash Attack: the picker shows two options
-// (maintain clash vs attack-then-move) before resolving.
-const clashChargeChoice = ref<{ participant: CombatParticipant; attack: any } | null>(null)
-const clashAttackParticipant = computed(() =>
-  (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === clashAttackActorId.value)
-)
-const clashAttackOptions = computed(() => {
-  const p = clashAttackParticipant.value
-  if (!p) return []
-  return getParticipantAttacks(p).filter(a => a.range === 'melee')
+const {
+  clashAttackActorId,
+  clashAttackParticipant,
+  clashAttackOptions,
+  clashChargeChoice,
+  clashAreaAttack,
+  startClashAttack,
+  pickClashAttack,
+  chooseClashCharge,
+  cancelClashAttack,
+  backToClashAttacks,
+} = useClashAttack({
+  getEncounter: () => {
+    const encounter = currentEncounter.value
+    return encounter ? { id: encounter.id, participants: encounter.participants as CombatParticipant[] } : null
+  },
+  getParticipantAttacks,
+  getAttackStats,
+  submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
+  refreshEncounter: fetchEncounter,
+  beginAreaAttack: (participant, attack) => {
+    showMapView.value = true
+    selectAttackAndShowTargets(participant, attack)
+  },
+  beginChargeMove: async (participantId) => {
+    showMapView.value = true
+    await nextTick()
+    encounterMapRef.value?.startChargeAfterMove?.(participantId)
+  },
+  onError: message => alert(message),
 })
 
 // Check if target is player-controlled
@@ -1016,31 +1064,20 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     selectedAttack.value = null
     selectedTargetIds.value = []
 
-    // Calculate accuracy with bolster bonus
-    const attackStats = getAttackStats(participant, attack)
-    let accuracyPool = attackStats.accuracy
-    if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
-      accuracyPool += 2
-    }
-
-    // Roll accuracy (count successes: 5+ = 1 success)
-    const accuracyDiceResults: number[] = []
-    for (let i = 0; i < accuracyPool; i++) {
-      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
-    }
-
-    // Huge Power: reroll low dice (Rank 1: 1s, Rank 2: 1s and 2s)
-    const originalDiceResults = [...accuracyDiceResults]
-    if (hugePowerEnabled.value) {
-      const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
-      for (let i = 0; i < accuracyDiceResults.length; i++) {
-        if (accuracyDiceResults[i] <= rerollThreshold) {
-          accuracyDiceResults[i] = Math.floor(Math.random() * 6) + 1
-        }
-      }
-    }
-
-    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
+    const {
+      dicePool: accuracyPool,
+      rolls: accuracyDiceResults,
+      originalRolls: originalDiceResults,
+      successes: accuracySuccesses,
+      hadHugePowerRerolls: hadRerolls,
+      riders,
+    } = prepareAttackAccuracy(getAttackStats(participant, attack).accuracy, {
+      bolster: bolsterAttackEnabled.value,
+      bolsterType: bolsterAttackType.value,
+      lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value,
+      hugePowerRank2: hugePowerRank2Enabled.value,
+    })
 
     // ALL attacks route through intercede-offer
     // Server handles: intercede offers, dodge requests, or NPC auto-resolve
@@ -1058,13 +1095,13 @@ async function confirmAttack(target: CombatParticipant | undefined) {
             dicePool: accuracyPool,
             attackStats: getAttackStats(participant, attack),
           },
-          bolstered: bolsterAttackEnabled.value,
-          bolsterType: bolsterAttackEnabled.value ? bolsterAttackType.value : undefined,
-          lifestealed: lifestealComplexEnabled.value || false,
-          hugePowerUsed: hugePowerEnabled.value,
-          hugePowerAttackRange: hugePowerEnabled.value ? attack.range : undefined,
-          hugePowerRank: hugePowerEnabled.value ? (hugePowerRank2Enabled.value ? 2 : 1) : undefined,
-          hugePowerTrackAll: hugePowerEnabled.value && !!eddySoulRules.value?.hugePowerOncePerTurn,
+          bolstered: riders.bolster,
+          bolsterType: riders.bolster ? riders.bolsterType : undefined,
+          lifestealed: riders.lifesteal || false,
+          hugePowerUsed: riders.hugePower,
+          hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
+          hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,
+          hugePowerTrackAll: riders.hugePower && !!eddySoulRules.value?.hugePowerOncePerTurn,
           isSignatureMove: !!(houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))),
           batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
         },
@@ -1075,9 +1112,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       // Add attack log entry
       const entity = getEntityDetails(participant)
       const targetEntity = getEntityDetails(target)
-      const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
-      const hadRerolls = hugePowerEnabled.value && originalDiceResults.some(d => d <= rerollThreshold)
-      const hpLabel = hugePowerRank2Enabled.value ? 'HP2 reroll' : 'HP reroll'
+      const hpLabel = riders.hugePowerRank2 ? 'HP2 reroll' : 'HP reroll'
       const logResult = hadRerolls
         ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => ${hpLabel} => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
         : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
@@ -1123,25 +1158,20 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     selectedAttack.value = null
     selectedTargetIds.value = []
 
-    const attackStats = getAttackStats(participant, attack)
-    let accuracyPool = attackStats.accuracy
-    if (bolsterAttackEnabled.value && bolsterAttackType.value === 'damage-accuracy') {
-      accuracyPool += 2
-    }
-    const accuracyDiceResults: number[] = []
-    for (let i = 0; i < accuracyPool; i++) {
-      accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
-    }
-    const originalDiceResults = [...accuracyDiceResults]
-    if (hugePowerEnabled.value) {
-      const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
-      for (let i = 0; i < accuracyDiceResults.length; i++) {
-        if (accuracyDiceResults[i] <= rerollThreshold) {
-          accuracyDiceResults[i] = Math.floor(Math.random() * 6) + 1
-        }
-      }
-    }
-    const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
+    const {
+      dicePool: accuracyPool,
+      rolls: accuracyDiceResults,
+      originalRolls: originalDiceResults,
+      successes: accuracySuccesses,
+      hadHugePowerRerolls: hadRerolls,
+      riders,
+    } = prepareAttackAccuracy(getAttackStats(participant, attack).accuracy, {
+      bolster: bolsterAttackEnabled.value,
+      bolsterType: bolsterAttackType.value,
+      lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value,
+      hugePowerRank2: hugePowerRank2Enabled.value,
+    })
 
     const sharedBody = {
       attackerId: participant.id,
@@ -1150,13 +1180,13 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       attackId: attack.id,
       attackName: attack.name,
       attackData: { dicePool: accuracyPool, attackStats: getAttackStats(participant, attack) },
-      bolstered: bolsterAttackEnabled.value,
-      bolsterType: bolsterAttackEnabled.value ? bolsterAttackType.value : undefined,
-      lifestealed: lifestealComplexEnabled.value || false,
-      hugePowerUsed: hugePowerEnabled.value,
-      hugePowerAttackRange: hugePowerEnabled.value ? attack.range : undefined,
-      hugePowerRank: hugePowerEnabled.value ? (hugePowerRank2Enabled.value ? 2 : 1) : undefined,
-      hugePowerTrackAll: hugePowerEnabled.value && !!eddySoulRules.value?.hugePowerOncePerTurn,
+      bolstered: riders.bolster,
+      bolsterType: riders.bolster ? riders.bolsterType : undefined,
+      lifestealed: riders.lifesteal || false,
+      hugePowerUsed: riders.hugePower,
+      hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
+      hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,
+      hugePowerTrackAll: riders.hugePower && !!eddySoulRules.value?.hugePowerOncePerTurn,
       isSignatureMove: !!(houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))),
       batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
     }
@@ -1185,9 +1215,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     const excludedSet = new Set<string>((currentEncounter.value as any)?.selectiveTargetingExcludedIds || [])
     const targetNames = targets.filter(t => !excludedSet.has(t.id))
       .map(t => getEntityDetails(t)?.name || 'Unknown').join(', ')
-    const rerollThreshold = hugePowerRank2Enabled.value ? 2 : 1
-    const hadRerolls = hugePowerEnabled.value && originalDiceResults.some(d => d <= rerollThreshold)
-    const hpLabel = hugePowerRank2Enabled.value ? 'HP2 reroll' : 'HP reroll'
+    const hpLabel = riders.hugePowerRank2 ? 'HP2 reroll' : 'HP reroll'
     const logResult = hadRerolls
       ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => ${hpLabel} => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
       : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
@@ -2155,11 +2183,7 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
   if (isEvolve && tamer) {
     // Partner digimon evolving — need willpower roll
     const target = evoOptions.evolveTargets.find((t: any) => t.chainIndex === targetChainIndex)
-    pendingDigivolve.value = { participant, targetChainIndex, targetSpecies: target?.species || 'Unknown', tamer }
-    pendingWarpChoice.value = null
-    willpowerRollResult.value = null
-    hasRolledWillpower.value = false
-    showWillpowerRollModal.value = true
+    openWillpower({ participant, targetChainIndex, targetSpecies: target?.species || 'Unknown', tamer })
     return
   }
 
@@ -2178,95 +2202,6 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
     console.error('Digivolve failed:', e)
     alert(e?.data?.message || 'Failed to digivolve')
   }
-}
-
-function rollWillpowerGM() {
-  if (!pendingDigivolve.value) return
-  const tamer = pendingDigivolve.value.tamer
-  const attrs = typeof tamer.attributes === 'string' ? JSON.parse(tamer.attributes as any) : tamer.attributes
-  const xpBonuses = typeof tamer.xpBonuses === 'string' ? JSON.parse(tamer.xpBonuses as any) : tamer.xpBonuses
-  const willpower = (attrs?.willpower || 0) + (xpBonuses?.attributes?.willpower || 0)
-  const rolls: number[] = []
-  for (let i = 0; i < 3; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
-  const total = rolls.reduce((a: number, b: number) => a + b, 0) + willpower
-  willpowerRollResult.value = { rolls, total }
-  hasRolledWillpower.value = true
-}
-
-// The rolling tamer's combat participant — holds the Inspiration a failed check can be re-rolled with
-const pendingDigivolveTamerParticipant = computed(() => {
-  if (!pendingDigivolve.value || !currentEncounter.value) return null
-  const tamerId = pendingDigivolve.value.tamer.id
-  return (currentEncounter.value.participants as CombatParticipant[])
-    .find(p => p.type === 'tamer' && p.entityId === tamerId) ?? null
-})
-
-// Failed Willpower check: spend 1 of the tamer's Inspiration to re-roll it
-async function rerollWillpowerWithInspirationGM() {
-  const tamerParticipant = pendingDigivolveTamerParticipant.value
-  if (!currentEncounter.value || !tamerParticipant || !willpowerRollResult.value) return
-  if ((tamerParticipant.currentInspiration ?? 0) < 1) return
-  willpowerRerollLoading.value = true
-  try {
-    // spendInspiration returns null on failure rather than throwing — only re-roll once it's paid
-    const result = await spendInspiration(currentEncounter.value.id, tamerParticipant.id, 'reroll', 1)
-    if (!result) {
-      alert('Failed to spend Inspiration')
-      return
-    }
-    rollWillpowerGM()
-  } finally {
-    willpowerRerollLoading.value = false
-  }
-}
-
-async function submitWillpowerRollGM() {
-  if (!currentEncounter.value || !willpowerRollResult.value || !pendingDigivolve.value) return
-
-  const dc = DIGIVOLVE_WILLPOWER_DC[campaignLevel.value]
-  const passed = willpowerRollResult.value.total >= dc
-
-  if (passed) {
-    const isWarp = !!pendingWarpChoice.value
-    const targetChainIndex = pendingWarpChoice.value?.chainIndex ?? pendingDigivolve.value.targetChainIndex
-    try {
-      await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
-        method: 'POST',
-        body: {
-          participantId: pendingDigivolve.value.participant.id,
-          targetChainIndex,
-          ...(isWarp ? { rollTotal: willpowerRollResult.value.total } : {}),
-        },
-      })
-    } catch (e: any) {
-      console.error('Digivolve failed:', e)
-      alert(e?.data?.message || 'Failed to digivolve')
-    }
-  } else {
-    try {
-      await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/digivolve-fail`, {
-        method: 'POST',
-        body: {
-          participantId: pendingDigivolve.value.participant.id,
-          targetSpecies: pendingDigivolve.value.targetSpecies,
-          rollTotal: willpowerRollResult.value.total,
-          dc,
-        },
-      })
-    } catch (e: any) {
-      console.error('Digivolve fail logging failed:', e)
-    }
-  }
-
-  showWillpowerRollModal.value = false
-  pendingDigivolve.value = null
-  pendingWarpChoice.value = null
-  await Promise.all([
-    fetchEncounter(currentEncounter.value.id),
-    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-    fetchEvolutionLines(),
-    fetchTamers(campaignId.value),
-  ])
 }
 
 // Get evolution options for a participant
@@ -2312,20 +2247,6 @@ function getParticipantEvolutionOptions(participant: CombatParticipant) {
     warpTargets,
   }
 }
-
-const warpAvailable = computed(() =>
-  eddySoulRules.value?.warpEvolution &&
-  willpowerRollResult.value &&
-  pendingDigivolve.value &&
-  willpowerRollResult.value.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel.value] + 5 &&
-  (getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets?.length ?? 0) > 0
-)
-
-const pendingDigivolveWarpTargets = computed(() =>
-  pendingDigivolve.value
-    ? getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets
-    : []
-)
 
 // Special Orders
 function getTamerSpecialOrders(participant: CombatParticipant) {
@@ -3233,90 +3154,6 @@ async function handleClashCheck(participantId: string) {
     await fetchEncounter(currentEncounter.value.id)
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash check')
-  }
-}
-
-// Clash Attack: open the floating attack picker (melee-only) for the controller. Picking an
-// attack rolls accuracy and submits to clash-action — see confirmClashAttack.
-function startClashAttack(participantId: string) {
-  if (!currentEncounter.value) return
-  const participant = (currentEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
-  if (!participant?.clash?.isController) return
-  clashAttackActorId.value = participantId
-}
-
-// Dispatch a picked clash attack: a charge (non-area) attack offers two options first (maintain
-// clash vs attack-then-move); everything else goes straight to confirmClashAttack.
-function pickClashAttack(participant: CombatParticipant, attack: any) {
-  const isCharge = (attack.tags ?? []).includes('Charge Attack')
-  const isArea = getAreaShape(attack.tags ?? []) !== null
-  if (isCharge && !isArea) {
-    clashChargeChoice.value = { participant, attack }
-    return
-  }
-  confirmClashAttack(participant, attack)
-}
-
-function chooseClashCharge(moveAfter: boolean) {
-  const c = clashChargeChoice.value
-  clashChargeChoice.value = null
-  if (c) confirmClashAttack(c.participant, c.attack, { endClash: moveAfter, moveAfter })
-}
-
-async function confirmClashAttack(participant: CombatParticipant, attack: any, opts?: { endClash?: boolean; moveAfter?: boolean }) {
-  if (!currentEncounter.value) return
-  const actorId = clashAttackActorId.value
-  clashAttackActorId.value = null
-  const clash = (participant as any).clash
-  if (!clash?.clashId || !actorId) return
-
-  // Area attack (Pass): route through the normal area-aim flow so the highlight renders and the
-  // attacker actually moves. confirmAreaAttack handles the clash context (force-include opponent,
-  // suppress intercede for the opponent, end the clash afterward).
-  if (getAreaShape(attack.tags ?? []) !== null) {
-    clashAreaAttack.value = { controllerId: actorId, opponentId: clash.opponentParticipantId }
-    showMapView.value = true
-    selectAttackAndShowTargets(participant, attack)
-    return
-  }
-
-  // Roll accuracy (5+ = 1 success), reusing the same dice math as a normal attack
-  const accuracyPool = getAttackStats(participant, attack).accuracy
-  const accuracyDiceResults: number[] = []
-  for (let i = 0; i < accuracyPool; i++) {
-    accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
-  }
-  const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
-
-  // Charge "move after" ends the clash; otherwise the clash is maintained. (Pass is handled above.)
-  const endClash = opts?.endClash ?? false
-
-  try {
-    const tamerId = participant.type === 'tamer' ? participant.entityId : undefined
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/clash-action`, {
-      method: 'POST',
-      body: {
-        clashId: clash.clashId,
-        participantId: actorId,
-        tamerId,
-        actionType: 'attack',
-        attackId: attack.id,
-        attackName: attack.name,
-        accuracySuccesses,
-        accuracyDiceResults,
-        accuracyDicePool: accuracyPool,
-        endClash,
-      },
-    })
-    await fetchEncounter(currentEncounter.value.id)
-    // Charge "move after": the clash has ended — let the controller charge away with a free move.
-    if (opts?.moveAfter) {
-      showMapView.value = true
-      await nextTick()
-      encounterMapRef.value?.startChargeAfterMove?.(actorId)
-    }
-  } catch (e: any) {
-    alert(e?.data?.message || 'Failed to execute clash attack')
   }
 }
 
@@ -5602,53 +5439,15 @@ function onMapAttackCancelled() {
         </div>
       </Teleport>
 
-      <!-- Clash Attack: melee attack picker (controller chooses a melee attack to use on the opponent) -->
-      <Teleport to="body">
-        <div
-          v-if="clashAttackActorId"
-          class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          @click.self="clashAttackActorId = null; clashChargeChoice = null"
-        >
-          <div class="bg-digimon-dark-800 rounded-xl p-6 max-w-md w-full max-h-[80vh] overflow-y-auto border-2 border-red-600">
-            <h2 class="text-xl font-display font-semibold text-white mb-1">Clash Attack</h2>
-            <!-- Charge attack: two options before resolving -->
-            <template v-if="clashChargeChoice">
-              <p class="text-xs text-digimon-dark-400 mb-4"><span class="font-semibold text-cyan-300">{{ clashChargeChoice.attack.name }}</span> has Charge. While clashing you may attack in place or attack then move.</p>
-              <div class="flex flex-col gap-2">
-                <button class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600" @click="chooseClashCharge(false)">
-                  <span class="font-semibold">Attack &amp; stay</span><span class="ml-2 text-xs text-digimon-dark-400">keep the clash</span>
-                </button>
-                <button class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600" @click="chooseClashCharge(true)">
-                  <span class="font-semibold">Attack &amp; move</span><span class="ml-2 text-xs text-digimon-dark-400">charge away, ends the clash</span>
-                </button>
-              </div>
-              <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashChargeChoice = null">Back</button>
-            </template>
-            <template v-else>
-              <p class="text-xs text-digimon-dark-400 mb-4">Choose a melee attack to use on the clash opponent. The target rolls half their Dodge pool.</p>
-              <div v-if="clashAttackOptions.length === 0" class="text-sm text-digimon-dark-400 italic">No melee attacks available.</div>
-              <div class="flex flex-col gap-2">
-                <button
-                  v-for="attack in clashAttackOptions"
-                  :key="attack.id"
-                  class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-                  @click="pickClashAttack(clashAttackParticipant!, attack)"
-                >
-                  <span class="font-semibold">{{ attack.name }}</span>
-                  <span class="ml-2 text-xs text-digimon-dark-400 capitalize">{{ attack.range }}</span>
-                  <span v-if="getAttackBadges(attack).aoe || getAttackBadges(attack).charge || getAttackBadges(attack).ap || getAttackBadges(attack).effect" class="mt-1 flex flex-wrap gap-1">
-                    <span v-if="getAttackBadges(attack).aoe" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300">{{ getAttackBadges(attack).aoe }}</span>
-                    <span v-if="getAttackBadges(attack).charge" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Charge</span>
-                    <span v-if="getAttackBadges(attack).ap" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/20 text-red-300">{{ getAttackBadges(attack).ap }}</span>
-                    <span v-if="getAttackBadges(attack).effect" class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-300">{{ getAttackBadges(attack).effect }}</span>
-                  </span>
-                </button>
-              </div>
-              <button class="mt-4 w-full text-xs text-digimon-dark-500 hover:text-white" @click="clashAttackActorId = null">Cancel</button>
-            </template>
-          </div>
-        </div>
-      </Teleport>
+      <ClashAttackDialog
+        :open="!!clashAttackActorId"
+        :attacks="clashAttackOptions"
+        :charge-attack="clashChargeChoice?.attack ?? null"
+        @pick="clashAttackParticipant && pickClashAttack(clashAttackParticipant, $event)"
+        @choose-charge="chooseClashCharge"
+        @back="backToClashAttacks"
+        @close="cancelClashAttack"
+      />
 
       <!-- Target Selection Modal -->
       <Teleport to="body">
@@ -5866,131 +5665,25 @@ function onMapAttackCancelled() {
       </div>
     </Teleport>
 
-    <!-- Willpower Roll Modal (for digivolution) -->
-    <Teleport to="body">
-      <div
-        v-if="showWillpowerRollModal && pendingDigivolve"
-        class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
-      >
-        <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-purple-500">
-          <h2 class="font-display text-xl font-semibold text-purple-400 mb-4">
-            Willpower Check — Digivolve to {{ pendingDigivolve.targetSpecies }}
-          </h2>
-
-          <div class="mb-4 p-3 bg-purple-900/20 rounded-lg">
-            <p class="text-white text-sm">
-              <span class="font-semibold">{{ pendingDigivolve.tamer.name }}</span> must pass a Willpower check
-            </p>
-            <p class="text-white text-sm mt-1">
-              DC <span class="font-semibold">{{ DIGIVOLVE_WILLPOWER_DC[campaignLevel] }}</span>
-              <span class="text-digimon-dark-400 ml-1">({{ campaignLevel }})</span>
-            </p>
-            <p class="text-digimon-dark-300 text-sm mt-1">
-              3d6 + {{ ((typeof pendingDigivolve.tamer.attributes === 'string' ? JSON.parse(pendingDigivolve.tamer.attributes as any) : pendingDigivolve.tamer.attributes)?.willpower || 0) + ((typeof pendingDigivolve.tamer.xpBonuses === 'string' ? JSON.parse(pendingDigivolve.tamer.xpBonuses as any) : pendingDigivolve.tamer.xpBonuses)?.attributes?.willpower || 0) }} (Willpower)
-            </p>
-          </div>
-
-          <!-- Dice Roller -->
-          <div class="mb-4">
-            <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
-              <div class="flex gap-2 items-center justify-center mb-4">
-                <span class="text-white font-semibold">3d6 + Willpower</span>
-              </div>
-
-              <button
-                :disabled="hasRolledWillpower"
-                @click="rollWillpowerGM"
-                :class="[
-                  'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
-                  hasRolledWillpower ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'
-                ]"
-              >
-                {{ hasRolledWillpower ? 'Already Rolled' : 'Roll Willpower' }}
-              </button>
-            </div>
-
-            <div
-              v-if="willpowerRollResult"
-              class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center"
-            >
-              <div class="text-sm text-digimon-dark-400 mb-2">Willpower Roll</div>
-              <div class="flex justify-center gap-1 mb-2">
-                <span
-                  v-for="(die, idx) in willpowerRollResult.rolls"
-                  :key="idx"
-                  class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-digimon-dark-600 text-white"
-                >
-                  {{ die }}
-                </span>
-                <span class="w-8 h-8 flex items-center justify-center text-digimon-dark-400 font-bold">+</span>
-                <span class="w-8 h-8 flex items-center justify-center rounded font-bold text-sm bg-purple-700 text-white">
-                  {{ ((typeof pendingDigivolve.tamer.attributes === 'string' ? JSON.parse(pendingDigivolve.tamer.attributes as any) : pendingDigivolve.tamer.attributes)?.willpower || 0) + ((typeof pendingDigivolve.tamer.xpBonuses === 'string' ? JSON.parse(pendingDigivolve.tamer.xpBonuses as any) : pendingDigivolve.tamer.xpBonuses)?.attributes?.willpower || 0) }}
-                </span>
-              </div>
-              <div class="text-3xl font-bold mb-1" :class="willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? 'text-green-400' : 'text-red-400'">
-                {{ willpowerRollResult.total }}
-              </div>
-              <div class="text-sm" :class="willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? 'text-green-400' : 'text-red-400'">
-                {{ willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? 'SUCCESS' : 'FAILURE' }}
-                <span class="text-digimon-dark-400 ml-1">(vs DC {{ DIGIVOLVE_WILLPOWER_DC[campaignLevel] }})</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Warp Evolution offer (shown when roll exceeds DC by 5+) -->
-          <div v-if="warpAvailable" class="bg-violet-900/20 border border-violet-500 rounded-lg p-3 mb-3">
-            <p class="text-violet-300 text-sm font-semibold mb-1">Warp Evolution Available!</p>
-            <p class="text-digimon-dark-300 text-xs mb-2">Roll exceeded DC by 5+. You may warp to a further stage instead:</p>
-            <div class="flex flex-wrap gap-2">
-              <button
-                v-for="wt in pendingDigivolveWarpTargets"
-                :key="wt.chainIndex"
-                @click="pendingWarpChoice = pendingWarpChoice?.chainIndex === wt.chainIndex ? null : { chainIndex: wt.chainIndex, species: wt.species }"
-                :class="[
-                  'text-xs px-3 py-1.5 rounded font-medium transition-colors',
-                  pendingWarpChoice?.chainIndex === wt.chainIndex
-                    ? 'bg-violet-600 text-white'
-                    : 'bg-violet-900/40 hover:bg-violet-700 text-violet-300'
-                ]"
-              >
-                {{ pendingWarpChoice?.chainIndex === wt.chainIndex ? '✓ ' : '' }}Warp → {{ wt.species }}
-              </button>
-            </div>
-          </div>
-
-          <div class="flex gap-2">
-            <!-- Once rolled the check must be resolved: no Cancel. A failure can be re-rolled with Inspiration. -->
-            <button
-              v-if="!hasRolledWillpower"
-              @click="showWillpowerRollModal = false; pendingDigivolve = null; pendingWarpChoice = null"
-              class="flex-1 bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              v-else-if="willpowerRollResult && willpowerRollResult.total < DIGIVOLVE_WILLPOWER_DC[campaignLevel] && (pendingDigivolveTamerParticipant?.currentInspiration ?? 0) >= 1"
-              :disabled="willpowerRerollLoading"
-              @click="rerollWillpowerWithInspirationGM"
-              class="flex-1 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            >
-              ✦ Spend Inspiration
-              <span class="block text-xs font-normal text-yellow-200/70">Re-roll · {{ pendingDigivolveTamerParticipant?.currentInspiration ?? 0 }} left</span>
-            </button>
-            <button
-              :disabled="!willpowerRollResult || willpowerRerollLoading"
-              @click="submitWillpowerRollGM"
-              :class="[
-                'flex-1 text-white px-4 py-2 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-                !willpowerRollResult ? 'bg-digimon-dark-600 opacity-50 cursor-not-allowed' :
-                willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? (pendingWarpChoice ? 'bg-violet-600 hover:bg-violet-700' : 'bg-green-600 hover:bg-green-700') : 'bg-red-600 hover:bg-red-700'
-              ]"
-            >
-              {{ willpowerRollResult && willpowerRollResult.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel] ? (pendingWarpChoice ? `Warp → ${pendingWarpChoice.species}!` : 'Digivolve!') : 'Accept Failure' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <DigivolveWillpowerDialog
+      v-if="pendingDigivolve"
+      :target-species="pendingDigivolve.targetSpecies"
+      :tamer-name="pendingDigivolve.tamer.name"
+      :campaign-level="campaignLevel"
+      :dc="willpowerDC"
+      :modifier="willpowerModifier"
+      :roll-result="willpowerRollResult"
+      :inspiration="willpowerInspiration"
+      :loading="willpowerLoading"
+      :warp-available="warpAvailable"
+      :warp-targets="pendingDigivolveWarpTargets"
+      :warp-choice="pendingWarpChoice"
+      @roll="rollWillpowerGM"
+      @reroll="rerollWillpowerWithInspirationGM"
+      @cancel="cancelWillpower"
+      @confirm="submitWillpowerRollGM"
+      @toggle-warp="toggleWillpowerWarp"
+    />
 
     <!-- GM Intercede Modal -->
     <Teleport to="body">
