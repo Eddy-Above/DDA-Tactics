@@ -12,6 +12,7 @@ import { loadDamageOverTimeRules } from './damageOverTime'
 import { hasUnusedTimeControl, knockedOutEnemyIds, resolveEnemyKnockouts, triggerTimeControl } from './enemyKnockouts'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
+import { refreshGuidingLightForParticipants } from './guidingLight'
 
 interface ResolveNpcAttackParams {
   participants: any[]
@@ -452,6 +453,14 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   )
   participants = knockout.participants
   if (knockout.positionPatch) positionPatch = { ...(positionPatch ?? {}), ...knockout.positionPatch }
+  // Partner auto-devolution is resolved above, before the knockout helper sees the new form.
+  // Its changed BIT and footprint must affect the aura without requiring another move.
+  if (autoDevolveLog || (knockout.changed && params.participantPositions)) {
+    const positions = params.participantPositions
+      ? { ...params.participantPositions, ...(positionPatch ?? {}) }
+      : undefined
+    participants = await refreshGuidingLightForParticipants(params.encounterId, participants, positions)
+  }
   const turnMoved = knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex
   const nextTurnIndex = params.turnOrder && turnMoved ? knockout.currentTurnIndex : undefined
   const nextRound = knockout.round !== params.round ? knockout.round : undefined

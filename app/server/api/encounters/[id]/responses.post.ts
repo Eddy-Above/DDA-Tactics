@@ -13,6 +13,7 @@ import { getOutsideClashArmorBonus } from '../../../utils/clashArmor'
 import { isImmuneToEffect } from '../../../utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../utils/enemyKnockouts'
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
+import { refreshGuidingLightForParticipants } from '../../../utils/guidingLight'
 
 interface SubmitResponseBody {
   requestId: string
@@ -1023,6 +1024,12 @@ export default defineEventHandler(async (event) => {
           updateData.currentTurnIndex = knockout.currentTurnIndex
           updateData.round = knockout.round
         }
+      }
+
+      // A knockout can change the target's form without moving it. Rebuild its aura from
+      // the final in-memory roster, including any reflected-damage knockout above.
+      if (autoDevolveLog) {
+        updateData.participants = await refreshGuidingLightForParticipants(encounterId, participants)
       }
 
     } // end damage attack branch

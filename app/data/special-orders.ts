@@ -23,7 +23,7 @@ export const specialOrdersData: Record<string, { name: string; type: string; eff
   charisma: [
     { name: 'Swagger', type: 'Once Per Battle / Simple', effect: 'Taunt for 3 rounds, auto-aggro at CPUx2' },
     { name: 'Peak Performance', type: 'Once Per Day / Complex', effect: 'Bastion buff: +2 to all stats except health for 1 round' },
-    { name: 'Guiding Light', type: 'Passive', effect: '+2 Accuracy to allies in burst radius, +1 Dodge per ally in radius' },
+    { name: 'Guiding Light', type: 'Passive', effect: '+2 Accuracy to allied Digimon in burst radius, +1 Dodge per allied Digimon in radius' },
   ],
   intelligence: [
     { name: 'Quick Reaction', type: 'Once Per Day / Intercede', effect: 'Gain Stage Bonus+2 Dodge Dice for the round (diminishing)' },

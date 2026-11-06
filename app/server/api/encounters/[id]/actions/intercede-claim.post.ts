@@ -25,7 +25,7 @@ import { calculateDigimonDerivedStats, type EddySoulRules } from '~/types'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
-import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
+import { recomputeGuidingLightForEncounter, refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
 import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
@@ -603,6 +603,7 @@ export default defineEventHandler(async (event) => {
           currentTurnIndex: encounter.currentTurnIndex || 0,
           houseRules,
           encounterId: encounterId!,
+          positions: updatedParticipantPositions ?? participantPositions,
         })
         participants = resolved.participants
         battleLog = resolved.battleLog
@@ -797,6 +798,7 @@ export default defineEventHandler(async (event) => {
         currentTurnIndex: encounter.currentTurnIndex || 0,
         houseRules,
         encounterId: encounterId!,
+        positions: updatedParticipantPositions ?? participantPositions,
       })
       participants = resolved.participants
       battleLog = resolved.battleLog
@@ -851,6 +853,13 @@ export default defineEventHandler(async (event) => {
           effects: ['Auto-Devolve'],
         }
       }
+    }
+
+    // Devolution changes the aura even if the interceptor stayed on its original cell.
+    if (autoDevolveLog) {
+      participants = await refreshGuidingLightForParticipants(
+        encounterId, participants, updatedParticipantPositions ?? participantPositions,
+      )
     }
 
     const fallEffectsDmg = fallDamageToApply > 0

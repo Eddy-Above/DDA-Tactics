@@ -8,6 +8,7 @@ import { applyEndOfTurnGravity, computeGravityDrops } from './endOfTurnGravity'
 import { loadParticipantDigimon } from './combatSpatial'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
+import { refreshGuidingLightForParticipants } from './guidingLight'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -380,6 +381,15 @@ export async function resolveEnemyKnockouts(
   }
 
   if (turnOrder.length === 0) currentTurnIndex = 0
+
+  // A removal or devolution changes the aura even when no token moved. Keep the refreshed
+  // effects in the array the caller saves, using any gravity positions not yet broadcast.
+  if (changed) {
+    const positions = ctx.gravity && ctx.gravity !== 'room'
+      ? { ...ctx.gravity.positions, ...(positionPatch ?? {}) }
+      : undefined
+    participants = await refreshGuidingLightForParticipants(ctx.encounterId, participants, positions)
+  }
 
   return { participants, turnOrder, currentTurnIndex, round, logEntries, positionPatch, removedIds, turnAdvanced, changed }
 }

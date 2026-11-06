@@ -148,8 +148,8 @@ export const EFFECT_STAT_MODIFIERS: Record<string, { accuracy?: number; damage?:
   'Swiftness': { dodge: 1, accuracy: 1 },
   'Vigilance': { dodge: 1, armor: 1 },
   'Vigor': { dodge: 1 },
-  'Guiding Light': { accuracy: 2 },          // [Guiding Light] aura: +2 Accuracy to allies in the owner's burst radius
-  'Guiding Light (Focus)': { dodge: 1 },     // [Guiding Light] aura: owner gets +1 Dodge per ally in its burst radius (potency = ally count)
+  'Guiding Light': { accuracy: 2 },          // +2 Accuracy to allied Digimon whose footprints intersect the source's ranged Burst
+  'Guiding Light (Focus)': { dodge: 1 },     // +1 Dodge per qualifying allied Digimon (potency = count; excludes the source)
   // Boss effects
   'Frenzy': { damage: 1 },   // BIT½ damage buff; potency stored as Math.floor(BIT/2) via special case below
   // Debuffs
