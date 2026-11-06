@@ -143,12 +143,12 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {
-  GameMap, Vec3, CombatParticipant, ElementType, MapTool, DigimonSize,
+  GameMap, MapVoxel, Vec3, CombatParticipant, ElementType, MapTool, DigimonSize,
   DestructibleState, WallFace, Stance, EddySoulRules,
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
-import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
+import { getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { buildVoxelSurface } from '~/utils/voxelSurface'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
@@ -722,11 +722,14 @@ function clearTransparentVoxelOutline() {
 }
 
 // Keep separate meshes/userData for cell picking, but render only the outside of
-// the visible transparent volume. Recompute at a floor cut to expose its new top.
+// each visible transparent element/material volume. Recompute at a floor cut to expose its new top.
 function refreshTransparentVoxels() {
   clearTransparentVoxelOutline()
   const meshes = voxelMeshes.filter(mesh => mesh.userData.transparentVoxel && mesh.userData.floorY <= clipY.value)
-  const surface = buildVoxelSurface(meshes.map(mesh => mesh.userData.voxel as Vec3))
+  const surface = buildVoxelSurface(meshes.map(mesh => mesh.userData.voxel as MapVoxel), voxel => {
+    const materialId = getVoxelMaterialId(voxel)
+    return JSON.stringify([materialId, voxel.element ?? materialId])
+  })
 
   for (const mesh of meshes) {
     const voxel = mesh.userData.voxel as Vec3

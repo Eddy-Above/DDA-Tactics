@@ -11,12 +11,36 @@ function cellKey(x: number, y: number, z: number): string {
   return `${x},${y},${z}`
 }
 
-/** Exposed faces and crease edges of a union of unit voxels. Flat face seams are omitted. */
-export function buildVoxelSurface(cells: readonly Vec3[]): {
+/** Exposed faces and crease edges. Flat seams within each optional group are omitted. */
+export function buildVoxelSurface<T extends Vec3>(cells: readonly T[], groupForCell?: (cell: T) => string): {
   exposedFaces: Map<string, number[]>
   outlinePositions: number[]
 } {
   const occupied = new Map(cells.map(cell => [cellKey(cell.x, cell.y, cell.z), cell]))
+  if (groupForCell) {
+    const groups = new Map<string, T[]>()
+    for (const cell of occupied.values()) {
+      const group = groupForCell(cell)
+      const members = groups.get(group)
+      if (members) members.push(cell)
+      else groups.set(group, [cell])
+    }
+
+    const exposedFaces = new Map<string, number[]>()
+    const edges = new Map<string, number[]>()
+    for (const members of groups.values()) {
+      const surface = buildVoxelSurface(members)
+      for (const [key, faces] of surface.exposedFaces) exposedFaces.set(key, faces)
+      for (let i = 0; i < surface.outlinePositions.length; i += 6) {
+        const edge = surface.outlinePositions.slice(i, i + 6)
+        // The base helper always emits edges in the positive axis direction.
+        // Draw a shared material boundary once, avoiding darker doubled lines.
+        edges.set(edge.join(','), edge)
+      }
+    }
+    return { exposedFaces, outlinePositions: [...edges.values()].flat() }
+  }
+
   const exposedFaces = new Map<string, number[]>()
   const outlinePositions: number[] = []
   const visitedEdges = new Set<string>()
