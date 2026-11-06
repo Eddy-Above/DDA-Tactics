@@ -149,6 +149,7 @@ import type {
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getVoxelColor, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
+import { buildVoxelSurface } from '~/utils/voxelSurface'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
@@ -427,6 +428,7 @@ let buildMeshes: THREE.Object3D[] = []
 let spawnMeshes: THREE.Object3D[] = []
 let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
 let voxelMeshes: THREE.Mesh[] = []
+let transparentVoxelOutline: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null
 let doorMeshes = new Map<string, THREE.Mesh>()  // doorId → door panel
 // Game-rules line of sight (single-target reticules + area shapes), rebuilt with the scene.
 let losIndex: LosIndex | null = null
@@ -576,6 +578,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   cancelAnimationFrame(rafId)
+  clearTransparentVoxelOutline()
   renderer?.dispose()
   window.removeEventListener('resize', onResize)
   window.removeEventListener('keydown', onKeyDown)
@@ -710,8 +713,44 @@ function makeBlendTexture(center: number, n?: number, s?: number, e?: number, w?
 }
 
 // ── Map building ───────────────────────────────────────────────────────────
+function clearTransparentVoxelOutline() {
+  if (!transparentVoxelOutline) return
+  scene.remove(transparentVoxelOutline)
+  transparentVoxelOutline.geometry.dispose()
+  transparentVoxelOutline.material.dispose()
+  transparentVoxelOutline = null
+}
+
+// Keep separate meshes/userData for cell picking, but render only the outside of
+// the visible transparent volume. Recompute at a floor cut to expose its new top.
+function refreshTransparentVoxels() {
+  clearTransparentVoxelOutline()
+  const meshes = voxelMeshes.filter(mesh => mesh.userData.transparentVoxel && mesh.userData.floorY <= clipY.value)
+  const surface = buildVoxelSurface(meshes.map(mesh => mesh.userData.voxel as Vec3))
+
+  for (const mesh of meshes) {
+    const voxel = mesh.userData.voxel as Vec3
+    const faces = surface.exposedFaces.get(vec3Key(voxel)) ?? []
+    const geometry = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+    const boxIndices = geometry.getIndex()!
+    const indices = faces.flatMap(face => Array.from({ length: 6 }, (_, i) => boxIndices.getX(face * 6 + i)))
+    geometry.setIndex(indices)
+    geometry.clearGroups()
+    mesh.geometry.dispose()
+    mesh.geometry = geometry
+  }
+
+  if (!surface.outlinePositions.length) return
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(surface.outlinePositions, 3))
+  const material = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false })
+  transparentVoxelOutline = new THREE.LineSegments(geometry, material)
+  scene.add(transparentVoxelOutline)
+}
+
 function buildMap() {
   losIndex = null
+  clearTransparentVoxelOutline()
   if (!props.map) return
   const map = props.map
   const destroyedIds = new Set(props.destructibleStates.filter(s => s.currentWounds <= 0).map(s => s.structureId))
@@ -804,18 +843,20 @@ function buildMap() {
     mesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + 0.5, voxel.z + 0.5)
     mesh.castShadow = true
     mesh.receiveShadow = true
-    mesh.userData = { type: 'voxel', voxel, floorY: voxel.y }
+    mesh.userData = { type: 'voxel', voxel, floorY: voxel.y, transparentVoxel: opacity < 1 }
     scene.add(mesh)
     buildMeshes.push(mesh)
     voxelMeshes.push(mesh)
 
-    const edgesGeo = new THREE.EdgesGeometry(geo)
-    const edgeMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
-    const edges = new THREE.LineSegments(edgesGeo, edgeMat)
-    edges.position.copy(mesh.position)
-    edges.userData = { floorY: voxel.y }
-    scene.add(edges)
-    buildMeshes.push(edges)
+    if (opacity >= 1) {
+      const edgesGeo = new THREE.EdgesGeometry(geo)
+      const edgeMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+      const edges = new THREE.LineSegments(edgesGeo, edgeMat)
+      edges.position.copy(mesh.position)
+      edges.userData = { floorY: voxel.y }
+      scene.add(edges)
+      buildMeshes.push(edges)
+    }
 
     if (voxel.isSpawnPoint) {
       const spawnGeo = new THREE.PlaneGeometry(TILE_SIZE * 0.72, TILE_SIZE * 0.72)
@@ -830,6 +871,8 @@ function buildMap() {
       spawnMeshes.push(spawnMesh)
     }
   }
+
+  refreshTransparentVoxels()
 
   // Walls — frame-only when a window or door is present
   const walledWindowIds = new Set(map.windows.map(w => w.wallId))
@@ -2524,6 +2567,7 @@ watch(clipY, (y) => {
   if (props.showSpawnIndicators === false) {
     for (const m of spawnMeshes) m.visible = false
   }
+  refreshTransparentVoxels()
 })
 
 watch(() => props.showSpawnIndicators, (show) => {
