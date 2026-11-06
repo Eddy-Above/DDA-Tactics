@@ -1,12 +1,14 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, campaigns, digimon, tamers, type Digimon, type Tamer } from '../db'
+import { db, encounters, digimon, tamers, type Digimon, type Tamer } from '../db'
 import type { Vec3 } from '../../types'
 import { applyEffectToParticipant } from './applyEffect'
 import { getUnlockedSpecialOrders } from '../../utils/specialOrders'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
-import { chebyshev } from './gridDistance'
+import { computeAreaCells } from '../../utils/areaShapes'
+import { getFootprintCells, getFootprintDimensions } from '../../utils/movementRules'
 import { getRoomPositions, broadcast } from './encounterRoom'
 import { buildEncounterPayload } from './encounterPayload'
+import { loadEncounterCombatContext } from './combatContext'
 
 const AURA_NAME = 'Guiding Light'
 const FOCUS_NAME = 'Guiding Light (Focus)'
@@ -24,8 +26,8 @@ function removeAura(effects: any[], name: string): any[] {
 
 /**
  * Recomputes the [Guiding Light] aura across all participants: any eligible Digimon (its
- * partner Tamer's Charisma has unlocked Guiding Light) grants +2 Accuracy to allies within its
- * burst radius, and itself gains +1 Dodge per ally currently in that radius. Pure/idempotent —
+ * partner Tamer's Charisma has unlocked Guiding Light) grants +2 Accuracy to allied Digimon within
+ * its ranged Burst, and itself gains +1 Dodge per allied Digimon in that area. Idempotent —
  * safe to call on every position change; a target only in range of one source, in case two
  * owners' radii overlap the same ally (mirrors how other PERMANENT_EFFECTS like Shield replace
  * rather than stack).
@@ -37,7 +39,6 @@ export async function applyGuidingLightAuras(
   houseRules?: { stunMaxDuration1?: boolean }
 ): Promise<{ participants: any[]; changed: boolean }> {
   const digimonParticipants = participants.filter((p) => p.type === 'digimon' && !p.inReserve)
-  if (digimonParticipants.length === 0) return { participants, changed: false }
 
   const digimonRows = new Map<string, Digimon>()
   for (const p of digimonParticipants) {
@@ -56,6 +57,14 @@ export async function applyGuidingLightAuras(
     return t
   }
 
+  const footprints = new Map<string, Vec3[]>()
+  for (const p of digimonParticipants) {
+    const position = positions[p.id]
+    const record = digimonRows.get(p.entityId)
+    if (!position || !record) continue
+    footprints.set(p.id, getFootprintCells(position, getFootprintDimensions(record.size, record.giganticDimensions)))
+  }
+
   // Every eligible Guiding Light source and the allies currently within its burst radius
   const sources: { ownerId: string; allyIds: Set<string> }[] = []
   for (const p of digimonParticipants) {
@@ -70,15 +79,20 @@ export async function applyGuidingLightAuras(
 
     const derived = await getDigimonDerivedStats(p.entityId)
     if (!derived) continue
-    const radius = 1 + derived.bit + 1
+    // Use the map's actual Burst cells and full target footprints, including height. An
+    // anchor-distance check overreaches diagonally and misses the far side of large units.
+    const burstCells = new Set(computeAreaCells(
+      'burst', 'ranged', ownerPos, { x: 0, y: 0, z: 0 }, derived.bit, 0, 0,
+      getFootprintDimensions(d.size, d.giganticDimensions),
+    ).map(cell => `${cell.x},${cell.y},${cell.z}`))
 
     const allyIds = new Set<string>()
-    for (const other of participants) {
-      if (other.id === p.id || other.inReserve) continue
-      const otherPos = positions[other.id]
-      if (!otherPos) continue
+    for (const other of digimonParticipants) {
+      if (other.id === p.id) continue
       if ((other.isEnemy ?? false) !== (p.isEnemy ?? false)) continue
-      if (chebyshev(ownerPos, otherPos) <= radius) allyIds.add(other.id)
+      if (footprints.get(other.id)?.some(cell => burstCells.has(`${cell.x},${cell.y},${cell.z}`))) {
+        allyIds.add(other.id)
+      }
     }
     sources.push({ ownerId: p.id, allyIds })
   }
@@ -95,7 +109,8 @@ export async function applyGuidingLightAuras(
 
   let changed = false
   const updated = participants.map((p) => {
-    let effects: any[] = p.activeEffects || []
+    const originalEffects: any[] = p.activeEffects || []
+    let effects = originalEffects
 
     const ownerId = buffedBy.get(p.id)
     effects = ownerId
@@ -107,7 +122,8 @@ export async function applyGuidingLightAuras(
       ? applyAura(effects, FOCUS_NAME, p.id, count, `+1 Dodge per ally in [Guiding Light] radius (${count} allies)`, houseRules)
       : removeAura(effects, FOCUS_NAME)
 
-    if (effects === (p.activeEffects || [])) return p
+    // Still run cleanup when no Digimon remain, so old effects cannot linger on Tamers.
+    if (effects === originalEffects) return p
     changed = true
     return { ...p, activeEffects: effects }
   })
@@ -115,19 +131,26 @@ export async function applyGuidingLightAuras(
   return changed ? { participants: updated, changed } : { participants, changed: false }
 }
 
-async function recomputeGuidingLightForEncounterOnce(encounterId: string): Promise<boolean> {
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  if (!encounter || encounter.phase !== 'combat') return false
+// Refresh an action's own participant array before its caller persists it. Re-reading and
+// writing participants independently here could overwrite wounds or a form change in flight.
+export async function refreshGuidingLightForParticipants(
+  encounterId: string | undefined,
+  participants: any[],
+  positions?: Record<string, Vec3>,
+): Promise<any[]> {
+  const context = await loadEncounterCombatContext(encounterId)
+  if (!context) return participants
 
-  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
-  let houseRules: { stunMaxDuration1?: boolean } | undefined
-  if (encounter.campaignId) {
-    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
-    if (campaign) {
-      campaignLevel = campaign.level
-      houseRules = (campaign.rulesSettings || {}).houseRules
-    }
-  }
+  const result = await applyGuidingLightAuras(
+    participants, positions ?? await getRoomPositions(context.encounter.id), context.campaignLevel, context.houseRules,
+  )
+  return result.participants
+}
+
+async function recomputeGuidingLightForEncounterOnce(encounterId: string): Promise<boolean> {
+  const context = await loadEncounterCombatContext(encounterId)
+  if (!context) return false
+  const { encounter, campaignLevel, houseRules } = context
 
   const positions = await getRoomPositions(encounterId)
   const { participants, changed } = await applyGuidingLightAuras(

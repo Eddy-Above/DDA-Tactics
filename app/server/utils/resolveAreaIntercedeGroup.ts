@@ -7,6 +7,8 @@ import { applyEffectToParticipant } from '~/server/utils/applyEffect'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
 import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
+import { refreshGuidingLightForParticipants } from './guidingLight'
+import type { Vec3 } from '../../types'
 
 export interface AreaAttackClaim {
   interceptorParticipantId: string
@@ -77,6 +79,7 @@ interface ResolveGroupParams {
   currentTurnIndex: number
   houseRules?: any
   encounterId: string
+  positions?: Record<string, Vec3>
 }
 
 /**
@@ -94,6 +97,7 @@ export async function resolveAreaIntercedeGroup({
   currentTurnIndex,
   houseRules,
   encounterId,
+  positions,
 }: ResolveGroupParams): Promise<{
   participants: any[]
   battleLog: any[]
@@ -145,6 +149,7 @@ export async function resolveAreaIntercedeGroup({
   })
 
   // Auto-devolve check for each interceptor that was KO'd
+  let claimFormChanged = false
   for (const claim of claims) {
     if (claim.isSupportAttack || claim.damageDealt <= 0) continue
     const interceptor = updatedParticipants.find((p: any) => p.id === claim.interceptorParticipantId)
@@ -156,6 +161,7 @@ export async function resolveAreaIntercedeGroup({
       if (previousState) {
         const oldEntityId = interceptor.entityId
         interceptor.entityId = previousState.entityId
+        claimFormChanged = true
         interceptor.maxWounds = previousState.maxWounds
         interceptor.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
 
@@ -255,6 +261,12 @@ export async function resolveAreaIntercedeGroup({
     updatedBattleLog.push(...knockout.logEntries)
     if (knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex) groupNextTurnIndex = knockout.currentTurnIndex
     if (knockout.round !== round) groupNextRound = knockout.round
+  }
+
+  // A shrinking or removed interceptor can change another target's Dodge bonus. Refresh
+  // before uncovered targets roll, including the current claim's unbroadcast positions.
+  if (claimFormChanged || knockout.changed) {
+    updatedParticipants = await refreshGuidingLightForParticipants(encounterId, updatedParticipants, positions)
   }
 
   // Targets that were not claimed by any interceptor
@@ -410,6 +422,7 @@ export async function resolveAreaIntercedeGroup({
         clashAttack: groupData.clashAttack,
         totalTargetCount: originalTargetIds.length,
         encounterId,
+        participantPositions: positions,
       })
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog

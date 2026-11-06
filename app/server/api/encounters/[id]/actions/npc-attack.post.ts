@@ -11,6 +11,7 @@ import { applyEndOfTurnGravity } from '../../../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQualityTriggers'
 import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect, damageOverTimeRules } from '../../../../utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
+import { refreshGuidingLightForParticipants } from '../../../../utils/guidingLight'
 
 interface NpcAttackBody {
   participantId: string
@@ -731,9 +732,15 @@ export default defineEventHandler(async (event) => {
   { encounterId, houseRules, campaignLevel, mapId: (encounter as any).mapId, gravity: 'room' })
   const turnStateChanged = !!npcDefeatedLog || knockout.changed
 
+  // This legacy path handles the primary target's devolution/removal before the shared
+  // knockout resolver sees it. Refresh from that final roster before the existing save.
+  const participantsForSave = autoDevolveLog || npcDefeatedLog
+    ? await refreshGuidingLightForParticipants(encounterId, knockout.participants)
+    : knockout.participants
+
   // Update encounter
   const updateData: any = {
-    participants: knockout.participants,
+    participants: participantsForSave,
     battleLog: [...updatedBattleLog, ...knockout.logEntries],
     ...(turnStateChanged ? { turnOrder: knockout.turnOrder, currentTurnIndex: knockout.currentTurnIndex, round: knockout.round } : {}),
     updatedAt: new Date(),

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
 import { resolveParticipantName } from './participantName'
+import { getEffectStatModifiers } from '../../data/attackConstants'
 
 interface TriggerCounterattackParams {
   participants: any[]
@@ -124,7 +125,9 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   // Determine accuracy pool
   const baseStats = counterattackerDigimon.baseStats
   const bonusStats = (counterattackerDigimon as any).bonusStats
-  const accuracyPool = Math.max(1, (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0) || 3)
+  const baseAccuracy = (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0) || 3
+  const effectModifiers = getEffectStatModifiers(counterattacker.activeEffects || [])
+  const accuracyPool = Math.max(1, baseAccuracy + effectModifiers.accuracy)
 
   // Roll accuracy dice server-side
   const accuracyDiceResults: number[] = []

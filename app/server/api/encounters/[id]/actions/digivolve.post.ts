@@ -1,8 +1,11 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, evolutionLines, tamers, campaigns } from '../../../../db'
+import { db, encounters, digimon, evolutionLines, tamers } from '../../../../db'
 import { STAGE_CONFIG } from '../../../../../types'
-import type { DigimonStage, CampaignRulesSettings } from '../../../../../types'
+import type { DigimonStage } from '../../../../../types'
 import { getDigizoidArmorBonus } from '../../../../utils/digizoidArmor'
+import { getRoomPositions } from '../../../../utils/encounterRoom'
+import { applyGuidingLightAuras } from '../../../../utils/guidingLight'
+import { loadCampaignCombatContext } from '../../../../utils/combatContext'
 
 interface DigivolveBody {
   participantId: string
@@ -80,17 +83,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Not enough actions to digivolve' })
   }
 
-  // Fetch campaign eddySoul rules
-  let eddySoulRules: CampaignRulesSettings['eddySoulRules'] = {}
-  let campaignLevel = 'standard'
-  if (encounter.campaignId) {
-    const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
-    if (campaign) {
-      campaignLevel = campaign.level || 'standard'
-      const rs: CampaignRulesSettings = campaign.rulesSettings || {}
-      eddySoulRules = rs.eddySoulRules || {}
-    }
-  }
+  const { campaignLevel, eddySoulRules, houseRules } = await loadCampaignCombatContext(encounter.campaignId)
 
   // Fetch evolution line
   const [evoLine] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, participant.evolutionLineId))
@@ -297,6 +290,14 @@ export default defineEventHandler(async (event) => {
     result: isEvolve ? 'Full heal' : `Wounds restored to ${participants.find((p: any) => p.id === body.participantId)?.currentWounds || 0}`,
     damage: null,
     effects: [],
+  }
+
+  // Evolution changes the source's BIT and footprint while its map anchor stays put.
+  // Use the new form and live room positions before the same final encounter write.
+  if (encounter.phase === 'combat') {
+    const positions = await getRoomPositions(encounterId)
+    const auraResult = await applyGuidingLightAuras(participants, positions, campaignLevel, houseRules)
+    if (auraResult.changed) participants = auraResult.participants
   }
 
   // Update encounter
