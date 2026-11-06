@@ -80,6 +80,7 @@ interface ResolveGroupParams {
   houseRules?: any
   encounterId: string
   positions?: Record<string, Vec3>
+  database?: Pick<typeof db, 'select' | 'update'>
 }
 
 /**
@@ -98,6 +99,7 @@ export async function resolveAreaIntercedeGroup({
   houseRules,
   encounterId,
   positions,
+  database = db,
 }: ResolveGroupParams): Promise<{
   participants: any[]
   battleLog: any[]
@@ -165,13 +167,13 @@ export async function resolveAreaIntercedeGroup({
         interceptor.maxWounds = previousState.maxWounds
         interceptor.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
 
-        await db.update(evolutionLines).set({
+        await database.update(evolutionLines).set({
           currentStageIndex: previousState.stageIndex,
           updatedAt: new Date(),
         }).where(eq(evolutionLines.id, interceptor.evolutionLineId))
 
-        const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
-        const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+        const [oldDigimon] = await database.select().from(digimon).where(eq(digimon.id, oldEntityId))
+        const [newDigimon] = await database.select().from(digimon).where(eq(digimon.id, previousState.entityId))
 
         const devolvedQualities = newDigimon?.qualities || []
         const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
@@ -360,10 +362,10 @@ export async function resolveAreaIntercedeGroup({
     const target = updatedParticipants.find((p: any) => p.id === targetId)
     let resolvedName = targetId
     if (target?.type === 'digimon') {
-      const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+      const [dig] = await database.select().from(digimon).where(eq(digimon.id, target.entityId))
       resolvedName = resolveParticipantName(target, updatedParticipants, dig?.name || 'Digimon', target.isEnemy || false)
     } else if (target?.type === 'tamer') {
-      const [tam] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
+      const [tam] = await database.select().from(tamers).where(eq(tamers.id, target.entityId))
       resolvedName = tam?.name || targetId
     }
 

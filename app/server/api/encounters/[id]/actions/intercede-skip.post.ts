@@ -9,6 +9,7 @@ import {
 } from '~/server/utils/intercedeDecision'
 import { updateTargetOptOuts, updateGmCharacterOptOuts } from '~/server/utils/intercedeOptOuts'
 import { getOfferTargetIds, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface IntercedeSkipBody {
   requestId: string
@@ -29,6 +30,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'requestId is required' })
   }
 
+  return serializeIntercedeClaim(encounterId, () => skipIntercede(encounterId, body))
+})
+
+async function skipIntercede(encounterId: string, body: IntercedeSkipBody) {
   // Fetch encounter
   let [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
@@ -82,4 +87,4 @@ export default defineEventHandler(async (event) => {
   }
 
   return updated
-})
+}

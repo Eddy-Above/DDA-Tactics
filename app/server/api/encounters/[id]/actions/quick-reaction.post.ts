@@ -3,6 +3,7 @@ import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { STAGE_CONFIG } from '~/types'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface QuickReactionBody {
   requestId: string
@@ -21,6 +22,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'requestId and tamerParticipantId are required' })
   }
 
+  return serializeIntercedeClaim(encounterId, () => useQuickReaction(encounterId, body))
+})
+
+async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
   // Fetch encounter
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) {
@@ -40,7 +45,7 @@ export default defineEventHandler(async (event) => {
   const intercedeGroupId = request.data.intercedeGroupId
   const isAreaAttack = !!request.data.isAreaAttack
 
-  // Atomic check: if group already resolved (no remaining group requests), 409
+  // Reject a group that has already resolved.
   const groupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
   if (groupRequests.length === 0) {
     throw createError({ statusCode: 409, message: 'Intercede group already resolved' })
@@ -334,4 +339,4 @@ export default defineEventHandler(async (event) => {
   }
 
   return updated
-})
+}

@@ -1289,7 +1289,7 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string, 
     showGmIntercedeModal.value = false
   } catch (e: any) {
     if (e?.statusCode === 409) {
-      alert('Another player already interceded for this attack!')
+      alert(e?.data?.message || 'This intercede offer is no longer available.')
     } else {
       alert(e?.data?.message || 'Intercede failed')
     }

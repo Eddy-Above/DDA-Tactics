@@ -8,6 +8,7 @@ import {
 } from '~/server/utils/intercedeDecision'
 import { updateTargetOptOuts } from '~/server/utils/intercedeOptOuts'
 import { GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface IntercedeOptOutsBody {
   ownerId?: string // tamer entity id, or 'GM'
@@ -31,6 +32,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'intercedeOptOuts must be an array' })
   }
 
+  return serializeIntercedeClaim(encounterId, () => saveIntercedeOptOuts(encounterId, body))
+})
+
+async function saveIntercedeOptOuts(encounterId: string, body: IntercedeOptOutsBody) {
   const [existing] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!existing) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
@@ -59,4 +64,4 @@ export default defineEventHandler(async (event) => {
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   return updated
-})
+}

@@ -227,3 +227,95 @@ test('the real player area handler hands shape, shared accuracy and clash contex
   assert.equal(fixture.attackSubmissions.length, 0)
   assert.equal(fixture.clashActions.length, 0, 'the player clash ends only after review submits the attack')
 })
+
+function createIntercedePage(role) {
+  const encounter = {
+    id: 'encounter-1', round: 2,
+    participants: [{ id: 'guard', actionsRemaining: { simple: 1 }, currentWounds: 3 }],
+    pendingRequests: [{ id: 'offer', type: 'intercede-offer' }], battleLog: [],
+  }
+  const request = { id: 'offer', data: { isAreaAttack: true, targetName: 'Target' } }
+  const alerts = []
+  const requests = []
+  const reloads = []
+  let rejectRequest
+  const dependencies = {
+    currentEncounter: shallowRef(encounter),
+    activeEncounter: shallowRef(encounter),
+    gmIntercedeRequest: shallowRef(request),
+    currentIntercedeRequest: shallowRef(request),
+    gmIntercedeLoading: ref(false),
+    intercedeLoading: ref(false),
+    showGmIntercedeModal: ref(true),
+    intercedeResultData: shallowRef(null),
+    showIntercedeResultModal: ref(false),
+    $fetch: (...args) => {
+      requests.push(args)
+      return new Promise((_resolve, reject) => { rejectRequest = reject })
+    },
+    loadData: async () => { reloads.push('reload') },
+    alert: message => { alerts.push(message) },
+    console: { error: () => {} },
+  }
+  const name = role === 'gm' ? 'handleGmIntercedeClaim' : 'handleIntercedeClaim'
+  const handler = loadPageFunctions(role === 'gm' ? gmPage : playerPage, [name], dependencies)[name]
+  return {
+    encounter, dependencies, alerts, requests, reloads,
+    loading: role === 'gm' ? dependencies.gmIntercedeLoading : dependencies.intercedeLoading,
+    reject: error => rejectRequest(error),
+    claim: () => {
+      const throwOptions = { allyId: 'target', landingPos: { x: 2, y: 0, z: 1 } }
+      return role === 'gm' ? handler('offer', 'guard', throwOptions) : handler('guard', throwOptions)
+    },
+  }
+}
+
+const claimConflicts = [
+  {
+    name: 'an interceptor already used in this AoE',
+    message: 'This character has already interceded for this area attack. Choose a different character.',
+  },
+  {
+    name: 'a target claimed by someone else',
+    message: 'Another participant already interceded for this target',
+  },
+  {
+    name: 'an area-shape conflict',
+    message: 'Area shape data missing from group state',
+  },
+  {
+    name: 'a conflict without a server message',
+    message: undefined,
+    expected: 'This intercede offer is no longer available.',
+  },
+]
+
+for (const role of ['gm', 'player']) {
+  for (const conflict of claimConflicts) {
+    test(`the real ${role} intercede handler explains ${conflict.name} without spending actions`, async () => {
+      const fixture = createIntercedePage(role)
+      const before = structuredClone(fixture.encounter)
+      const operation = fixture.claim()
+      assert.equal(fixture.loading.value, true)
+      fixture.reject({ statusCode: 409, ...(conflict.message ? { data: { message: conflict.message } } : {}) })
+      await operation
+
+      assert.deepEqual(fixture.alerts, [conflict.expected ?? conflict.message])
+      assert.equal(fixture.loading.value, false, 'a rejected claim must release its busy state')
+      assert.equal(fixture.requests.length, 1)
+      assert.deepEqual(fixture.requests[0], [
+        '/api/encounters/encounter-1/actions/intercede-claim',
+        { method: 'POST', body: {
+          requestId: 'offer', interceptorParticipantId: 'guard', chosenTargetId: 'target',
+          throwAllyLandingPos: { x: 2, y: 0, z: 1 },
+        } },
+      ])
+      assert.strictEqual(fixture.dependencies.currentEncounter.value, fixture.encounter)
+      assert.strictEqual(fixture.dependencies.activeEncounter.value, fixture.encounter)
+      assert.deepEqual(fixture.encounter, before, 'a conflict must not deduct actions, apply damage or replace encounter data')
+      assert.deepEqual(fixture.reloads, [], 'a rejected claim must not run the success refresh')
+      assert.equal(fixture.dependencies.intercedeResultData.value, null)
+      assert.equal(fixture.dependencies.showIntercedeResultModal.value, false)
+    })
+  }
+}
