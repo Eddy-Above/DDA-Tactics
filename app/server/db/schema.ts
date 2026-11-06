@@ -59,6 +59,7 @@ export const tamers = pgTable('tamers', {
     totalBoxes: number
     markedBoxes: number
     cpMarkedBoxes: number // Boxes marked at creation with CP (locked, can't be removed)
+    gmMarkedBoxes?: number
   }>>(),
 
   // Special Orders (array of unlocked order IDs)
@@ -266,7 +267,7 @@ export const encounters = pgTable('encounters', {
     usedAttackIds?: string[]
     dodgePenalty?: number
     evolutionLineId?: string
-    woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number }>
+    woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number; totalHealth?: number }>
     usedSpecialOrders?: string[]
     usedSkillOrders?: string[]
     interceptPenalty?: number
@@ -294,11 +295,13 @@ export const encounters = pgTable('encounters', {
       clashPinsUsed?: number
       clashCheckNeeded: boolean
       pendingRoll?: number
+      pendingRollDescription?: string
       reachInitiated?: boolean
       reachDistance?: number
       cannotInitiateUntilRound?: number
     }
     clashCooldownUntilRound?: number
+    modeChangeFreeSwapsUsed?: number
     usedFreeClashThisRound?: boolean
     usedCounterattackThisCombat?: boolean
     moodValue?: number
@@ -371,7 +374,7 @@ export const encounters = pgTable('encounters', {
   // Pending player requests (digimon selection, initiative roll, dodge roll, etc.)
   pendingRequests: jsonb('pending_requests').notNull().default([]).$type<Array<{
     id: string
-    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'health-roll' | 'divine-protection-offer' | 'throw-impact-attack'
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'health-roll' | 'recovery-check' | 'divine-protection-offer' | 'throw-impact-attack'
     targetTamerId: string
     targetParticipantId?: string
     timestamp: string
@@ -384,12 +387,29 @@ export const encounters = pgTable('encounters', {
     requestId: string
     tamerId: string
     participantId?: string
+    attackerParticipantId?: string
+    attackerName?: string
     response: {
-      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled'
-      digimonId?: string
+      type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled' | 'divine-protection-used' | 'divine-protection-declined'
+      digimonId?: string | null
       initiative?: number
       initiativeRoll?: number
       dodgeRoll?: number
+      dodgeDicePool?: number
+      dodgeSuccesses?: number
+      dodgeDiceResults?: number[]
+      healthDicePool?: number
+      healthSuccesses?: number
+      healthDiceResults?: number[]
+      attackId?: string
+      attackName?: string
+      accuracyDicePool?: number
+      accuracySuccesses?: number
+      accuracyDiceResults?: number[]
+      tamerSuccesses?: number
+      digimonSuccesses?: number
+      tamerDiceResults?: number[]
+      digimonDiceResults?: number[]
       timestamp: string
       attackerParticipantId?: string
       attackerName?: string

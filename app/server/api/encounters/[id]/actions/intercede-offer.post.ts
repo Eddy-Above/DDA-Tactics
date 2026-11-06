@@ -1241,7 +1241,7 @@ export default defineEventHandler(async (event) => {
         if (dig?.partnerId) dodgeTargetTamerId = dig.partnerId
       }
 
-      const dodgeRequest = {
+      const dodgeRequest: (typeof pendingRequests)[number] = {
         id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type: 'dodge-roll',
         targetTamerId: dodgeTargetTamerId,
@@ -1410,7 +1410,7 @@ export default defineEventHandler(async (event) => {
   // If no player tamers eligible but GM is, create GM-only intercede offer
   if (eligibleTamerIds.length === 0 && gmEligible) {
     const intercedeGroupId = `intercede-${Date.now()}-${body.targetId}`
-    const gmRequest = {
+    const gmRequest: (typeof pendingRequests)[number] = {
       id: `req-${Date.now()}-gm`,
       type: 'intercede-offer',
       targetTamerId: 'GM',

@@ -3,13 +3,13 @@
  * Handles quality CRUD operations, rank validation, and DP budget checking
  */
 
-import { computed, type Ref, isRef } from 'vue'
+import { computed, type Ref, unref } from 'vue'
 import type { DigimonFormData } from './useDigimonForm'
 import type { EddySoulRules } from '../types/index'
 import { QUALITY_DATABASE, getEffectiveDPCost, STAGE_ORDER } from '../data/qualities'
 
 export interface UseDigimonQualitiesOptions {
-  form: Ref<any> | any
+  form: Ref<DigimonFormData> | DigimonFormData
   availableDPForQualities: Ref<number> | number
   dpUsedOnStats: Ref<number> | number
   baseDP: Ref<number> | number
@@ -19,16 +19,10 @@ export interface UseDigimonQualitiesOptions {
 
 export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
   // Handle both Ref and raw values
-  const formRef = isRef(options.form) ? options.form : computed(() => options.form)
-  const availableDPRef = isRef(options.availableDPForQualities)
-    ? options.availableDPForQualities
-    : computed(() => options.availableDPForQualities)
-  const dpUsedOnStatsRef = isRef(options.dpUsedOnStats)
-    ? options.dpUsedOnStats
-    : computed(() => options.dpUsedOnStats)
-  const baseDPRef = isRef(options.baseDP)
-    ? options.baseDP
-    : computed(() => options.baseDP)
+  const formRef = computed(() => unref(options.form))
+  const availableDPRef = computed(() => unref(options.availableDPForQualities))
+  const dpUsedOnStatsRef = computed(() => unref(options.dpUsedOnStats))
+  const baseDPRef = computed(() => unref(options.baseDP))
 
   // ========================
   // Quality DP Usage Calculation

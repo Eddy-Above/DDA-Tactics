@@ -346,7 +346,7 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
-    const clashRequest = {
+    const clashRequest: (typeof pendingRequests)[number] = {
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'clash-check',
       targetTamerId: opponentTamerId,

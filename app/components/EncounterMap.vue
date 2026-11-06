@@ -111,7 +111,7 @@
             @click="selectParticipant(p.id)"
           >
             <div class="placement-avatar">
-              <img v-if="getSpriteUrl(p)" :src="getSpriteUrl(p)" class="placement-avatar-img" />
+              <img v-if="getSpriteUrl(p)" :src="getSpriteUrl(p) ?? undefined" class="placement-avatar-img" />
               <div v-else class="placement-avatar-fallback">{{ getNameForParticipant(p)[0] }}</div>
             </div>
             <span class="placement-name">{{ getNameForParticipant(p) }}</span>

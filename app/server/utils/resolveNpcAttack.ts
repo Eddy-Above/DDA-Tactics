@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
-import type { Vec3, GameMap } from '../types'
+import type { Vec3, GameMap } from '../../types'
 import { getEffectStatModifiers } from '../../data/attackConstants'
 import { applyEffectToParticipant } from './applyEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'

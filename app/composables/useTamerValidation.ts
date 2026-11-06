@@ -4,11 +4,12 @@
  */
 
 import { skillsByAttribute } from '../constants/tamer-skills'
+import type { TormentSeverity } from '../types'
 
 export interface TamerFormData {
   attributes: Record<string, number>
   skills: Record<string, number>
-  torments?: Array<{ name: string }>
+  torments?: Array<{ name: string; severity: TormentSeverity }>
 }
 
 export function useTamerValidation(

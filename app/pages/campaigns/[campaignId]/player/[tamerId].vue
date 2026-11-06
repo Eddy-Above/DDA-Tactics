@@ -875,7 +875,7 @@ const sortedParticipants = computed(() => {
 
   const filteredTurnOrder = turnOrder.filter(id => {
     const participant = participants.find(p => p.id === id)
-    if (!participant || participant.type === 'gm') return false
+    if (!participant || participant.id === 'gm') return false
     if (participant.type !== 'digimon') return true
     return !hasPartnerTamerInEncounter(participant)
   })
@@ -1286,7 +1286,7 @@ const initiativeModifierB = computed(() => {
   if (!tamer.value) return 0
 
   const agility = tamer.value.attributes?.agility || 0
-  const fight = tamer.value.fight || -1  // If 0 or undefined, default to -1
+  const fight = tamer.value.skills.fight ?? -1
   return agility + fight
 })
 
@@ -1982,7 +1982,7 @@ const warpAvailable = computed(() =>
   willpowerRollResult.value &&
   pendingDigivolve.value &&
   willpowerRollResult.value.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel.value] + 5 &&
-  getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets.length > 0
+  (getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets?.length ?? 0) > 0
 )
 
 const pendingDigivolveWarpTargets = computed(() =>
@@ -2193,7 +2193,7 @@ function getEnemyTargets(): CombatParticipant[] {
   const myParticipantIds = new Set(myParticipants.value.map((p) => p.id))
 
   return visibleParticipants.value.filter(
-    (p) => !myParticipantIds.has(p.id) && p.type !== 'gm' && !p.inReserve
+    (p) => !myParticipantIds.has(p.id) && p.id !== 'gm' && !p.inReserve
   )
 }
 
@@ -2222,8 +2222,8 @@ async function selectAttackAndShowTargets(participant: CombatParticipant, attack
   showTargetSelector.value = true
 }
 
-async function confirmAttack(target: CombatParticipant) {
-  if (!selectedAttack.value || !activeEncounter.value || !tamer.value) return
+async function confirmAttack(target: CombatParticipant | undefined) {
+  if (!target || !selectedAttack.value || !activeEncounter.value || !tamer.value) return
 
   try {
     const { participant, attack } = selectedAttack.value
@@ -2749,7 +2749,7 @@ function showAttackResult(
     baseDamage: baseDamage,
     armorPiercing: armorPiercing,
     targetArmor: targetArmor,
-    finalDamage: finalDamage,
+    finalDamage: finalDamage ?? undefined,
     groupId: resolvedGroupId,
     divineProtectionNote: divineProtectionNote
   })
@@ -2916,7 +2916,7 @@ async function submitInitiativeRoll() {
     const modifierA = digimon ? calcDigimonStats(digimon).agility : 0
 
     const tamerAgility = tamer.value.attributes?.agility || 0
-    const fight = tamer.value.fight || -1  // If 0 or undefined, default to -1
+    const fight = tamer.value.skills.fight ?? -1
     const modifierB = tamerAgility + fight // Tamer AGI + Fight
 
     // Use the higher modifier (or just tamer modifier if no digimon), plus Strike First's +1 Initiative
@@ -3233,6 +3233,7 @@ async function confirmThrowImpactAttack() {
               accuracyDiceResults,
               accuracySuccesses,
               participantId: controller.id,
+              targetParticipantId: target.id,
               attackData: attack
             })
           }
@@ -3971,7 +3972,7 @@ function getClashTargets(): CombatParticipant[] {
   if (!activeEncounter.value) return []
   const myIds = new Set(myParticipants.value.map(p => p.id))
   return visibleParticipants.value.filter(
-    p => !myIds.has(p.id) && p.type !== 'gm' && !p.inReserve && !(p as any).clash
+    p => !myIds.has(p.id) && p.id !== 'gm' && !p.inReserve && !(p as any).clash
   )
 }
 
@@ -5190,7 +5191,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                     <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
                     <div class="space-y-2 max-h-60 overflow-y-auto">
                       <button
-                        v-for="p in visibleParticipants.filter(p => p.id !== participant.id && p.type !== 'gm' && !p.inReserve)"
+                        v-for="p in visibleParticipants.filter(p => p.id !== participant.id && p.id !== 'gm' && !p.inReserve)"
                         :key="p.id"
                         class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
                         @click="handleUseSpecialOrder(participant, 'Enemy Scan', p.id); showPlayerSpecialOrdersModal = false"
@@ -5369,7 +5370,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 <div class="w-12 h-12 rounded-lg bg-digimon-dark-700 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="currentTurnParticipant && getParticipantImage(currentTurnParticipant)"
-                    :src="getParticipantImage(currentTurnParticipant)"
+                    :src="getParticipantImage(currentTurnParticipant) ?? undefined"
                     alt="Current"
                     class="w-full h-full object-cover"
                   />
@@ -5595,7 +5596,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   :key="attr"
                   :class="[
                     'relative group text-center bg-digimon-dark-700 rounded-lg p-2 cursor-pointer hover:bg-digimon-dark-600 transition-colors',
-                    tamer.xpBonuses?.attributes[attr as keyof typeof tamer.xpBonuses.attributes] > 0 && 'ring-2 ring-green-500/50'
+                    (tamer.xpBonuses?.attributes[attr as keyof Tamer['attributes']] ?? 0) > 0 && 'ring-2 ring-green-500/50'
                   ]"
                   @click="openAttributeRollModal(attr)"
                 >
@@ -5614,7 +5615,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                         <span class="text-white font-medium">
                           {{ totalSkills[skill as keyof typeof totalSkills] }}
                           <span
-                            v-if="tamer.xpBonuses?.skills[skill as keyof typeof tamer.xpBonuses.skills] > 0"
+                            v-if="(tamer.xpBonuses?.skills[skill as keyof Tamer['skills']] ?? 0) > 0"
                             class="inline-block w-1.5 h-1.5 bg-green-500 rounded-full ml-1"
                             title="XP Enhanced"
                           ></span>

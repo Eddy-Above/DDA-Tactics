@@ -3,19 +3,10 @@ import { eq } from 'drizzle-orm'
 
 export default defineEventHandler(async (event) => {
   const mapId = getRouterParam(event, 'mapId')!
-  const body = await readBody<Partial<{
-    name: string
-    description: string
-    dimensions: { width: number; depth: number; height: number }
-    groundTiles: unknown[]
-    spaceTiles: unknown[]
-    voxels: unknown[]
-    walls: unknown[]
-    windows: unknown[]
-    doors: unknown[]
-    ceilings: unknown[]
-    stairs: unknown[]
-  }>>(event)
+  const body = await readBody<Partial<Pick<Map,
+    'name' | 'description' | 'dimensions' | 'groundTiles' | 'spaceTiles' | 'voxels' |
+    'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs'
+  >>>(event)
 
   const [existing] = await db.select().from(maps).where(eq(maps.id, mapId))
   if (!existing) throw createError({ statusCode: 404, message: 'Map not found' })

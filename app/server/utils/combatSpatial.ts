@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, maps } from '../db'
-import type { GameMap } from '../types'
+import type { GameMap } from '../../types'
 import { calculateDigimonDerivedStats } from '../../types'
 import { detectCapabilities, type MovementCapabilities, type FallerProfile } from '../../utils/movementRules'
 import { getDigimonDerivedStats } from './resolveSupportAttack'

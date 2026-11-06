@@ -23,6 +23,8 @@ interface AttackActionBody {
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
   lifestealed?: boolean
   hugePowerUsed?: boolean
+  hugePowerRank?: number
+  hugePowerTrackAll?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
   clashNoInterceptTargetId?: string  // Pass clash attack: this one target (clash opponent) cannot be interceded
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)

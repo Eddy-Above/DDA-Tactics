@@ -5,10 +5,11 @@ interface CreateEvolutionLineBody {
   name: string
   description?: string
   chain: Array<{
-    stage: 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega'
+    stage: 'fresh' | 'in-training' | 'rookie' | 'champion' | 'ultimate' | 'mega' | 'ultra'
     species: string
     digimonId: string // Required: must link to library Digimon
     isUnlocked?: boolean
+    evolvesFromIndex?: number | null
   }>
   partnerId?: string
   campaignId?: string
@@ -39,6 +40,7 @@ export default defineEventHandler(async (event) => {
   const chain = body.chain.map((entry, index) => ({
     ...entry,
     isUnlocked: index === 0 || (entry.isUnlocked ?? false),
+    evolvesFromIndex: entry.evolvesFromIndex === undefined ? (index === 0 ? null : index - 1) : entry.evolvesFromIndex,
   }))
 
   const newEvolutionLine: NewEvolutionLine = {

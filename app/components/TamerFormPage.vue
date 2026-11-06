@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Tamer } from '~/server/db/schema'
+import type { TormentSeverity } from '~/types'
 import { useTamerForm } from '~/composables/useTamerForm'
 
 const props = defineProps<{ source: 'library' | 'portal' | 'workshop', mode: 'create' | 'edit' }>()

@@ -113,6 +113,11 @@ const giganticDims = reactive({ width: 4, height: 4, depth: 4 })
 const giganticCapWarning = ref<string | null>(null)
 const giganticMaxSize = computed(() => houseRules.value?.giganticMaxSize ?? null)
 
+function giganticDimMax(dim: 'width' | 'height' | 'depth') {
+  const axisMap = { width: 'x', height: 'y', depth: 'z' } as const
+  return giganticMaxSize.value?.[axisMap[dim]] ?? 999
+}
+
 function clampGiganticDim(dim: 'width' | 'height' | 'depth') {
   const axisMap = { width: 'x', height: 'y', depth: 'z' } as const
   const axis = axisMap[dim]
@@ -234,7 +239,7 @@ async function loadDigimon() {
       stage: data.stage,
       attribute: data.attribute,
       family: data.family,
-      type: data.type,
+      type: data.type || '',
       size: data.size || 'medium',
       baseStats: { ...data.baseStats },
       bonusStats: { ...(data.bonusStats || { accuracy: 0, damage: 0, dodge: 0, armor: 0, health: 0 }) },
@@ -250,7 +255,7 @@ async function loadDigimon() {
       spriteUrl: data.spriteUrl || '',
       evolvesFromId: data.evolvesFromId || null,
       evolutionPathIds: Array.isArray(data.evolutionPathIds) ? data.evolutionPathIds : [],
-      syncBonusDP: data.syncBonusDP ?? true,
+      syncBonusDP: true,
     })
     basicInfoExpanded.value = false
     baseStatsExpanded.value = false
@@ -390,7 +395,7 @@ async function handleSubmit() {
 async function handleCopy() {
   if (!loadedDigimon.value) return
   copying.value = true
-  const newDigimon = await copyDigimon(loadedDigimon.value.id)
+  const newDigimon = await copyDigimon(loadedDigimon.value)
   if (newDigimon) {
     router.push(`${digimonLinkBase.value}/${newDigimon.id}`)
   }
@@ -509,7 +514,7 @@ async function handleCopy() {
                       v-model.number="giganticDims[dim as 'width' | 'height' | 'depth']"
                       type="number"
                       min="4"
-                      :max="giganticMaxSize || 999"
+                      :max="giganticDimMax(dim as 'width' | 'height' | 'depth')"
                       class="w-full bg-digimon-dark-600 border border-digimon-dark-500 rounded px-2 py-1 text-white text-sm"
                       @change="clampGiganticDim(dim as 'width' | 'height' | 'depth')"
                     />

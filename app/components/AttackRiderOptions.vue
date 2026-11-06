@@ -7,8 +7,8 @@ interface Props {
   eddySoulRules?: EddySoulRules
   canBolster: boolean
   hugePower: { rank1: boolean; rank2: boolean }
-  actOfInspirationCost: number
-  currentInspiration: number
+  actOfInspirationCost?: number
+  currentInspiration?: number
 }
 
 const props = defineProps<Props>()
@@ -18,7 +18,7 @@ const bolsterAttackType = defineModel<'damage-accuracy' | 'bit-cpu'>('bolsterAtt
 const lifestealComplexEnabled = defineModel<boolean>('lifestealComplexEnabled', { required: true })
 const hugePowerEnabled = defineModel<boolean>('hugePowerEnabled', { required: true })
 const hugePowerRank2Enabled = defineModel<boolean>('hugePowerRank2Enabled', { required: true })
-const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', { required: true })
+const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', { default: false })
 </script>
 
 <template>
@@ -116,7 +116,7 @@ const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', 
   </div>
 
   <!-- Act of Inspiration Toggle -->
-  <div class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
+  <div v-if="actOfInspirationCost !== undefined && currentInspiration !== undefined" class="mb-4 p-3 bg-digimon-dark-700 rounded-lg border border-digimon-dark-600">
     <label class="flex items-center gap-2 cursor-pointer mb-2">
       <input
         type="checkbox"

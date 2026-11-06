@@ -177,7 +177,7 @@ export default defineEventHandler(async (event) => {
     let qrTargetTamerId = 'GM'
     if (targetDig.partnerId) qrTargetTamerId = targetDig.partnerId
 
-    const qrDodgeRequest = {
+    const qrDodgeRequest: (typeof pendingRequests)[number] = {
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'dodge-roll',
       targetTamerId: qrTargetTamerId,
@@ -227,7 +227,7 @@ export default defineEventHandler(async (event) => {
             const [dig] = await db.select().from(digimon).where(eq(digimon.id, uncoveredParticipant.entityId))
             if (dig?.partnerId) targetTamerId = dig.partnerId
           }
-          const dodgeRequest = {
+          const dodgeRequest: (typeof pendingRequests)[number] = {
             id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             type: 'dodge-roll',
             targetTamerId,
@@ -268,7 +268,7 @@ export default defineEventHandler(async (event) => {
     if (targetDig.partnerId) targetTamerId = targetDig.partnerId
 
     // Build dodge-roll pending request
-    const dodgeRequest = {
+    const dodgeRequest: (typeof pendingRequests)[number] = {
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'dodge-roll',
       targetTamerId,

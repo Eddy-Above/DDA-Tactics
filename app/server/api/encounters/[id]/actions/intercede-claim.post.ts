@@ -813,9 +813,10 @@ export default defineEventHandler(async (event) => {
     let autoDevolveLog: any = null
     const damagedInterceptor = participants.find((p: any) => p.id === body.interceptorParticipantId)
     if (damagedInterceptor &&
+        damagedInterceptor.currentWounds !== undefined && damagedInterceptor.maxWounds !== undefined &&
         damagedInterceptor.currentWounds >= damagedInterceptor.maxWounds &&
         damagedInterceptor.evolutionLineId &&
-        damagedInterceptor.woundsHistory?.length > 0) {
+        damagedInterceptor.woundsHistory && damagedInterceptor.woundsHistory.length > 0) {
       const previousState = damagedInterceptor.woundsHistory.pop()
       if (previousState) {
         const oldEntityId = damagedInterceptor.entityId

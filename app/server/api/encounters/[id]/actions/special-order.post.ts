@@ -238,7 +238,7 @@ export default defineEventHandler(async (event) => {
     actorId: body.participantId,
     actorName: tamer.name,
     action: `Special Order: ${body.orderName}`,
-    target: body.targetId ? participants.find((p: any) => p.id === body.targetId)?.entityId : null,
+    target: body.targetId ? participants.find((p: any) => p.id === body.targetId)?.entityId ?? null : null,
     result: effectDescription,
     damage: null,
     effects: [body.orderName],

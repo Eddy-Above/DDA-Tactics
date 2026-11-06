@@ -19,6 +19,7 @@ export interface TormentEntry {
   totalBoxes: number
   markedBoxes: number
   cpMarkedBoxes: number
+  originalMarkedBoxes: number
   gmMarkedBoxes: number
   xpBoxCosts: number[] // actual XP paid for each XP-purchased box, in order
 }
@@ -54,6 +55,12 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
   // Form State
   // ========================
   const form = reactive<CreateTamerData & {
+    aspects: NonNullable<CreateTamerData['aspects']>
+    torments: NonNullable<CreateTamerData['torments']>
+    xp: number
+    inspiration: number
+    notes: string
+    spriteUrl: string
     majorAspect: { name: string; description: string }
     minorAspect: { name: string; description: string }
   }>({
@@ -127,6 +134,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
       totalBoxes: t.totalBoxes,
       markedBoxes: t.markedBoxes,
       cpMarkedBoxes: t.cpMarkedBoxes,
+      originalMarkedBoxes: t.cpMarkedBoxes,
       gmMarkedBoxes,
       xpBoxCosts: (t as any).xpBoxCosts ?? Array.from({ length: xpCount }, (_, k) => lockFloor + k + 1),
     }
@@ -252,6 +260,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
         totalBoxes: boxCount,
         markedBoxes: 0,
         cpMarkedBoxes: 0,
+        originalMarkedBoxes: 0,
         gmMarkedBoxes: 0,
         xpBoxCosts: [],
       })
@@ -390,6 +399,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
         totalBoxes: getTormentBoxCount('minor'),
         markedBoxes: 0,
         cpMarkedBoxes: 0,
+        originalMarkedBoxes: 0,
         gmMarkedBoxes: 0,
         xpBoxCosts: [],
       })
@@ -403,6 +413,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
         totalBoxes: getTormentBoxCount('major'),
         markedBoxes: 0,
         cpMarkedBoxes: 0,
+        originalMarkedBoxes: 0,
         gmMarkedBoxes: 0,
         xpBoxCosts: [],
       })
@@ -416,6 +427,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
         totalBoxes: getTormentBoxCount('terrible'),
         markedBoxes: 0,
         cpMarkedBoxes: 0,
+        originalMarkedBoxes: 0,
         gmMarkedBoxes: 0,
         xpBoxCosts: [],
       })

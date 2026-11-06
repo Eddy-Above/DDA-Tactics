@@ -149,7 +149,7 @@ const sortedParticipants = computed(() => {
   // Filter turnOrder to exclude partner digimon (for backward compatibility)
   const filteredTurnOrder = turnOrder.filter(id => {
     const participant = participants.find(p => p.id === id)
-    if (!participant || participant.type === 'gm') return false
+    if (!participant || participant.id === 'gm') return false
     if (participant.type !== 'digimon') return true
     return !hasPartnerTamerInEncounter(participant)
   })
@@ -352,6 +352,7 @@ function getEntityDetails(participant: CombatParticipant) {
       isEnemy: digimon.isEnemy,
       stats: digimon.baseStats,
       derived,
+      movement: derived.movement,
       icon: digimon.isEnemy ? '👹' : '🦖',
       spriteUrl: digimon.spriteUrl,
     }
@@ -366,6 +367,7 @@ function getEntityDetails(participant: CombatParticipant) {
       isEnemy: false,
       stats: tamer.attributes,
       derived,
+      movement: derived.speed,
       icon: '👤',
       spriteUrl: tamer.spriteUrl || null,
     }
@@ -431,7 +433,7 @@ function canParticipantAct(participant: CombatParticipant): boolean {
 }
 
 // Get attacks for a participant
-function getParticipantAttacks(participant: CombatParticipant) {
+function getParticipantAttacks(participant: CombatParticipant): Digimon['attacks'] {
   if (participant.type !== 'digimon') return []
 
   // Look up digimon in digimonMap
@@ -924,7 +926,7 @@ function getAttackTargets(attackerId: string, attack?: any): CombatParticipant[]
 
   // Target anyone except GM; self only allowed for area attacks
   return participants.filter(p => {
-    if (p.type === 'gm') return false
+    if (p.id === 'gm') return false
     if (p.inReserve) return false  // Not on the board yet — can't be hit
     if (p.id === attackerId) {
       const isAreaAttack = attack?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
@@ -1002,8 +1004,8 @@ function canUseHugePower(participant: CombatParticipant, attack: any): { rank1: 
 }
 
 // Confirm attack and execute
-async function confirmAttack(target: CombatParticipant) {
-  if (!selectedAttack.value || !currentEncounter.value) return
+async function confirmAttack(target: CombatParticipant | undefined) {
+  if (!target || !selectedAttack.value || !currentEncounter.value) return
 
   try {
     const { participant, attack } = selectedAttack.value
@@ -1079,6 +1081,7 @@ async function confirmAttack(target: CombatParticipant) {
       const logResult = hadRerolls
         ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => ${hpLabel} => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
         : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
+      if (!currentEncounter.value) return
       await addBattleLogEntry(currentEncounter.value.id, {
         round: currentEncounter.value.round,
         actorId: participant.id,
@@ -1188,6 +1191,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     const logResult = hadRerolls
       ? `${accuracyPool}d6 => [${originalDiceResults.join(',')}] => ${hpLabel} => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
       : `${accuracyPool}d6 => [${accuracyDiceResults.join(',')}] = ${accuracySuccesses} successes`
+    if (!currentEncounter.value) return
     await addBattleLogEntry(currentEncounter.value.id, {
       round: currentEncounter.value.round,
       actorId: participant.id,
@@ -2314,7 +2318,7 @@ const warpAvailable = computed(() =>
   willpowerRollResult.value &&
   pendingDigivolve.value &&
   willpowerRollResult.value.total >= DIGIVOLVE_WILLPOWER_DC[campaignLevel.value] + 5 &&
-  getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets.length > 0
+  (getParticipantEvolutionOptions(pendingDigivolve.value.participant).warpTargets?.length ?? 0) > 0
 )
 
 const pendingDigivolveWarpTargets = computed(() =>
@@ -3183,7 +3187,7 @@ function openClashTargetSelector(participantId: string) {
 function getClashTargets(participantId: string): CombatParticipant[] {
   if (!currentEncounter.value) return []
   return (currentEncounter.value.participants as CombatParticipant[]).filter(
-    p => p.id !== participantId && p.type !== 'gm' && !(p as any).clash
+    p => p.id !== participantId && p.id !== 'gm' && !(p as any).clash
   )
 }
 
@@ -4085,7 +4089,7 @@ function onMapAttackCancelled() {
                     <div class="flex gap-3 mb-2 text-xs">
                       <span v-if="getEntityDetails(item.participant)?.derived" class="text-digimon-dark-400">
                         {{ item.participant.type === 'tamer' ? 'Speed' : 'Movement' }}:
-                        <span class="text-digimon-dark-300">{{ item.participant.type === 'tamer' ? getEntityDetails(item.participant)?.derived.speed : getEntityDetails(item.participant)?.derived.movement }}</span>
+                        <span class="text-digimon-dark-300">{{ getEntityDetails(item.participant)?.movement }}</span>
                       </span>
                       <span v-if="item.participant.dodgePenalty" class="text-red-400">Dodge -{{ item.participant.dodgePenalty }}</span>
                       <span v-if="item.participant.combatMonsterBonus" class="text-amber-400">Combat Monster +{{ item.participant.combatMonsterBonus }}</span>
@@ -4321,7 +4325,7 @@ function onMapAttackCancelled() {
                     <div class="w-10 h-10 rounded-lg bg-digimon-dark-700 flex items-center justify-center overflow-hidden flex-shrink-0">
                       <img
                         v-if="getEntityDetails(item.partnerDigimon)?.spriteUrl"
-                        :src="getEntityDetails(item.partnerDigimon)?.spriteUrl"
+                        :src="getEntityDetails(item.partnerDigimon)?.spriteUrl ?? undefined"
                         :alt="getEntityDetails(item.partnerDigimon)?.name"
                         class="max-w-full max-h-full object-contain"
                       />
@@ -4393,7 +4397,7 @@ function onMapAttackCancelled() {
 
                   <!-- Movement -->
                   <span v-if="getEntityDetails(item.partnerDigimon)?.derived" class="text-digimon-dark-400">
-                    Mov: <span class="text-digimon-dark-300">{{ getEntityDetails(item.partnerDigimon)?.derived.movement }}</span>
+                    Mov: <span class="text-digimon-dark-300">{{ getEntityDetails(item.partnerDigimon)?.movement }}</span>
                   </span>
 
                   <!-- Dodge penalty -->
@@ -4741,7 +4745,7 @@ function onMapAttackCancelled() {
                   :key="order.name"
                   :disabled="
                     (activeParticipant.usedSpecialOrders || []).includes(order.name) ||
-                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDayOrders || []).includes(order.name)) ||
+                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDayOrders || []).includes(order.name)) ||
                     (activeParticipant.actionsRemaining?.simple || 0) < getOrderActionCost(order.type) ||
                     getOrderUsageLimit(order.type) === 'passive'
                   "
@@ -4749,7 +4753,7 @@ function onMapAttackCancelled() {
                     'w-full px-3 py-2 rounded text-xs text-left transition-colors',
                     (activeParticipant.usedSpecialOrders || []).includes(order.name)
                       ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
-                      : (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDayOrders || []).includes(order.name))
+                      : (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDayOrders || []).includes(order.name))
                         ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
                         : getOrderUsageLimit(order.type) === 'passive'
                           ? 'bg-digimon-dark-700 text-digimon-dark-400 cursor-default'
@@ -4771,7 +4775,7 @@ function onMapAttackCancelled() {
                   </div>
                   <div class="text-digimon-dark-400 mt-0.5">{{ order.effect }}</div>
                   <div v-if="(activeParticipant.usedSpecialOrders || []).includes(order.name)" class="text-red-400 mt-0.5">Used</div>
-                  <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDayOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
+                  <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDayOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
                 </button>
               </div>
             </div>
@@ -4785,7 +4789,7 @@ function onMapAttackCancelled() {
                   :key="order.name"
                   :disabled="
                     (activeParticipant.usedSkillOrders || []).includes(order.name) ||
-                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name)) ||
+                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDaySkillOrders || []).includes(order.name)) ||
                     (activeParticipant.actionsRemaining?.simple || 0) < getSkillOrderActionCost(order.type) ||
                     isPassiveSkillOrder(order)
                   "
@@ -4793,7 +4797,7 @@ function onMapAttackCancelled() {
                     'w-full px-3 py-2 rounded text-xs text-left transition-colors',
                     (activeParticipant.usedSkillOrders || []).includes(order.name)
                       ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
-                      : (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name))
+                      : (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDaySkillOrders || []).includes(order.name))
                         ? 'bg-digimon-dark-700 text-digimon-dark-500 line-through cursor-not-allowed'
                         : isPassiveSkillOrder(order)
                           ? 'bg-digimon-dark-700 text-digimon-dark-400 cursor-default'
@@ -4811,7 +4815,7 @@ function onMapAttackCancelled() {
                   </div>
                   <div class="text-digimon-dark-400 mt-0.5">{{ order.effect }}</div>
                   <div v-if="(activeParticipant.usedSkillOrders || []).includes(order.name)" class="text-red-400 mt-0.5">Used</div>
-                  <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant.entityId)?.usedPerDaySkillOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
+                  <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDaySkillOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
                 </button>
               </div>
             </div>
@@ -4822,7 +4826,7 @@ function onMapAttackCancelled() {
                 <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
                 <div class="space-y-2 max-h-60 overflow-y-auto">
                   <button
-                    v-for="p in (currentEncounter?.participants as CombatParticipant[] || []).filter(p => p.id !== activeParticipant.id && p.type !== 'gm')"
+                    v-for="p in (currentEncounter?.participants as CombatParticipant[] || []).filter(p => p.id !== activeParticipant?.id && p.id !== 'gm')"
                     :key="p.id"
                     class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
                     @click="handleUseSpecialOrder(activeParticipant, 'Enemy Scan', p.id)"
@@ -4971,7 +4975,7 @@ function onMapAttackCancelled() {
                     <div v-if="request.data?.isAreaAttack" class="text-yellow-300 text-xs mr-2">
                       Area attack on:
                       {{ getAreaProtectTargetIds(request.data).map((tid: string) => {
-                        const p = (currentEncounter.participants as any[]).find((pp: any) => pp.id === tid)
+                        const p = currentEncounter?.participants.find(pp => pp.id === tid)
                         return p?.name || tid
                       }).join(', ') }}
                     </div>
@@ -5133,7 +5137,7 @@ function onMapAttackCancelled() {
                     </div>
                     <div class="flex justify-between">
                       <span>Net Successes:</span>
-                      <span class="text-white font-mono">{{ entry.netSuccesses >= 0 ? '+' : '' }}{{ entry.netSuccesses }}</span>
+                      <span class="text-white font-mono">{{ (entry.netSuccesses ?? 0) >= 0 ? '+' : '' }}{{ entry.netSuccesses }}</span>
                     </div>
                     <div v-if="entry.targetArmor !== undefined && entry.targetArmor > 0" class="flex justify-between">
                       <span>Target Armor:</span>

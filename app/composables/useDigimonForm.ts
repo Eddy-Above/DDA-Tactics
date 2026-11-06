@@ -7,7 +7,7 @@
 import { computed, ref, reactive, watch } from 'vue'
 import type { Ref } from 'vue'
 import type { Digimon } from '../server/db/schema'
-import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type EddySoulRules } from '../types/index'
+import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily, type EddySoulRules } from '../types/index'
 import { QUALITY_DATABASE, getMaxRanksAtStage, compareStages } from '../data/qualities'
 import type { Attack } from './useAttackTags'
 import { useDigimonStats } from './useDigimonStats'
@@ -16,11 +16,23 @@ import { useDigimonAttacks } from './useDigimonAttacks'
 import type { CreateDigimonData } from './useDigimon'
 
 export interface DigimonFormData extends CreateDigimonData {
-  bonusStats?: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
-  bonusDPForQualities?: number
-  evolvesFromId?: string | null
-  evolutionPathIds?: string[]
-  syncBonusDP?: boolean
+  nickname: string
+  family: DigimonFamily
+  type: string
+  bonusStats: { accuracy: number; damage: number; dodge: number; armor: number; health: number }
+  bonusDP: number
+  bonusDPForQualities: number
+  attacks: Digimon['attacks']
+  qualities: Digimon['qualities']
+  dataOptimization: string
+  partnerId: string | null
+  isEnemy: boolean
+  isDarkEvolution: boolean
+  notes: string
+  spriteUrl: string
+  evolvesFromId: string | null
+  evolutionPathIds: string[]
+  syncBonusDP: boolean
 }
 
 /**
@@ -86,7 +98,7 @@ export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulR
     attacks: initialData?.attacks || [],
     qualities: initialData?.qualities || [],
     dataOptimization: initialData?.dataOptimization || '',
-    partnerId: initialData?.partnerId || undefined,
+    partnerId: initialData?.partnerId ?? null,
     isEnemy: initialData?.isEnemy || false,
     isDarkEvolution: initialData?.isDarkEvolution || false,
     notes: initialData?.notes || '',

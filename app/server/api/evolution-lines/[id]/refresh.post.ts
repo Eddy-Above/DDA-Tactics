@@ -1,13 +1,7 @@
 import { eq } from 'drizzle-orm'
-import { db, evolutionLines, digimon as digimonTable } from '../../../db'
+import { db, evolutionLines, digimon as digimonTable, type EvolutionLine, type Digimon } from '../../../db'
 
-interface EvolutionChainEntry {
-  stage: string
-  species: string
-  digimonId: string
-  isUnlocked: boolean
-  evolvesFromIndex: number | null
-}
+type EvolutionChainEntry = EvolutionLine['chain'][number]
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -61,7 +55,7 @@ export default defineEventHandler(async (event) => {
   const newChain: EvolutionChainEntry[] = []
   const visited = new Set<string>()
 
-  function buildForwardChain(digimon: any, parentIndex: number | null) {
+  function buildForwardChain(digimon: Digimon, parentIndex: number | null) {
     if (visited.has(digimon.id)) return
 
     visited.add(digimon.id)

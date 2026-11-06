@@ -54,9 +54,9 @@ function getSpeedyMaxRanks(
   return hasAdvancedMovement ? Math.ceil(effectiveBase / 2) : Math.floor(effectiveBase / 2)
 }
 
-export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySoulRules | undefined>) {
+export function useDigimonStats(form: Ref<DigimonFormData> | DigimonFormData, eddySoulRules?: Ref<EddySoulRules | undefined>) {
   // Handle both Ref and raw values
-  const formRef = isRef(form) ? form : computed(() => form)
+  const formRef = computed(() => isRef(form) ? form.value : form)
 
   // ========================
   // Stage Configuration
@@ -145,7 +145,7 @@ export function useDigimonStats(form: Ref<any> | any, eddySoulRules?: Ref<EddySo
     minBonusDPForQualities,
     maxBonusDPForQualities,
     bonusStatsOverspent,
-  } = useDigimonDP(formRef as any, eddySoulRules)
+  } = useDigimonDP(formRef, eddySoulRules)
 
   // ========================
   // Derived Stats

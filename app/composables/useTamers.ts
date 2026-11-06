@@ -1,5 +1,5 @@
 import type { Tamer } from '../server/db/schema'
-import type { CreationRules, EddySoulRules } from '../types'
+import type { CreationRules, EddySoulRules, TamerAttributes, TamerSkills } from '../types'
 
 export interface CreateTamerData {
   name: string

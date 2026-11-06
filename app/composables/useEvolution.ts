@@ -114,8 +114,9 @@ export function useEvolution() {
 
     // If not found, fetch it directly
     if (!line) {
-      line = await fetchEvolutionLine(evolutionLineId)
-      if (!line) return null
+      const fetchedLine = await fetchEvolutionLine(evolutionLineId)
+      if (!fetchedLine) return null
+      line = fetchedLine
     }
 
     // Parse chain from JSON if needed
@@ -156,8 +157,9 @@ export function useEvolution() {
 
     // If not found, fetch it directly
     if (!line) {
-      line = await fetchEvolutionLine(evolutionLineId)
-      if (!line) return null
+      const fetchedLine = await fetchEvolutionLine(evolutionLineId)
+      if (!fetchedLine) return null
+      line = fetchedLine
     }
 
     // Parse chain from JSON if needed
@@ -186,8 +188,9 @@ export function useEvolution() {
 
     // If not found, fetch it directly
     if (!line) {
-      line = await fetchEvolutionLine(evolutionLineId)
-      if (!line) return null
+      const fetchedLine = await fetchEvolutionLine(evolutionLineId)
+      if (!fetchedLine) return null
+      line = fetchedLine
     }
 
     // Parse chain from JSON if needed
@@ -246,6 +249,11 @@ export function useEvolution() {
     digimonId: string | null,
     digimonName?: string
   ): Promise<EvolutionLine | null> {
+    if (!digimonId) {
+      error.value = 'All chain entries must be linked to a Digimon'
+      return null
+    }
+
     const line = evolutionLines.value.find((l) => l.id === evolutionLineId)
     if (!line) {
       // Try fetching it

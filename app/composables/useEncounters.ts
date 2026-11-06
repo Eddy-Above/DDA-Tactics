@@ -9,6 +9,7 @@ export interface CombatParticipant {
   id: string
   type: 'tamer' | 'digimon'
   entityId: string
+  seq?: number
   initiative: number
   initiativeRoll: number
   actionsRemaining: { simple: number }
@@ -774,7 +775,7 @@ export function useEncounters() {
     tamerId: string,
     response: {
       type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled' | 'divine-protection-used' | 'divine-protection-declined'
-      digimonId?: string
+      digimonId?: string | null
       initiative?: number
       initiativeRoll?: number
       participantId?: string

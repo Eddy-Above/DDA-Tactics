@@ -19,7 +19,7 @@ interface SubmitResponseBody {
   tamerId: string
   response: {
     type: 'digimon-selected' | 'initiative-rolled' | 'dodge-rolled' | 'health-rolled' | 'counterattack-declined' | 'counterattack-triggered' | 'recovery-rolled' | 'divine-protection-used' | 'divine-protection-declined'
-    digimonId?: string
+    digimonId?: string | null
     initiative?: number
     initiativeRoll?: number
     dodgeDicePool?: number
@@ -202,7 +202,7 @@ export default defineEventHandler(async (event) => {
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     // Create initiative-roll request
-    const initiativeRequest = {
+    const initiativeRequest: (typeof pendingRequests)[number] = {
       id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'initiative-roll',
       targetTamerId: body.tamerId,
@@ -246,6 +246,9 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body.response.type === 'dodge-rolled' && request.data?.attackId) {
+    if (!request.targetParticipantId) {
+      throw createError({ statusCode: 400, message: 'Dodge request is missing its target participant' })
+    }
     let participants = encounter.participants
     let battleLog = encounter.battleLog
     const turnOrder = encounter.turnOrder
@@ -312,7 +315,7 @@ export default defineEventHandler(async (event) => {
           fullDodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
         }
       }
-      fullDodgePool = applyStanceToDodge(fullDodgePool, targetParticipantForDodge?.currentStance)
+      fullDodgePool = applyStanceToDodge(fullDodgePool, targetParticipantForDodge?.currentStance ?? 'neutral')
       fullDodgePool = Math.max(1, fullDodgePool - (targetParticipantForDodge?.dodgePenalty ?? 0))
       const targetEffectModsForDodge = getEffectStatModifiers(targetParticipantForDodge?.activeEffects || [])
       fullDodgePool += targetEffectModsForDodge.dodge
@@ -429,6 +432,7 @@ export default defineEventHandler(async (event) => {
       if (hit && appliedEffectName && CLASH_ENDING_EFFECTS.has(appliedEffectName)) {
         const clashTarget = participants.find((p: any) => p.id === request.targetParticipantId)
         if (clashTarget?.clash?.clashId) {
+          const endingClashId = clashTarget.clash.clashId
           const clashEndLog = {
             id: `log-${Date.now()}-clashend-effect`,
             timestamp: new Date().toISOString(),
@@ -442,7 +446,7 @@ export default defineEventHandler(async (event) => {
             effects: ['Clash Ended', appliedEffectName],
           }
           participants = participants.map((p: any) => {
-            if (p.clash?.clashId === clashTarget.clash.clashId) {
+            if (p.clash?.clashId === endingClashId) {
               const { clash, ...rest } = p
               return { ...rest, clashCooldownUntilRound: (encounter.round || 0) + 1 }
             }
@@ -685,7 +689,7 @@ export default defineEventHandler(async (event) => {
               : p,
           )
 
-          const dpRequest = {
+          const dpRequest: (typeof pendingRequests)[number] = {
             id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             type: 'divine-protection-offer',
             targetTamerId: request.data.targetEntityId,
@@ -845,6 +849,7 @@ export default defineEventHandler(async (event) => {
       if (hit && appliedEffectName && CLASH_ENDING_EFFECTS.has(appliedEffectName)) {
         const clashTarget = participants.find((p: any) => p.id === request.targetParticipantId)
         if (clashTarget?.clash?.clashId) {
+          const endingClashId = clashTarget.clash.clashId
           const clashEndLog = {
             id: `log-${Date.now()}-clashend-effect`,
             timestamp: new Date().toISOString(),
@@ -859,7 +864,7 @@ export default defineEventHandler(async (event) => {
           }
           battleLog = [...battleLog, clashEndLog]
           participants = participants.map((p: any) => {
-            if (p.clash?.clashId === clashTarget.clash.clashId) {
+            if (p.clash?.clashId === endingClashId) {
               const { clash, ...rest } = p
               return { ...rest, clashCooldownUntilRound: (encounter.round || 0) + 1 }
             }
@@ -890,9 +895,10 @@ export default defineEventHandler(async (event) => {
       let autoDevolveLog: any = null
       const damagedTarget = participants.find((p: any) => p.id === request.targetParticipantId)
       if (damagedTarget && hit &&
+          damagedTarget.currentWounds !== undefined && damagedTarget.maxWounds !== undefined &&
           damagedTarget.currentWounds >= damagedTarget.maxWounds &&
           damagedTarget.evolutionLineId &&
-          damagedTarget.woundsHistory?.length > 0) {
+          damagedTarget.woundsHistory && damagedTarget.woundsHistory.length > 0) {
         const previousState = damagedTarget.woundsHistory.pop()
         if (previousState) {
           const oldEntityId = damagedTarget.entityId
@@ -1024,6 +1030,9 @@ export default defineEventHandler(async (event) => {
 
   // === HEALTH-ROLLED: Positive [P] effect duration from Health roll ===
   if (body.response.type === 'health-rolled' && request.data?.attackId) {
+    if (!request.targetParticipantId) {
+      throw createError({ statusCode: 400, message: 'Health request is missing its target participant' })
+    }
     let participants = encounter.participants
     let battleLog = encounter.battleLog
 
@@ -1109,6 +1118,9 @@ export default defineEventHandler(async (event) => {
 
   // === COUNTERATTACK-DECLINED: player declines the free retaliation ===
   if (body.response.type === 'counterattack-declined') {
+    if (!request.targetParticipantId) {
+      throw createError({ statusCode: 400, message: 'Counterattack request is missing its target participant' })
+    }
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
     const battleLog = encounter.battleLog
 
@@ -1235,7 +1247,7 @@ export default defineEventHandler(async (event) => {
 
     if (originalAttackerIsPlayer && originalAttackerTamerId) {
       // Create dodge-roll directly (bypassing intercede-offer) with halfDodge: true
-      const dodgeRequest = {
+      const dodgeRequest: (typeof pendingRequests)[number] = {
         id: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type: 'dodge-roll',
         targetTamerId: originalAttackerTamerId,

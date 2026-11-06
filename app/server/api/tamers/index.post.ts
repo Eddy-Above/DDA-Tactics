@@ -44,12 +44,10 @@ interface CreateTamerBody {
     severity: 'minor' | 'major' | 'terrible'
     totalBoxes: number
     markedBoxes: number
+    cpMarkedBoxes?: number
+    gmMarkedBoxes?: number
   }>
-  xpBonuses?: {
-    attributes: Record<string, number>
-    skills: Record<string, number>
-    inspiration: number
-  }
+  xpBonuses?: NonNullable<NewTamer['xpBonuses']>
   notes?: string
   spriteUrl?: string
   xp?: number
@@ -111,7 +109,7 @@ export default defineEventHandler(async (event) => {
     attributes,
     skills,
     aspects: body.aspects || [],
-    torments: body.torments || [],
+    torments: (body.torments || []).map((torment) => ({ ...torment, cpMarkedBoxes: torment.cpMarkedBoxes ?? 0 })),
     specialOrders: [],
     inspiration: body.inspiration ?? 1,
     grantedInspiration: body.grantedInspiration ?? 0,

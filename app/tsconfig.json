@@ -1,6 +1,7 @@
 {
   "extends": "./.nuxt/tsconfig.json",
   "compilerOptions": {
+    "types": ["node"],
     "strict": true,
     "strictNullChecks": true,
     "noImplicitAny": true,

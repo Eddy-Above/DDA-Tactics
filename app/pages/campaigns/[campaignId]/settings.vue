@@ -292,7 +292,9 @@ onMounted(async () => {
     // Load skill renames
     const renames = campaign.value.rulesSettings?.skillRenames
     if (renames) {
-      form.skillRenames = { ...renames }
+      form.skillRenames = Object.fromEntries(
+        Object.entries(renames).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+      )
     }
 
     // Load EddySoul rules

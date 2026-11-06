@@ -9,9 +9,9 @@ import { useAttackTags, type Attack, type NewAttack } from './useAttackTags'
 import type { DigimonFormData } from './useDigimonForm'
 import type { EddySoulRules } from '../types'
 
-export function useDigimonAttacks(form: Ref<any> | any, eddySoulRules?: Ref<EddySoulRules | undefined>) {
+export function useDigimonAttacks(form: Ref<DigimonFormData> | DigimonFormData, eddySoulRules?: Ref<EddySoulRules | undefined>) {
   // Handle both Ref and raw values
-  const formRef = isRef(form) ? form : computed(() => form)
+  const formRef = computed(() => isRef(form) ? form.value : form)
 
   // ========================
   // UI State
@@ -34,7 +34,7 @@ export function useDigimonAttacks(form: Ref<any> | any, eddySoulRules?: Ref<Eddy
   // ========================
   // Attack Tags Management
   // ========================
-  const { usedAttackTags, countAttacksWithTag, isTagAlreadyUsed, availableAttackTags, usedEffects, availableEffectTags, addTagToAttack, removeTagFromAttack } = useAttackTags(formRef as any, newAttack as any, eddySoulRules)
+  const { usedAttackTags, countAttacksWithTag, isTagAlreadyUsed, availableAttackTags, usedEffects, availableEffectTags, addTagToAttack, removeTagFromAttack } = useAttackTags(formRef, newAttack, eddySoulRules)
 
   // ========================
   // Attack CRUD Operations

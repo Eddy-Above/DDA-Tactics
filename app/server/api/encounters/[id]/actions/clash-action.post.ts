@@ -57,10 +57,11 @@ export default defineEventHandler(async (event) => {
   if (!actor.clash || actor.clash.clashId !== body.clashId) {
     throw createError({ statusCode: 400, message: 'You are not in this clash' })
   }
-  if (!actor.clash.isController) {
+  const actorClash = actor.clash
+  if (!actorClash.isController) {
     throw createError({ statusCode: 403, message: 'Only the clash controller can take clash actions' })
   }
-  if (actor.clash.clashCheckNeeded) {
+  if (actorClash.clashCheckNeeded) {
     throw createError({ statusCode: 400, message: 'A clash check must be resolved before taking actions' })
   }
 
@@ -78,7 +79,7 @@ export default defineEventHandler(async (event) => {
   }
   if (!canAct) throw createError({ statusCode: 403, message: "It is not this participant's turn" })
 
-  const target = participants.find((p: any) => p.id === actor.clash.opponentParticipantId)
+  const target = participants.find((p: any) => p.id === actorClash.opponentParticipantId)
   if (!target) throw createError({ statusCode: 404, message: 'Clash opponent not found' })
 
   // Resolve names
@@ -107,7 +108,7 @@ export default defineEventHandler(async (event) => {
     // Free action — no action cost
     // Both participants exit clash; set cooldown
     participants = participants.map((p: any) => {
-      if (p.id === body.participantId || p.id === actor.clash.opponentParticipantId) {
+      if (p.id === body.participantId || p.id === actorClash.opponentParticipantId) {
         const { clash, ...rest } = p
         return {
           ...rest,
@@ -159,7 +160,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const maxPins = Math.max(1, actorCpu - targetCpu)
-    const pinsUsed = actor.clash.clashPinsUsed ?? 0
+    const pinsUsed = actorClash.clashPinsUsed ?? 0
     if (pinsUsed >= maxPins) {
       throw createError({ statusCode: 403, message: `Pin limit reached (${maxPins} pin${maxPins !== 1 ? 's' : ''} allowed this clash)` })
     }
@@ -172,7 +173,7 @@ export default defineEventHandler(async (event) => {
           clash: { ...p.clash, clashPinsUsed: pinsUsed + 1 },
         }
       }
-      if (p.id === actor.clash.opponentParticipantId) {
+      if (p.id === actorClash.opponentParticipantId) {
         return {
           ...p,
           clash: { ...p.clash, isPinned: true },
@@ -374,7 +375,7 @@ export default defineEventHandler(async (event) => {
           clashCooldownUntilRound: (encounter.round || 0) + 1,
         }
       }
-      if (p.id === actor.clash.opponentParticipantId) {
+      if (p.id === actorClash.opponentParticipantId) {
         const { clash, ...rest } = p
         return {
           ...rest,

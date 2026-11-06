@@ -1,4 +1,4 @@
-import type { Vec3, GameMap } from '../types'
+import type { Vec3, GameMap } from '../../types'
 import { getRoomPositions, broadcastPositionPatch } from './encounterRoom'
 import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
 import { getFootprintDimsForParticipant, buildFootprintOccupiedSet, findPushPullLandingCell } from './mapMovement'
