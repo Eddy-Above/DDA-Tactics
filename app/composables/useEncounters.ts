@@ -3,6 +3,7 @@ import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
 import type { AreaShapeData } from '../utils/areaShapes'
+import { applyDeferredIntercedeCost } from '../utils/intercedeActions'
 import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
 
 export interface CombatParticipant {
@@ -190,10 +191,9 @@ function tickTurnEffects(participant: CombatParticipant) {
     .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name))
 }
 
-// Marks a participant as the active one for their turn: resets dodge penalty,
-// applies any pending Divine Protection action penalty, and resets their
-// partner digimon's dodge/intercede state. Shared by nextTurn and
-// removeParticipant's activate-next-participant case.
+// Starts a participant's turn: resets dodge penalty, repays deferred intercede actions,
+// applies any Divine Protection penalty, and resets their partner's dodge/intercede state.
+// Shared by nextTurn and removeParticipant's activate-next-participant case.
 function activateParticipant(
   participant: CombatParticipant,
   participants: CombatParticipant[],
@@ -202,6 +202,7 @@ function activateParticipant(
   participant.isActive = true
   participant.dodgePenalty = 0
   participant.hasDirectedThisTurn = false
+  applyDeferredIntercedeCost(participant)
 
   // Apply Divine Protection Simple Action penalty carried from previous turn
   if (participant.pendingSimpleActionPenalty && participant.pendingSimpleActionPenalty > 0) {
@@ -222,12 +223,7 @@ function activateParticipant(
     })
     if (partner) {
       partner.dodgePenalty = 0
-      // Apply post-turn intercede penalty accumulated since last cycle
-      if (partner.interceptPenalty) {
-        partner.actionsRemaining = partner.actionsRemaining || { simple: 2 }
-        partner.actionsRemaining.simple = Math.max(0, partner.actionsRemaining.simple - partner.interceptPenalty)
-        partner.interceptPenalty = 0
-      }
+      applyDeferredIntercedeCost(partner)
       partner.hasActed = false
     }
   }

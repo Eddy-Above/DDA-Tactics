@@ -3353,7 +3353,7 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
     await loadData()
   } catch (e: any) {
     if (e?.statusCode === 409) {
-      alert('Another player already interceded for this attack!')
+      alert(e?.data?.message || 'This intercede offer is no longer available.')
     } else {
       console.error('Intercede claim failed:', e)
       alert(e?.data?.message || 'Failed to intercede')

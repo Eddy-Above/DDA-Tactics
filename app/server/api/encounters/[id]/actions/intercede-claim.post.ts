@@ -30,6 +30,7 @@ import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server
 import { resolveFall } from '~/utils/movementRules'
 import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface IntercedeClaimBody {
   requestId: string
@@ -98,10 +99,42 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'requestId and interceptorParticipantId are required' })
   }
 
-  // Fetch encounter
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  if (!encounter) {
-    throw createError({ statusCode: 404, message: 'Encounter not found' })
+  return serializeIntercedeClaim(encounterId, async () => {
+    const positions = await db.transaction(async (tx) => {
+      // Competing claims must validate the offer and save its resolution under the same lock.
+      const [encounter] = await tx.select().from(encounters).where(eq(encounters.id, encounterId)).for('update')
+      if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
+      return resolveIntercedeClaim(tx, encounter, encounterId, body)
+    })
+
+    if (positions) {
+      await broadcastPositionPatch(encounterId, positions)
+      await recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[intercede-claim] Guiding Light recompute failed:', e))
+    }
+
+    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
+
+    const room = await getRoomSnapshot(encounterId)
+    return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
+  })
+})
+
+type ClaimDatabase = Pick<typeof db, 'select' | 'update'>
+
+async function resolveIntercedeClaim(
+  db: ClaimDatabase,
+  encounter: typeof encounters.$inferSelect,
+  encounterId: string,
+  body: IntercedeClaimBody,
+): Promise<Record<string, Vec3> | null> {
+  let participants = encounter.participants || []
+  let pendingRequests = encounter.pendingRequests || []
+  let battleLog = encounter.battleLog || []
+
+  const request = pendingRequests.find((r: any) => r.id === body.requestId)
+  if (!request || request.type !== 'intercede-offer') {
+    throw createError({ statusCode: 409, message: 'This intercede offer is no longer available' })
   }
 
   // Fetch campaign house rules (+ EddySoul rules, for Burn)
@@ -116,10 +149,6 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  let participants = encounter.participants || []
-  let pendingRequests = encounter.pendingRequests || []
-  let battleLog = encounter.battleLog || []
-
   const participantPositions: Record<string, { x: number; y: number; z: number }> = await getRoomPositions(encounterId)
 
   const participantDigimonIds = participants.filter((p: any) => p.type === 'digimon').map((p: any) => p.entityId as string)
@@ -130,12 +159,6 @@ export default defineEventHandler(async (event) => {
   ])
   const digimonById = new Map(allParticipantDigimon.map((d: any) => [d.id, d]))
   const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
-
-  // Find the request
-  const request = pendingRequests.find((r: any) => r.id === body.requestId)
-  if (!request || request.type !== 'intercede-offer') {
-    throw createError({ statusCode: 404, message: 'Intercede offer not found' })
-  }
 
   const intercedeGroupId = request.data.intercedeGroupId
   const isAreaAttack = !!request.data.isAreaAttack
@@ -161,15 +184,18 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, message: 'chosenTargetId is required for area attacks' })
     }
     const chosenTargetId: string = body.chosenTargetId
-    if (!isAreaTargetCovered(request.data, chosenTargetId)) {
-      throw createError({ statusCode: 400, message: 'chosenTargetId is not a valid target for this request' })
-    }
-    // 409 check: is chosen target still available (not already claimed by another interceptor)?
-    const stillAvailable = pendingRequests.some(
-      (r: any) => r.data?.intercedeGroupId === intercedeGroupId && isAreaTargetCovered(r.data, chosenTargetId)
+    const groupState = pendingRequests.find(
+      (r: any) => r.type === 'intercede-group-state' && r.data?.intercedeGroupId === intercedeGroupId
     )
-    if (!stillAvailable) {
-      throw createError({ statusCode: 409, message: 'Target already claimed by another interceptor' })
+    const claims: AreaAttackClaim[] = groupState?.data?.claims || []
+    if (claims.some((claim) => claim.targetId === chosenTargetId)) {
+      throw createError({ statusCode: 409, message: 'Another participant already interceded for this target' })
+    }
+    if (claims.some((claim) => claim.interceptorParticipantId === body.interceptorParticipantId)) {
+      throw createError({ statusCode: 409, message: 'This character has already interceded for this area attack. Choose a different character.' })
+    }
+    if (!isAreaTargetCovered(request.data, chosenTargetId)) {
+      throw createError({ statusCode: 409, message: 'This target is no longer available for interceding' })
     }
     effectiveTargetId = chosenTargetId
     const chosenParticipant = participants.find((p: any) => p.id === chosenTargetId)
@@ -181,11 +207,6 @@ export default defineEventHandler(async (event) => {
       effectiveTargetName = chosenTargetId
     }
   } else {
-    // Single-target 409 check: if no group requests left, someone already claimed
-    const groupRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId === intercedeGroupId)
-    if (groupRequests.length === 0) {
-      throw createError({ statusCode: 409, message: 'Another player already interceded' })
-    }
     effectiveTargetId = request.data.targetId
     effectiveTargetName = request.data.targetName || 'Unknown'
   }
@@ -214,11 +235,20 @@ export default defineEventHandler(async (event) => {
   // interceptor (the hit, its fall, Burn on the way in), the target it moved (Burn, a throw's fall)
   // and the attacker (Digizoid Armor reflect).
   const knockedOutBefore = new Set(knockedOutEnemyIds(encounter.participants || []))
-  const resolveClaimKnockouts = (ids: string[], turnIndex: number, round: number) => resolveEnemyKnockouts(
-    { participants, turnOrder, currentTurnIndex: turnIndex, round },
-    ids.filter((pid) => !knockedOutBefore.has(pid)),
-    { encounterId, houseRules, mapId: (encounter as any).mapId, gravity: 'room' },
-  )
+  const resolveClaimKnockouts = async (ids: string[], turnIndex: number, round: number) => {
+    const result = await resolveEnemyKnockouts(
+      { participants, turnOrder, currentTurnIndex: turnIndex, round },
+      ids.filter((pid) => !knockedOutBefore.has(pid)),
+      {
+        encounterId, houseRules,
+        gravity: claimMapRecord ? { map: claimMapRecord, positions: updatedParticipantPositions ?? participantPositions } : undefined,
+      },
+    )
+    if (result.positionPatch && Object.keys(result.positionPatch).length > 0) {
+      updatedParticipantPositions = { ...(updatedParticipantPositions ?? participantPositions), ...result.positionPatch }
+    }
+    return result
+  }
   let turnHasGone = false
 
   if (interceptor.type === 'tamer') {
@@ -604,6 +634,7 @@ export default defineEventHandler(async (event) => {
           houseRules,
           encounterId: encounterId!,
           positions: updatedParticipantPositions ?? participantPositions,
+          database: db,
         })
         participants = resolved.participants
         battleLog = resolved.battleLog
@@ -660,18 +691,7 @@ export default defineEventHandler(async (event) => {
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
-    if (updatedParticipantPositions) {
-      await broadcastPositionPatch(encounterId, updatedParticipantPositions)
-      // [Guiding Light]: participants were already persisted above, so this recompute is safe —
-      // awaited before the re-select below so the response also reflects any aura change.
-      await recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[intercede-claim] Guiding Light recompute failed:', e))
-    }
-
-    const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    if (!updated) throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-
-    const room = await getRoomSnapshot(encounterId)
-    return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
+    return updatedParticipantPositions
   }
 
   // --- Damage attack: existing flow ---
@@ -799,6 +819,7 @@ export default defineEventHandler(async (event) => {
         houseRules,
         encounterId: encounterId!,
         positions: updatedParticipantPositions ?? participantPositions,
+        database: db,
       })
       participants = resolved.participants
       battleLog = resolved.battleLog
@@ -917,19 +938,5 @@ export default defineEventHandler(async (event) => {
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
 
-  if (updatedParticipantPositions) {
-    await broadcastPositionPatch(encounterId, updatedParticipantPositions)
-    // [Guiding Light]: participants were already persisted above, so this recompute is safe —
-    // awaited before the re-select below so the response also reflects any aura change.
-    await recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[intercede-claim] Guiding Light recompute failed:', e))
-  }
-
-  const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-
-  if (!updated) {
-    throw createError({ statusCode: 500, message: 'Failed to retrieve encounter after update' })
-  }
-
-  const room = await getRoomSnapshot(encounterId)
-  return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
-})
+  return updatedParticipantPositions
+}
