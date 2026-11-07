@@ -379,6 +379,10 @@ export const encounters = pgTable('encounters', {
     targetParticipantId?: string
     timestamp: string
     data?: any
+    /** Set by responses.post when the request is first answered. It survives deleting the
+     *  response, so a dismissed result can never turn the request back into an open prompt, and
+     *  a repeat submission (double click, retry, second tab) is a no-op instead of a second hit. */
+    answeredAt?: string
   }>>(),
 
   // Player responses to requests

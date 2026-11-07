@@ -4774,7 +4774,10 @@ function onMapAttackCancelled() {
                 </div>
                 <div class="flex gap-2">
                   <template v-if="request.type === 'dodge-roll'">
+                    <!-- Already answered: rolling again would hit the target a second time -->
+                    <span v-if="request.answeredAt" class="text-green-400 text-sm self-center">Answered</span>
                     <button
+                      v-else
                       @click="handleGmDodgeRoll(request)"
                       :disabled="gmDodgeRollInProgress"
                       class="bg-digimon-orange-600 hover:bg-digimon-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-sm font-semibold transition-colors"

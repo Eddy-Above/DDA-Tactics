@@ -14,6 +14,8 @@ import { isImmuneToEffect } from '../../../utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../utils/enemyKnockouts'
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 import { refreshGuidingLightForParticipants } from '../../../utils/guidingLight'
+import { serializeIntercedeClaim } from '../../../utils/intercedeClaims'
+import { isRequestAnswered } from '../../../../utils/requestState'
 
 interface SubmitResponseBody {
   requestId: string
@@ -59,6 +61,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Answers are processed one at a time per encounter, in the same queue the intercede decisions
+  // use. Each reads the whole encounter and writes it back, so two overlapping answers (several
+  // defenders submitting at once, or a double click) would otherwise let the later write erase the
+  // earlier one's damage, and a repeat could slip past the already-answered check below.
+  return serializeIntercedeClaim(encounterId, () => submitResponse(encounterId, body))
+})
+
+async function submitResponse(encounterId: string, body: SubmitResponseBody) {
   // Fetch encounter
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
@@ -197,6 +207,14 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // A dodge is answered once. The request stays pending until the result is dismissed, and its
+  // response is deleted on dismissal, so a second submission (double click, a retry after a lost
+  // reply, another tab) would otherwise roll the hit and apply its damage again. The stamp on the
+  // request outlives the response, so it also covers a submission that arrives after the dismissal.
+  if (body.response.type === 'dodge-rolled' && isRequestAnswered(request, currentResponses)) {
+    return encounter
+  }
+
   // Auto-process digimon-selected: immediately create initiative-roll request
   if (body.response.type === 'digimon-selected') {
     // Remove the original digimon-selection request
@@ -238,6 +256,9 @@ export default defineEventHandler(async (event) => {
   }
 
   currentResponses.push(newResponse)
+  // Stamp the request itself (mutated in place; every write below derives from pendingRequests,
+  // and the branches that drop the request drop the stamp with it). See the check above.
+  if (body.response.type === 'dodge-rolled') request.answeredAt = new Date().toISOString()
 
   // If this is a dodge-roll response to a player attack, calculate damage and update battle log
   let updateData: any = {
@@ -1517,4 +1538,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   return updated
-})
+}

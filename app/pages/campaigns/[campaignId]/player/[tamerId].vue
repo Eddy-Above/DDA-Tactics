@@ -21,6 +21,8 @@ import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts
 import { evolutionFormsKey } from '~/utils/evolutionForms'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
+import { useAutoDismiss } from '~/composables/useAutoDismiss'
+import { isRequestAnswered } from '~/utils/requestState'
 import { prepareAttackAccuracy, snapshotAttackRiders, type AccuracyRollResult } from '~/utils/attackAccuracy'
 
 definePageMeta({
@@ -156,6 +158,8 @@ const intercedeOptionsSelections = ref<Set<string>>(new Set())
 const savingIntercedeOptions = ref(false)
 const attackResultQueue = ref<Array<{
   responseId: string
+  /** The dodge request this result answered; absent for results rebuilt from the battle log. */
+  requestId?: string
   attackerName: string
   attackName: string
   targetName: string
@@ -229,6 +233,42 @@ const intercedeResultData = ref<{
   armorPiercing: number
   effectiveArmor: number
 } | null>(null)
+// Bumped each time a result is set, so a result that replaces another restarts its countdown
+// even when its numbers are identical.
+const intercedeResultSerial = ref(0)
+const clashCheckResultSerial = ref(0)
+
+// Server response ids whose result this page already dismissed. A stale push that still carries
+// the response must not rebuild a result the player has seen.
+const dismissedResponseIds = new Set<string>()
+
+// Completed results leave on their own after 5 s. Each dialog's Close button calls the same
+// `dismiss()` as its timer, so automatic and manual dismissal share one cleanup and run once.
+// Dialogs awaiting a decision (dodge/counterattack/intercede prompts, accuracy review) have no
+// key here and never time out; the battle log keeps every result after it is dismissed.
+const attackResultDismissal = useAutoDismiss({
+  key: () => {
+    const first = attackResultData.value
+    if (!showAttackResultModal.value || !first) return null
+    return `${first.groupId ?? first.responseId}:${attackResultGroup.value.length}`
+  },
+  cleanup: () => cleanupAttackResultGroup(),
+})
+const dodgeResultDismissal = useAutoDismiss({
+  key: () => (showDodgeResultModal.value && dodgeResultData.value
+    ? (dodgeRequestId.value ?? dodgeResponseId.value ?? 'dodge-result')
+    : null),
+  cleanup: () => cleanupDodgeResult(),
+})
+const intercedeResultDismissal = useAutoDismiss({
+  key: () => (showIntercedeResultModal.value && intercedeResultData.value ? intercedeResultSerial.value : null),
+  cleanup: () => closeIntercedeResultModal(),
+})
+const clashCheckResultDismissal = useAutoDismiss({
+  // A clash result still PENDING the opponent's roll is not finished: it stays until it resolves.
+  key: () => (clashCheckResultData.value && !clashCheckResultData.value.waiting ? clashCheckResultSerial.value : null),
+  cleanup: () => closeClashCheckResult(),
+})
 
 // Attribute/Skill roll modal state
 const showAttributeRollModal = ref(false)
@@ -389,8 +429,9 @@ function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
   for (const resp of responses) {
     if (resp.response?.type !== 'dodge-rolled') continue
     if (!myPartIds.has(resp.attackerParticipantId)) continue
-    // Skip if already in queue
+    // Skip if already in queue, or if the player already saw and dismissed it
     if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
+    if (dismissedResponseIds.has(resp.id)) continue
     // Skip if already being tracked as pending
     if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId && pa.targetParticipantId === resp.participantId)) continue
 
@@ -1139,9 +1180,7 @@ const hasUnrespondedDodgeRequest = computed(() => {
   if (!dodgeRequest) return false
 
   const responses = (activeEncounter.value.requestResponses as any[]) || []
-  const hasResponse = responses.some((r) => r.requestId === dodgeRequest.id && r.tamerId === tamer.value!.id)
-
-  return !hasResponse
+  return !isRequestAnswered(dodgeRequest, responses, tamer.value.id)
 })
 
 // Attacked from outside the target's clash: the target cannot dodge at all. Checked against live
@@ -2654,6 +2693,7 @@ function showAttackResult(
   // Add to queue to handle multiple attacks in one turn
   attackResultQueue.value.push({
     responseId: dodgeResponse.id,
+    requestId: dodgeRequest?.id,
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: pendingAttack.targetName,
@@ -2735,22 +2775,45 @@ function maybeShowGroupModal(groupId?: string) {
   }
 }
 
-async function closeAttackResultModal() {
-  // Get all results in the current group (all targets of one AoE attack share a groupId)
+// Server-issued response ids look like `resp-…`; results built locally from misses or the
+// battle log use `miss-…` / `log-…` and have nothing to delete.
+function isServerResponseId(id?: string | null): id is string {
+  return !!id && id.startsWith('resp-')
+}
+
+// The one cleanup for a finished dodge exchange: cancel the request AND delete the response, so
+// neither a stale prompt nor a stale result can come back. Each step tolerates the other having
+// already run (another client, the GM, or an earlier dismissal), and failures never block closing.
+async function cleanupDodgeExchange(requestId?: string | null, responseId?: string | null) {
+  const encounterId = activeEncounter.value?.id
+  if (!encounterId) return
+  if (requestId) {
+    try {
+      await cancelRequest(encounterId, requestId)
+    } catch (error) {
+      console.error('Failed to cancel dodge request:', error)
+    }
+  }
+  if (isServerResponseId(responseId)) {
+    try {
+      await deleteResponse(encounterId, responseId)
+    } catch (error) {
+      console.error('Failed to delete response:', error)
+    }
+  }
+}
+
+// Closes the head group of attack results: all targets of one AoE attack share a groupId. Used by
+// the Close button and the 5 s timer alike (attackResultDismissal.dismiss()).
+async function cleanupAttackResultGroup() {
   const group = attackResultGroup.value
   if (group.length === 0) return
   const closedGroupId = group[0].groupId
 
-  // Delete the responses backing each result in the group
+  // Clear the exchange behind each result in the group
   for (const result of group) {
-    if (result.responseId && activeEncounter.value) {
-      try {
-        await deleteResponse(activeEncounter.value.id, result.responseId)
-      } catch (error) {
-        console.error('Failed to delete response:', error)
-        // Continue closing modal even if delete fails
-      }
-    }
+    await cleanupDodgeExchange(result.requestId, result.responseId)
+    dismissedResponseIds.add(result.responseId)
   }
 
   // Remove all results in the closed group from the queue
@@ -3007,21 +3070,11 @@ async function submitCounterattack() {
   }
 }
 
-async function closeDodgeResultModal() {
-  // Auto-dismiss: mirrors GM dismiss flow (cancelRequest + deleteResponse + fetchEncounter)
-  if (activeEncounter.value) {
-    try {
-      if (dodgeRequestId.value) {
-        await cancelRequest(activeEncounter.value.id, dodgeRequestId.value)
-      }
-      if (dodgeResponseId.value) {
-        await deleteResponse(activeEncounter.value.id, dodgeResponseId.value)
-      }
-      await fetchEncounter(activeEncounter.value.id)
-    } catch (error) {
-      console.error('Failed to dismiss dodge response:', error)
-    }
-  }
+// Dismisses the defender's dodge result (Close button and 5 s timer, via dodgeResultDismissal).
+// Mirrors the GM's dismiss flow: cancel the request, delete the response.
+async function cleanupDodgeResult() {
+  await cleanupDodgeExchange(dodgeRequestId.value, dodgeResponseId.value)
+  if (dodgeResponseId.value) dismissedResponseIds.add(dodgeResponseId.value)
   showDodgeResultModal.value = false
   dodgeResultData.value = null
   hasRolledDodge.value = false
@@ -3207,6 +3260,17 @@ function closeIntercedeResultModal() {
   intercedeResultData.value = null
 }
 
+// Clash check outcomes are completed results too (while PENDING they are not: see the key above).
+function showClashCheckResult(result: NonNullable<typeof clashCheckResultData.value>) {
+  clashCheckResultData.value = result
+  clashCheckResultSerial.value++
+}
+
+async function closeClashCheckResult() {
+  clashCheckResultData.value = null
+  await loadData()
+}
+
 // Targets this player (tamer + partner digimon) is eligible to protect for an area-attack offer
 function getAreaProtectTargetIds(data: any): string[] {
   return [...new Set([...(data?.tamerAreaTargetIds || []), ...(data?.digimonAreaTargetIds || [])])]
@@ -3346,6 +3410,7 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
           armorPiercing: intercedeEntry.armorPiercing,
           effectiveArmor: intercedeEntry.effectiveArmor,
         }
+        intercedeResultSerial.value++
         showIntercedeResultModal.value = true
       }
     }
@@ -3912,7 +3977,7 @@ async function handleInitiateClash(participantId: string, targetId: string, preR
     // If clash resolved immediately (NPC target auto-rolled), show the outcome
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     if (updatedParticipant?.clash && updatedParticipant.clash.pendingRoll === undefined) {
-      clashCheckResultData.value = {
+      showClashCheckResult({
         youControl: updatedParticipant.clash.isController ?? false,
         waiting: false,
         opponentName: target ? getEntityName(target) : '?',
@@ -3920,7 +3985,7 @@ async function handleInitiateClash(participantId: string, targetId: string, preR
         playerRollDice: bodyDiceResults,
         bodyBonus: actor ? getParticipantBodyScore(actor) : 0,
         opponentRollTotal: response?.opponentRollTotal,
-      }
+      })
     }
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to initiate clash')
@@ -3953,7 +4018,7 @@ async function handleClashCheck(participantId: string, preRolled?: { roll: numbe
     })
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
-    clashCheckResultData.value = {
+    showClashCheckResult({
       youControl: updatedParticipant?.clash?.isController ?? false,
       waiting,
       opponentName,
@@ -3961,7 +4026,7 @@ async function handleClashCheck(participantId: string, preRolled?: { roll: numbe
       playerRollDice: diceResults,
       bodyBonus,
       opponentRollTotal: response?.opponentRollTotal,
-    }
+    })
     clashCheckRollResult.value = null
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash check')
@@ -3988,7 +4053,7 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
     })
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
-    clashCheckResultData.value = {
+    showClashCheckResult({
       youControl: updatedParticipant?.clash?.isController ?? false,
       waiting,
       opponentName,
@@ -3996,7 +4061,7 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
       playerRollDice: diceResults,
       bodyBonus,
       opponentRollTotal: response?.opponentRollTotal,
-    }
+    })
     clashCheckRollResult.value = null
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash response')
@@ -6673,7 +6738,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
           <button
             class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            @click="clashCheckResultData = null; loadData()"
+            @click="clashCheckResultDismissal.dismiss()"
           >
             Close
           </button>
@@ -7260,7 +7325,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeAttackResultModal"
+            @click="attackResultDismissal.dismiss()"
             class="px-6 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
@@ -7358,7 +7423,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeDodgeResultModal"
+            @click="dodgeResultDismissal.dismiss()"
             class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
@@ -7423,7 +7488,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeIntercedeResultModal"
+            @click="intercedeResultDismissal.dismiss()"
             class="px-6 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
