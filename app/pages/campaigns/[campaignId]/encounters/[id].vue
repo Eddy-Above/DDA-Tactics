@@ -15,7 +15,7 @@ import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPa
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
-import { getAttackBadges } from '~/utils/attackBadges'
+import { attackRadialItem, getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encounterSnapshot'
@@ -554,15 +554,7 @@ const mapRadialOptions = computed(() => {
   const options: Record<string, { attacks: MapRadialItem[]; stances: MapRadialItem[] }> = {}
   for (const p of (currentEncounter.value?.participants ?? []) as CombatParticipant[]) {
     options[p.id] = {
-      attacks: getParticipantAttacks(p).map(attack => {
-        const badges = getAttackBadges(attack)
-        return {
-          id: attack.id,
-          label: attack.name,
-          description: [attack.range, badges.aoe, badges.charge ? 'Charge' : null, badges.ap, badges.effect].filter(Boolean).join(' · '),
-          disabled: !canUseAttack(p, attack),
-        }
-      }),
+      attacks: getParticipantAttacks(p).map(attack => attackRadialItem(attack, !canUseAttack(p, attack))),
       stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),

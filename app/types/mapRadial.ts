@@ -6,6 +6,11 @@ export interface MapRadialItem {
   description?: string
   disabled?: boolean
   active?: boolean
+  /** Attack details drawn under the label on the outer ring. */
+  range?: string
+  aoe?: string
+  effect?: string
+  tags?: string[]
   children?: MapRadialItem[]
 }
 

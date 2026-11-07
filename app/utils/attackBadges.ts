@@ -1,4 +1,5 @@
 import type { Attack } from '~/types'
+import type { MapRadialItem } from '~/types/mapRadial'
 import { getAreaShape } from '~/utils/areaShapes'
 
 export interface AttackBadges {
@@ -35,5 +36,24 @@ export function getAttackBadges(attack: Attack): AttackBadges {
     ap,
     charge,
     aoe,
+  }
+}
+
+/** Build the map radial menu entry for an attack: visible details plus the full tooltip text. */
+export function attackRadialItem(attack: Attack, disabled: boolean): MapRadialItem {
+  const tags = attack.tags ?? []
+  const range = attack.range ? attack.range[0].toUpperCase() + attack.range.slice(1) : undefined
+  const aoe = getAttackBadges(attack).aoe ?? undefined
+  const effect = attack.effect || undefined
+  return {
+    id: attack.id,
+    label: attack.name,
+    description: [range, aoe, effect, ...tags].filter(Boolean).join(' · '),
+    disabled,
+    range,
+    aoe,
+    effect,
+    // The area tag is already shown as the AoE type.
+    tags: tags.filter(tag => !/^area attack/i.test(tag.trim())),
   }
 }
