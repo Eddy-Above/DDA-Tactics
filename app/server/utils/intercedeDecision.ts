@@ -8,7 +8,7 @@ import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
-import { GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
+import { GM_OPT_OUT_OWNER, offerHasQuickReaction } from '~/utils/intercedeOptOuts'
 
 // What happens once an intercede-offer is answered without anyone stepping in — a Skip, or an
 // opt-out clearing it. Shared by intercede-skip and intercede-optouts so an opt-out can clear
@@ -334,6 +334,36 @@ export async function pruneOptedOutOffers(
         ? state.pendingRequests.map((r: any) => (r.id === offerId ? pruned : r))
         : state.pendingRequests.filter((r: any) => r.id !== offerId),
     }
+    state = await resolveIntercedeGroupIfDecided(ctx, state, offer)
+  }
+  return state
+}
+
+/**
+ * Answers every intercede prompt already queued for the owners in `passedOwnerIds` (players with an
+ * active "Pass until my next turn") exactly as a plain Skip would: the owner's whole offer is
+ * dropped — unlike an opt-out, an area offer is not kept open for other targets — and each attack
+ * whose last open decision this was resolves through the same path (area group, dodge-roll for a
+ * player target, support effect, NPC auto-resolve). An offer that carries a usable Quick Reaction
+ * is left alone; a pass is about interceding, and Quick Reaction is a separate use of a daily order.
+ */
+export async function resolvePassedOffers(
+  ctx: IntercedeDecisionContext,
+  state: IntercedeDecisionState,
+  passedOwnerIds: string[],
+): Promise<IntercedeDecisionState> {
+  const passed = new Set(passedOwnerIds)
+  if (passed.size === 0) return state
+
+  const offerIds = state.pendingRequests
+    .filter((r: any) => r.type === 'intercede-offer' && passed.has(r.targetTamerId) && !offerHasQuickReaction(r))
+    .map((r: any) => r.id)
+
+  for (const offerId of offerIds) {
+    // An earlier resolution in this loop may already have removed it
+    const offer = state.pendingRequests.find((r: any) => r.id === offerId)
+    if (!offer) continue
+    state = { ...state, pendingRequests: state.pendingRequests.filter((r: any) => r.id !== offerId) }
     state = await resolveIntercedeGroupIfDecided(ctx, state, offer)
   }
   return state

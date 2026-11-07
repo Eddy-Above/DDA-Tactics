@@ -3,7 +3,7 @@ import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
 import type { Tamer } from '../server/db/schema'
 import type { AreaShapeData } from '../utils/areaShapes'
-import { applyDeferredIntercedeCost } from '../utils/intercedeActions'
+import { applyDeferredIntercedeCost, recordTurnStart } from '../utils/intercedeActions'
 import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
 
 export interface CombatParticipant {
@@ -47,6 +47,7 @@ export interface CombatParticipant {
   isEnemy?: boolean
   inReserve?: boolean  // Staged by the GM: excluded from turn order, the map and target lists until deployed
   airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears. Optional — getFallerProfile derives it from the Jumper quality when unset
+  turnsStarted?: number  // Turns started this combat; bumped by activateParticipant / server startTurn (see utils/intercedeActions.ts recordTurnStart)
   lastMovedRound?: number  // Round this unit last moved — set server-side by every movement path; Burn's stationary penalty reads it
   battery?: number
   usedSignatureMoveThisTurn?: boolean
@@ -203,6 +204,7 @@ function activateParticipant(
   participant.dodgePenalty = 0
   participant.hasDirectedThisTurn = false
   applyDeferredIntercedeCost(participant)
+  recordTurnStart(participant)
 
   // Apply Divine Protection Simple Action penalty carried from previous turn
   if (participant.pendingSimpleActionPenalty && participant.pendingSimpleActionPenalty > 0) {

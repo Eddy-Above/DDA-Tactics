@@ -593,6 +593,7 @@ export interface CombatParticipant {
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
   mapPosition?: Vec3  // 3D grid position on the encounter map
   airborneByJump?: boolean  // Set when a unit intentionally jumped onto an air tile: at end of its turn it still falls to the ground but takes 0 fall damage, then the flag clears on landing. Optional — getFallerProfile derives it from the Jumper quality when unset
+  turnsStarted?: number  // Turns this participant has started this combat (every turn start bumps it); a "Pass until my next turn" is in force only while it is unchanged
   lastMovedRound?: number  // Round this unit last moved (map move, Charge, Pass, Knockback/Pull, throw, intercede). Burn's stationary penalty hits a burned Digimon whose stamp isn't the round that just ended
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
   modeChangeFreeSwapsUsed?: number  // Mode Change X.0 Rank 2 EddySoul rule: free swaps used this combat (0-3)

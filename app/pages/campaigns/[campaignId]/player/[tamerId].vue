@@ -17,7 +17,8 @@ import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
-import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts'
+import { getTargetOptOuts, isOfferSuppressed } from '~/utils/intercedeOptOuts'
+import { useIntercedePass } from '~/composables/useIntercedePass'
 import {
   createEncounterSnapshotGate, shapeActionResponse, battleLogTotal, newBattleLogEntries, isEncounterShownToTamer, needsFullReload,
   type SnapshotSource,
@@ -1047,6 +1048,22 @@ const myTamerParticipant = computed(() =>
 // Targets I've said I never want to be asked to intercede for (this encounter)
 const myIntercedeOptOuts = computed(() => getTargetOptOuts(activeEncounter.value as any, tamer.value?.id))
 
+// "Pass until my next turn": a temporary "don't ask me to intercede" for this encounter. Unlike the
+// permanent opt-outs above it ends by itself when my Tamer's next turn starts, and it lives on the
+// encounter, so it follows me across tabs and reconnects.
+const {
+  busy: intercedePassBusy,
+  isPassing: isPassingOnIntercede,
+  start: startIntercedePass,
+  resume: resumeIntercedePass,
+} = useIntercedePass({
+  encounter: () => activeEncounter.value as any,
+  ownerId: () => tamer.value?.id,
+  send: (encounterId, body) => $fetch<any>(`/api/encounters/${encounterId}/actions/intercede-pass`, { method: 'POST', body }),
+  apply: (result) => applyActionResult(result, 'intercede-pass'),
+  onError: (message) => alert(message),
+})
+
 const currentCombatInspiration = computed(() => {
   const inCombat = myTamerParticipant.value
   if (inCombat && (inCombat as any).currentInspiration !== undefined) return (inCombat as any).currentInspiration as number
@@ -1200,16 +1217,24 @@ watch(() => currentIntercedeRequest.value?.id, (newId) => {
   playerIntercedeAreaChosenTarget.value = null
   if (!newId) return
   const req = currentIntercedeRequest.value
-  // Never prompt about a target I opted out of. The server already filters these out and clears
-  // queued ones on save; this catches an offer created in the same instant as a save.
-  if (req && isOfferFullyOptedOut(req, myIntercedeOptOuts.value)) {
-    handleIntercedeSkip()
+  // Never prompt about a target I opted out of, or while I am passing. The server already filters
+  // these out and answers queued ones when the preference is saved; this catches an offer created
+  // in the same instant.
+  if (req && isOfferSuppressed(activeEncounter.value as any, req)) {
+    void autoSkipSuppressedOffer(req.id)
     return
   }
   // Auto-skip if the player has no eligible interceptors for this offer
   if (req && !req.data?.isAreaAttack && intercedeOptions.value.length === 0) {
     handleIntercedeSkip()
   }
+})
+
+// A pass can start while a prompt is already on screen (set from another tab, or the offer was
+// created in the same instant the pass was): answer it instead of leaving it for me.
+watch(isPassingOnIntercede, (passing) => {
+  const req = currentIntercedeRequest.value
+  if (passing && req && isOfferSuppressed(activeEncounter.value as any, req)) void autoSkipSuppressedOffer(req.id)
 })
 
 // If the chosen area-attack target is claimed by someone else and drops out of our
@@ -3555,6 +3580,25 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
   }
 }
 
+// Answers a prompt I already declined (opted out, or passing) without bothering me. The server
+// usually has answered it already, so a failure is only logged: the next update removes the prompt.
+const autoSkipsInFlight = new Set<string>()
+async function autoSkipSuppressedOffer(requestId: string) {
+  if (!activeEncounter.value || autoSkipsInFlight.has(requestId)) return
+  autoSkipsInFlight.add(requestId)
+  try {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+      method: 'POST',
+      body: { requestId },
+    })
+    await applyActionResult(updated, 'intercede-skip')
+  } catch (e: any) {
+    console.error('Auto-skip of a declined intercede prompt failed:', e)
+  } finally {
+    autoSkipsInFlight.delete(requestId)
+  }
+}
+
 // Intercede: Skip (let original target handle it)
 async function handleIntercedeSkip() {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
@@ -4626,6 +4670,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   >
                     {{ endingTurn ? 'Ending...' : 'End Turn' }}
                   </button>
+                  <IntercedePassNotice v-if="isPassingOnIntercede" :busy="intercedePassBusy" @resume="resumeIntercedePass" />
                   <button
                     v-if="myTamerParticipant"
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
@@ -4762,6 +4807,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   @click="handleIntercedeSkip"
                   class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
                 >{{ intercedeLoading ? 'Processing…' : 'Skip All' }}</button>
+                <button
+                  v-if="!isPassingOnIntercede"
+                  :disabled="intercedeLoading || intercedePassBusy"
+                  class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+                  title="Skip every intercede prompt, including later ones, until your next turn starts"
+                  @click="startIntercedePass"
+                >
+                  {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+                </button>
               </div>
             </div>
             <!-- Direct / Bolster Direct map target picker (shown when player clicks Direct from map radial) -->
@@ -5376,6 +5430,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
                 @click="showMapView = !showMapView"
               >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
+              <IntercedePassNotice v-if="isPassingOnIntercede" :busy="intercedePassBusy" @resume="resumeIntercedePass" />
               <button
                 class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
                 @click="openIntercedeOptions"
@@ -6977,6 +7032,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
             >
               {{ intercedeLoading ? 'Processing...' : 'Skip All' }}
             </button>
+            <button
+              v-if="!isPassingOnIntercede"
+              :disabled="intercedeLoading || intercedePassBusy"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+              title="Skip every intercede prompt, including later ones, until your next turn starts"
+              @click="startIntercedePass"
+            >
+              {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+            </button>
           </div>
         </template>
 
@@ -7027,6 +7091,21 @@ async function handleBreakClash(participantId: string, clashId: string) {
             >
               {{ intercedeLoading ? 'Processing...' : 'Skip' }}
             </button>
+            <button
+              v-if="!isPassingOnIntercede"
+              :disabled="intercedeLoading || intercedePassBusy"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+              title="Skip every intercede prompt, including later ones, until your next turn starts"
+              @click="startIntercedePass"
+            >
+              {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+            </button>
+            <p v-if="!isPassingOnIntercede" class="text-xs text-digimon-dark-400 text-center -mt-1">
+              Skips every intercede prompt until your next turn starts. Prompts that offer Quick Reaction still appear.
+            </p>
+            <p v-else class="text-xs text-yellow-300 text-center">
+              You are passing, but this prompt offers Quick Reaction, so it still needs an answer.
+            </p>
             <button
               v-if="currentIntercedeRequest.data?.isAreaAttack"
               :disabled="intercedeLoading"
@@ -7778,6 +7857,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <p class="text-sm text-digimon-dark-400 mb-4">
           Select which participants you want to be asked to intercede for. Unchecked participants will be skipped.
         </p>
+        <div v-if="isPassingOnIntercede" class="mb-4">
+          <IntercedePassNotice :busy="intercedePassBusy" @resume="resumeIntercedePass" />
+          <p class="text-xs text-digimon-dark-400 mt-1">Your selections below are kept and apply again once the pass ends.</p>
+        </div>
         <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
           <button
             v-for="p in (visibleParticipants as any[]).filter((p: any) => p.type !== 'gm' && !p.inReserve && p.id !== myTamerParticipant!.id)"

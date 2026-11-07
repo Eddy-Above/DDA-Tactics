@@ -32,6 +32,9 @@ import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
+import type { H3Event } from 'h3'
+import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercedePasses'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -56,6 +59,20 @@ interface IntercedeOfferBody {
 }
 
 export default defineEventHandler(async (event) => {
+  const result = await createIntercedeOffers(event)
+
+  // A player who is passing ("Pass until my next turn") is never asked: offers just created for
+  // them are answered through the Skip flow before the attacker's response goes back. The common
+  // case, nobody passing, costs nothing: it is decided from the row the handler already returned.
+  const encounterId = getRouterParam(event, 'id')
+  if (!encounterId || passableOfferOwners(result).length === 0) return result
+  const answered = await serializeIntercedeClaim(encounterId, () => applyActivePasses(encounterId))
+  if (!answered) return result
+  const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  return fresh ? { ...result, ...fresh } : result
+})
+
+async function createIntercedeOffers(event: H3Event) {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeOfferBody>(event)
 
@@ -1547,4 +1564,4 @@ export default defineEventHandler(async (event) => {
   }
 
   return updated
-})
+}

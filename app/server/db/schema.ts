@@ -324,6 +324,7 @@ export const encounters = pgTable('encounters', {
     tankBusterUsedAtThresholds?: number[]
     mapPosition?: { x: number; y: number; z: number }
     lastMovedRound?: number
+    turnsStarted?: number
     blackArmorRoundBonus?: { armor: number; dodge: number }
     brownArmorAutoDodgeAvailable?: boolean
   }>>(),

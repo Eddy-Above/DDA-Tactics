@@ -5,7 +5,7 @@ import { evolutionFormsKey } from './evolutionForms'
 /** The action a page just performed, for records an encounter snapshot cannot reveal. */
 export type CombatActionKind =
   | 'attack' | 'dodge' | 'counterattack' | 'health' | 'throw-impact' | 'recovery' | 'direct'
-  | 'intercede-claim' | 'intercede-skip' | 'intercede-optouts' | 'divine-protection'
+  | 'intercede-claim' | 'intercede-skip' | 'intercede-optouts' | 'intercede-pass' | 'divine-protection'
   | 'digivolve' | 'devolve' | 'mode-change'
   | 'special-order' | 'skill-order' | 'spend-inspiration'
   | 'clash' | 'move' | 'stance' | 'end-turn' | 'request-response'

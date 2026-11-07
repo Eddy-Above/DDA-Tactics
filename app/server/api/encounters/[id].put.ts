@@ -8,6 +8,7 @@ import { applyGuidingLightAuras } from '../../utils/guidingLight'
 import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions, damageOverTimeRules } from '../../utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnockouts'
 import { loadCampaignCombatContext } from '../../utils/combatContext'
+import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -70,10 +71,15 @@ export default defineEventHandler(async (event) => {
     // lastMovedRound is only ever written server-side (the movement paths), so a client copy that
     // hasn't caught up with a move's broadcast must not roll it back — Burn's stationary check
     // below reads it.
+    // turnsStarted (the turn counter a "Pass until my next turn" is measured against) is the same:
+    // a stale client copy must not roll it back and bring an expired pass back to life.
     const existingById = new Map(((existing.participants as any[]) || []).map((p: any) => [p.id, p]))
     participants = participants.map((p: any) => {
-      const stamp = existingById.get(p.id)?.lastMovedRound
-      return typeof stamp === 'number' && !(p.lastMovedRound >= stamp) ? { ...p, lastMovedRound: stamp } : p
+      const stored = existingById.get(p.id)
+      let next = p
+      if (typeof stored?.lastMovedRound === 'number' && !(p.lastMovedRound >= stored.lastMovedRound)) next = { ...next, lastMovedRound: stored.lastMovedRound }
+      if (typeof stored?.turnsStarted === 'number' && !(p.turnsStarted >= stored.turnsStarted)) next = { ...next, turnsStarted: stored.turnsStarted }
+      return next
     })
 
     // Enemies the client sent already knocked out are the GM's call (the GM page removes the ones it
@@ -235,6 +241,12 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.update(encounters).set(updateData).where(eq(encounters.id, id))
+
+  // Passes are per combat: once the encounter is no longer in combat (ended, reopened for setup)
+  // none survives, so a later combat in the same encounter starts with everyone prompted again.
+  if (resultingPhase !== 'combat' && Object.keys(existing.intercedeOptOuts?.temporaryPasses || {}).length > 0) {
+    await clearTemporaryPasses(id)
+  }
 
   // Return updated encounter
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, id))
