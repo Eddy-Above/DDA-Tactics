@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { getAttackOrderModifiers, signatureReadyRound } from '~/utils/specialOrderCombat'
+
+import { combatAttackStats } from '~/utils/combatDice'
+import { computeDodgeDefense, getPaidDodgeDiceBonus } from '~/utils/areaDefense'
+
 import type { Encounter } from '~/server/db/schema'
 import type { CombatParticipant, BattleLogEntry, Hazard } from '~/composables/useEncounters'
 import type { Digimon } from '~/server/db/schema'
@@ -18,9 +23,14 @@ import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, 
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
+import { useSpecialOrderTargets, type SpecialOrderChoice } from '~/composables/useSpecialOrderTargets'
+import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/useFatefulIntervention'
+import { useReactionOrders } from '~/composables/useReactionOrders'
+import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
+import { isRequestAnswered } from '~/utils/requestState'
 import type { Vec3 } from '~/types'
-import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY } from '~/types'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
+import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
+import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 
 definePageMeta({
@@ -475,6 +485,7 @@ function getParticipantAttacks(participant: CombatParticipant): Digimon['attacks
   const usedIds = new Set(participant.usedAttackIds || [])
   const filtered = attacks.filter((a: any) => {
     if (usedIds.has(a.id)) return false
+    if (a.tags?.some((t: string) => /signature/i.test(t)) && (currentEncounter.value?.round ?? 0) < signatureReadyRound(participant)) return false
     // Signature Move Battery: require at least 1 battery to use
     if (houseRules.value?.signatureMoveBattery && a.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
       if (((participant as any).battery ?? 0) < 1) return false
@@ -486,190 +497,32 @@ function getParticipantAttacks(participant: CombatParticipant): Digimon['attacks
 }
 
 // Calculate attack stats based on digimon stats, qualities, and tags (mirrors AttackSelector logic)
-function getAttackStats(participant: CombatParticipant, attack: any) {
-  if (participant.type !== 'digimon') {
-    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
-  }
-
-  const digimon = digimonMap.value.get(participant.entityId)
-  if (!digimon) {
-    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
-  }
-
-  // Get base stats (baseStats + bonusStats), apply Mode Change stat swaps, then apply stance modifier
-  const rawStats: StatBlock = {
-    accuracy: (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0),
-    damage: (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0),
-    dodge: (digimon.baseStats?.dodge ?? 0) + ((digimon as any).bonusStats?.dodge ?? 0),
-    armor: (digimon.baseStats?.armor ?? 0) + ((digimon as any).bonusStats?.armor ?? 0),
-  }
-  const resolvedStats = applyStatSwaps(rawStats, participant.statSwaps)
-  const baseAccuracy = applyStanceToAccuracy(resolvedStats.accuracy, participant.currentStance)
-  const baseDamage = resolvedStats.damage
-
-  let damageBonus = 0
-  let accuracyBonus = 0
-  let notes: string[] = []
-
-  // Helper functions
-  const hasQuality = (id: string) => digimon.qualities?.some((q: any) => q.id === id)
-  const hasTag = (pattern: string) => attack.tags?.some((t: string) => t.toLowerCase().includes(pattern.toLowerCase()))
-  const hasWeaponTag = attack.tags?.some((t: string) => /^Weapon\s+/i.test(t)) || attack.tags?.includes('Chrome Digizoid')
-  const hasSignatureTag = attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))
-
-  // === GLOBAL QUALITY BONUSES ===
-
-  // True Guardian: -2 Accuracy (global penalty)
-  if (hasQuality('true-guardian')) {
-    accuracyBonus -= 2
-  }
-
-  // Huge Power: Reroll 1s on Accuracy (Rank 2: also 2s)
-  if (hasQuality('huge-power')) {
-    const hpRank = digimon.qualities?.find((q: any) => q.id === 'huge-power')?.ranks || 1
-    if (eddySoulRules.value?.hugePowerOncePerTurn) {
-      notes.push(hpRank >= 2 ? 'Reroll 1s+2s (1/turn)' : 'Reroll 1s (1/turn)')
-    } else if (hpRank >= 2) {
-      notes.push(attack.range === 'melee' ? 'Reroll 1s, Reroll 2s (1/round)' : 'Reroll 1s+2s (1/round)')
-    } else {
-      notes.push(attack.range === 'melee' ? 'Reroll 1s' : 'Reroll 1s (1/round)')
+const attackStatRows = computed(() => {
+  const rows = new Map<string, ReturnType<typeof combatAttackStats>>()
+  for (const participant of currentEncounter.value?.participants ?? []) {
+    if (participant.type !== 'digimon') continue
+    const record = digimonMap.value.get(participant.entityId)
+    if (!record) continue
+    const derived = calcDigimonStats(record)
+    for (const attack of getParticipantAttacks(participant as CombatParticipant)) {
+      rows.set(`${participant.id}:${attack.id}`, combatAttackStats(record, participant, attack, {
+        eddySoulRules: eddySoulRules.value, houseRules: houseRules.value, derived,
+      }))
     }
   }
+  return rows
+})
 
-  // Aggressive Flank: +RAM to Accuracy when near allies
-  if (hasQuality('aggressive-flank')) {
-    notes.push('+RAM ACC (near ally)')
-  }
-
-  // === DATA OPTIMIZATION BONUSES ===
-
-  const dataOptQuality = digimon.qualities?.find((q: any) => q.id === 'data-optimization')
-  const dataOpt = dataOptQuality?.choiceId || digimon.dataOptimization
-
-  if (dataOpt === 'close-combat') {
-    if (attack.range === 'melee') {
-      accuracyBonus += 2
-    } else if (attack.range === 'ranged') {
-      accuracyBonus -= 1
-    }
-  } else if (dataOpt === 'ranged-striker') {
-    if (attack.range === 'ranged') {
-      accuracyBonus += 2
-    }
-  }
-
-  // === DATA SPECIALIZATION BONUSES ===
-
-  // Mobile Artillery: Add CPU to [Area] attack damage
-  if (hasQuality('mobile-artillery') && hasTag('area')) {
-    notes.push('+CPU DMG (Area)')
-  }
-
-  // Hit and Run: [Charge] attacks add RAM to Damage
-  if (hasQuality('hit-and-run') && hasTag('charge')) {
-    notes.push('+RAM DMG (Charge)')
-  }
-
-  // === WEAPON-TAGGED ATTACK BONUSES (Digizoid Weapons) ===
-
-  if (hasWeaponTag) {
-    const digizoidWeapon = digimon.qualities?.find((q: any) => q.id === 'digizoid-weapon')
-    if (digizoidWeapon) {
-      const cid = digizoidWeapon.choiceId
-
-      // Chrome: Check if rule is active and Chrome applies to this attack
-      if (cid === 'chrome') {
-        const hasWeaponRanks = digimon.qualities?.some((q: any) => q.id === 'weapon')
-        const chromeAppliesToThisAttack =
-          !eddySoulRules.value?.chromeWeaponNoWeaponRankRequired ||
-          hasWeaponRanks ||
-          attack.tags?.includes('Chrome Digizoid')
-        if (chromeAppliesToThisAttack) { accuracyBonus += 2; damageBonus += 1 }
-      }
-      if (cid === 'black') { accuracyBonus += 2; notes.push('+random (d6)') }
-      if (cid === 'brown') { damageBonus += 2 }
-      if (cid === 'blue') { accuracyBonus += 2; damageBonus += 2; notes.push('+1 auto success') }
-      if (cid === 'gold') { accuracyBonus += 4; damageBonus += 1 }
-      if (cid === 'obsidian') { accuracyBonus += 2; damageBonus += 2; notes.push('+1 Armor Piercing') }
-      if (cid === 'red') { damageBonus += 6 }
-    }
-  }
-
-  // === SIGNATURE MOVE BONUSES ===
-
-  if (hasSignatureTag) {
-    if (houseRules.value?.signatureMoveBattery) {
-      const battery = (participant as any).battery ?? 0
-      const cap = STAGE_BATTERY_CAPACITY[digimon?.stage as keyof typeof STAGE_BATTERY_CAPACITY] ?? 0
-      if (attack.type === 'damage') {
-        accuracyBonus += battery
-        damageBonus += battery
-      }
-      notes.push(`Battery ${battery}/${cap}${battery > 0 ? ` (+${battery})` : ' (no charge)'}`)
-    } else {
-      notes.push('+Attacks ACC/DMG (R3+)')
-    }
-  }
-
-  // === TAG-BASED BONUSES ===
-
-  if (attack.tags) {
-    for (const tag of attack.tags) {
-      // Weapon I/II/III adds +Rank to both accuracy and damage
-      const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
-      if (weaponMatch) {
-        const rankStr = weaponMatch[1]
-        const romanMap: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
-        const rank = romanMap[rankStr.toUpperCase()] || parseInt(rankStr) || 1
-        damageBonus += rank
-        accuracyBonus += rank
-      }
-
-      // Certain Strike adds +2 accuracy
-      if (tag.startsWith('Certain Strike')) {
-        accuracyBonus += 2
-      }
-    }
-  }
-
-  // === ACTIVE EFFECT STAT MODIFIERS ===
-  const effectMods = getEffectStatModifiers(participant.activeEffects || [])
-  accuracyBonus += effectMods.accuracy
-  damageBonus += effectMods.damage
-
-  // Directed effect bonus
-  const directedEffect = participant.activeEffects?.find(e => e.name === 'Directed')
-  if (directedEffect?.value) {
-    accuracyBonus += directedEffect.value
-    notes.push(`Directed +${directedEffect.value}`)
-  }
-
-  // Return calculated stats
-  const stats = calcDigimonStats(digimon)
-
-  // Per-attack range: melee = 1 (or Reach x 2), ranged = calculated
-  const reachQuality = (digimon as any).qualities?.find((q: any) => q.id === 'reach')
-  const reachRanks = reachQuality?.ranks || 0
-  let attackRange: number | null = null
-  let attackEffectiveLimit: number | null = null
-  if (attack.range === 'melee') {
-    attackRange = reachRanks > 0 ? reachRanks * 2 : 1
-  } else {
-    attackRange = stats.range
-    attackEffectiveLimit = stats.effectiveLimit
-  }
-
-  return {
-    accuracy: baseAccuracy + accuracyBonus,
-    damage: baseDamage + damageBonus,
-    accuracyBonus,
-    damageBonus,
-    notes,
-    range: stats.range,
-    effectiveLimit: stats.effectiveLimit,
-    attackRange,
-    attackEffectiveLimit,
-  }
+function getAttackStats(participant: CombatParticipant, attack: any, targetIds?: readonly string[]) {
+  const cached = !targetIds && attackStatRows.value.get(`${participant.id}:${attack.id}`)
+  if (cached) return cached
+  const record = digimonMap.value.get(participant.entityId)
+  return combatAttackStats(record, participant, attack, {
+    eddySoulRules: eddySoulRules.value,
+    houseRules: houseRules.value,
+    derived: record ? calcDigimonStats(record) : undefined,
+    targetIds,
+  })
 }
 
 // Check if participant can use an attack (requires 1 simple action)
@@ -743,39 +596,17 @@ function isPlayerControlled(participant: CombatParticipant): boolean {
 }
 
 // Get dodge pool for a participant (reduced by successive dodge penalty)
-function getDodgePool(participant: CombatParticipant): number {
-  let pool = 3  // Fallback
-  if (participant.type === 'digimon') {
-    const digimon = digimonMap.value.get(participant.entityId)
-    if (digimon) {
-      // calcDigimonStats already includes Digizoid Armor's flat +Dodge (Blue) bonus
-      const totalDodge = calcDigimonStats(digimon).dodge
-      pool = totalDodge || 3
-      // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of calcDigimonStats)
-      pool += (participant as any).blackArmorRoundBonus?.dodge ?? 0
-    }
-  } else if (participant.type === 'tamer') {
-    const tamer = tamerMap.value.get(participant.entityId)
-    if (tamer) {
-      const derived = calcTamerStats(tamer, eddySoulRules.value)
-      pool = derived.dodgePool || 3
-    }
-  }
-  pool = applyStanceToDodge(pool, participant.currentStance)
-  pool += (participant.quickReactionDiceBonus ?? 0)
-  pool = Math.max(1, pool - (participant.dodgePenalty ?? 0))
-
-  // Active effect dodge modifiers
-  const dodgeEffectMods = getEffectStatModifiers(participant.activeEffects || [])
-  pool += dodgeEffectMods.dodge
-
-  // Add Directed effect bonus to dodge pool
-  const directedEffect = participant.activeEffects?.find(e => e.name === 'Directed')
-  if (directedEffect?.value) {
-    pool += directedEffect.value
-  }
-
-  return Math.max(1, pool)
+function getDodgePool(participant: CombatParticipant, request?: any): number {
+  return computeDodgeDefense(request ?? {
+    targetParticipantId: participant.id,
+    data: { dodgePenalty: participant.dodgePenalty ?? 0 },
+  }, {
+    participants: (currentEncounter.value?.participants as CombatParticipant[]) || [],
+    findDigimon: id => digimonMap.value.get(id),
+    findTamer: id => tamerMap.value.get(id),
+    digimonDodge: record => calcDigimonStats(record).dodge,
+    tamerDodgePool: record => calcTamerStats(record, eddySoulRules.value).dodgePool,
+  }).pool
 }
 
 // Get participant name (tamer or digimon) for display
@@ -1069,13 +900,13 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       successes: accuracySuccesses,
       hadHugePowerRerolls: hadRerolls,
       riders,
-    } = prepareAttackAccuracy(getAttackStats(participant, attack).accuracy, {
+    } = prepareAttackAccuracy(getAttackStats(participant, attack, [target.id]).accuracy, {
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
       hugePower: hugePowerEnabled.value,
       hugePowerRank2: hugePowerRank2Enabled.value,
-    })
+    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, [target.id]).automaticSuccesses })
 
     // ALL attacks route through intercede-offer
     // Server handles: intercede offers, dodge requests, or NPC auto-resolve
@@ -1091,7 +922,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
           attackName: attack.name,
           attackData: {
             dicePool: accuracyPool,
-            attackStats: getAttackStats(participant, attack),
+            attackStats: getAttackStats(participant, attack, [target.id]),
           },
           bolstered: riders.bolster,
           bolsterType: riders.bolster ? riders.bolsterType : undefined,
@@ -1163,13 +994,13 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       successes: accuracySuccesses,
       hadHugePowerRerolls: hadRerolls,
       riders,
-    } = prepareAttackAccuracy(getAttackStats(participant, attack).accuracy, {
+    } = prepareAttackAccuracy(getAttackStats(participant, attack, targets.map(t => t.id)).accuracy, {
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
       hugePower: hugePowerEnabled.value,
       hugePowerRank2: hugePowerRank2Enabled.value,
-    })
+    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, targets.map(t => t.id)).automaticSuccesses })
 
     const sharedBody = {
       attackerId: participant.id,
@@ -1177,7 +1008,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       accuracyDice: accuracyDiceResults,
       attackId: attack.id,
       attackName: attack.name,
-      attackData: { dicePool: accuracyPool, attackStats: getAttackStats(participant, attack) },
+      attackData: { dicePool: accuracyPool, attackStats: getAttackStats(participant, attack, targets.map(t => t.id)) },
       bolstered: riders.bolster,
       bolsterType: riders.bolster ? riders.bolsterType : undefined,
       lifestealed: riders.lifesteal || false,
@@ -2252,18 +2083,118 @@ function getTamerSpecialOrders(participant: CombatParticipant) {
   return getUnlockedSpecialOrders(attrs, xpB, campaignLevel.value)
 }
 
-async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
-  if (!currentEncounter.value) return
+const gmFatefulTamer = ref<CombatParticipant | null>(null)
+const gmFatefulAvailableTamers = computed(() => currentEncounter.value?.phase === 'combat'
+  ? (currentEncounter.value.participants as CombatParticipant[]).filter(p => p.type === 'tamer' && !p.inReserve && (p.currentInspiration ?? 0) >= INSPIRATION_FATEFUL_COST[campaignLevel.value])
+  : [])
+watch(gmFatefulAvailableTamers, available => {
+  gmFatefulTamer.value = available.find(p => p.id === gmFatefulTamer.value?.id) ?? available[0] ?? null
+}, { immediate: true })
+const gmFatefulWillpower = computed(() => {
+  const tamer = tamers.value.find(t => t.id === gmFatefulTamer.value?.entityId)
+  return (tamer?.attributes?.willpower ?? 0) + (tamer?.xpBonuses?.attributes?.willpower ?? 0)
+})
+const gmFatefulOptions = computed<FatefulRollTarget[]>(() => {
+  const encounter = currentEncounter.value
+  if (!encounter) return []
+  const options: FatefulRollTarget[] = []
+  for (const request of (encounter.pendingRequests as any[] ?? [])) {
+    if (request.type !== 'dodge-roll' || isRequestAnswered(request, encounter.requestResponses as any[] ?? [])) continue
+    const target = (encounter.participants as CombatParticipant[]).find(p => p.id === request.targetParticipantId)
+    if (!target) continue
+    const isCurrent = () => !!currentEncounter.value?.pendingRequests?.some(r => r.id === request.id && !isRequestAnswered(r, currentEncounter.value?.requestResponses as any[] ?? []))
+    const base = { requestId: request.id, isCurrent, apply: () => {} }
+    if (!request.data?.fatefulAccuracy) options.push({ ...base, id: `incoming:${request.id}`, label: `${request.data?.attackerName ?? 'Incoming attack'} Accuracy`, rollType: 'accuracy', successThreshold: request.data?.finishingTouch ? 4 : request.data?.attackData?.orderModifiers?.successThreshold ?? 5, baseDicePool: request.data?.accuracyDice?.length ?? request.data?.accuracyDiceResults?.length ?? request.data?.accuracyDicePool ?? 0 })
+    const pool = getDodgePool(target, request)
+    if (pool > 0 && !request.data?.fatefulIntervention) options.push({ ...base, id: `dodge:${request.id}`, label: `${getEntityDetails(target)?.name ?? 'Target'} Dodge`, rollType: 'dodge', baseDicePool: pool + getPaidDodgeDiceBonus(request), targetParticipantId: target.id })
+  }
+  return options
+})
+const gmFateful = useFatefulIntervention({
+  rolls: () => gmFatefulOptions.value,
+  willpower: () => gmFatefulWillpower.value,
+  cost: () => INSPIRATION_FATEFUL_COST[campaignLevel.value],
+  pay: async (target, choice) => {
+    if (!currentEncounter.value || !gmFatefulTamer.value) return false
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/spend-inspiration`, {
+      method: 'POST', body: { participantId: gmFatefulTamer.value.id, spendType: 'fateful-intervention', amount: INSPIRATION_FATEFUL_COST[campaignLevel.value], rollType: target.rollType, rollId: target.id, requestId: target.requestId, targetParticipantId: target.targetParticipantId, baseDicePool: target.baseDicePool, ...choice },
+    })
+    await applyActionResult(updated, 'spend-inspiration')
+    return !!updated
+  },
+})
+
+function canUseGmSpecialOrder(participant: CombatParticipant, order: any): boolean {
+  if (order.name === 'Fateful Intervention') return (participant.currentInspiration ?? 0) >= INSPIRATION_FATEFUL_COST[campaignLevel.value]
+  if (order.type.includes('Intercede') || order.type === 'Passive' || specialOrderTargets.busy.value) return false
+  if ((participant.usedSpecialOrders ?? []).includes(order.name)) return false
+  if (getOrderUsageLimit(order.type) === 'per-day' && (tamers.value.find(t => t.id === participant.entityId)?.usedPerDayOrders ?? []).includes(order.name)) return false
+  return (participant.actionsRemaining?.simple ?? 0) >= getOrderActionCost(order.type)
+}
+
+const gmReactionOrders = useReactionOrders({
+  encounter: () => currentEncounter.value,
+  requests: () => (currentEncounter.value?.pendingRequests as any[]) ?? [],
+  tamers: () => tamers.value,
+  digimon: () => digimonList.value,
+  campaignLevel: () => campaignLevel.value,
+  nameFor: (participant) => getEntityDetails(participant)?.name || 'Digimon',
+  canControl: () => true,
+  onSkip: async (option) => {
+    if (option.resolved && currentEncounter.value) await applyActionResult(await cancelRequest(currentEncounter.value.id, option.requestId), 'special-order')
+  },
+  send: async (option, order) => {
+    const participant = (currentEncounter.value?.participants as CombatParticipant[])?.find(p => p.id === option.participantId)
+    if (!participant || !currentEncounter.value) return false
+    if (order === 'Strike Last!') return handleUseSpecialOrder(participant, order, undefined, { partnerId: option.partnerId, requestId: option.requestId })
+    try {
+      const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/quick-reaction`, { method: 'POST', body: { requestId: option.requestId, tamerParticipantId: option.participantId, targetParticipantId: option.partnerId } })
+      await applyActionResult(updated, 'quick-reaction')
+      return !!updated
+    } catch (e: any) { alert(e?.data?.message || 'Quick Reaction failed'); return false }
+  },
+})
+
+const gmAutomaticDefenses = useAutomaticDefenses({
+  encounterId: () => currentEncounter.value?.id,
+  isPending: (request) => !!currentEncounter.value?.pendingRequests?.some(r => r.id === request.id && !isRequestAnswered(r, currentEncounter.value?.requestResponses as any[] ?? [])),
+  isBlocked: (request) => {
+    const target = (currentEncounter.value?.participants as CombatParticipant[])?.find(p => p.id === request.targetParticipantId)
+    return !!target && getDodgePool(target, request) === 0 && !gmReactionOrders.canDeclareStrikeLast(request)
+  },
+  submit: async (request) => {
+    await handleGmDodgeRoll(request)
+    return !currentEncounter.value?.pendingRequests?.some(r => r.id === request.id && !isRequestAnswered(r, currentEncounter.value?.requestResponses as any[] ?? []))
+  },
+})
+watch(() => [currentEncounter.value?.pendingRequests, currentEncounter.value?.participants, gmReactionOrders.choices.value], () => {
+  for (const request of (currentEncounter.value?.pendingRequests as any[] ?? [])) {
+    if (request.type === 'dodge-roll' && request.targetTamerId === 'GM') void gmAutomaticDefenses.resolve(request)
+  }
+}, { flush: 'post' })
+
+const specialOrderTargets = useSpecialOrderTargets({
+  participants: () => (currentEncounter.value?.participants as CombatParticipant[]) ?? [],
+  digimon: () => digimonList.value,
+  nameFor: (participant) => getEntityDetails(participant)?.name || 'Digimon',
+  send: (participant, orderName, choice) => handleUseSpecialOrder(participant, orderName, choice.targetId, choice),
+})
+
+async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string, choice: SpecialOrderChoice = {}): Promise<boolean> {
+  if (!currentEncounter.value) return false
+  if (orderName === 'Fateful Intervention') { gmFatefulTamer.value = participant; gmFateful.open(); return true }
   try {
     const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/special-order`, {
       method: 'POST',
-      body: { participantId: participant.id, orderName, targetId },
+      body: { participantId: participant.id, orderName, targetId, ...choice },
     })
     await applyActionResult(updated, 'special-order')
     showSpecialOrdersModal.value = false
+    return true
   } catch (e: any) {
     console.error('Special order failed:', e)
     alert(e?.data?.message || 'Failed to use special order')
+    return false
   }
 }
 
@@ -2405,7 +2336,7 @@ async function useMovement(participantId?: string) {
   if ((active.actionsRemaining?.simple || 0) < 1) return
 
   active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
-  await updateEncounter(currentEncounter.value.id, { participants })
+  await updateEncounter(currentEncounter.value.id, { participants, movementActionParticipantId: targetId } as any)
 
   const entity = getEntityDetails(active)
   if (entity) {
@@ -2764,20 +2695,9 @@ async function handleGmDodgeRoll(request: any) {
       return
     }
 
-    // Get dodge pool for the target
-    let dodgePool = getDodgePool(target)
-
-    // Clash Attack: target rolls only half their dodge pool
-    if (request.data?.clashAttack) {
-      dodgePool = Math.max(1, Math.floor(dodgePool / 2))
-    }
-
-    // Attacked from outside the target's clash: no dodge at all (live check covers dodge-rolls
-    // created after an intercede window, which don't carry the cannotDodge flag)
-    const attacker = participants.find(p => p.id === request.data?.attackerParticipantId)
-    if (request.data?.cannotDodge || isAttackedFromOutsideClash(attacker, target)) {
-      dodgePool = 0
-    }
+    // The request carries Clash/Counterattack/Strike Fast snapshots; halve only once.
+    const basePool = getDodgePool(target, request)
+    const dodgePool = basePool + (basePool > 0 && !request.data?.fatefulIntervention ? getPaidDodgeDiceBonus(request) : 0)
 
     // Roll dice (count successes: 5+ = 1 success)
     const dodgeDiceResults = []
@@ -3403,7 +3323,7 @@ const mapSelectedAttackProp = computed(() => {
       attackerParticipantId: p.id,
     }
   }
-  const stats = calcDigimonStats(digimon)
+  const stats = applyDerivedStatEffects(calcDigimonStats(digimon), p.activeEffects ?? [])
   const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
   const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
   const reachRanks = (digimon.qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
@@ -3446,6 +3366,26 @@ function onMapAttackCancelled() {
 
 <template>
   <div class="container mx-auto px-4 py-8">
+    <Teleport to="body">
+      <div v-if="gmFatefulAvailableTamers.length" class="fixed top-4 right-4 z-[65] rounded-lg border border-amber-700 bg-digimon-dark-800 p-2 flex gap-2">
+        <select v-model="gmFatefulTamer" :disabled="gmFateful.busy.value" aria-label="Tamer using Fateful Intervention" class="rounded bg-digimon-dark-700 text-white text-sm p-1">
+          <option v-for="participant in gmFatefulAvailableTamers" :key="participant.id" :value="participant">{{ getEntityDetails(participant)?.name ?? 'Tamer' }}</option>
+        </select>
+        <button :disabled="!gmFatefulTamer || gmFateful.busy.value" class="rounded bg-amber-800 text-white text-sm px-2 py-1 disabled:opacity-40" @click="gmFateful.open()">Fateful Intervention</button>
+      </div>
+    </Teleport>
+    <ReactionOrdersPanel :choices="gmReactionOrders.choices.value" :busy="gmReactionOrders.busy.value" @declare="gmReactionOrders.declare" @skip="gmReactionOrders.skip" />
+    <FatefulInterventionDialog v-if="gmFateful.visible.value" :rolls="gmFatefulOptions" :willpower="gmFatefulWillpower" :cost="INSPIRATION_FATEFUL_COST[campaignLevel]" :inspiration="gmFatefulTamer?.currentInspiration ?? 0" :busy="gmFateful.busy.value" :error="gmFateful.error.value" @confirm="gmFateful.confirm" @cancel="gmFateful.close" />
+    <SpecialOrderTargetDialog
+      v-if="specialOrderTargets.selection.value"
+      :key="specialOrderTargets.selection.value.orderName"
+      :order-name="specialOrderTargets.selection.value.orderName"
+      :partners="specialOrderTargets.partners.value"
+      :targets="specialOrderTargets.targets.value"
+      :busy="specialOrderTargets.busy.value"
+      @confirm="specialOrderTargets.confirm"
+      @cancel="specialOrderTargets.close"
+    />
     <div v-if="loading && !currentEncounter" class="text-center py-12">
       <div class="text-digimon-dark-400">Loading encounter...</div>
     </div>
@@ -4632,12 +4572,7 @@ function onMapAttackCancelled() {
                 <button
                   v-for="order in getTamerSpecialOrders(activeParticipant)"
                   :key="order.name"
-                  :disabled="
-                    (activeParticipant.usedSpecialOrders || []).includes(order.name) ||
-                    (getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDayOrders || []).includes(order.name)) ||
-                    (activeParticipant.actionsRemaining?.simple || 0) < getOrderActionCost(order.type) ||
-                    getOrderUsageLimit(order.type) === 'passive'
-                  "
+                  :disabled="!canUseGmSpecialOrder(activeParticipant, order)"
                   :class="[
                     'w-full px-3 py-2 rounded text-xs text-left transition-colors',
                     (activeParticipant.usedSpecialOrders || []).includes(order.name)
@@ -4650,16 +4585,12 @@ function onMapAttackCancelled() {
                             ? 'bg-digimon-dark-700 text-digimon-dark-500 cursor-not-allowed'
                             : 'bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 cursor-pointer'
                   ]"
-                  @click="
-                    order.name === 'Enemy Scan'
-                      ? (showSpecialOrdersModal = true, specialOrderTargetId = null)
-                      : handleUseSpecialOrder(activeParticipant, order.name)
-                  "
+                  @click="order.name === 'Fateful Intervention' ? handleUseSpecialOrder(activeParticipant, order.name) : specialOrderTargets.open(activeParticipant, order.name)"
                 >
                   <div class="flex items-center justify-between">
                     <span class="font-medium">{{ order.name }}</span>
                     <span class="text-digimon-dark-400 ml-2">
-                      {{ getOrderUsageLimit(order.type) === 'passive' ? 'Passive' : getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
+                      {{ order.type === 'Passive' ? 'Passive' : order.type.includes('Intercede') ? 'Reaction' : getOrderActionCost(order.type) === 0 ? 'Free' : getOrderActionCost(order.type) === 1 ? '1 Action' : '2 Actions' }}
                     </span>
                   </div>
                   <div class="text-digimon-dark-400 mt-0.5">{{ order.effect }}</div>
@@ -4706,25 +4637,6 @@ function onMapAttackCancelled() {
                   <div v-if="(activeParticipant.usedSkillOrders || []).includes(order.name)" class="text-red-400 mt-0.5">Used</div>
                   <div v-else-if="getOrderUsageLimit(order.type) === 'per-day' && (tamers.find(t => t.id === activeParticipant?.entityId)?.usedPerDaySkillOrders || []).includes(order.name)" class="text-orange-400 mt-0.5">Used Today</div>
                 </button>
-              </div>
-            </div>
-
-            <!-- Enemy Scan Target Modal -->
-            <div v-if="showSpecialOrdersModal && activeParticipant.type === 'tamer'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showSpecialOrdersModal = false">
-              <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-600 max-w-md w-full mx-4">
-                <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
-                <div class="space-y-2 max-h-60 overflow-y-auto">
-                  <button
-                    v-for="p in (currentEncounter?.participants as CombatParticipant[] || []).filter(p => p.id !== activeParticipant?.id && p.id !== 'gm')"
-                    :key="p.id"
-                    class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
-                    @click="handleUseSpecialOrder(activeParticipant, 'Enemy Scan', p.id)"
-                  >
-                    {{ getEntityDetails(p)?.name || 'Unknown' }}
-                    <span class="text-digimon-dark-400 text-xs ml-2">({{ p.maxWounds - p.currentWounds }}/{{ p.maxWounds }} wounds)</span>
-                  </button>
-                </div>
-                <button class="mt-4 text-sm text-digimon-dark-400 hover:text-white" @click="showSpecialOrdersModal = false">Cancel</button>
               </div>
             </div>
 

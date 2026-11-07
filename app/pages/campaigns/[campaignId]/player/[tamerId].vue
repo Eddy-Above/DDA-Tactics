@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { getAttackOrderModifiers, signatureReadyRound } from '~/utils/specialOrderCombat'
+import { applyFatefulPool } from '~/utils/fatefulIntervention'
+
+import { combatAttackStats } from '~/utils/combatDice'
+
 import type { Tamer, Digimon, Encounter } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
@@ -10,12 +15,12 @@ import { STAGE_CONFIG, DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATI
 import { getStageColor } from '~/utils/displayHelpers'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
-import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
+import { getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects, getAllStatEffectModifier } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
 import {
-  groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, type DodgeDefenseContext,
+  groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, getPaidDodgeDiceBonus, type DodgeDefenseContext,
 } from '~/utils/areaDefense'
 import { useAreaDefenseBatch, type DefenseRoll, type SubmitOutcome } from '~/composables/useAreaDefenseBatch'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
@@ -33,6 +38,10 @@ import {
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { useAutoDismiss } from '~/composables/useAutoDismiss'
+import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
+import { useSpecialOrderTargets, type SpecialOrderChoice } from '~/composables/useSpecialOrderTargets'
+import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/useFatefulIntervention'
+import { useReactionOrders, type ReactionOrderOption } from '~/composables/useReactionOrders'
 import { isRequestAnswered } from '~/utils/requestState'
 import { prepareAttackAccuracy, snapshotAttackRiders, type AccuracyRollResult } from '~/utils/attackAccuracy'
 
@@ -124,7 +133,7 @@ const loading = ref(true)
 const lastRefresh = ref(new Date())
 const myRequests = ref<any[]>([])
 const initiativeRollResult = ref<{ rolls: number[]; total: number } | null>(null)
-const dodgeRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
+const dodgeRollResult = ref<AccuracyRollResult | null>(null)
 const healthRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
 const recoveryRollResult = ref<{ tamerDice: number[]; tamerSuccesses: number; digimonDice: number[]; digimonSuccesses: number } | null>(null)
 const hasRolledRecovery = ref(false)
@@ -136,7 +145,7 @@ const hasRolledDodge = ref(false)
 const hasRolledHealth = ref(false)
 const hasRolledCounterattack = ref(false)
 const counterattackSelectedAttack = ref<any>(null)
-const counterattackRollResult = ref<{ rolls: number[]; successes: number; dicePool: number } | null>(null)
+const counterattackRollResult = ref<AccuracyRollResult | null>(null)
 const selectedAttack = ref<any>(null)
 const showTargetSelector = ref(false)
 const selectedTargetId = ref<string | null>(null)
@@ -1213,7 +1222,7 @@ const areaDefenseBatch = useAreaDefenseBatch({
   defense: (request) => defenseFor(request),
   currentInspiration: () => currentCombatInspiration.value,
   actOfInspirationCost: () => actOfInspirationCost.value,
-  spend: (kind, amount) => handleSpendInspiration(kind, amount),
+  spend: (kind, amount, requestId) => handleSpendInspiration(kind, amount, requestId),
   submit: (request, roll) => submitAreaDefense(request, roll),
   isAnswered: (request) => isRequestAnswered(request, (activeEncounter.value?.requestResponses as any[]) || [], tamer.value?.id),
   isTargetPresent: (request) =>
@@ -1435,23 +1444,42 @@ const dodgeDicePool = computed(() => {
   return defenseFor(currentDodgeRequest.value).pool
 })
 
+const automaticDefenses = useAutomaticDefenses({
+  encounterId: () => activeEncounter.value?.id,
+  isPending: (request) => myUnansweredDodgeRequests.value.some((r) => r.id === request.id),
+    isBlocked: (request) => defenseFor(request).blocked && !reactionOrders.canDeclareStrikeLast(request),
+  submit: async (request) => {
+    if (areaDefenseBatch.ownsRequest(request.id)) return areaDefenseBatch.resolveBlocked(request.id)
+    if (currentDodgeRequest.value?.id !== request.id) return false
+    dodgeActOfInspirationEnabled.value = false
+    dodgeRollResult.value = { rolls: [], successes: 0, dicePool: 0 }
+    hasRolledDodge.value = true
+    await submitDodgeRoll()
+    return !myUnansweredDodgeRequests.value.some((r) => r.id === request.id)
+  },
+})
+
+watch(
+  () => [myUnansweredDodgeRequests.value, activeEncounter.value?.participants, areaDefenseBatch.groupId.value],
+  () => {
+    for (const request of myUnansweredDodgeRequests.value) {
+      if (defenseFor(request).blocked && (areaDefenseBatch.ownsRequest(request.id) || currentDodgeRequest.value?.id === request.id)) {
+        void automaticDefenses.resolve(request)
+      }
+    }
+  },
+  { flush: 'post' },
+)
+
+const counterattackSuccessThreshold = computed(() => getAttackOrderModifiers(
+  activeEncounter.value?.participants?.find((p: any) => p.id === currentCounterattackRequest.value?.data?.counterattackerParticipantId),
+).successThreshold)
+
 const counterattackAccuracyPool = computed(() => {
-  if (!activeEncounter.value || !currentCounterattackRequest.value) return 3
-
-  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
-  const counterattackerParticipantId = currentCounterattackRequest.value.data?.counterattackerParticipantId
-  const counterattackerParticipant = participants.find((p) => p.id === counterattackerParticipantId)
-  if (!counterattackerParticipant || counterattackerParticipant.type !== 'digimon') return 3
-
-  const digi = allDigimon.value.find((d) => d.id === counterattackerParticipant.entityId)
-  if (!digi) return 3
-
-  const darkEvoBonus = (digi as any).isDarkEvolution ? 2 : 0
-  const rawAccuracy = ((digi as any).baseStats?.accuracy ?? 0) + ((digi as any).bonusStats?.accuracy ?? 0) + darkEvoBonus
-  const accuracyWithStance = applyStanceToAccuracy(rawAccuracy, counterattackerParticipant.currentStance)
-
-  const effectMods = getEffectStatModifiers(counterattackerParticipant.activeEffects || [])
-  return Math.max(1, accuracyWithStance + effectMods.accuracy)
+  const request = currentCounterattackRequest.value
+  const participant = activeEncounter.value?.participants?.find((p: any) => p.id === request?.data?.counterattackerParticipantId)
+  if (!participant || !counterattackSelectedAttack.value) return 3
+  return getAttackStats(participant as CombatParticipant, counterattackSelectedAttack.value, [request.data?.originalAttackerParticipantId]).accuracy
 })
 
 const counterattackAvailableAttacks = computed(() => {
@@ -1727,6 +1755,7 @@ function getParticipantAttacks(participant: CombatParticipant): any[] {
   const usedIds = new Set(participant.usedAttackIds || [])
   const filtered = attacks.filter((a: any) => {
     if (usedIds.has(a.id)) return false
+    if (a.tags?.some((t: string) => /signature/i.test(t)) && (activeEncounter.value?.round ?? 0) < signatureReadyRound(participant)) return false
     if (houseRules.value?.signatureMoveBattery && a.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
       if (((participant as any).battery ?? 0) < 1) return false
     }
@@ -1736,180 +1765,32 @@ function getParticipantAttacks(participant: CombatParticipant): any[] {
   return [...filtered, ...basicAttacks]
 }
 
-function getAttackStats(participant: CombatParticipant, attack: any) {
-  if (participant.type !== 'digimon') {
-    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
-  }
-
-  const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  if (!digimon) {
-    return { accuracy: 0, damage: 0, accuracyBonus: 0, damageBonus: 0, notes: [], range: 0, effectiveLimit: 0, attackRange: null, attackEffectiveLimit: null }
-  }
-
-  // Get base stats (baseStats + bonusStats + dark evo), apply Mode Change stat swaps, then apply stance modifier
-  const darkEvoBonus = (digimon as any).isDarkEvolution ? 2 : 0
-  const rawStats: StatBlock = {
-    accuracy: (digimon.baseStats?.accuracy ?? 0) + ((digimon as any).bonusStats?.accuracy ?? 0) + darkEvoBonus,
-    damage: (digimon.baseStats?.damage ?? 0) + ((digimon as any).bonusStats?.damage ?? 0) + darkEvoBonus,
-    dodge: (digimon.baseStats?.dodge ?? 0) + ((digimon as any).bonusStats?.dodge ?? 0) + darkEvoBonus,
-    armor: (digimon.baseStats?.armor ?? 0) + ((digimon as any).bonusStats?.armor ?? 0) + darkEvoBonus,
-  }
-  const resolvedStats = applyStatSwaps(rawStats, participant.statSwaps)
-  const baseAccuracy = applyStanceToAccuracy(resolvedStats.accuracy, participant.currentStance)
-  const baseDamage = resolvedStats.damage
-
-  let damageBonus = 0
-  let accuracyBonus = 0
-  let notes: string[] = []
-
-  // Helper functions
-  const hasQuality = (id: string) => digimon.qualities?.some((q: any) => q.id === id)
-  const hasTag = (pattern: string) => attack.tags?.some((t: string) => t.toLowerCase().includes(pattern.toLowerCase()))
-  const hasWeaponTag = attack.tags?.some((t: string) => /^Weapon\s+/i.test(t)) || attack.tags?.includes('Chrome Digizoid')
-  const hasSignatureTag = attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))
-
-  // === GLOBAL QUALITY BONUSES ===
-  if (hasQuality('true-guardian')) {
-    accuracyBonus -= 2
-  }
-  if (hasQuality('huge-power')) {
-    const hpRank = digimon.qualities?.find((q: any) => q.id === 'huge-power')?.ranks || 1
-    if (eddySoulRules.value?.hugePowerOncePerTurn) {
-      notes.push(hpRank >= 2 ? 'Reroll 1s+2s (1/turn)' : 'Reroll 1s (1/turn)')
-    } else if (hpRank >= 2) {
-      notes.push(attack.range === 'melee' ? 'Reroll 1s, Reroll 2s (1/round)' : 'Reroll 1s+2s (1/round)')
-    } else {
-      notes.push(attack.range === 'melee' ? 'Reroll 1s' : 'Reroll 1s (1/round)')
+const attackStatRows = computed(() => {
+  const rows = new Map<string, ReturnType<typeof combatAttackStats>>()
+  for (const participant of activeEncounter.value?.participants ?? []) {
+    if (participant.type !== 'digimon') continue
+    const record = allDigimon.value.find(d => d.id === participant.entityId)
+    if (!record) continue
+    const derived = calcDigimonStats(record)
+    for (const attack of getParticipantAttacks(participant as CombatParticipant)) {
+      rows.set(`${participant.id}:${attack.id}`, combatAttackStats(record, participant, attack, {
+        eddySoulRules: eddySoulRules.value, houseRules: houseRules.value, derived,
+      }))
     }
   }
-  if (hasQuality('aggressive-flank')) {
-    notes.push('+RAM ACC (near ally)')
-  }
+  return rows
+})
 
-  // === DATA OPTIMIZATION BONUSES ===
-  const dataOptQuality = digimon.qualities?.find((q: any) => q.id === 'data-optimization')
-  const dataOpt = dataOptQuality?.choiceId || digimon.dataOptimization
-
-  if (dataOpt === 'close-combat') {
-    if (attack.range === 'melee') {
-      accuracyBonus += 2
-    } else if (attack.range === 'ranged') {
-      accuracyBonus -= 1
-    }
-  } else if (dataOpt === 'ranged-striker') {
-    if (attack.range === 'ranged') {
-      accuracyBonus += 2
-    }
-  }
-
-  // === DATA SPECIALIZATION BONUSES ===
-  if (hasQuality('mobile-artillery') && hasTag('area')) {
-    notes.push('+CPU DMG (Area)')
-  }
-  if (hasQuality('hit-and-run') && hasTag('charge')) {
-    notes.push('+RAM DMG (Charge)')
-  }
-
-  // === WEAPON-TAGGED ATTACK BONUSES (Digizoid Weapons) ===
-  if (hasWeaponTag) {
-    const digizoidWeapon = digimon.qualities?.find((q: any) => q.id === 'digizoid-weapon')
-    if (digizoidWeapon) {
-      const cid = digizoidWeapon.choiceId
-
-      // Chrome: Check if rule is active and Chrome applies to this attack
-      if (cid === 'chrome') {
-        const hasWeaponRanks = digimon.qualities?.some((q: any) => q.id === 'weapon')
-        const chromeAppliesToThisAttack =
-          !eddySoulRules.value?.chromeWeaponNoWeaponRankRequired ||
-          hasWeaponRanks ||
-          attack.tags?.includes('Chrome Digizoid')
-        if (chromeAppliesToThisAttack) { accuracyBonus += 2; damageBonus += 1 }
-      }
-      if (cid === 'black') { accuracyBonus += 2; notes.push('+random (d6)') }
-      if (cid === 'brown') { damageBonus += 2 }
-      if (cid === 'blue') { accuracyBonus += 2; damageBonus += 2; notes.push('+1 auto success') }
-      if (cid === 'gold') { accuracyBonus += 4; damageBonus += 1 }
-      if (cid === 'obsidian') { accuracyBonus += 2; damageBonus += 2; notes.push('+1 Armor Piercing') }
-      if (cid === 'red') { damageBonus += 6 }
-    }
-  }
-
-  // === SIGNATURE MOVE BONUSES ===
-  if (hasSignatureTag) {
-    if (houseRules.value?.signatureMoveBattery) {
-      const battery = (participant as any).battery ?? 0
-      const cap = STAGE_BATTERY_CAPACITY[digimon?.stage as keyof typeof STAGE_BATTERY_CAPACITY] ?? 0
-      if (attack.type === 'damage') {
-        accuracyBonus += battery
-        damageBonus += battery
-      }
-      notes.push(`Battery ${battery}/${cap}${battery > 0 ? ` (+${battery})` : ' (no charge)'}`)
-    } else {
-      notes.push('+Attacks ACC/DMG (R3+)')
-    }
-  }
-
-  // === TAG-BASED BONUSES ===
-  if (attack.tags) {
-    for (const tag of attack.tags) {
-      const weaponMatch = tag.match(/^Weapon\s+(\d+|I{1,3}|IV|V)$/i)
-      if (weaponMatch) {
-        const rankStr = weaponMatch[1]
-        const romanMap: Record<string, number> = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 }
-        const rank = romanMap[rankStr.toUpperCase()] || parseInt(rankStr) || 1
-        damageBonus += rank
-        accuracyBonus += rank
-      }
-
-      if (tag.startsWith('Certain Strike')) {
-        accuracyBonus += 2
-      }
-    }
-  }
-
-  // === ACTIVE EFFECT STAT MODIFIERS ===
-  const effectMods = getEffectStatModifiers(participant.activeEffects || [])
-  accuracyBonus += effectMods.accuracy
-  damageBonus += effectMods.damage
-
-  // Directed effect bonus
-  const directedEffect = participant.activeEffects?.find(e => e.name === 'Directed')
-  if (directedEffect?.value) {
-    accuracyBonus += directedEffect.value
-    notes.push(`Directed +${directedEffect.value}`)
-  }
-
-  // Combat Monster bonus (accumulated damage for next attack)
-  const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
-  if (combatMonsterBonus > 0 && hasQuality('combat-monster')) {
-    damageBonus += combatMonsterBonus
-  }
-
-  const stats = calcDigimonStats(digimon)
-
-  // Per-attack range: melee = 1 (or Reach x 2), ranged = calculated
-  const reachQuality = digimon.qualities?.find((q: any) => q.id === 'reach')
-  const reachRanks = reachQuality?.ranks || 0
-  let attackRange: number | null = null
-  let attackEffectiveLimit: number | null = null
-  if (attack.range === 'melee') {
-    attackRange = reachRanks > 0 ? reachRanks * 2 : 1
-  } else {
-    attackRange = stats.range
-    attackEffectiveLimit = stats.effectiveLimit
-  }
-
-  return {
-    accuracy: baseAccuracy + accuracyBonus,
-    damage: baseDamage + damageBonus,
-    accuracyBonus,
-    damageBonus,
-    notes,
-    range: stats.range,
-    effectiveLimit: stats.effectiveLimit,
-    attackRange,
-    attackEffectiveLimit,
-  }
+function getAttackStats(participant: CombatParticipant, attack: any, targetIds?: readonly string[]) {
+  const cached = !targetIds && attackStatRows.value.get(`${participant.id}:${attack.id}`)
+  if (cached) return cached
+  const record = allDigimon.value.find(d => d.id === participant.entityId)
+  return combatAttackStats(record, participant, attack, {
+    eddySoulRules: eddySoulRules.value,
+    houseRules: houseRules.value,
+    derived: record ? calcDigimonStats(record) : undefined,
+    targetIds,
+  })
 }
 
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
@@ -1971,6 +1852,8 @@ const {
 })
 
 function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any): boolean {
+  if (order.name === 'Fateful Intervention') return currentCombatInspiration.value >= fatefulInterventionCost.value
+  if (order.type.includes('Intercede') || specialOrderTargets.busy.value) return false
   // Can't use if already used
   if ((participant.usedSpecialOrders || []).includes(order.name)) {
     return false
@@ -1979,6 +1862,8 @@ function canUseSpecialOrderInCombat(participant: CombatParticipant, order: any):
   if (getOrderUsageLimit(order.type) === 'passive') {
     return false
   }
+  if (getOrderUsageLimit(order.type) === 'per-day'
+    && (allTamers.value.find(t => t.id === participant.entityId)?.usedPerDayOrders ?? []).includes(order.name)) return false
   // Check if tamer has enough actions
   const requiredActions = getOrderActionCost(order.type)
   return (participant.actionsRemaining?.simple || 0) >= requiredActions
@@ -2094,7 +1979,7 @@ async function usePlayerAction(participant: CombatParticipant, actionType: 'move
   if (!target) return
 
   target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
-  await updateEncounter(activeEncounter.value.id, { participants })
+  await updateEncounter(activeEncounter.value.id, { participants, movementActionParticipantId: target.id } as any)
 
   const updated = await addBattleLogEntry(activeEncounter.value.id, {
     round: activeEncounter.value.round,
@@ -2411,25 +2296,27 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     selectedAttack.value = null
     selectedTargetIds.value = []
 
-    const baseAccuracy = getAttackStats(participant, attack).accuracy
+    const baseAccuracy = getAttackStats(participant, attack, [target.id]).accuracy
     const riders = snapshotAttackRiders({
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
-      hugePower: hugePowerEnabled.value,
-      hugePowerRank2: hugePowerRank2Enabled.value,
+      hugePower: hugePowerEnabled.value && !getAttackOrderModifiers(participant).suppressPower,
+      hugePowerRank2: hugePowerRank2Enabled.value && !getAttackOrderModifiers(participant).suppressPower,
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
       if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
-    const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
+    const { rolls, dicePool, successes, successThreshold, automaticSuccesses } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
+      ...getAttackOrderModifiers(participant),
+      automaticSuccesses: getAttackStats(participant, attack, [target.id]).automaticSuccesses,
     })
 
     // Show the Accuracy Roll Review step so the player can spend Inspiration
     // (re-roll / ±1 die) before the attack is submitted to the server
-    accuracyReview.value = { rolls, dicePool, successes }
+    accuracyReview.value = { rolls, dicePool, successes, successThreshold, automaticSuccesses }
     accuracyReviewContext.value = {
       participant,
       attack,
@@ -2462,25 +2349,27 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     selectedAttack.value = null
     selectedTargetIds.value = []
 
-    const baseAccuracy = getAttackStats(participant, attack).accuracy
+    const baseAccuracy = getAttackStats(participant, attack, targets.map(t => t.id)).accuracy
     const riders = snapshotAttackRiders({
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
-      hugePower: hugePowerEnabled.value,
-      hugePowerRank2: hugePowerRank2Enabled.value,
+      hugePower: hugePowerEnabled.value && !getAttackOrderModifiers(participant).suppressPower,
+      hugePowerRank2: hugePowerRank2Enabled.value && !getAttackOrderModifiers(participant).suppressPower,
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
       if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
-    const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
+    const { rolls, dicePool, successes, successThreshold, automaticSuccesses } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
+      ...getAttackOrderModifiers(participant),
+      automaticSuccesses: getAttackStats(participant, attack, targets.map(t => t.id)).automaticSuccesses,
     })
 
     // Show the Accuracy Roll Review step so the player can spend Inspiration
     // (re-roll / ±1 die) before the attack is submitted to the server
-    accuracyReview.value = { rolls, dicePool, successes }
+    accuracyReview.value = { rolls, dicePool, successes, successThreshold, automaticSuccesses }
     accuracyReviewContext.value = {
       participant,
       attack,
@@ -2730,10 +2619,10 @@ function showAttackResult(
     dodgeSuccesses: dodgeResponse.response.dodgeSuccesses
   })
 
-  const accuracySuccesses = pendingAttack.accuracySuccesses
-  const dodgeSuccesses = dodgeResponse.response.dodgeSuccesses
-  const netSuccesses = accuracySuccesses - dodgeSuccesses
-  const hit = netSuccesses >= 0
+  let accuracySuccesses = dodgeRequest.data?.accuracySuccesses ?? pendingAttack.accuracySuccesses
+  let dodgeSuccesses = dodgeResponse.response.dodgeSuccesses
+  let netSuccesses = accuracySuccesses - dodgeSuccesses
+  let hit = netSuccesses >= 0
 
   console.log('[ATTACK RESULT] Damage calculation: accuracySuccesses:', accuracySuccesses, 'dodgeSuccesses:', dodgeSuccesses, 'netSuccesses:', netSuccesses, 'hit:', hit)
 
@@ -2803,6 +2692,12 @@ function showAttackResult(
   if (matchingLogEntry?.baseDamage != null) {
     baseDamage = matchingLogEntry.baseDamage
     armorPiercing = matchingLogEntry.armorPiercing ?? armorPiercing
+  }
+  if (matchingLogEntry) {
+    accuracySuccesses = matchingLogEntry.accuracySuccesses ?? accuracySuccesses
+    dodgeSuccesses = matchingLogEntry.dodgeSuccesses ?? dodgeSuccesses
+    netSuccesses = matchingLogEntry.netSuccesses ?? accuracySuccesses - dodgeSuccesses
+    hit = matchingLogEntry.hit ?? hit
   }
 
   // Fallback: apply combat monster bonus from participant if no battle log entry found
@@ -2880,8 +2775,8 @@ function showAttackResult(
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: pendingAttack.targetName,
-    accuracyDicePool: pendingAttack.accuracyDicePool,
-    accuracyDiceResults: pendingAttack.accuracyDiceResults,
+    accuracyDicePool: matchingLogEntry?.accuracyDicePool ?? dodgeRequest.data?.accuracyDice?.length ?? pendingAttack.accuracyDicePool,
+    accuracyDiceResults: matchingLogEntry?.accuracyDiceResults ?? dodgeRequest.data?.accuracyDice ?? pendingAttack.accuracyDiceResults,
     accuracySuccesses: accuracySuccesses,
     dodgeDicePool: dodgeResponse.response.dodgeDicePool,
     dodgeDiceResults: dodgeResponse.response.dodgeDiceResults,
@@ -2924,9 +2819,9 @@ function showAttackResultFromBattleLog(
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: logEntry.effects?.includes('Intercede') ? logEntry.actorName : pendingAttack.targetName,
-    accuracyDicePool: pendingAttack.accuracyDicePool,
-    accuracyDiceResults: pendingAttack.accuracyDiceResults,
-    accuracySuccesses: pendingAttack.accuracySuccesses,
+    accuracyDicePool: logEntry.accuracyDicePool ?? pendingAttack.accuracyDicePool,
+    accuracyDiceResults: logEntry.accuracyDiceResults ?? pendingAttack.accuracyDiceResults,
+    accuracySuccesses: logEntry.accuracySuccesses ?? pendingAttack.accuracySuccesses,
     dodgeDicePool: logEntry.dodgeDicePool ?? 0,
     dodgeDiceResults: logEntry.dodgeDiceResults ?? [],
     dodgeSuccesses: logEntry.dodgeSuccesses ?? 0,
@@ -3119,15 +3014,20 @@ async function submitInitiativeRoll() {
 }
 
 async function rollDodgeDice() {
-  if (hasRolledDodge.value || inspirationSpendLoading.value) return
+  if (hasRolledDodge.value || inspirationSpendLoading.value || !currentDodgeRequest.value) return
+  const request = currentDodgeRequest.value
   let pool = dodgeDicePool.value
-  if (dodgeActOfInspirationEnabled.value && !dodgeBlockedByClash.value) {
-    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
-    pool += 5
+  let paidBonus = getPaidDodgeDiceBonus(request)
+  if (dodgeActOfInspirationEnabled.value && !dodgeBlockedByClash.value && !request.data?.dodgeActPaid) {
+    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value, request.id))) return
+    paidBonus += 5
   }
+  if (!dodgeBlockedByClash.value && !request.data?.fatefulIntervention) pool += paidBonus
   const rolls: number[] = []
   for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
-  dodgeRollResult.value = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: pool }
+  const automaticSuccesses = defenseFor(currentDodgeRequest.value).automaticSuccesses ?? 0
+  dodgeRollResult.value = { rolls, successes: rolls.filter(d => d >= 5).length + automaticSuccesses, dicePool: pool,
+    ...(automaticSuccesses ? { automaticSuccesses } : {}) }
   hasRolledDodge.value = true
 }
 
@@ -3138,9 +3038,11 @@ async function rollCounterattackDice() {
     if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     pool += 5
   }
-  const rolls: number[] = []
-  for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
-  counterattackRollResult.value = { rolls, successes: rolls.filter(d => d >= 5).length, dicePool: pool }
+  const participant = activeEncounter.value?.participants?.find((p: any) => p.id === currentCounterattackRequest.value?.data?.counterattackerParticipantId)
+  const stats = participant ? getAttackStats(participant as CombatParticipant, counterattackSelectedAttack.value) : null
+  counterattackRollResult.value = prepareAttackAccuracy(pool, {}, {
+    ...getAttackOrderModifiers(participant), automaticSuccesses: stats?.automaticSuccesses,
+  })
   hasRolledCounterattack.value = true
 }
 
@@ -3191,9 +3093,9 @@ async function submitDodgeRoll() {
           attackName: capturedRequest.data.attackName,
           attackerName: capturedRequest.data.attackerName,
           targetName: resolveParticipantName(capturedRequest.targetParticipantId) || capturedRequest.data.targetName,
-          dodgeDicePool: capturedDodgeRoll.dicePool,
-          dodgeDiceResults: capturedDodgeRoll.rolls,
-          dodgeSuccesses: capturedDodgeRoll.successes,
+          dodgeDicePool: dodgeEntry.dodgeDicePool ?? capturedDodgeRoll.dicePool,
+          dodgeDiceResults: dodgeEntry.dodgeDiceResults ?? capturedDodgeRoll.rolls,
+          dodgeSuccesses: dodgeEntry.dodgeSuccesses ?? capturedDodgeRoll.successes,
           accuracySuccesses: capturedRequest.data.accuracySuccesses,
           netSuccesses: dodgeEntry.netSuccesses,
           hit: dodgeEntry.hit,
@@ -3835,11 +3737,12 @@ async function handleDivineProtectionDeclined() {
 async function handleSpendInspiration(
   spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
   amount: number,
+  requestId?: string,
 ): Promise<boolean> {
   if (inspirationSpendLoading.value || !activeEncounter.value || !myTamerParticipant.value) return false
   inspirationSpendLoading.value = true
   try {
-    const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
+    const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount, requestId)
     await applyActionResult(result, 'spend-inspiration')
     return !!result
   } catch (e: any) {
@@ -3851,18 +3754,169 @@ async function handleSpendInspiration(
   }
 }
 
-async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
-  if (!activeEncounter.value) return
+function spendDodgeInspiration(kind: 'reroll' | 'modifier', amount: number): Promise<boolean> {
+  const request = currentDodgeRequest.value
+  return request ? handleSpendInspiration(kind, amount, request.id) : Promise.resolve(false)
+}
+
+const fatefulRollIds = new WeakMap<object, string>()
+let fatefulRollSequence = 0
+function fatefulRollId(roll: object): string {
+  if (!fatefulRollIds.has(roll)) fatefulRollIds.set(roll, `roll-${Date.now()}-${++fatefulRollSequence}`)
+  return fatefulRollIds.get(roll)!
+}
+
+const fatefulRollOptions = computed<FatefulRollTarget[]>(() => {
+  const options: FatefulRollTarget[] = []
+  function local(label: string, rollType: 'accuracy' | 'check', read: () => any, write: (value: any) => void, participantId?: string) {
+    const roll = read()
+    if (!roll || roll.fatefulIntervention) return
+    options.push({
+      id: fatefulRollId(roll), label, rollType, baseDicePool: roll.dicePool ?? 3, baseModifier: roll.modifier,
+      successThreshold: roll.successThreshold, automaticSuccesses: roll.automaticSuccesses,
+      targetParticipantId: participantId, isCurrent: () => read() === roll,
+      apply: (result) => write({ ...roll, ...result }),
+    })
+  }
+  local('Your attack Accuracy', 'accuracy', () => accuracyReview.value, value => { accuracyReview.value = value }, accuracyReviewContext.value?.participant.id)
+  local('Your counterattack Accuracy', 'accuracy', () => counterattackRollResult.value, value => { counterattackRollResult.value = value }, currentCounterattackRequest.value?.data?.counterattackerParticipantId)
+  if (showAttributeRollModal.value) local('Your attribute / skill check', 'check', () => attributeRollResult.value, value => {
+    attributeRollResult.value = value
+    logRoll({ rollName: `Fateful Intervention: ${value.label}`, rolls: value.rolls, modifier: value.modifier, total: value.total })
+  })
+  if (showTormentRollModal.value) local('Your Torment check', 'check', () => tormentRollResult.value, value => {
+    tormentRollResult.value = { ...value, passed: value.total >= 12 }
+    logRoll({ rollName: `Fateful Intervention: ${selectedTorment.value?.name ?? 'Torment'}`, rolls: value.rolls, modifier: value.modifier, total: value.total, passed: value.total >= 12 })
+  })
+  for (const request of myUnansweredDodgeRequests.value) {
+    const current = () => myUnansweredDodgeRequests.value.some(r => r.id === request.id)
+    if (!defenseFor(request).blocked && !request.data?.fatefulIntervention) {
+      const entry = areaDefenseBatch.entries.value.find(e => e.requestId === request.id)
+      const roll = entry?.roll ?? (currentDodgeRequest.value?.id === request.id ? dodgeRollResult.value : null)
+      options.push({
+        id: `dodge:${request.id}`, label: `${areaDefenseName(request)} Dodge`, rollType: 'dodge',
+        requestId: request.id, targetParticipantId: request.targetParticipantId,
+        automaticSuccesses: roll?.automaticSuccesses ?? defenseFor(request).automaticSuccesses ?? 0,
+        baseDicePool: roll?.dicePool ?? defenseFor(request).pool + getPaidDodgeDiceBonus(request), isCurrent: current,
+        apply: (result) => {
+          if (areaDefenseBatch.ownsRequest(request.id)) areaDefenseBatch.setFatefulRoll(request.id, result)
+          else if (currentDodgeRequest.value?.id === request.id) {
+            dodgeRollResult.value = result
+            hasRolledDodge.value = true
+            dodgeActOfInspirationEnabled.value = false
+          }
+        },
+      })
+    }
+    if (!request.data?.fatefulAccuracy) options.push({
+      id: `incoming:${request.id}`, label: `${request.data?.attackerName ?? 'Incoming attack'} Accuracy`, rollType: 'accuracy',
+      requestId: request.id, targetParticipantId: request.data?.attackerParticipantId,
+      baseDicePool: request.data?.accuracyDice?.length ?? request.data?.accuracyDiceResults?.length ?? request.data?.accuracyDicePool ?? 0,
+      successThreshold: request.data?.finishingTouch ? 4 : request.data?.attackData?.orderModifiers?.successThreshold ?? 5,
+      isCurrent: current, apply: () => {},
+    })
+  }
+  return options
+})
+
+const fateful = useFatefulIntervention({
+  rolls: () => fatefulRollOptions.value,
+  willpower: () => totalAttributes.value.willpower ?? 0,
+  cost: () => fatefulInterventionCost.value,
+  pay: async (target, choice) => {
+    if (inspirationSpendLoading.value || !activeEncounter.value || !myTamerParticipant.value) return false
+    inspirationSpendLoading.value = true
+    try {
+      const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/spend-inspiration`, {
+        method: 'POST', body: {
+          participantId: myTamerParticipant.value.id, spendType: 'fateful-intervention', amount: fatefulInterventionCost.value,
+          rollType: target.rollType, rollId: target.id, requestId: target.requestId, targetParticipantId: target.targetParticipantId,
+          baseDicePool: target.baseDicePool, ...choice,
+        },
+      })
+      await applyActionResult(updated, 'spend-inspiration')
+      return !!updated
+    } finally { inspirationSpendLoading.value = false }
+  },
+})
+
+function spendFromPanel(spendType: 'act-of-inspiration' | 'fateful-intervention', amount: number) {
+  if (spendType === 'fateful-intervention') fateful.open()
+  else void handleSpendInspiration(spendType, amount)
+}
+
+// A refresh or a second tab receives the same paid, chosen dice from the request.
+watch(() => [myUnansweredDodgeRequests.value, areaDefenseBatch.groupId.value], () => {
+  for (const request of myUnansweredDodgeRequests.value) {
+    const choice = request.data?.fatefulIntervention
+    if (!choice || defenseFor(request).blocked) continue
+    const entry = areaDefenseBatch.entries.value.find(e => e.requestId === request.id)
+    if (entry?.roll?.fatefulIntervention || (currentDodgeRequest.value?.id === request.id && (dodgeRollResult.value as any)?.fatefulIntervention)) continue
+    const automaticSuccesses = defenseFor(request).automaticSuccesses ?? 0
+    const chosen = applyFatefulPool(choice.baseDicePool, choice.willpower, choice)
+    const roll = { ...chosen, successes: chosen.successes + automaticSuccesses, automaticSuccesses, fatefulIntervention: true }
+    if (entry) areaDefenseBatch.setFatefulRoll(request.id, roll)
+    else if (currentDodgeRequest.value?.id === request.id) {
+      dodgeRollResult.value = roll
+      hasRolledDodge.value = true
+      dodgeActOfInspirationEnabled.value = false
+    }
+  }
+}, { flush: 'post' })
+
+const reactionOrders = useReactionOrders({
+  encounter: () => activeEncounter.value,
+  requests: () => myRequests.value,
+  tamers: () => allTamers.value,
+  digimon: () => allDigimon.value,
+  campaignLevel: () => campaignLevel.value,
+  nameFor: (participant) => resolveParticipantName(participant.id) || 'Digimon',
+  canControl: (participant) => participant.entityId === tamer.value?.id,
+  onSkip: async (option) => {
+    if (option.resolved && activeEncounter.value) await applyActionResult(await cancelRequest(activeEncounter.value.id, option.requestId), 'special-order')
+  },
+  send: async (option: ReactionOrderOption, order) => {
+    const participant = (activeEncounter.value?.participants as CombatParticipant[])?.find(p => p.id === option.participantId)
+    if (!participant || !activeEncounter.value) return false
+    if (order === 'Strike Last!') return handleUseSpecialOrder(participant, order, undefined, { partnerId: option.partnerId, requestId: option.requestId })
+    try {
+      const result = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/quick-reaction`, {
+        method: 'POST', body: { requestId: option.requestId, tamerParticipantId: option.participantId, targetParticipantId: option.partnerId },
+      })
+      await applyActionResult(result, 'quick-reaction')
+      return !!result
+    } catch (e: any) { alert(e?.data?.message || 'Quick Reaction failed'); return false }
+  },
+})
+
+watch(() => reactionOrders.choices.value, () => {
+  for (const request of myUnansweredDodgeRequests.value) {
+    if (defenseFor(request).blocked && !reactionOrders.canDeclareStrikeLast(request)) void automaticDefenses.resolve(request)
+  }
+}, { flush: 'post' })
+
+const specialOrderTargets = useSpecialOrderTargets({
+  participants: () => (activeEncounter.value?.participants as CombatParticipant[]) ?? [],
+  digimon: () => allDigimon.value,
+  nameFor: (participant) => resolveParticipantName(participant.id) || 'Digimon',
+  send: (participant, orderName, choice) => handleUseSpecialOrder(participant, orderName, choice.targetId, choice),
+})
+
+async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string, choice: SpecialOrderChoice = {}): Promise<boolean> {
+  if (!activeEncounter.value) return false
+  if (orderName === 'Fateful Intervention') { fateful.open(); return true }
   try {
     const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
       method: 'POST',
-      body: { participantId: participant.id, orderName, targetId },
+      body: { participantId: participant.id, orderName, targetId, ...choice },
     })
     await applyActionResult(updated, 'special-order')
     showPlayerSpecialOrdersModal.value = false
+    return true
   } catch (e: any) {
     console.error('Special order failed:', e)
     alert(e?.data?.message || 'Failed to use special order')
+    return false
   }
 }
 
@@ -4273,7 +4327,7 @@ function getParticipantBodyScore(participant: CombatParticipant): number {
   if (participant.type === 'tamer') return getTotalAttribute('body')
   const digimonEntity = partnerDigimon.value.find(d => d.id === participant.entityId)
   if (!digimonEntity) return 0
-  return calcDigimonStats(digimonEntity).body
+  return calcDigimonStats(digimonEntity).body + getAllStatEffectModifier(participant.activeEffects ?? [])
 }
 
 async function handleClashCheck(participantId: string, preRolled?: { roll: number; diceResults: number[] }) {
@@ -4577,7 +4631,7 @@ const mapSelectedAttackProp = computed(() => {
       attackerParticipantId: p.id,
     }
   }
-  const stats = calcDigimonStats(digimon)
+  const stats = applyDerivedStatEffects(calcDigimonStats(digimon), p.activeEffects ?? [])
   const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
   const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
   const reachRanks = (digimon.qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
@@ -4654,6 +4708,42 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
 <template>
   <div class="min-h-screen bg-digimon-dark-900">
+    <ReactionOrdersPanel :choices="reactionOrders.choices.value" :busy="reactionOrders.busy.value" @declare="reactionOrders.declare" @skip="reactionOrders.skip" />
+    <SpecialOrderTargetDialog
+      v-if="specialOrderTargets.selection.value"
+      :key="specialOrderTargets.selection.value.orderName"
+      :order-name="specialOrderTargets.selection.value.orderName"
+      :partners="specialOrderTargets.partners.value"
+      :targets="specialOrderTargets.targets.value"
+      :busy="specialOrderTargets.busy.value"
+      @confirm="specialOrderTargets.confirm"
+      @cancel="specialOrderTargets.close"
+    />
+    <FatefulInterventionDialog
+      v-if="fateful.visible.value"
+      :rolls="fatefulRollOptions"
+      :willpower="totalAttributes.willpower ?? 0"
+      :cost="fatefulInterventionCost"
+      :inspiration="currentCombatInspiration"
+      :busy="fateful.busy.value"
+      :error="fateful.error.value"
+      @confirm="fateful.confirm"
+      @cancel="fateful.close"
+    />
+    <Teleport to="body">
+      <div v-if="showPlayerSpecialOrdersModal && myTamerParticipant" class="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4" role="dialog" aria-modal="true" aria-label="Special Orders">
+        <div class="bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-6 w-full max-w-md max-h-[85vh] overflow-y-auto">
+          <h2 class="text-lg font-semibold text-white mb-4">Special Orders</h2>
+          <div class="space-y-2">
+            <button v-for="order in getTamerSpecialOrders(myTamerParticipant)" :key="order.name" :disabled="!canUseSpecialOrderInCombat(myTamerParticipant, order)" class="w-full text-left p-3 rounded bg-digimon-dark-700 text-white disabled:opacity-40" @click="showPlayerSpecialOrdersModal = false; order.name === 'Fateful Intervention' ? fateful.open() : specialOrderTargets.open(myTamerParticipant, order.name)">
+              <span class="block font-semibold">{{ order.name }}</span>
+              <span class="block text-xs text-digimon-dark-300">{{ order.effect }}</span>
+            </button>
+          </div>
+          <button class="mt-4 text-sm text-digimon-dark-300" @click="showPlayerSpecialOrdersModal = false">Close</button>
+        </div>
+      </div>
+    </Teleport>
     <!-- Render child route (create/edit Digimon) -->
     <NuxtPage v-if="isChildRoute" />
 
@@ -4891,7 +4981,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :act-of-inspiration-cost="actOfInspirationCost"
               :fateful-intervention-cost="fatefulInterventionCost"
               :loading="inspirationSpendLoading"
-              @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+              @spend-inspiration="({ spendType, amount }) => spendFromPanel(spendType, amount)"
             />
             <!-- AOE intercede target picker — shown in place of full modal when map view is active -->
             <div
@@ -5319,11 +5409,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                       v-for="order in getTamerSpecialOrders(participant)"
                       :key="order.name"
                       :disabled="!canUseSpecialOrderInCombat(participant, order)"
-                      @click="
-                        order.name === 'Enemy Scan'
-                          ? (showPlayerSpecialOrdersModal = true)
-                          : handleUseSpecialOrder(participant, order.name)
-                      "
+                      @click="order.name === 'Fateful Intervention' ? fateful.open() : specialOrderTargets.open(participant, order.name)"
                       :class="[
                         'w-full text-left text-xs px-3 py-2 rounded transition-colors',
                         !canUseSpecialOrderInCombat(participant, order)
@@ -5367,27 +5453,6 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   </div>
                 </div>
               </div>
-
-              <!-- Enemy Scan Target Modal (Player) -->
-              <Teleport to="body">
-                <div v-if="showPlayerSpecialOrdersModal && participant.type === 'tamer'" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showPlayerSpecialOrdersModal = false">
-                  <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-600 max-w-md w-full mx-4">
-                    <h3 class="text-lg font-semibold text-white mb-4">Enemy Scan - Select Target</h3>
-                    <div class="space-y-2 max-h-60 overflow-y-auto">
-                      <button
-                        v-for="p in visibleParticipants.filter(p => p.id !== participant.id && p.id !== 'gm' && !p.inReserve)"
-                        :key="p.id"
-                        class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded text-sm text-left"
-                        @click="handleUseSpecialOrder(participant, 'Enemy Scan', p.id); showPlayerSpecialOrdersModal = false"
-                      >
-                        {{ getEntityName(p) }}
-                        <span class="text-digimon-dark-400 text-xs ml-2">({{ p.maxWounds - p.currentWounds }}/{{ p.maxWounds }} wounds)</span>
-                      </button>
-                    </div>
-                    <button class="mt-4 text-sm text-digimon-dark-400 hover:text-white" @click="showPlayerSpecialOrdersModal = false">Cancel</button>
-                  </div>
-                </div>
-              </Teleport>
 
               <!-- Digivolve / Devolve (digimon with evolution line) -->
               <div
@@ -5522,7 +5587,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           :act-of-inspiration-cost="actOfInspirationCost"
           :fateful-intervention-cost="fatefulInterventionCost"
           :loading="inspirationSpendLoading"
-          @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+          @spend-inspiration="({ spendType, amount }) => spendFromPanel(spendType, amount)"
         />
 
         <!-- Turn Tracker (Redesigned) -->
@@ -6496,7 +6561,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
   <!-- Dodge Request Modal -->
   <Teleport to="body">
     <div
-      v-if="hasUnrespondedDodgeRequest"
+      v-if="hasUnrespondedDodgeRequest && (!dodgeBlockedByClash || automaticDefenses.hasFailed(currentDodgeRequest))"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 animate-pulse"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border-2 border-red-500">
@@ -6511,13 +6576,16 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </p>
         </div>
 
+        <button v-if="!dodgeBlockedByClash && !hasRolledDodge" :disabled="currentCombatInspiration < fatefulInterventionCost || inspirationSpendLoading" class="mb-3 w-full rounded bg-amber-800 text-white px-3 py-2 text-sm disabled:opacity-40" @click="fateful.open()">Fateful Intervention · choose Accuracy or Dodge dice</button>
         <div v-if="dodgeBlockedByClash" class="mb-4 p-3 bg-red-900/40 rounded-lg border border-red-600">
           <p class="text-red-300 text-sm font-medium">
             You're locked in a clash — you cannot dodge attacks from outside it. This attack hits automatically.
           </p>
+          <p class="text-red-300 text-xs mt-2">The automatic defense could not be sent. Retry to continue resolving the attack.</p>
+          <button class="mt-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm" @click="automaticDefenses.resolve(currentDodgeRequest, true)">Retry defense</button>
         </div>
 
-        <p class="text-white text-sm mb-4">
+        <p v-if="!dodgeBlockedByClash" class="text-white text-sm mb-4">
           Roll {{ dodgeDicePool }}d6 — count 5+ as successes
           <span v-if="(currentDodgeRequest?.data?.dodgePenalty ?? 0) > 0" class="text-red-400 text-xs ml-1">
             (-{{ currentDodgeRequest.data.dodgePenalty }} successive attack penalty)
@@ -6539,7 +6607,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </div>
 
         <!-- Embedded Dice Roller -->
-        <div class="mb-4">
+        <div v-if="!dodgeBlockedByClash" class="mb-4">
           <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
             <div class="flex gap-2 items-center justify-center mb-4">
               <span class="text-white font-semibold">{{ dodgeDicePool }}d6</span>
@@ -6586,11 +6654,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :current-inspiration="currentCombatInspiration"
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
-            :spend-inspiration="handleSpendInspiration"
+            :spend-inspiration="spendDodgeInspiration"
+            :fateful-cost="fatefulInterventionCost"
+            @fateful="fateful.open()"
           />
         </div>
 
         <button
+          v-if="!dodgeBlockedByClash"
           :disabled="!dodgeRollResult || inspirationSpendLoading"
           @click="submitDodgeRoll"
           class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
@@ -6610,6 +6681,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
       :inspiration="currentCombatInspiration"
       :max-inspiration="maxCombatInspiration"
       :act-cost="actOfInspirationCost"
+      :fateful-cost="fatefulInterventionCost"
+      @fateful="fateful.open()"
       :settled="areaDefenseBatch.isSettled.value"
       :running="areaDefenseBatch.running.value"
       @toggle-act="areaDefenseBatch.toggleAct"
@@ -6650,6 +6723,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
               v-for="atk in counterattackAvailableAttacks"
               :key="atk.id"
               @click="counterattackSelectedAttack = atk"
+              :disabled="hasRolledCounterattack"
               :class="[
                 'text-left px-3 py-2 rounded-lg text-sm font-semibold transition-colors border',
                 counterattackSelectedAttack?.id === atk.id
@@ -6682,7 +6756,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
             <div class="flex gap-2 items-center justify-center mb-4">
               <span class="text-white font-semibold">{{ counterattackAccuracyPool }}d6</span>
-              <span class="text-digimon-dark-400 text-sm">(5+ = success)</span>
+              <span class="text-digimon-dark-400 text-sm">({{ counterattackRollResult?.successThreshold ?? counterattackSuccessThreshold }}+ = success)</span>
             </div>
 
             <button
@@ -6708,7 +6782,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 :key="idx"
                 :class="[
                   'w-8 h-8 flex items-center justify-center rounded font-bold text-sm',
-                  die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
+                  die >= (counterattackRollResult.successThreshold ?? 5) ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
                 ]"
               >{{ die }}</span>
             </div>
@@ -6724,6 +6798,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
             :spend-inspiration="handleSpendInspiration"
+            :fateful-cost="fatefulInterventionCost"
+            @fateful="fateful.open()"
           />
         </div>
 
@@ -6760,14 +6836,14 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <p class="text-digimon-dark-400 text-xs mb-4">{{ accuracyReviewContext.attack.name }}</p>
 
         <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4 text-center">
-          <div class="text-sm text-digimon-dark-400 mb-2">{{ accuracyReview.dicePool }}d6 — count 5+ as successes</div>
+          <div class="text-sm text-digimon-dark-400 mb-2">{{ accuracyReview.dicePool }}d6 — count {{ accuracyReview.successThreshold ?? 5 }}+ as successes</div>
           <div class="flex justify-center gap-1 mb-2 flex-wrap">
             <span
               v-for="(die, idx) in accuracyReview.rolls"
               :key="idx"
               :class="[
                 'w-8 h-8 flex items-center justify-center rounded font-bold text-sm',
-                die >= 5 ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
+                die >= (accuracyReview.successThreshold ?? 5) ? 'bg-green-600 text-white' : 'bg-digimon-dark-600 text-digimon-dark-400'
               ]"
             >{{ die }}</span>
           </div>
@@ -6782,6 +6858,8 @@ async function handleBreakClash(participantId: string, clashId: string) {
           :max-inspiration="maxCombatInspiration"
           :loading="inspirationSpendLoading"
           :spend-inspiration="handleSpendInspiration"
+          :fateful-cost="fatefulInterventionCost"
+          @fateful="fateful.open()"
         />
 
         <button
@@ -7906,8 +7984,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
           <div class="text-3xl font-bold text-digimon-orange-400">{{ attributeRollResult.total }}</div>
         </div>
 
-        <button
-          @click="showAttributeRollModal = false; attributeRollResult = null"
+          <button v-if="attributeRollResult && activeEncounter?.phase === 'combat' && myTamerParticipant" :disabled="currentCombatInspiration < fatefulInterventionCost || inspirationSpendLoading" class="w-full mb-2 rounded bg-amber-800 text-white px-3 py-2 disabled:opacity-40" @click="fateful.open()">Fateful Intervention</button>
+          <button
+            :disabled="inspirationSpendLoading"
+            @click="showAttributeRollModal = false; attributeRollResult = null"
           class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
           Close
@@ -7964,8 +8044,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </div>
         </div>
 
-        <button
-          @click="showTormentRollModal = false; tormentRollResult = null"
+          <button v-if="tormentRollResult && activeEncounter?.phase === 'combat' && myTamerParticipant" :disabled="currentCombatInspiration < fatefulInterventionCost || inspirationSpendLoading" class="w-full mb-2 rounded bg-amber-800 text-white px-3 py-2 disabled:opacity-40" @click="fateful.open()">Fateful Intervention</button>
+          <button
+            :disabled="inspirationSpendLoading"
+            @click="showTormentRollModal = false; tormentRollResult = null"
           class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
           Close

@@ -273,6 +273,7 @@ export const encounters = pgTable('encounters', {
     usedSpecialOrders?: string[]
     usedSkillOrders?: string[]
     interceptPenalty?: number
+    specialOrderDebt?: Record<string, number>
     // Legacy: read-only fallback for encounters saved before the `intercede_opt_outs` column
     intercedeOptOuts?: string[]
     gmCharacterOptOuts?: Record<string, string[]>
@@ -313,6 +314,18 @@ export const encounters = pgTable('encounters', {
     pendingSimpleActionPenalty?: number
     statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
     quickReactionDiceBonus?: number
+    lastMovedTurnKey?: string
+    strikeFastReady?: boolean
+    strikeFastTurnKey?: string
+    fatefulSpentRollIds?: string[]
+    finishingTouchReady?: boolean
+    decimationReady?: boolean
+    enduringSoulAvailable?: boolean
+    enduringSoulUsed?: boolean
+    strikeLastCounter?: { attackerId: string; groupId: string; tamerId: string }
+    isMinion?: boolean
+    summonerId?: string
+    summonedByParticipantId?: string
     stunActionReducedThisRound?: boolean
     dataAbsorbActive?: boolean
     dataAbsorbHealAmount?: number
@@ -377,7 +390,7 @@ export const encounters = pgTable('encounters', {
   // Pending player requests (digimon selection, initiative roll, dodge roll, etc.)
   pendingRequests: jsonb('pending_requests').notNull().default([]).$type<Array<{
     id: string
-    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'health-roll' | 'recovery-check' | 'divine-protection-offer' | 'throw-impact-attack'
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'strike-last-offer' | 'health-roll' | 'recovery-check' | 'divine-protection-offer' | 'throw-impact-attack'
     targetTamerId: string
     targetParticipantId?: string
     timestamp: string

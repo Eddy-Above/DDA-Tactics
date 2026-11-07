@@ -1,10 +1,23 @@
+import { ref } from 'vue'
 import type { GameMap, Vec3, DigimonSize } from '~/types'
 import type { MovementCapabilities } from '~/utils/movementRules'
 import { canPassThrough, canLandOn, sizeInteraction, getFootprintDimensions, getFootprintCells, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
-import { bfsReachable, findPath } from '~/utils/pathfinding'
+import { searchReachable, findPath, type ReachableSearch } from '~/utils/pathfinding'
 import { vec3Key } from '~/utils/mapGeometry'
 
 type GiganticDims = { width: number; height: number; depth: number } | null
+type UnitPositions = Map<string, { pos: Vec3; size: DigimonSize; isEnemy?: boolean; giganticDimensions?: GiganticDims }>
+
+function searchContextKey(
+  origin: Vec3, caps: MovementCapabilities, destroyed: Set<string>, units: UnitPositions,
+  moverSize: DigimonSize, moverIsEnemy: boolean, moverDimensions: GiganticDims,
+): string {
+  return JSON.stringify([
+    origin, caps, [...destroyed].sort(),
+    [...units].sort(([a], [b]) => a.localeCompare(b)),
+    moverSize, moverIsEnemy, moverDimensions,
+  ])
+}
 
 // Capabilities + projectile caps now live in the shared movementRules module (single source of
 // truth for client and server). Re-exported here so existing `from '~/composables/useMapMovement'`
@@ -14,6 +27,13 @@ export { detectCapabilities, PROJECTILE_CAPS }
 export function useMapMovement() {
   const reachableCells = ref<Set<string>>(new Set())
   const activePath = ref<Vec3[]>([])
+  let cachedSearch: { map: GameMap; contextKey: string; search: ReachableSearch } | null = null
+
+  // The map owner calls this for in-place geometry edits. Origin, capabilities,
+  // destroyed structures and occupied footprints are also compared on every use.
+  function invalidateSearch() {
+    cachedSearch = null
+  }
 
   function computeReachable(
     origin: Vec3,
@@ -21,7 +41,7 @@ export function useMapMovement() {
     caps: MovementCapabilities,
     map: GameMap,
     destroyedStructures: Set<string> = new Set(),
-    unitPositions: Map<string, { pos: Vec3; size: DigimonSize; isEnemy?: boolean; giganticDimensions?: GiganticDims }> = new Map(),
+    unitPositions: UnitPositions = new Map(),
     moverSize: DigimonSize = 'medium',
     moverIsEnemy: boolean = false,
     moverGiganticDimensions: GiganticDims = null,
@@ -50,16 +70,21 @@ export function useMapMovement() {
       }
     }
 
-    const reachable = bfsReachable(origin, budget, (from, to) => {
+    const search = searchReachable(origin, budget, (from, to) => {
       if (blockedPositions.has(vec3Key(to))) return false
       return canPassThrough(from, to, caps, map, destroyedStructures)
     })
+    cachedSearch = {
+      map,
+      contextKey: searchContextKey(origin, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions),
+      search,
+    }
 
     // Filter to only cells where the unit can actually land — the mover's own full
     // 3D box at that anchor must not overlap any other unit's box (blocked or passable-only).
     const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
     const landable = new Set<string>()
-    for (const k of reachable) {
+    for (const k of search.cells) {
       if (k === vec3Key(origin)) continue
       const [x, y, z] = k.split(',').map(Number)
       const pos = { x, y, z }
@@ -82,11 +107,20 @@ export function useMapMovement() {
     caps: MovementCapabilities,
     map: GameMap,
     destroyedStructures: Set<string> = new Set(),
-    unitPositions: Map<string, { pos: Vec3; size: DigimonSize; isEnemy?: boolean; giganticDimensions?: GiganticDims }> = new Map(),
+    unitPositions: UnitPositions = new Map(),
     moverSize: DigimonSize = 'medium',
     moverIsEnemy: boolean = false,
     moverGiganticDimensions: GiganticDims = null,
   ) {
+    if (cachedSearch?.map === map && cachedSearch.contextKey === searchContextKey(
+      from, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions,
+    )) {
+      const path = cachedSearch.search.pathTo(to)
+      if (path) {
+        activePath.value = path
+        return path
+      }
+    }
     const blockedPositions = new Set<string>()
     for (const [, { pos, size, isEnemy: partIsEnemy, giganticDimensions }] of unitPositions) {
       const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
@@ -104,9 +138,10 @@ export function useMapMovement() {
   }
 
   function clearMovement() {
+    invalidateSearch()
     reachableCells.value = new Set()
     activePath.value = []
   }
 
-  return { reachableCells, activePath, computeReachable, computePath, clearMovement, detectCapabilities }
+  return { reachableCells, activePath, computeReachable, computePath, clearMovement, invalidateSearch, detectCapabilities }
 }

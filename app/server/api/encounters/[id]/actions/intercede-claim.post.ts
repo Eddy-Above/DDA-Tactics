@@ -1,4 +1,5 @@
 import { eq, inArray } from 'drizzle-orm'
+import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns, evolutionLines, maps } from '../../../../db'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup, isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
@@ -764,6 +765,8 @@ async function resolveIntercedeClaim(
     }
     return p
   })
+
+  participants = preserveEnduringSouls(participants, encounter.participants)
 
   let claimNextTurnIndex: number | undefined
   let claimNextRound: number | undefined

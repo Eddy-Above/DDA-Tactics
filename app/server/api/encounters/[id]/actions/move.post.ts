@@ -3,6 +3,7 @@ import { db, encounters } from '../../../../db'
 import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '../../../../utils/damageOverTime'
 import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
 import { knockedOutEnemyIds, resolveEnemyKnockouts, type KnockoutResult } from '../../../../utils/enemyKnockouts'
+import { combatTurnKey } from '../../../../../utils/specialOrderCombat'
 
 interface MoveBody {
   participantId: string
@@ -50,6 +51,8 @@ export default defineEventHandler(async (event) => {
   let battleLog: any[] | undefined
   const distance = Math.max(0, Math.floor(Number(body.distance) || 0))
   if (encounter.phase === 'combat' && distance > 0) {
+    updatedParticipants = updatedParticipants.map((p: any) => p.id === body.participantId
+      ? { ...p, lastMovedTurnKey: combatTurnKey(encounter.round ?? 0, encounter.currentTurnIndex ?? 0) } : p)
     const moved = applyMovementBurn(updatedParticipants, [{ participantId: body.participantId, meters: distance }], {
       round: encounter.round ?? 0,
       digimonById: await loadParticipantDigimon([mover]),

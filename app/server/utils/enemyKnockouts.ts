@@ -201,13 +201,14 @@ function resetRound(participants: any[]): void {
 
 // Starts a participant's turn (the server-side counterpart of the client's activateParticipant).
 // Mutates participants in place.
-async function startTurn(participants: any[], participantId: string | undefined): Promise<void> {
+async function startTurn(participants: any[], participantId: string | undefined, round: number): Promise<void> {
   const nextParticipant = participants.find((p: any) => p.id === participantId)
   if (!nextParticipant) return
+  for (const p of participants) if (p.strikeFastReady) p.strikeFastReady = false
   nextParticipant.isActive = true
   nextParticipant.dodgePenalty = 0
   nextParticipant.hasDirectedThisTurn = false
-  applyDeferredIntercedeCost(nextParticipant)
+  applyDeferredIntercedeCost(nextParticipant, round)
   recordTurnStart(nextParticipant)
   if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
     nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
@@ -222,7 +223,7 @@ async function startTurn(participants: any[], participantId: string | undefined)
     for (const p of participants.filter((p: any) => p.type === 'digimon')) {
       if (digimonById.get(p.entityId)?.partnerId === nextParticipant.entityId) {
         p.dodgePenalty = 0
-        applyDeferredIntercedeCost(p)
+        applyDeferredIntercedeCost(p, round)
         p.hasActed = false
         break
       }
@@ -372,7 +373,7 @@ export async function resolveEnemyKnockouts(
       participants = await applyRoundStartQualityTriggers(participants)
     }
 
-    await startTurn(participants, turnOrder[currentTurnIndex])
+    await startTurn(participants, turnOrder[currentTurnIndex], round)
 
     const before = new Set(knockedOutEnemyIds(participants))
     await applyGravity()

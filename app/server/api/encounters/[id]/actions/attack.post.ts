@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, type Encounter } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 import { chebyshev } from '../../../../utils/gridDistance'
@@ -8,6 +8,10 @@ import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { getAreaShape } from '~/utils/areaShapes'
+import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '../../../../../utils/specialOrderCombat'
+import { combatAttackStats } from '../../../../../utils/combatDice'
+import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
+import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 
 interface AttackActionBody {
   participantId: string
@@ -30,6 +34,10 @@ interface AttackActionBody {
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
 }
 
+type PreparedAttack =
+  | { type: 'resolved'; encounter: Encounter | undefined }
+  | { type: 'intercede'; body: Record<string, unknown> }
+
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<AttackActionBody>(event)
@@ -51,7 +59,20 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Fetch encounter
+  // Read and persist in the same queue as defense answers and offer creation. Delegation must
+  // happen after this claim releases: intercede-offer acquires this non-reentrant queue itself.
+  const prepared = await serializeIntercedeClaim(encounterId, () => prepareAttack(encounterId, body))
+  if (prepared.type === 'intercede') {
+    return $fetch<Encounter>(`/api/encounters/${encounterId}/actions/intercede-offer`, {
+      method: 'POST',
+      body: prepared.body,
+    })
+  }
+  return prepared.encounter
+})
+
+async function prepareAttack(encounterId: string, body: AttackActionBody): Promise<PreparedAttack> {
+  // Fetch encounter only after earlier defense decisions have finished.
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   if (!encounter) {
@@ -76,6 +97,20 @@ export default defineEventHandler(async (event) => {
       statusCode: 404,
       message: 'Participant not found',
     })
+  }
+
+  const orderModifiers = getAttackOrderModifiers(actor)
+  if (orderModifiers.suppressPower && body.hugePowerUsed) {
+    throw createError({ statusCode: 400, message: 'Huge Power and Overkill cannot trigger with this Special Order' })
+  }
+  if (actor.type === 'digimon') {
+    const [actorRecord] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+    const attack = actorRecord?.attacks?.find((a: any) => a.id === body.attackId)
+    if (orderModifiers.successThreshold === 4) body.accuracySuccesses = body.accuracyDiceResults.filter(d => d >= 4).length
+      + combatAttackStats(actorRecord, actor, attack).automaticSuccesses
+    if (attack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(actor)) {
+      throw createError({ statusCode: 400, message: `Signature Move is available from round ${signatureReadyRound(actor)}` })
+    }
   }
 
   // Check if participant can act (direct turn or partner digimon on tamer's turn)
@@ -309,7 +344,7 @@ export default defineEventHandler(async (event) => {
   const updatedParticipants = participants.map((p: any) => {
     if (p.id === body.participantId) {
       const updated: any = {
-        ...p,
+        ...consumeAttackOrders(p),
         actionsRemaining: {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCostSimple),
         },
@@ -405,13 +440,21 @@ export default defineEventHandler(async (event) => {
         hit: false,
       }
       updatedBattleLog.push(missLogEntry)
+      const missOffers = await offerStrikeLastOnMiss(updatedParticipants, pendingRequests, {
+        id: missLogEntry.id, attackerId: actor.id, targetIds: body.targetIds, round: encounter.round,
+        attackerName: actorName, attackName: body.attackName || 'Attack',
+      }, (campaign?.level ?? 'standard') as any, {
+        digimon: async id => (await db.select().from(digimon).where(eq(digimon.id, id)))[0],
+        tamer: async id => (await db.select().from(tamers).where(eq(tamers.id, id)))[0],
+      })
       await db.update(encounters).set({
         participants: updatedParticipants,
+        pendingRequests: missOffers as any,
         battleLog: updatedBattleLog,
         updatedAt: new Date(),
       }).where(eq(encounters.id, encounterId))
       const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-      return updated
+      return { type: 'resolved' as const, encounter: updated }
     }
 
     // Save action deduction and attack log, then delegate to intercede-offer with all targetIds
@@ -421,8 +464,8 @@ export default defineEventHandler(async (event) => {
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
 
-    const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
-      method: 'POST',
+    return {
+      type: 'intercede' as const,
       body: {
         attackerId: body.participantId,
         targetIds: body.targetIds,
@@ -430,7 +473,7 @@ export default defineEventHandler(async (event) => {
         accuracyDice: body.accuracyDiceResults,
         attackId: body.attackId,
         attackName: body.attackName,
-        attackData: { dicePool: body.accuracyDicePool },
+        attackData: { dicePool: body.accuracyDicePool, orderModifiers },
         bolstered: body.bolstered || false,
         bolsterType: body.bolsterType,
         lifestealed: body.lifestealed || false,
@@ -442,8 +485,7 @@ export default defineEventHandler(async (event) => {
         clashNoInterceptTargetId: body.clashNoInterceptTargetId,
         areaShapeData: body.areaShapeData ?? null,
       },
-    })
-    return result
+    }
   }
 
   // Auto-miss: 0 accuracy successes = automatic miss, no dodge request needed
@@ -464,8 +506,17 @@ export default defineEventHandler(async (event) => {
 
     updatedBattleLog.push(missLogEntry)
 
+    const missOffers = await offerStrikeLastOnMiss(updatedParticipants, pendingRequests, {
+      id: missLogEntry.id, attackerId: actor.id, targetIds: [body.targetId!], round: encounter.round,
+      attackerName: actorName, attackName: body.attackName || 'Attack',
+    }, (campaign?.level ?? 'standard') as any, {
+      digimon: async id => (await db.select().from(digimon).where(eq(digimon.id, id)))[0],
+      tamer: async id => (await db.select().from(tamers).where(eq(tamers.id, id)))[0],
+    })
+
     const updateData: any = {
       participants: updatedParticipants,
+      pendingRequests: missOffers,
       battleLog: updatedBattleLog,
       updatedAt: new Date(),
     }
@@ -504,7 +555,7 @@ export default defineEventHandler(async (event) => {
 
     const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
-    return updated
+    return { type: 'resolved' as const, encounter: updated }
   }
 
   // Save validated participants (action deducted) and battle log to DB first
@@ -517,8 +568,8 @@ export default defineEventHandler(async (event) => {
   // Delegate to intercede-offer endpoint for intercede/dodge/NPC-resolve logic
   // skipActionDeduction=true since we already deducted actions above
   // (clash armor for outside-clash targets is computed at damage time — see utils/clashArmor.ts)
-  const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
-    method: 'POST',
+  return {
+    type: 'intercede' as const,
     body: {
       attackerId: body.participantId,
       targetId: body.targetId,
@@ -528,6 +579,7 @@ export default defineEventHandler(async (event) => {
       attackName: body.attackName,
       attackData: {
         dicePool: body.accuracyDicePool,
+        orderModifiers,
       },
       bolstered: body.bolstered || false,
       bolsterType: body.bolsterType,
@@ -538,7 +590,5 @@ export default defineEventHandler(async (event) => {
       batteryCount,
       skipActionDeduction: true,
     },
-  })
-
-  return result
-})
+  }
+}

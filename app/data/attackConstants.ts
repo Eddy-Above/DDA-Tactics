@@ -19,6 +19,7 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Regenerate': 'P',
   'Guiding Light': 'P',
   'Guiding Light (Focus)': 'P',
+  'Bastion': 'P',
   // Negative [N] — debuffs on enemies
   'Poison': 'N',
   'Confuse': 'N',
@@ -34,6 +35,7 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'DOT': 'N',
   'Lag': 'N',
   'Burn': 'N',
+  'Debilitate': 'N',
   // Boss-only Negative [N]
   'Bug': 'N',
   'Charm': 'N',
@@ -148,6 +150,7 @@ export const EFFECT_STAT_MODIFIERS: Record<string, { accuracy?: number; damage?:
   'Swiftness': { dodge: 1, accuracy: 1 },
   'Vigilance': { dodge: 1, armor: 1 },
   'Vigor': { dodge: 1 },
+  'Bastion': { accuracy: 1, damage: 1, dodge: 1, armor: 1 },
   'Guiding Light': { accuracy: 2 },          // +2 Accuracy to allied Digimon whose footprints intersect the source's ranged Burst
   'Guiding Light (Focus)': { dodge: 1 },     // +1 Dodge per qualifying allied Digimon (potency = count; excludes the source)
   // Boss effects
@@ -159,6 +162,22 @@ export const EFFECT_STAT_MODIFIERS: Record<string, { accuracy?: number; damage?:
   'Pacify': { damage: -1, accuracy: -1 },
   'Blind': { accuracy: -1, dodge: -1 },
   'Paralysis': { dodge: -1 },
+  'Debilitate': { accuracy: -1, damage: -1, dodge: -1, armor: -1 },
+}
+
+/** Bastion/Debilitate also change derived stats and movement, while leaving Health unchanged. */
+export function getAllStatEffectModifier(activeEffects: { name: string; potency?: number }[]): number {
+  return activeEffects.reduce((total, e) => total + (e.name === 'Bastion' ? (e.potency ?? 2) : e.name === 'Debilitate' ? -(e.potency ?? 2) : 0), 0)
+}
+
+export function applyDerivedStatEffects<T extends object>(derived: T, activeEffects: { name: string; potency?: number }[]): T {
+  const modifier = getAllStatEffectModifier(activeEffects)
+  if (!modifier) return derived
+  const result: Record<string, any> = { ...derived }
+  for (const stat of ['brains', 'body', 'agility', 'bit', 'cpu', 'ram', 'movement', 'range', 'effectiveLimit']) {
+    if (typeof result[stat] === 'number') result[stat] += modifier
+  }
+  return result as T
 }
 
 /**

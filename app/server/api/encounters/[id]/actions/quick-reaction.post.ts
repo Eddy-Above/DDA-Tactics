@@ -5,10 +5,12 @@ import { isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { STAGE_CONFIG } from '~/types'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 import { applyActivePasses } from '~/server/utils/intercedePasses'
+import { deferSpecialOrderCost } from '~/utils/intercedeActions'
 
 interface QuickReactionBody {
   requestId: string
   tamerParticipantId: string
+  targetParticipantId?: string
 }
 
 export default defineEventHandler(async (event) => {
@@ -64,6 +66,7 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
     const tamerAreaTargetIds: string[] = request.data.tamerAreaTargetIds || []
     let partnerTargetId: string | null = null
     for (const tid of tamerAreaTargetIds) {
+      if (body.targetParticipantId && tid !== body.targetParticipantId) continue
       const p = participants.find((pp: any) => pp.id === tid)
       if (p?.type === 'digimon') {
         const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
@@ -84,6 +87,10 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
   const target = participants.find((p: any) => p.id === effectiveTargetId)
   if (!target || target.type !== 'digimon') {
     throw createError({ statusCode: 400, message: 'Quick Reaction requires a digimon target' })
+  }
+  const attacker = participants.find((p: any) => p.id === (request.data.attackerParticipantId ?? request.data.attackerId))
+  if (!attacker || attacker.type !== 'digimon' || !!attacker.isEnemy === !!target.isEnemy) {
+    throw createError({ statusCode: 400, message: 'Quick Reaction requires an attack from an enemy Digimon' })
   }
 
   // Load tamer DB record
@@ -133,7 +140,7 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
   // Apply action cost to tamer — always deferred (rule: "next round")
   participants = participants.map((p: any) => {
     if (p.id === body.tamerParticipantId) {
-      return { ...p, interceptPenalty: (p.interceptPenalty || 0) + 1 }
+      return deferSpecialOrderCost(p, encounter.round ?? 0)
     }
     if (p.id === effectiveTargetId) {
       return { ...p, quickReactionDiceBonus: diceCount }

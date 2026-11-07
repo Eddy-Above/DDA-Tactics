@@ -19,6 +19,7 @@ const props = defineProps<{
   settled: boolean
   /** A "roll all" or "submit all" pass is running. */
   running: boolean
+  fatefulCost?: number
 }>()
 
 defineEmits<{
@@ -30,6 +31,7 @@ defineEmits<{
   'roll-all': []
   'submit-ready': []
   close: []
+  fateful: []
 }>()
 
 const first = computed(() => props.views[0]?.request?.data ?? {})
@@ -76,6 +78,7 @@ function outcomeText(view: DefenseView): string {
           class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-sm font-semibold transition-colors"
           @click="$emit('submit-ready')"
         >Submit ready defenses</button>
+        <button v-if="fatefulCost !== undefined" :disabled="running || inspiration < fatefulCost" class="px-3 py-2 rounded bg-amber-700 text-white text-sm disabled:opacity-40" @click="$emit('fateful')">Fateful Intervention</button>
         <span class="ml-auto self-center text-xs text-digimon-dark-400">Inspiration: {{ inspiration }}/{{ maxInspiration }}</span>
       </div>
 
@@ -112,7 +115,7 @@ function outcomeText(view: DefenseView): string {
 
           <!-- Before the roll: Act of Inspiration for this target -->
           <label
-            v-if="view.status === 'idle' && !view.defense.blocked"
+            v-if="view.status === 'idle' && !view.defense.blocked && !view.actPaid"
             class="flex items-center gap-2 mb-2 text-sm"
             :class="inspiration < actCost && !view.actOfInspiration ? 'opacity-50' : 'cursor-pointer'"
           >
@@ -128,7 +131,7 @@ function outcomeText(view: DefenseView): string {
           </label>
 
           <button
-            v-if="view.status === 'idle'"
+            v-if="view.status === 'idle' && !view.defense.blocked"
             type="button"
             :disabled="view.busy || running"
             class="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-sm font-semibold transition-colors"
@@ -153,7 +156,7 @@ function outcomeText(view: DefenseView): string {
 
           <!-- After the roll, before it is sent: spend Inspiration on this target -->
           <div
-            v-if="view.roll && (view.status === 'rolled' || view.status === 'failed')"
+            v-if="view.roll && !view.roll.fatefulIntervention && !view.defense.blocked && (view.status === 'rolled' || view.status === 'failed')"
             class="grid grid-cols-2 gap-2 mt-2"
           >
             <button

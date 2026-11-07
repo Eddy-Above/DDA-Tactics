@@ -2,6 +2,17 @@ import type { Vec3 } from '~/types'
 
 function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 
+function reconstructPath(goalKey: string, cameFrom: Map<string, string>): Vec3[] {
+  const path: Vec3[] = []
+  let current: string | undefined = goalKey
+  while (current) {
+    const [x, y, z] = current.split(',').map(Number)
+    path.push({ x, y, z })
+    current = cameFrom.get(current)
+  }
+  return path.reverse()
+}
+
 // Chebyshev distance (3D "king's move")
 export function chebyshev(a: Vec3, b: Vec3): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.z - b.z))
@@ -49,19 +60,7 @@ export function findPath(
     }
     if (!currentNode) break
     if (currentKey === goalKey) {
-      // Reconstruct path
-      const path: Vec3[] = []
-      let k: string | undefined = goalKey
-      while (k) { path.unshift(open.get(k)?.pos ?? JSON.parse(`[${k.replace(/,/g, ',')}]`) as any); k = cameFrom.get(k) }
-      // Reconstruct from cameFrom
-      const pathOut: Vec3[] = []
-      let cur: string | undefined = goalKey
-      while (cur) {
-        const parts = cur.split(',').map(Number)
-        pathOut.unshift({ x: parts[0], y: parts[1], z: parts[2] })
-        cur = cameFrom.get(cur)
-      }
-      return pathOut
+      return reconstructPath(goalKey, cameFrom)
     }
     open.delete(currentKey)
     for (const nb of neighbours(currentNode.pos)) {
@@ -78,24 +77,44 @@ export function findPath(
   return null
 }
 
-// BFS to find all cells reachable within `budget` steps
-export function bfsReachable(
+export interface ReachableSearch {
+  cells: Set<string>
+  pathTo: (goal: Vec3) => Vec3[] | null
+}
+
+// Retain the shortest-path tree so movement previews need no second search.
+export function searchReachable(
   origin: Vec3,
   budget: number,
   canPass: (from: Vec3, to: Vec3) => boolean,
-): Set<string> {
+): ReachableSearch {
   const visited = new Map<string, number>([[key(origin), 0]])
+  const cameFrom = new Map<string, string>()
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: origin, cost: 0 }]
-  while (queue.length > 0) {
-    const { pos, cost } = queue.shift()!
+  for (let head = 0; head < queue.length; head++) {
+    const { pos, cost } = queue[head]
     if (cost >= budget) continue
     for (const nb of neighbours(pos)) {
       const k = key(nb)
       if (visited.has(k)) continue
       if (!canPass(pos, nb)) continue
       visited.set(k, cost + 1)
+      cameFrom.set(k, key(pos))
       queue.push({ pos: nb, cost: cost + 1 })
     }
   }
-  return new Set(visited.keys())
+  const cells = new Set(visited.keys())
+  return {
+    cells,
+    pathTo: goal => cells.has(key(goal)) ? reconstructPath(key(goal), cameFrom) : null,
+  }
+}
+
+// Kept for callers that only need the reachable cells.
+export function bfsReachable(
+  origin: Vec3,
+  budget: number,
+  canPass: (from: Vec3, to: Vec3) => boolean,
+): Set<string> {
+  return searchReachable(origin, budget, canPass).cells
 }

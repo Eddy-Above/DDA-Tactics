@@ -4,6 +4,7 @@ import type { GameMap } from '../../types'
 import { calculateDigimonDerivedStats } from '../../types'
 import { detectCapabilities, type MovementCapabilities, type FallerProfile } from '../../utils/movementRules'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
+import { applyDerivedStatEffects } from '../../data/attackConstants'
 
 // Loads a full GameMap (all tile/structure layers) from the maps table for the given id, or null.
 // Centralises the map-record construction that was previously copied across every map-aware handler,
@@ -47,7 +48,7 @@ export interface MovementProfile {
 // Derives a participant's movement profile (capabilities + move budget + Body stat) for spatial
 // pathing. Digimon use derived stats + qualities; tamers use Agility+Survival for budget and Body.
 export function getMovementProfile(
-  participant: { type: string; entityId: string },
+  participant: { type: string; entityId: string; activeEffects?: any[] },
   digimonById: Map<string, any>,
   tamerById: Map<string, any>,
 ): MovementProfile {
@@ -55,7 +56,7 @@ export function getMovementProfile(
     const digRec = digimonById.get(participant.entityId)
     if (!digRec) return { budget: 0, caps: detectCapabilities([], 0, 0, 0), bodyStat: 0 }
     const quals = digRec.qualities ?? []
-    const deriv = calculateDigimonDerivedStats(digRec.baseStats, digRec.stage, digRec.size)
+    const deriv = applyDerivedStatEffects(calculateDigimonDerivedStats(digRec.baseStats, digRec.stage, digRec.size), participant.activeEffects ?? [])
     return {
       budget: deriv.movement,
       caps: detectCapabilities(quals, deriv.movement, deriv.ram, deriv.cpu),
@@ -88,7 +89,7 @@ export async function getFallerProfile(
   const airborneByJump = !!participant?.airborneByJump
   if (participant?.type === 'digimon') {
     const quals = digimonById.get(participant.entityId)?.qualities ?? []
-    const ds = await getDigimonDerivedStats(participant.entityId)
+    const ds = await getDigimonDerivedStats(participant.entityId, participant)
     return {
       cpu: ds?.cpu ?? 0,
       ram: ds?.ram ?? 0,

@@ -1,10 +1,14 @@
 import { computed, ref } from 'vue'
 import type { DodgeDefense } from '../utils/areaDefense'
+import { getPaidDodgeDiceBonus } from '../utils/areaDefense'
 
 export interface DefenseRoll {
+  fatefulIntervention?: boolean
   rolls: number[]
   successes: number
   dicePool: number
+  automaticSuccesses?: number
+  successThreshold?: number
 }
 
 /**
@@ -57,7 +61,7 @@ export interface AreaDefenseAdapters {
   currentInspiration: () => number
   actOfInspirationCost: () => number
   /** Spends Inspiration and resolves true only once the server has accepted the spend. */
-  spend: (kind: InspirationSpend, amount: number) => Promise<boolean>
+  spend: (kind: InspirationSpend, amount: number, requestId?: string) => Promise<boolean>
   /** Sends one `dodge-rolled` response. Must not throw for an ordinary failure: return `{ ok: false }`. */
   submit: (request: any, roll: DefenseRoll) => Promise<SubmitOutcome>
   /** The server already answered this request. */
@@ -94,16 +98,16 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
   const die = adapters.rollDie ?? (() => Math.floor(Math.random() * 6) + 1)
   const find = (requestId: string) => entries.value.find((e) => e.requestId === requestId)
   const newEntry = (request: any): DefenseEntry => ({
-    requestId: request.id, request, status: 'idle', roll: null, actOfInspiration: false, actPaid: false,
+    requestId: request.id, request, status: 'idle', roll: null, actOfInspiration: false, actPaid: !!request.data?.dodgeActPaid,
     rerolls: 0, extraDice: 0, busy: false, error: null, responseId: null, summary: null, answeredElsewhere: false,
   })
 
   let spendChain: Promise<unknown> = Promise.resolve()
-  function spend(kind: InspirationSpend, amount: number): Promise<boolean> {
+  function spend(kind: InspirationSpend, amount: number, requestId: string): Promise<boolean> {
     const run = async () => {
       if (adapters.currentInspiration() < amount) return false
       try {
-        return (await adapters.spend(kind, amount)) === true
+        return (await adapters.spend(kind, amount, requestId)) === true
       } catch {
         return false
       }
@@ -141,17 +145,21 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
     entry.error = null
     try {
       const defense = adapters.defense(entry.request)
+      if (entry.request.data?.dodgeActPaid) entry.actPaid = true
       if (entry.actOfInspiration && !defense.blocked && !entry.actPaid) {
-        if (!(await spend('act-of-inspiration', adapters.actOfInspirationCost()))) {
+        if (!(await spend('act-of-inspiration', adapters.actOfInspirationCost(), entry.requestId))) {
           entry.error = 'Could not spend Inspiration, so nothing was rolled.'
           return false
         }
         entry.actPaid = true
       }
       if (entry.status !== 'idle') return false // settled while the spend was in flight
-      const pool = defense.pool + (entry.actPaid && !defense.blocked ? 5 : 0)
+      const pool = defense.pool + (!defense.blocked && !entry.request.data?.fatefulIntervention
+        ? Math.max(getPaidDodgeDiceBonus(entry.request), entry.actPaid ? 5 : 0) : 0)
       const rolls = Array.from({ length: pool }, die)
-      entry.roll = { rolls, successes: countSuccesses(rolls), dicePool: pool }
+      const automaticSuccesses = defense.automaticSuccesses ?? 0
+      entry.roll = { rolls, successes: countSuccesses(rolls) + automaticSuccesses, dicePool: pool,
+        ...(automaticSuccesses ? { automaticSuccesses } : {}) }
       entry.status = 'rolled'
       return true
     } finally {
@@ -161,10 +169,10 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
 
   async function adjustRoll(requestId: string, kind: 'reroll' | 'modifier'): Promise<boolean> {
     const entry = find(requestId)
-    if (!entry || entry.busy || !entry.roll || !SENDABLE.includes(entry.status)) return false
+    if (!entry || entry.busy || !entry.roll || entry.roll.fatefulIntervention || !SENDABLE.includes(entry.status)) return false
     entry.busy = true
     try {
-      if (!(await spend(kind, 1))) {
+      if (!(await spend(kind, 1, entry.requestId))) {
         entry.error = 'Could not spend Inspiration; the roll is unchanged.'
         return false
       }
@@ -172,7 +180,8 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
       if (!entry.roll || !SENDABLE.includes(entry.status)) return false
       const rolls = kind === 'reroll' ? entry.roll.rolls.map(die) : [...entry.roll.rolls, die()]
       entry.roll = {
-        rolls, successes: countSuccesses(rolls),
+        ...entry.roll, rolls,
+        successes: rolls.filter(d => d >= (entry.roll!.successThreshold ?? 5)).length + (entry.roll.automaticSuccesses ?? 0),
         dicePool: kind === 'reroll' ? entry.roll.dicePool : entry.roll.dicePool + 1,
       }
       if (kind === 'reroll') entry.rerolls++
@@ -192,7 +201,7 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
     entry.status = 'submitting'
     entry.error = null
     // Sent exactly as held, whatever else happens: a plain copy, so the adapter can serialize it.
-    const roll: DefenseRoll = { rolls: [...entry.roll.rolls], successes: entry.roll.successes, dicePool: entry.roll.dicePool }
+    const roll: DefenseRoll = { ...entry.roll, rolls: [...entry.roll.rolls] }
     try {
       const outcome = await adapters.submit(entry.request, roll)
       if (outcome.ok) {
@@ -211,6 +220,26 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
     } finally {
       entry.busy = false
     }
+  }
+
+  /** A blocked defense has no roll or Inspiration decision; use the normal submit continuation. */
+  async function resolveBlocked(requestId: string): Promise<boolean> {
+    const entry = find(requestId)
+    if (!entry || entry.busy || SETTLED.includes(entry.status) || !adapters.defense(entry.request).blocked) return false
+    entry.actOfInspiration = false
+    entry.roll = { rolls: [], successes: 0, dicePool: 0 }
+    entry.status = 'rolled'
+    return submitOne(requestId)
+  }
+
+  function setFatefulRoll(requestId: string, roll: DefenseRoll): boolean {
+    const entry = find(requestId)
+    if (!entry || entry.busy || SETTLED.includes(entry.status) || entry.status === 'submitting') return false
+    entry.roll = { ...roll, rolls: [...roll.rolls] }
+    entry.actOfInspiration = false
+    entry.status = 'rolled'
+    entry.error = null
+    return true
   }
 
   async function runAll(step: (entry: DefenseEntry) => Promise<unknown>, wanted: (entry: DefenseEntry) => boolean) {
@@ -274,6 +303,6 @@ export function useAreaDefenseBatch(adapters: AreaDefenseAdapters) {
     groupId, entries, views, active, isSettled, running,
     open, close, reconcile, ownsRequest, cleanupTargets,
     toggleAct, rollOne, rerollOne: (id: string) => adjustRoll(id, 'reroll'), addDieOne: (id: string) => adjustRoll(id, 'modifier'),
-    submitOne, rollAllUnrolled, submitReady,
+    submitOne, resolveBlocked, setFatefulRoll, rollAllUnrolled, submitReady,
   }
 }

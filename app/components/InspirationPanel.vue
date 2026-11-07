@@ -44,7 +44,7 @@ function spend(spendType: 'act-of-inspiration' | 'fateful-intervention', amount:
       </span>
     </div>
     <p class="text-xs text-digimon-dark-400 mb-3">
-      Spend freely on any roll. The GM applies the effect to your in-progress roll.
+      Use roll controls to adjust an active roll. Fateful Intervention lets you choose the roll and every die.
     </p>
     <div class="grid grid-cols-2 gap-2">
       <button

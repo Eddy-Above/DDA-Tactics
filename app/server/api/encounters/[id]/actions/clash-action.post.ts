@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, maps } from '../../../../db'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -386,6 +387,7 @@ export default defineEventHandler(async (event) => {
       return p
     })
 
+    participants = preserveEnduringSouls(participants, encounter.participants)
     const totalDamage = damageDealt + burnDamageApplied
     const throwResult = wasDisplaced
       ? `${actorName} throws ${targetName}, dealing ${totalDamage} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage` : ''}${burnDamageApplied > 0 ? ` + ${burnDamageApplied} Burn damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`

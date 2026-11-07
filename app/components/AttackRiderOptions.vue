@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { EddySoulRules } from '../types'
+import { computed, watch } from 'vue'
+import { getAttackOrderModifiers } from '../utils/specialOrderCombat'
 
 interface Props {
   selectedAttack: { participant: any; attack: any }
@@ -19,9 +21,18 @@ const lifestealComplexEnabled = defineModel<boolean>('lifestealComplexEnabled', 
 const hugePowerEnabled = defineModel<boolean>('hugePowerEnabled', { required: true })
 const hugePowerRank2Enabled = defineModel<boolean>('hugePowerRank2Enabled', { required: true })
 const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', { default: false })
+const orderModifiers = computed(() => getAttackOrderModifiers(props.selectedAttack.participant))
+watch(() => orderModifiers.value.suppressPower, suppressed => {
+  if (suppressed) { hugePowerEnabled.value = false; hugePowerRank2Enabled.value = false }
+}, { immediate: true })
 </script>
 
 <template>
+  <p v-if="orderModifiers.suppressPower" class="mb-3 text-sm text-cyan-300">
+    <template v-if="orderModifiers.successThreshold === 4">Finishing Touch: 4+ counts as an Accuracy success. </template>
+    <template v-if="orderModifiers.halfDodge">Strike Fast!: the target rolls half Dodge. </template>
+    Huge Power and Overkill cannot trigger for this attack.
+  </p>
   <!-- Bolster Attack Toggle -->
   <div
     v-if="canBolster && !lifestealComplexEnabled"
@@ -92,7 +103,7 @@ const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', 
       <input
         type="checkbox"
         v-model="hugePowerEnabled"
-        :disabled="!hugePower.rank1"
+        :disabled="!hugePower.rank1 || orderModifiers.suppressPower"
         class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-cyan-500"
       />
       <span class="text-sm text-cyan-400 font-medium">Huge Power (Reroll 1s)</span>
@@ -107,7 +118,7 @@ const actOfInspirationEnabled = defineModel<boolean>('actOfInspirationEnabled', 
       <input
         type="checkbox"
         v-model="hugePowerRank2Enabled"
-        :disabled="!hugePowerEnabled"
+        :disabled="!hugePowerEnabled || orderModifiers.suppressPower"
         class="rounded border-digimon-dark-500 bg-digimon-dark-600 text-amber-500"
       />
       <span class="text-sm text-amber-400 font-medium">Rank 2 (Also reroll 2s)</span>

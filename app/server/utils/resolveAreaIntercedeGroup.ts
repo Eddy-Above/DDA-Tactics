@@ -9,6 +9,8 @@ import { getEffectResolutionType } from '~/data/attackConstants'
 import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import type { Vec3 } from '../../types'
+import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
+import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 
 export interface AreaAttackClaim {
   interceptorParticipantId: string
@@ -108,6 +110,7 @@ export async function resolveAreaIntercedeGroup({
   nextTurnIndex?: number
   nextRound?: number
 }> {
+  return withCombatRecords(async () => {
   const groupData = groupState.data
   const claims: AreaAttackClaim[] = groupData.claims || []
   const originalTargetIds: string[] = groupData.originalTargetIds || []
@@ -150,6 +153,8 @@ export async function resolveAreaIntercedeGroup({
     return p
   })
 
+  updatedParticipants = preserveEnduringSouls(updatedParticipants, participants)
+
   // Auto-devolve check for each interceptor that was KO'd
   let claimFormChanged = false
   for (const claim of claims) {
@@ -172,8 +177,8 @@ export async function resolveAreaIntercedeGroup({
           updatedAt: new Date(),
         }).where(eq(evolutionLines.id, interceptor.evolutionLineId))
 
-        const [oldDigimon] = await database.select().from(digimon).where(eq(digimon.id, oldEntityId))
-        const [newDigimon] = await database.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+        const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => database.select().from(digimon).where(eq(digimon.id, oldEntityId)))
+        const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => database.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
 
         const devolvedQualities = newDigimon?.qualities || []
         const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
@@ -301,6 +306,7 @@ export async function resolveAreaIntercedeGroup({
         attackerParticipantId: groupData.attackerId,
         targetParticipantId: targetId,
         attackDef,
+        halfDodge: !!groupData.attackData?.orderModifiers?.halfDodge,
         accuracySuccesses: groupData.accuracySuccesses,
         accuracyDice: groupData.accuracyDice,
         round,
@@ -365,10 +371,10 @@ export async function resolveAreaIntercedeGroup({
     const target = updatedParticipants.find((p: any) => p.id === targetId)
     let resolvedName = targetId
     if (target?.type === 'digimon') {
-      const [dig] = await database.select().from(digimon).where(eq(digimon.id, target.entityId))
+      const dig = await readCombatRecord('digimon', target.entityId, () => database.select().from(digimon).where(eq(digimon.id, target.entityId)))
       resolvedName = resolveParticipantName(target, updatedParticipants, dig?.name || 'Digimon', target.isEnemy || false)
     } else if (target?.type === 'tamer') {
-      const [tam] = await database.select().from(tamers).where(eq(tamers.id, target.entityId))
+      const tam = await readCombatRecord('tamer', target.entityId, () => database.select().from(tamers).where(eq(tamers.id, target.entityId)))
       resolvedName = tam?.name || targetId
     }
 
@@ -425,6 +431,7 @@ export async function resolveAreaIntercedeGroup({
         currentTurnIndex: groupNextTurnIndex ?? currentTurnIndex,
         houseRules,
         clashAttack: groupData.clashAttack,
+        strikeFast: !!groupData.attackData?.orderModifiers?.halfDodge,
         totalTargetCount: originalTargetIds.length,
         encounterId,
         participantPositions: positions,
@@ -448,4 +455,5 @@ export async function resolveAreaIntercedeGroup({
     nextTurnIndex: groupNextTurnIndex,
     nextRound: groupNextRound,
   }
+  })
 }

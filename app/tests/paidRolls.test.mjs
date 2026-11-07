@@ -51,6 +51,11 @@ for (const kind of ['dodge', 'counterattack']) {
     const hasRolled = ref(false)
     const result = ref(null)
     const dependencies = {
+      activeEncounter: ref({ participants: [] }), currentCounterattackRequest: ref(null),
+      currentDodgeRequest: ref({ id: 'dodge-request' }), defenseFor: () => ({ automaticSuccesses: 0 }),
+      prepareAttackAccuracy: loadTypeScript('utils/attackAccuracy.ts').prepareAttackAccuracy,
+      getAttackOrderModifiers: loadTypeScript('utils/specialOrderCombat.ts').getAttackOrderModifiers,
+      getPaidDodgeDiceBonus: loadTypeScript('utils/areaDefense.ts').getPaidDodgeDiceBonus,
       hasRolledDodge: hasRolled, hasRolledCounterattack: hasRolled,
       dodgeRollResult: result, counterattackRollResult: result,
       dodgeDicePool: ref(2), counterattackAccuracyPool: ref(2),
@@ -77,6 +82,52 @@ for (const name of ['confirmAccuracyReview', 'submitDodgeRoll', 'submitCounterat
     await handler()
   })
 }
+
+test('single and area defense payments identify the exact request they extend', async () => {
+  const fixture = inspiration({ id: 'encounter' })
+  const calls = []
+  fixture.dependencies.spendInspiration = async (...args) => { calls.push(args); return { id: 'encounter' } }
+  const { handleSpendInspiration } = loadPageFunctions(page, ['handleSpendInspiration'], fixture.dependencies)
+  await handleSpendInspiration('act-of-inspiration', 2, 'single-defense')
+  assert.deepEqual(calls[0], ['encounter', 'tamer', 'act-of-inspiration', 2, 'single-defense'])
+  const batch = useAreaDefenseBatch({
+    defense: () => ({ pool: 2, blocked: false }), currentInspiration: () => 5, actOfInspirationCost: () => 2,
+    spend: handleSpendInspiration, submit: async () => ({ ok: true }),
+    isAnswered: () => false, isTargetPresent: () => true, rollDie: () => 6,
+  })
+  batch.open('cast', [{ id: 'first-defense' }, { id: 'second-defense' }])
+  batch.toggleAct('second-defense')
+  await batch.rollOne('second-defense')
+  await batch.addDieOne('second-defense')
+  assert.deepEqual(calls.slice(1).map(args => [args[2], args[4]]), [
+    ['act-of-inspiration', 'second-defense'], ['modifier', 'second-defense'],
+  ])
+})
+
+test('a refreshed area defense retains its accepted paid dice without paying for Act again', async () => {
+  const batch = useAreaDefenseBatch({
+    defense: () => ({ pool: 4, blocked: false }), currentInspiration: () => 0, actOfInspirationCost: () => 2,
+    spend: async () => { throw new Error('must not pay twice') }, submit: async () => ({ ok: true }),
+    isAnswered: () => false, isTargetPresent: () => true, rollDie: () => 6,
+  })
+  batch.open('cast', [{ id: 'defense', data: { dodgeActPaid: true, paidDodgeDiceBonus: 6 } }])
+  assert.equal(await batch.rollOne('defense'), true)
+  assert.equal(batch.entries.value[0].roll.dicePool, 10)
+  assert.equal(batch.entries.value[0].actPaid, true)
+})
+
+test('a vanished single defense cannot spend Inspiration on a replacement roll', async () => {
+  const currentDodgeRequest = ref({ id: 'defense' })
+  const calls = []
+  const { spendDodgeInspiration } = loadPageFunctions(page, ['spendDodgeInspiration'], {
+    currentDodgeRequest, handleSpendInspiration: async (...args) => { calls.push(args); return true },
+  })
+  assert.equal(await spendDodgeInspiration('modifier', 1), true)
+  assert.deepEqual(calls[0], ['modifier', 1, 'defense'])
+  currentDodgeRequest.value = null
+  assert.equal(await spendDodgeInspiration('modifier', 1), false)
+  assert.equal(calls.length, 1)
+})
 
 test('overlapping Inspiration spends cannot both charge the same pending action', async () => {
   const fixture = inspiration()
@@ -126,3 +177,17 @@ for (const kind of ['reroll', 'modifier']) {
     assert.deepEqual(rollResult.value.rolls, kind === 'reroll' ? [6] : [3, 6])
   })
 }
+
+test('paid Accuracy adjustments retain Finishing Touch and automatic-success metadata', async () => {
+  const rollResult = ref({ rolls: [1, 4], successes: 2, dicePool: 2, successThreshold: 4, automaticSuccesses: 1 })
+  const { adjustRoll } = loadPageFunctions('components/RollInterceptPanel.vue', ['recompute', 'adjustRoll'], {
+    props: { loading: false, currentInspiration: 5, spendInspiration: async () => true },
+    spending: ref(false), rollResult, Math: { floor: Math.floor, random: () => 0.5 },
+  })
+  await adjustRoll('reroll')
+  assert.equal(rollResult.value.successes, 3, 'both fours and the automatic success still count')
+  await adjustRoll('modifier')
+  assert.equal(rollResult.value.successes, 4)
+  assert.equal(rollResult.value.successThreshold, 4)
+  assert.equal(rollResult.value.automaticSuccesses, 1)
+})

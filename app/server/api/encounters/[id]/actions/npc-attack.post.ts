@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../../db'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
@@ -453,6 +454,8 @@ export default defineEventHandler(async (event) => {
     return p
   })
 
+  finalParticipants = preserveEnduringSouls(finalParticipants, participants)
+
   // Knockback / Pull: displace the target on the map (damage-attack path). Runs before the
   // auto-devolve / defeat / gravity checks so those see the post-displacement state.
   let npcPushLogNote: string | null = null
@@ -597,7 +600,7 @@ export default defineEventHandler(async (event) => {
         nextParticipant.isActive = true
         nextParticipant.dodgePenalty = 0
         nextParticipant.hasDirectedThisTurn = false
-        applyDeferredIntercedeCost(nextParticipant)
+        applyDeferredIntercedeCost(nextParticipant, npcDefeatNextRound ?? encounter.round ?? 0)
         recordTurnStart(nextParticipant)
         if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
           nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
@@ -612,7 +615,7 @@ export default defineEventHandler(async (event) => {
             const [dig] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
             if (dig?.partnerId === nextParticipant.entityId) {
               p.dodgePenalty = 0
-              applyDeferredIntercedeCost(p)
+              applyDeferredIntercedeCost(p, npcDefeatNextRound ?? encounter.round ?? 0)
               p.hasActed = false
               break
             }

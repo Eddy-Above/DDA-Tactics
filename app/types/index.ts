@@ -591,6 +591,18 @@ export interface CombatParticipant {
   stunActionReducedThisRound?: boolean  // Stun already reduced actions this round (prevents double-reduction at rollover)
   moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
   quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
+  lastMovedTurnKey?: string
+  strikeFastReady?: boolean
+  strikeFastTurnKey?: string
+  fatefulSpentRollIds?: string[]
+  finishingTouchReady?: boolean
+  decimationReady?: boolean
+  enduringSoulAvailable?: boolean
+  enduringSoulUsed?: boolean
+  strikeLastCounter?: { attackerId: string; groupId: string; tamerId: string }
+  isMinion?: boolean
+  summonerId?: string
+  summonedByParticipantId?: string
   mapPosition?: Vec3  // 3D grid position on the encounter map
   airborneByJump?: boolean  // Set when a unit intentionally jumped onto an air tile: at end of its turn it still falls to the ground but takes 0 fall damage, then the flag clears on landing. Optional — getFallerProfile derives it from the Jumper quality when unset
   turnsStarted?: number  // Turns this participant has started this combat (every turn start bumps it); a "Pass until my next turn" is in force only while it is unchanged
