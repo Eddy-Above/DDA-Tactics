@@ -89,11 +89,12 @@
 
 <script setup lang="ts">
 import type { CombatParticipant } from '~/types'
+import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 
 const props = defineProps<{
   participants: CombatParticipant[]
   tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
-  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
+  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; isEnemy?: boolean }>
   isDm: boolean
   myTamerId: string | null
   myParticipantIds?: string[]
@@ -120,32 +121,11 @@ watch(() => props.placementActive, (active) => { if (active) minimized.value = f
 
 interface HudEntry { id: string; name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; actionsRemaining: { simple: number } }
 
-// Compute display names matching the encounter page's getDisplayName logic:
-// group by name, sort each group by participant ID, number if duplicates exist
-const participantDisplayNames = computed(() => {
-  const nameGroups: Record<string, string[]> = {}
-  for (const p of props.participants) {
-    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (!info) continue
-    if (!nameGroups[info.name]) nameGroups[info.name] = []
-    nameGroups[info.name].push(p.id)
-  }
-  for (const name in nameGroups) nameGroups[name].sort((a, b) => a.localeCompare(b))
-  const result: Record<string, string> = {}
-  for (const p of props.participants) {
-    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (!info) continue
-    const seq = (p as any).seq as number | undefined
-    if (p.type === 'digimon' && seq !== undefined) {
-      const group = nameGroups[info.name]
-      result[p.id] = (seq > 1 || group.length > 1) ? `${info.name} ${seq}` : info.name
-    } else {
-      const group = nameGroups[info.name]
-      result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
-    }
-  }
-  return result
-})
+const participantDisplayNames = computed(() => buildParticipantDisplayNames(
+  props.participants,
+  p => (p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId])?.name,
+  p => ((p as CombatParticipant & { isEnemy?: boolean }).isEnemy ?? props.digimonMap[p.entityId]?.isEnemy) === true,
+))
 
 function makeEntry(p: CombatParticipant): HudEntry | null {
   const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]

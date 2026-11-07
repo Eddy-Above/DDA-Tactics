@@ -98,6 +98,7 @@ import {
   type PlacementEvaluation, type PlacementFootprint,
 } from '~/utils/placementRules'
 import { createTokenDragController } from '~/utils/tokenDrag'
+import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
@@ -109,7 +110,7 @@ const props = defineProps<{
   participantPositions: Record<string, Vec3>
   destructibleStates: DestructibleState[]
   tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
-  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null; qualities?: any[] }>
+  digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null; qualities?: any[]; isEnemy?: boolean }>
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   currentEditY: number
@@ -173,30 +174,11 @@ const effectiveAttackerId = computed(() =>
   props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId
 )
 
-const participantDisplayNames = computed(() => {
-  const nameGroups: Record<string, string[]> = {}
-  for (const p of props.participants) {
-    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (!info) continue
-    if (!nameGroups[info.name]) nameGroups[info.name] = []
-    nameGroups[info.name].push(p.id)
-  }
-  for (const name in nameGroups) nameGroups[name].sort((a, b) => a.localeCompare(b))
-  const result: Record<string, string> = {}
-  for (const p of props.participants) {
-    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (!info) continue
-    const seq = (p as any).seq as number | undefined
-    if (p.type === 'digimon' && seq !== undefined) {
-      const group = nameGroups[info.name]
-      result[p.id] = (seq > 1 || group.length > 1) ? `${info.name} ${seq}` : info.name
-    } else {
-      const group = nameGroups[info.name]
-      result[p.id] = group.length > 1 ? `${info.name} ${group.indexOf(p.id) + 1}` : info.name
-    }
-  }
-  return result
-})
+const participantDisplayNames = computed(() => buildParticipantDisplayNames(
+  props.participants,
+  p => (p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId])?.name,
+  p => ((p as CombatParticipant & { isEnemy?: boolean }).isEnemy ?? props.digimonMap[p.entityId]?.isEnemy) === true,
+))
 
 // ── Refs ───────────────────────────────────────────────────────────────────
 const containerRef = ref<HTMLDivElement | null>(null)
