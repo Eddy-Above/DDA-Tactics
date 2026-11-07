@@ -1,3 +1,5 @@
+import { serverDodgeDefense } from './combatDodge'
+import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import type { Vec3, GameMap } from '../../types'
@@ -9,6 +11,7 @@ import { computeAttackDamage } from './computeAttackDamage'
 import { loadParticipantDigimon } from './combatSpatial'
 import { computePushPull } from './pushPull'
 import { loadDamageOverTimeRules } from './damageOverTime'
+import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 import { hasUnusedTimeControl, knockedOutEnemyIds, resolveEnemyKnockouts, triggerTimeControl } from './enemyKnockouts'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
@@ -30,6 +33,9 @@ interface ResolveNpcAttackParams {
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   clashAttack?: boolean        // If true, target's dodge pool is halved (clash mechanic)
   counterattack?: boolean      // If true, target's dodge pool is halved (Counterattack mechanic)
+  counterBlow?: boolean        // Strike Last: Counter Blow also halves Armor
+  halfDodge?: boolean
+  strikeFast?: boolean
   cannotDodge?: boolean        // If true, target gets NO dodge (attacked from outside their clash)
   totalTargetCount?: number     // Total original targets of an [Area] attack (for Selective Targeting)
   mapRecord?: GameMap           // If provided, enables push/pull displacement
@@ -51,6 +57,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   nextRound?: number
   positionPatch?: Record<string, Vec3>
 }> {
+  return withCombatRecords(async () => {
   let { participants, battleLog } = params
 
   const currentTurnIndex = params.currentTurnIndex ?? 0
@@ -61,7 +68,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     const idx = (params.turnOrder || []).indexOf(targetParticipantForTurn.id)
     targetHasGone = idx >= 0 && idx < currentTurnIndex
   } else if (targetParticipantForTurn?.type === 'digimon') {
-    const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+    const targetDigimonForTurn = await readCombatRecord('digimon', targetParticipantForTurn.entityId, () => db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId)))
     if (targetDigimonForTurn?.partnerId) {
       const tamerOfTarget = params.participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
       if (tamerOfTarget) {
@@ -90,85 +97,20 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   const targetMoodValue = target.moodValue ?? 3
   let targetQualities: any[] = []  // Hoisted: needed for Immunity + Adaptive Intelligence
 
-  // --- Target dodge pool ---
-  let dodgePool = 3
-  if (target.type === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    if (targetDigimon) {
-      const baseStats = targetDigimon.baseStats
-      const bonusStats = (targetDigimon as any).bonusStats
-      const rawTargetStats = {
-        accuracy: (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0),
-        damage: (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0),
-        dodge: (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0),
-        armor: (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0),
-      }
-      const dodgeSource = (target.statSwaps as Record<string, string> | undefined)?.dodge ?? 'dodge'
-      dodgePool = (rawTargetStats[dodgeSource as keyof typeof rawTargetStats] ?? rawTargetStats.dodge) || 3
-      targetQualities = targetDigimon.qualities || []
-      targetHasPositiveReinforcement = targetQualities.some((q: any) => q.id === 'positive-reinforcement')
-      targetHasCombatMonster = targetQualities.some((q: any) => q.id === 'combat-monster')
-      const instinct = targetQualities.find((q: any) => q.id === 'instinct')
-      dodgePool += instinct?.ranks || 0
-
-      // Digizoid Armor: flat +Dodge (Blue) + this round's rolled Black Armor bonus
-      dodgePool += getDigizoidArmorBonus(targetQualities).dodge
-      dodgePool += (target as any).blackArmorRoundBonus?.dodge ?? 0
-    }
-  } else if (target.type === 'tamer') {
-    const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-    if (targetTamer) {
-      const attrs = targetTamer.attributes
-      const skills = targetTamer.skills
-      dodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
-    }
-  }
-  dodgePool = applyStanceToDodge(dodgePool, target.currentStance)
-  dodgePool = Math.max(1, dodgePool - (target.dodgePenalty ?? 0))
-
-  // Apply active effect dodge modifiers
-  const targetEffectMods = getEffectStatModifiers(target.activeEffects || [])
-  dodgePool += targetEffectMods.dodge
-
-  // Apply Positive Reinforcement mood dodge bonus for target
-  if (targetHasPositiveReinforcement && targetMoodValue >= 5) {
-    dodgePool += targetMoodValue - 4  // Mood 5 → +1, Mood 6 → +2
-  }
-
-  // Boss quality: Juggernaut dodge stacking bonus
-  dodgePool += (target as any).juggernauntBonuses?.dodge ?? 0
-
-  // Boss quality: Adaptive Intelligence — +2 dodge per prior sighting of this attack
-  if (targetQualities.some((q: any) => q.id === 'adaptive-intelligence')) {
-    const seenCount = (target as any).seenAttackIds?.[params.attackId] ?? 0
-    if (seenCount > 0) dodgePool += seenCount * 2
-  }
-
-  // Apply Directed bonus to dodge pool (for NPC targets that were directed by a tamer)
-  const directedEffect = (target.activeEffects || []).find((e: any) => e.name === 'Directed')
-  if (directedEffect?.value) {
-    dodgePool += directedEffect.value
-  }
-
-  // Clash Attack: target can only use half their dodge pool
-  if (params.clashAttack) {
-    dodgePool = Math.max(1, Math.floor(dodgePool / 2))
-  }
-
-  // Counterattack: target can only use half their dodge pool
-  if (params.counterattack) {
-    dodgePool = Math.max(1, Math.floor(dodgePool / 2))
-  }
-
-  dodgePool = Math.max(1, dodgePool)
-
-  // Attacked from OUTSIDE the clash: the target gets no dodge at all (overrides the min-1 floor).
-  // Derived from live clash state so every caller (intercede-skip, area group, counterattack) gets it;
-  // params.cannotDodge is the snapshot taken when the attack was declared.
-  const cannotDodge = !!params.cannotDodge || isAttackedFromOutsideClash(attacker, target)
-  if (cannotDodge) {
-    dodgePool = 0
-  }
+  // Resolve from the same record-backed formula displayed by both clients.
+  const targetRecord: any = target.type === 'digimon'
+    ? await readCombatRecord('digimon', target.entityId, () => db.select().from(digimon).where(eq(digimon.id, target.entityId)))
+    : await readCombatRecord('tamer', target.entityId, () => db.select().from(tamers).where(eq(tamers.id, target.entityId)))
+  targetQualities = targetRecord?.qualities ?? []
+  targetHasPositiveReinforcement = targetQualities.some((q: any) => q.id === 'positive-reinforcement')
+  targetHasCombatMonster = targetQualities.some((q: any) => q.id === 'combat-monster')
+  const defense = serverDodgeDefense({
+    targetParticipantId: target.id,
+    data: { ...params, attackerParticipantId: attacker.id, dodgePenalty: target.dodgePenalty ?? 0,
+      halfDodge: params.counterattack || (params as any).halfDodge },
+  }, participants, targetRecord)
+  const dodgePool = defense.pool
+  const cannotDodge = defense.blocked
 
   // Roll dodge
   const dodgeDiceResults: number[] = []
@@ -195,6 +137,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     accuracySuccesses: params.accuracySuccesses,
     dodgeSuccesses,
     totalTargetCount: params.totalTargetCount,
+    counterBlow: params.counterBlow,
     houseRules: params.houseRules,
   })
 
@@ -359,6 +302,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     return p
   })
 
+  participants = preserveEnduringSouls(participants, params.participants)
+
   // --- Push/Pull map displacement (map mode only) ---
   let positionPatch: Record<string, Vec3> | undefined
   let pushPullLogNote: string | null = null
@@ -396,8 +341,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       // Update npcStageIndex on the participant (NPCs track stage locally)
       (damagedTarget as any).npcStageIndex = previousState.stageIndex
 
-      const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
-      const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+      const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => db.select().from(digimon).where(eq(digimon.id, oldEntityId)))
+      const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
 
       const devolvedQualities = newDigimon?.qualities || []
       const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
@@ -501,4 +446,5 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : []), ...knockout.logEntries]
 
   return { participants, battleLog, turnOrder: params.turnOrder ? knockout.turnOrder : undefined, hit, nextTurnIndex, nextRound, positionPatch }
+  })
 }

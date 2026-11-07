@@ -1,3 +1,6 @@
+import { combatAttackStats } from '../../utils/combatDice'
+import { prepareAttackAccuracy } from '../../utils/attackAccuracy'
+import { getAttackOrderModifiers, consumeAttackOrders } from '../../utils/specialOrderCombat'
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
@@ -122,19 +125,15 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
     return { participants, battleLog, pendingRequests }
   }
 
-  // Determine accuracy pool
-  const baseStats = counterattackerDigimon.baseStats
-  const bonusStats = (counterattackerDigimon as any).bonusStats
-  const baseAccuracy = (baseStats?.accuracy ?? 0) + (bonusStats?.accuracy ?? 0) || 3
-  const effectModifiers = getEffectStatModifiers(counterattacker.activeEffects || [])
-  const accuracyPool = Math.max(1, baseAccuracy + effectModifiers.accuracy)
-
-  // Roll accuracy dice server-side
-  const accuracyDiceResults: number[] = []
-  for (let i = 0; i < accuracyPool; i++) {
-    accuracyDiceResults.push(Math.floor(Math.random() * 6) + 1)
-  }
-  const accuracySuccesses = accuracyDiceResults.filter((d: number) => d >= 5).length
+  // The selected move uses the same per-attack bonuses as an ordinary attack.
+  const attackStats = combatAttackStats(counterattackerDigimon, counterattacker, chosenAttack, {
+    fallbackAccuracy: 3, houseRules: params.houseRules, targetId: originalAttacker.id,
+  })
+  const accuracyPool = Math.max(1, attackStats.accuracy)
+  const orderModifiers = getAttackOrderModifiers(counterattacker)
+  const { rolls: accuracyDiceResults, successes: accuracySuccesses } = prepareAttackAccuracy(accuracyPool, {}, {
+    ...orderModifiers, automaticSuccesses: attackStats.automaticSuccesses,
+  })
 
   // Parse counterattacker qualities (needed for Chain Counter check below)
   const counterattackerQualities: any[] = counterattackerDigimon.qualities || []
@@ -143,7 +142,7 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
   // Mark used (for NPC counterattackers this may be skipped below if Chain Counter + KO)
   participants = participants.map((p: any) =>
     p.id === params.counterattackerParticipantId
-      ? { ...p, usedCounterattackThisCombat: true }
+      ? { ...consumeAttackOrders(p), usedCounterattackThisCombat: true }
       : p,
   )
 
@@ -214,7 +213,9 @@ export async function triggerCounterattack(params: TriggerCounterattackParams): 
         accuracySuccesses,
         accuracyDice: accuracyDiceResults,
         attackId: chosenAttack.id,
-        attackData: chosenAttack,
+        attackData: { ...chosenAttack, orderModifiers },
+        finishingTouch: orderModifiers.successThreshold === 4,
+        suppressPower: orderModifiers.suppressPower,
         attackerEntityId: counterattacker.entityId,
         attackerParticipantId: params.counterattackerParticipantId,
         targetEntityId: originalAttacker.entityId,

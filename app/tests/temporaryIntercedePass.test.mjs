@@ -476,7 +476,7 @@ test('every place a turn starts counts it (static guard against a fourth, uncoun
   const sources = ['composables/useEncounters.ts', 'server/utils/enemyKnockouts.ts', 'server/api/encounters/[id]/actions/npc-attack.post.ts']
   for (const file of sources) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
-    const starts = (source.match(/applyDeferredIntercedeCost\((participant|nextParticipant)\)/g) || []).length
+    const starts = (source.match(/applyDeferredIntercedeCost\((participant|nextParticipant)(?:, [^)]*)?\)/g) || []).length
     const counted = (source.match(/recordTurnStart\((participant|nextParticipant)\)/g) || []).length
     assert.ok(starts > 0, file)
     assert.equal(counted, starts, `${file}: each turn start must call recordTurnStart`)

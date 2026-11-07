@@ -4,6 +4,7 @@ import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './co
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
 import { applyGuidingLightAuras } from './guidingLight'
+import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
 // wounds in place and returns the position patch + battle-log entries. Flyers hover (skipped
@@ -32,7 +33,11 @@ export async function computeGravityDrops(
     if (fallHeight <= 0) continue
 
     patch[p.id] = landingPos
-    if (damage > 0) p.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + damage)
+    if (damage > 0) {
+      const previousWounds = p.currentWounds || 0
+      p.currentWounds = Math.min(p.maxWounds, previousWounds + damage)
+      preserveEnduringSoul(p, previousWounds)
+    }
     if (p.airborneByJump) p.airborneByJump = false   // landed — clear the jump flag
 
     logEntries.push({

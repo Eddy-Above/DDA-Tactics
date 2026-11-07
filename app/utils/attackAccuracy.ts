@@ -9,9 +9,12 @@ export interface AttackRiders {
 }
 
 export interface AccuracyRollResult {
+  fatefulIntervention?: boolean
   rolls: number[]
   dicePool: number
   successes: number
+  successThreshold?: number
+  automaticSuccesses?: number
 }
 
 export interface PreparedAttackAccuracy extends AccuracyRollResult {
@@ -23,6 +26,9 @@ export interface PreparedAttackAccuracy extends AccuracyRollResult {
 interface AttackAccuracyOptions {
   actOfInspiration?: boolean
   random?: () => number
+  successThreshold?: number
+  automaticSuccesses?: number
+  suppressPower?: boolean
 }
 
 /** Capture rider choices before an asynchronous Inspiration spend or attack submission. */
@@ -46,6 +52,10 @@ export function prepareAttackAccuracy(
   options: AttackAccuracyOptions = {},
 ): PreparedAttackAccuracy {
   const capturedRiders = snapshotAttackRiders(riders)
+  if (options.suppressPower) {
+    capturedRiders.hugePower = false
+    capturedRiders.hugePowerRank2 = false
+  }
   const random = options.random ?? Math.random
   const rollDie = () => Math.floor(random() * 6) + 1
 
@@ -60,7 +70,7 @@ export function prepareAttackAccuracy(
   const originalRolls = [...rolls]
 
   let hadHugePowerRerolls = false
-  if (capturedRiders.hugePower) {
+  if (capturedRiders.hugePower && !options.suppressPower) {
     const rerollThreshold = capturedRiders.hugePowerRank2 ? 2 : 1
     for (let i = 0; i < rolls.length; i++) {
       if (rolls[i] <= rerollThreshold) {
@@ -75,7 +85,9 @@ export function prepareAttackAccuracy(
     dicePool,
     rolls,
     originalRolls,
-    successes: rolls.filter(die => die >= 5).length,
+    successes: rolls.filter(die => die >= (options.successThreshold ?? 5)).length + (options.automaticSuccesses ?? 0),
+    successThreshold: options.successThreshold ?? 5,
+    automaticSuccesses: options.automaticSuccesses ?? 0,
     hadHugePowerRerolls,
   }
 }

@@ -1,3 +1,4 @@
+import { serverDodgeDefense } from './combatDodge'
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import {
@@ -7,6 +8,7 @@ import {
   EFFECT_TARGET_POTENCY,
   getEffectResolutionType,
   getEffectStatModifiers,
+  getAllStatEffectModifier,
 } from '../../data/attackConstants'
 import { calculateDigimonDerivedStats, STAGE_CONFIG } from '../../types'
 import type { DigimonBaseStats, DigimonStage, DigimonSize, EddySoulRules } from '../../types'
@@ -15,6 +17,7 @@ import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { selectiveTargetingBlocksEffect } from './selectiveTargeting'
 import { getDigizoidArmorBonus } from './digizoidArmor'
+import { readCombatRecord, readCombatDerivedStats, withCombatRecords } from './combatRecordCache'
 
 interface SupportAttackParams {
   participants: any[]
@@ -51,8 +54,21 @@ interface SupportAttackResult {
 /**
  * Fetch a digimon's derived stats by entity ID
  */
-export async function getDigimonDerivedStats(entityId: string) {
-  const [dig] = await db.select().from(digimon).where(eq(digimon.id, entityId))
+export async function getDigimonDerivedStats(entityId: string, participant?: { activeEffects?: any[] }) {
+  const base = await readCombatDerivedStats(entityId, () => loadRawDigimonDerivedStats(entityId))
+  if (!base) return null
+  const derived = { ...base }
+  const modifier = getAllStatEffectModifier(participant?.activeEffects || [])
+  if (modifier) {
+    for (const stat of Object.keys(derived) as (keyof typeof derived)[]) {
+      if (stat !== 'woundBoxes' && stat !== 'stageBonus') derived[stat] += modifier
+    }
+  }
+  return derived
+}
+
+async function loadRawDigimonDerivedStats(entityId: string) {
+  const dig = await readCombatRecord('digimon', entityId, () => db.select().from(digimon).where(eq(digimon.id, entityId)))
   if (!dig) return null
 
   const baseStats = dig.baseStats
@@ -109,7 +125,7 @@ export async function getDigimonDerivedStats(entityId: string) {
  */
 async function getTargetHealthPool(targetEntityId: string, targetType: string): Promise<number> {
   if (targetType === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetEntityId))
+    const targetDigimon = await readCombatRecord('digimon', targetEntityId, () => db.select().from(digimon).where(eq(digimon.id, targetEntityId)))
     if (targetDigimon) {
       const baseStats = targetDigimon.baseStats
       const bonusStats = (targetDigimon as any).bonusStats
@@ -194,6 +210,7 @@ export function getPositiveSupportResolutionType(
  * Shield, Haste, Purify, Revitalize — guaranteed duration 1, no health roll needed.
  */
 export async function resolvePositiveAuto(params: SupportAttackParams): Promise<SupportAttackResult> {
+  return withCombatRecords(async () => {
   let { participants, battleLog, pendingRequests } = params
 
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
@@ -217,7 +234,7 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
     return { participants, battleLog, pendingRequests, resolved: true }
   }
 
-  const derivedStats = await getDigimonDerivedStats(attacker.entityId)
+  const derivedStats = await getDigimonDerivedStats(attacker.entityId, attacker)
 
   const effectData = buildEffectData(
     params.attackDef.effect,
@@ -272,6 +289,7 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
   battleLog = [...battleLog, logEntry]
 
   return { participants, battleLog, pendingRequests, resolved: true }
+  })
 }
 
 /**
@@ -280,13 +298,14 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
  * For player targets: create a 'health-roll' request.
  */
 export async function resolvePositiveHealth(params: SupportAttackParams): Promise<SupportAttackResult> {
+  return withCombatRecords(async () => {
   let { participants, battleLog, pendingRequests } = params
 
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
   const target = participants.find((p: any) => p.id === params.targetParticipantId)
   if (!attacker || !target) return { participants, battleLog, pendingRequests, resolved: true }
 
-  const derivedStats = await getDigimonDerivedStats(attacker.entityId)
+  const derivedStats = await getDigimonDerivedStats(attacker.entityId, attacker)
 
   // Determine if target is player-controlled
   let isPlayerTarget = false
@@ -295,7 +314,7 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
     isPlayerTarget = true
     targetTamerId = target.entityId
   } else if (target.type === 'digimon') {
-    const [dig] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
+    const dig = await readCombatRecord('digimon', target.entityId, () => db.select().from(digimon).where(eq(digimon.id, target.entityId)))
     if (dig?.partnerId) {
       isPlayerTarget = true
       targetTamerId = dig.partnerId
@@ -428,49 +447,28 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
 
     return { participants, battleLog, pendingRequests, resolved: true }
   }
+  })
 }
 
 /**
  * Resolve a negative support attack against an NPC target (auto-roll dodge, apply debuff, no damage).
  */
 export async function resolveNegativeSupportNpc(params: SupportAttackParams): Promise<SupportAttackResult> {
+  return withCombatRecords(async () => {
   let { participants, battleLog } = params
 
   const attacker = participants.find((p: any) => p.id === params.attackerParticipantId)
   const target = participants.find((p: any) => p.id === params.targetParticipantId)
   if (!attacker || !target) return { participants, battleLog, pendingRequests: params.pendingRequests, resolved: true }
 
-  // Roll dodge for NPC
-  let dodgePool = 3
-  if (target.type === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    if (targetDigimon) {
-      const baseStats = targetDigimon.baseStats
-      const bonusStats = (targetDigimon as any).bonusStats
-      dodgePool = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0) || 3
-    }
-  } else if (target.type === 'tamer') {
-    const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, target.entityId))
-    if (targetTamer) {
-      const attrs = targetTamer.attributes
-      const skills = targetTamer.skills
-      dodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
-    }
-  }
-  dodgePool = applyStanceToDodge(dodgePool, target.currentStance)
-  dodgePool = Math.max(1, dodgePool - (target.dodgePenalty ?? 0))
-
-  // Apply active effect dodge modifiers
-  const targetEffectMods = getEffectStatModifiers(target.activeEffects || [])
-  dodgePool += targetEffectMods.dodge
-
-  // Apply Directed bonus to dodge pool
-  const directedEffect = (target.activeEffects || []).find((e: any) => e.name === 'Directed')
-  if (directedEffect?.value) {
-    dodgePool += directedEffect.value
-  }
-
-  dodgePool = Math.max(1, dodgePool)
+  const targetRecord = target.type === 'digimon'
+    ? await readCombatRecord('digimon', target.entityId, () => db.select().from(digimon).where(eq(digimon.id, target.entityId)))
+    : await readCombatRecord('tamer', target.entityId, () => db.select().from(tamers).where(eq(tamers.id, target.entityId)))
+  const defense = serverDodgeDefense({
+    targetParticipantId: target.id,
+    data: { ...params, attackId: params.attackDef.id, dodgePenalty: target.dodgePenalty ?? 0 },
+  }, participants, targetRecord)
+  const dodgePool = defense.pool
 
   const dodgeDiceResults: number[] = []
   for (let i = 0; i < dodgePool; i++) {
@@ -481,8 +479,8 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
   const netSuccesses = params.accuracySuccesses - dodgeSuccesses
   const hit = netSuccesses >= 0
 
-  const attackerDerived = await getDigimonDerivedStats(attacker.entityId)
-  const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId) : null
+  const attackerDerived = await getDigimonDerivedStats(attacker.entityId, attacker)
+  const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId, target) : null
   let appliedEffectName: string | null = null
   let selectiveTargetingBlocked = false
 
@@ -540,4 +538,5 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
   battleLog = [...battleLog, logEntry]
 
   return { participants, battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, resolved: true }
+  })
 }

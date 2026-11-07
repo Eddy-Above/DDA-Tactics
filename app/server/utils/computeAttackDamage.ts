@@ -7,6 +7,7 @@ import { getSelectiveTargetingFilter, selectiveTargetingBlocksDamage, selectiveT
 import { getDigizoidArmorBonus, getReflectArmorRange } from './digizoidArmor'
 import { getOutsideClashArmorBonus } from './clashArmor'
 import { isImmuneToEffect } from './damageOverTime'
+import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 
 export interface ComputeAttackDamageParams {
   attackerParticipant: any
@@ -21,6 +22,7 @@ export interface ComputeAttackDamageParams {
   isSignatureMove?: boolean
   batteryCount?: number
   totalTargetCount?: number
+  counterBlow?: boolean
   houseRules?: any
 }
 
@@ -57,6 +59,7 @@ export interface ComputeAttackDamageResult {
 export async function computeAttackDamage(
   params: ComputeAttackDamageParams,
 ): Promise<ComputeAttackDamageResult> {
+  return withCombatRecords(async () => {
   const {
     attackerParticipant,
     targetParticipant,
@@ -84,7 +87,7 @@ export async function computeAttackDamage(
   const attackerMoodValue: number = attackerParticipant.moodValue ?? 3
 
   if (attackerParticipant.type === 'digimon') {
-    const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, attackerParticipant.entityId))
+    const attackerDigimon = await readCombatRecord('digimon', attackerParticipant.entityId, () => db.select().from(digimon).where(eq(digimon.id, attackerParticipant.entityId)))
     if (attackerDigimon) {
       const baseStats = attackerDigimon.baseStats
       const bonusStats = attackerDigimon.bonusStats
@@ -138,7 +141,7 @@ export async function computeAttackDamage(
       if (attackerHasWeaponTag && !attackerIsDisarmed) {
         const weaponsExpertQ = (qualities || []).find((q: any) => q.id === 'weapons-expert')
         if (weaponsExpertQ) {
-          if (!atkDerivedCached) atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+          if (!atkDerivedCached) atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId, attackerParticipant)
           const chosenSpec = (weaponsExpertQ.choiceId || 'bit') as 'bit' | 'cpu' | 'ram'
           attackBaseDamage += atkDerivedCached?.[chosenSpec] ?? 0
         }
@@ -179,7 +182,7 @@ export async function computeAttackDamage(
   const targetMoodValue: number = targetParticipant.moodValue ?? 3
 
   if (targetParticipant.type === 'digimon') {
-    const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetParticipant.entityId))
+    const targetDigimon = await readCombatRecord('digimon', targetParticipant.entityId, () => db.select().from(digimon).where(eq(digimon.id, targetParticipant.entityId)))
     if (targetDigimon) {
       const baseStats = targetDigimon.baseStats
       const bonusStats = targetDigimon.bonusStats
@@ -211,7 +214,7 @@ export async function computeAttackDamage(
       targetFinesseRanks = (qualities || []).find((q: any) => q.id === 'finesse')?.ranks ?? 0
     }
   } else if (targetParticipant.type === 'tamer') {
-    const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId))
+    const targetTamer = await readCombatRecord('tamer', targetParticipant.entityId, () => db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId)))
     if (targetTamer) {
       const attrs = targetTamer.attributes
       const skills = targetTamer.skills
@@ -257,7 +260,7 @@ export async function computeAttackDamage(
 
   // ── Final damage ──────────────────────────────────────────────────────────
   let effectiveTargetArmor = targetArmor
-  if (hasTankBusterTag) effectiveTargetArmor = Math.floor(effectiveTargetArmor / 2)
+  if (hasTankBusterTag || params.counterBlow) effectiveTargetArmor = Math.floor(effectiveTargetArmor / 2)
   const effectiveArmor = Math.max(0, effectiveTargetArmor - armorPiercing)
   let damageDealt = 0
   if (hit && attackDef?.type !== 'support') {
@@ -283,7 +286,7 @@ export async function computeAttackDamage(
     const reflectRange = getReflectArmorRange(targetDigizoidChoiceId)
     if (reflectRange && attackDef?.range === reflectRange) {
       if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
-        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId, attackerParticipant)
       }
       const attackerCpu = atkDerivedCached?.cpu ?? 0
       reflectDamageToAttacker = Math.max(1, attackerCpu * 2 - attackerTotalArmor)
@@ -314,11 +317,11 @@ export async function computeAttackDamage(
       && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
     if (hit && shouldApply) {
       if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
-        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId)
+        atkDerivedCached = await getDigimonDerivedStats(attackerParticipant.entityId, attackerParticipant)
       }
       const atkDerived = atkDerivedCached
       const tgtDerived = targetParticipant.type === 'digimon'
-        ? await getDigimonDerivedStats(targetParticipant.entityId) : null
+        ? await getDigimonDerivedStats(targetParticipant.entityId, targetParticipant) : null
       const { potency, potencyStat } = calculateEffectPotency(attackDef.effect, atkDerived, tgtDerived)
 
       let potencyFinal = potency
@@ -361,4 +364,5 @@ export async function computeAttackDamage(
     targetHealthStat,
     reflectDamageToAttacker,
   }
+  })
 }

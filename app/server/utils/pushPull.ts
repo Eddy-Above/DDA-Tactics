@@ -9,6 +9,7 @@ import { applyMovementBurn, loadEncounterRules } from './damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { chebyshev } from './gridDistance'
 import type { EddySoulRules } from '../../types'
+import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 
 // Pure core for Knockback (push) / Pull displacement: walks the target away from / toward the
 // attacker by `distance` cells (findPushPullLandingCell), settles it to the ground (resolveFall,
@@ -64,6 +65,7 @@ export async function computePushPull(args: {
     )
   }
 
+  participants = preserveEnduringSouls(participants, args.participants)
   let burnDamage = 0
   if (args.burn) {
     const moved = applyMovementBurn(participants, [{ participantId: targetParticipantId, meters: chebyshev(targetPos, landingCell) }], {

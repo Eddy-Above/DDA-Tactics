@@ -7,6 +7,7 @@ import { applyStatSwaps, type StatBlock } from './statSwaps'
 import { applyStanceToDodge } from './stanceModifiers'
 import { getEffectStatModifiers } from '../data/attackConstants'
 import { isAttackedFromOutsideClash } from './clashRules'
+import { rawCombatStats, digimonDodgeBase, tamerDodgeBase } from './combatDice'
 
 export interface DodgeRequestGroup<R = any> {
   /** The cast (`intercedeGroupId`) the requests share, or a per-request key when there is none. */
@@ -42,9 +43,9 @@ export interface DodgeDefenseContext {
   findDigimon: (id: string) => any | undefined
   findTamer: (id: string) => any | undefined
   /** The Digimon's derived Dodge, quality bonuses included (the page's `calcDigimonStats(d).dodge`). */
-  digimonDodge: (digimon: any) => number
+  digimonDodge?: (digimon: any) => number
   /** The Tamer's derived Dodge pool (the page's `calcTamerStats(t).dodgePool`). */
-  tamerDodgePool: (tamer: any) => number
+  tamerDodgePool?: (tamer: any) => number
 }
 
 export interface DodgeModifier {
@@ -63,6 +64,14 @@ export interface DodgeDefense {
   basePool: number
   /** What moved the pool away from `basePool`, in the order they apply (changes only). */
   modifiers: DodgeModifier[]
+  /** Brown Digizoid Armor's once-per-round success; never part of the dice pool. */
+  automaticSuccesses?: number
+}
+
+/** Extra dice whose Inspiration cost was accepted for this exact defense request. */
+export function getPaidDodgeDiceBonus(request: any): number {
+  const bonus = request?.data?.paidDodgeDiceBonus
+  return Number.isSafeInteger(bonus) && bonus > 0 ? bonus : 0
 }
 
 /** Whether the target of a dodge request can dodge at all (the clash rule, checked against live state). */
@@ -78,34 +87,30 @@ export function isDodgeBlocked(request: any, participants: readonly any[]): bool
  * The Dodge pool for one `dodge-roll` request: the target's Dodge, its stance, the successive
  * attack penalty, active effects and Directed, then the clash block and the counterattack half.
  * An unknown target or an unloaded record falls back to 3 dice, as the single-request modal always
- * has. (Quick Reaction dice are not included, as before.)
+ * has. Quick Reaction is part of the pool before successive-attack penalties, and persists
+ * until round end. Clash, Counterattack and Strike Fast halve the assembled pool only once.
  */
 export function computeDodgeDefense(request: any, ctx: DodgeDefenseContext): DodgeDefense {
   const blocked = isDodgeBlocked(request, ctx.participants)
-  const half = !!request?.data?.halfDodge
   const target = ctx.participants.find((p) => p.id === request?.targetParticipantId)
-  if (!request || !target) return { pool: 3, blocked, half, basePool: 3, modifiers: [] }
+  const half = !!(request?.data?.halfDodge || request?.data?.clashAttack || (target?.type === 'digimon'
+    && (request?.data?.strikeFast || request?.data?.attackData?.orderModifiers?.halfDodge)))
+  if (!request || !target) return { pool: blocked ? 0 : 3, blocked, half, basePool: 3, modifiers: [] }
 
   let pool = 3
   if (target.type === 'digimon') {
     const digi = ctx.findDigimon(target.entityId)
     if (digi) {
-      const darkEvoBonus = digi.isDarkEvolution ? 2 : 0
-      const rawStats: StatBlock = {
-        accuracy: (digi.baseStats?.accuracy ?? 0) + (digi.bonusStats?.accuracy ?? 0) + darkEvoBonus,
-        damage: (digi.baseStats?.damage ?? 0) + (digi.bonusStats?.damage ?? 0) + darkEvoBonus,
-        dodge: (digi.baseStats?.dodge ?? 0) + (digi.bonusStats?.dodge ?? 0) + darkEvoBonus,
-        armor: (digi.baseStats?.armor ?? 0) + (digi.bonusStats?.armor ?? 0) + darkEvoBonus,
-      }
+      const rawStats: StatBlock = rawCombatStats(digi)
       const resolvedStats = applyStatSwaps(rawStats, target.statSwaps)
-      const qualityDodgeBonus = ctx.digimonDodge(digi) - rawStats.dodge
+      const qualityDodgeBonus = (ctx.digimonDodge ?? digimonDodgeBase)(digi) - rawStats.dodge
       pool = resolvedStats.dodge + qualityDodgeBonus || 3
       // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of the derived stats)
       pool += target.blackArmorRoundBonus?.dodge ?? 0
     }
   } else if (target.type === 'tamer') {
     const tamer = ctx.findTamer(target.entityId)
-    if (tamer) pool = ctx.tamerDodgePool(tamer) || 3
+    if (tamer) pool = (ctx.tamerDodgePool ?? tamerDodgeBase)(tamer) || 3
   }
 
   const basePool = pool
@@ -116,14 +121,29 @@ export function computeDodgeDefense(request: any, ctx: DodgeDefenseContext): Dod
   }
 
   apply('Stance', applyStanceToDodge(pool, target.currentStance))
-  apply('Successive attack penalty', Math.max(1, pool - (request.data?.dodgePenalty ?? 0)))
+  apply('Quick Reaction', pool + (target.quickReactionDiceBonus ?? 0))
+  apply('Successive attack penalty', Math.max(1, pool - (request.data?.dodgePenalty ?? target.dodgePenalty ?? 0)))
   apply('Effects', pool + getEffectStatModifiers(target.activeEffects || []).dodge)
+  const qualities = target.type === 'digimon' ? ctx.findDigimon(target.entityId)?.qualities ?? [] : []
+  if (qualities.some((q: any) => q.id === 'positive-reinforcement')) {
+    apply('Mood', pool + Math.max(0, (target.moodValue ?? 3) - 4))
+  }
+  apply('Juggernaut', pool + (target.juggernauntBonuses?.dodge ?? 0))
+  apply('Tormentor', pool + (target.tormentorBonusStacks ?? 0) * 2)
+  if (qualities.some((q: any) => q.id === 'adaptive-intelligence')) {
+    apply('Adaptive Intelligence', pool + (target.seenAttackIds?.[request.data?.attackId] ?? 0) * 2)
+  }
   const directed = target.activeEffects?.find((e: any) => e.name === 'Directed')
   if (directed?.value) apply('Directed', pool + directed.value)
 
   if (blocked) return { pool: 0, blocked, half, basePool, modifiers }
-  if (half) apply('Counterattack (half)', Math.max(1, Math.floor(pool / 2)))
-  return { pool: Math.max(1, pool), blocked, half, basePool, modifiers }
+  if (half) apply(request.data?.clashAttack ? 'Clash Attack (half)' : request.data?.strikeFast ? 'Strike Fast (half)' : 'Counterattack (half)', Math.max(1, Math.floor(pool / 2)))
+  const fatefulDice = request.data?.fatefulIntervention?.diceResults
+  if (Array.isArray(fatefulDice)) apply('Fateful Intervention', fatefulDice.length)
+  const automaticSuccesses = qualities.some((q: any) => q.id === 'digizoid-armor' && q.choiceId === 'brown')
+    && target.brownArmorAutoDodgeAvailable ? 1 : 0
+  return { pool: Array.isArray(fatefulDice) ? Math.max(0, pool) : Math.max(1, pool), blocked, half, basePool, modifiers,
+    ...(automaticSuccesses ? { automaticSuccesses } : {}) }
 }
 
 /**

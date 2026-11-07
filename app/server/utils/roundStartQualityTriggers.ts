@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../db'
 import { rollBlackArmorBonus } from './digizoidArmor'
+import { expireRoundSpecialOrders } from '../../utils/specialOrderCombat'
 
 /**
  * Applied at every point a new combat round starts, regardless of which code path advanced it
@@ -18,7 +19,8 @@ export async function applyRoundStartQualityTriggers(participants: any[]): Promi
   }
 
   const updated: any[] = []
-  for (const p of participants) {
+  for (const original of participants) {
+    const p = expireRoundSpecialOrders(original)
     if (p.type !== 'digimon') {
       updated.push(p)
       continue

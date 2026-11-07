@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import { preserveEnduringSouls, combatTurnKey } from '../../../utils/specialOrderCombat'
 import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
 import { getRoomSnapshot } from '../../utils/encounterRoom'
 import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
@@ -10,7 +11,7 @@ import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnoc
 import { loadCampaignCombatContext } from '../../utils/combatContext'
 import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
 
-type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>>
+type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -42,7 +43,7 @@ export default defineEventHandler(async (event) => {
 
   // Intercede opt-outs are written only by the intercede-optouts/intercede-skip endpoints (under a
   // row lock). Ignore them here so a client PUT built from an older copy can't revert them.
-  const { intercedeOptOuts: _managedByOptOutEndpoints, revision: _databaseRevision, ...updatableFields } = body as UpdateEncounterBody & { revision?: unknown }
+  const { intercedeOptOuts: _managedByOptOutEndpoints, revision: _databaseRevision, movementActionParticipantId, ...updatableFields } = body as UpdateEncounterBody & { revision?: unknown }
 
   const updateData: Partial<Encounter> = {
     ...updatableFields,
@@ -79,8 +80,37 @@ export default defineEventHandler(async (event) => {
       let next = p
       if (typeof stored?.lastMovedRound === 'number' && !(p.lastMovedRound >= stored.lastMovedRound)) next = { ...next, lastMovedRound: stored.lastMovedRound }
       if (typeof stored?.turnsStarted === 'number' && !(p.turnsStarted >= stored.turnsStarted)) next = { ...next, turnsStarted: stored.turnsStarted }
+      if (stored) {
+        // These are server-owned declarations/passives. A stale turn-save cannot restore a spent order.
+        next = { ...next }
+        for (const field of ['lastMovedTurnKey', 'strikeFastReady', 'strikeFastTurnKey', 'finishingTouchReady', 'decimationReady',
+          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus']) {
+          if (Object.prototype.hasOwnProperty.call(stored, field)) next[field] = stored[field]
+          else delete next[field]
+        }
+        const incomingTurnKey = combatTurnKey(incomingRound, body.currentTurnIndex ?? existing.currentTurnIndex ?? 0)
+        if (next.strikeFastReady && next.strikeFastTurnKey !== incomingTurnKey) next.strikeFastReady = false
+      }
       return next
     })
+
+    // Card-view movement has no map path, but still proves movement in this turn.
+    if (movementActionParticipantId) {
+      const mover = participants.find(p => p.id === movementActionParticipantId)
+      const stored = existingById.get(movementActionParticipantId)
+      const active = existingById.get(existing.turnOrder?.[existing.currentTurnIndex ?? 0])
+      let canMove = !!mover && !!stored && !stored.inReserve && stored.id === active?.id
+      if (!canMove && mover?.type === 'digimon' && !stored?.inReserve && active?.type === 'tamer') {
+        const [record] = await db.select().from(digimon).where(eq(digimon.id, mover.entityId))
+        canMove = record?.partnerId === active.entityId
+      }
+      if (!canMove || !stored || (stored.actionsRemaining?.simple ?? 0) - (mover?.actionsRemaining?.simple ?? 0) !== 1) {
+        throw createError({ statusCode: 400, message: 'Movement requires one action from a character acting this turn' })
+      }
+      participants = participants.map(p => p.id === movementActionParticipantId ? {
+        ...p, lastMovedRound: existingRound, lastMovedTurnKey: combatTurnKey(existingRound, existing.currentTurnIndex ?? 0),
+      } : p)
+    }
 
     // Enemies the client sent already knocked out are the GM's call (the GM page removes the ones it
     // knocks out itself); only the ones this request knocks out are resolved below.
@@ -137,6 +167,8 @@ export default defineEventHandler(async (event) => {
         }
       }
     }
+
+    participants = preserveEnduringSouls(participants, existing.participants)
 
     // Auto-devolve any partner digimon KO'd by direct wound edit
     for (const p of participants) {

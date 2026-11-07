@@ -38,6 +38,7 @@ export interface CombatParticipant {
   usedSpecialOrders?: string[]
   usedSkillOrders?: string[]
   interceptPenalty?: number
+  specialOrderDebt?: Record<string, number>
   intercedeOptOuts?: string[]  // legacy — opt-outs now live on encounter.intercedeOptOuts (~/utils/intercedeOptOuts)
   hasDirectedThisTurn?: boolean
   digimonBolsterCount?: number
@@ -77,6 +78,12 @@ export interface CombatParticipant {
   statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
   modeChangeFreeSwapsUsed?: number
   quickReactionDiceBonus?: number
+  lastMovedTurnKey?: string
+  strikeFastReady?: boolean
+  finishingTouchReady?: boolean
+  decimationReady?: boolean
+  enduringSoulAvailable?: boolean
+  enduringSoulUsed?: boolean
   stunActionReducedThisRound?: boolean
   dataAbsorbActive?: boolean
   maxPostTurnIntercedes?: number
@@ -143,6 +150,7 @@ function applyRoundReset(
     p.hasActed = false
     p.usedAttackIds = []
     p.hasAttemptedDigivolve = false
+    p.quickReactionDiceBonus = 0
     // Apply Stun action penalty (skip if already reduced mid-round when Stun was applied)
     if (!p.stunActionReducedThisRound) {
       const stunEffect = (p.activeEffects || []).find((e: any) => e.name === 'Stun')
@@ -187,6 +195,7 @@ function applyRoundReset(
 // End-of-turn duration countdown for one participant. Permanent effects never count down;
 // Poison/Burn count down server-side together with their damage (server/utils/damageOverTime.ts).
 function tickTurnEffects(participant: CombatParticipant) {
+  participant.strikeFastReady = false
   participant.activeEffects = (participant.activeEffects || [])
     .map((e) => PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
     .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name))
@@ -198,12 +207,13 @@ function tickTurnEffects(participant: CombatParticipant) {
 function activateParticipant(
   participant: CombatParticipant,
   participants: CombatParticipant[],
-  digimonMap?: Map<string, any>
+  digimonMap?: Map<string, any>,
+  round?: number,
 ) {
   participant.isActive = true
   participant.dodgePenalty = 0
   participant.hasDirectedThisTurn = false
-  applyDeferredIntercedeCost(participant)
+  applyDeferredIntercedeCost(participant, round)
   recordTurnStart(participant)
 
   // Apply Divine Protection Simple Action penalty carried from previous turn
@@ -225,7 +235,7 @@ function activateParticipant(
     })
     if (partner) {
       partner.dodgePenalty = 0
-      applyDeferredIntercedeCost(partner)
+      applyDeferredIntercedeCost(partner, round)
       partner.hasActed = false
     }
   }
@@ -515,7 +525,7 @@ export function useEncounters() {
         }
         const nextParticipant = participants.find((p) => p.id === remainingTurnOrder[survivingIndex])
         if (nextParticipant) {
-          activateParticipant(nextParticipant, participants, digimonMap)
+          activateParticipant(nextParticipant, participants, digimonMap, round)
         }
       }
     }
@@ -638,7 +648,7 @@ export function useEncounters() {
     const nextParticipantId = turnOrder[nextIndex]
     const nextParticipant = participants.find((p) => p.id === nextParticipantId)
     if (nextParticipant) {
-      activateParticipant(nextParticipant, participants, digimonMap)
+      activateParticipant(nextParticipant, participants, digimonMap, newRound)
     }
 
     const updatePayload: Partial<Encounter> = { participants, currentTurnIndex: nextIndex, round: newRound }
@@ -998,13 +1008,14 @@ export function useEncounters() {
     participantId: string,
     spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
     amount: number,
+    requestId?: string,
   ): Promise<Encounter | null> {
     loading.value = true
     error.value = null
     try {
       const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/spend-inspiration`, {
         method: 'POST',
-        body: { participantId, spendType, amount },
+        body: { participantId, spendType, amount, ...(requestId ? { requestId } : {}) },
       })
       encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
       if (currentEncounter.value?.id === encounterId) currentEncounter.value = result

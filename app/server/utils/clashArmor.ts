@@ -8,7 +8,7 @@ import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 /** A participant's CPU for clash purposes. Tamers have no CPU and count as 1 (same as Clash Pin). */
 async function getClashCpu(participant: any): Promise<number> {
   if (participant?.type === 'digimon') {
-    const derived = await getDigimonDerivedStats(participant.entityId)
+    const derived = await getDigimonDerivedStats(participant.entityId, participant)
     return derived?.cpu ?? 0
   }
   if (participant?.type === 'tamer') return 1

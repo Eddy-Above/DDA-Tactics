@@ -1,3 +1,4 @@
+import { serverDodgeDefense, recountSubmittedDodge } from '../../../utils/combatDodge'
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns, maps } from '../../../db'
 import { applyPushPullDisplacement } from '../../../utils/pushPull'
@@ -15,7 +16,11 @@ import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../utils/enemyK
 import { isAttackedFromOutsideClash } from '../../../../utils/clashRules'
 import { refreshGuidingLightForParticipants } from '../../../utils/guidingLight'
 import { serializeIntercedeClaim } from '../../../utils/intercedeClaims'
+import { readCombatRecord, withCombatRecords, invalidateCombatRecord } from '../../../utils/combatRecordCache'
 import { isRequestAnswered } from '../../../../utils/requestState'
+import { preserveEnduringSouls, getAttackOrderModifiers, consumeAttackOrders } from '../../../../utils/specialOrderCombat'
+import { queueStrikeLastCounter } from '../../../utils/strikeLast'
+import { applyFatefulPool } from '../../../../utils/fatefulIntervention'
 
 interface SubmitResponseBody {
   requestId: string
@@ -65,7 +70,7 @@ export default defineEventHandler(async (event) => {
   // use. Each reads the whole encounter and writes it back, so two overlapping answers (several
   // defenders submitting at once, or a double click) would otherwise let the later write erase the
   // earlier one's damage, and a repeat could slip past the already-answered check below.
-  return serializeIntercedeClaim(encounterId, () => submitResponse(encounterId, body))
+  return serializeIntercedeClaim(encounterId, () => withCombatRecords(() => submitResponse(encounterId, body)))
 })
 
 async function submitResponse(encounterId: string, body: SubmitResponseBody) {
@@ -240,6 +245,17 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
     return updated
   }
 
+  // A paid Fateful choice belongs to this request and is authoritative on retries/other tabs.
+  if (body.response.type === 'dodge-rolled' && request.data?.fatefulIntervention) {
+    const choice = request.data.fatefulIntervention
+    try {
+      const rolled = applyFatefulPool(choice.baseDicePool, choice.willpower, choice)
+      body.response = { ...body.response, dodgeDicePool: rolled.dicePool, dodgeDiceResults: rolled.rolls, dodgeSuccesses: rolled.successes }
+    } catch {
+      throw createError({ statusCode: 400, message: 'Stored Fateful Intervention dice are invalid' })
+    }
+  }
+
   // Create response
   const newResponse = {
     id: `resp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -283,7 +299,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       const idx = turnOrder.indexOf(targetParticipantForTurn.id)
       targetHasGone = idx >= 0 && idx < currentTurnIndex
     } else if (targetParticipantForTurn?.type === 'digimon') {
-      const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+      const targetDigimonForTurn = await readCombatRecord('digimon', targetParticipantForTurn.entityId, () => db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId)))
       if (targetDigimonForTurn?.partnerId) {
         const tamerOfTarget = participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
         if (tamerOfTarget) {
@@ -297,57 +313,21 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       }
     }
 
-    // Calculate hit/miss
+    // Enforce halving on the server, retaining only request-bound paid additions.
     const accuracySuccesses = request.data.accuracySuccesses
-    let dodgeSuccesses = body.response.dodgeSuccesses ?? 0
-
-    // Digizoid Armor: fetch target's qualities once (used for Brown's auto-dodge-success below,
-    // and for the halfDodge full-pool recompute)
-    let targetQualitiesForDodge: any[] = []
-    if (targetParticipantForTurn?.type === 'digimon') {
-      const [targetDigimonForQualities] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
-      targetQualitiesForDodge = targetDigimonForQualities?.qualities || []
-    }
-
     const attackerParticipant = participants.find((p: any) => p.id === request.data.attackerParticipantId)
-
-    // Attacked from OUTSIDE the clash: the clashing target cannot dodge at all (server-enforced
-    // even if a dodge roll was somehow submitted). Derived from live clash state so dodge-rolls
-    // created after an intercede window / Quick Reaction / counterattack are covered;
-    // request.data.cannotDodge is the snapshot taken when the attack was declared.
-    const cannotDodge = !!request.data.cannotDodge || isAttackedFromOutsideClash(attackerParticipant, targetParticipantForTurn)
-    if (cannotDodge) {
-      dodgeSuccesses = 0
-    } else if (request.data.clashAttack || request.data.halfDodge) {
-      // Clash Attack / Counterattack halfDodge: target may only use half their dodge pool — recount successes from capped dice
-      const targetParticipantForDodge = participants.find((p: any) => p.id === request.targetParticipantId)
-      let fullDodgePool = 3
-      if (targetParticipantForDodge?.type === 'digimon') {
-        const [targetDigimonForDodge] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
-        if (targetDigimonForDodge) {
-          const baseStats = targetDigimonForDodge.baseStats
-          const bonusStats = (targetDigimonForDodge as any).bonusStats
-          fullDodgePool = (baseStats?.dodge ?? 0) + (bonusStats?.dodge ?? 0) || 3
-        }
-      } else if (targetParticipantForDodge?.type === 'tamer') {
-        const [targetTamerForDodge] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
-        if (targetTamerForDodge) {
-          const attrs = targetTamerForDodge.attributes
-          const skills = targetTamerForDodge.skills
-          fullDodgePool = (attrs?.agility ?? 0) + (skills?.dodge ?? 0) || 3
-        }
-      }
-      fullDodgePool = applyStanceToDodge(fullDodgePool, targetParticipantForDodge?.currentStance ?? 'neutral')
-      fullDodgePool = Math.max(1, fullDodgePool - (targetParticipantForDodge?.dodgePenalty ?? 0))
-      const targetEffectModsForDodge = getEffectStatModifiers(targetParticipantForDodge?.activeEffects || [])
-      fullDodgePool += targetEffectModsForDodge.dodge
-      // Digizoid Armor: flat +Dodge (Blue) + this round's rolled Black Armor bonus
-      fullDodgePool += getDigizoidArmorBonus(targetQualitiesForDodge).dodge
-      fullDodgePool += (targetParticipantForDodge as any)?.blackArmorRoundBonus?.dodge ?? 0
-      const maxClashPool = Math.max(1, Math.floor(fullDodgePool / 2))
-      const clashDiceResults = (body.response.dodgeDiceResults ?? []).slice(0, maxClashPool)
-      dodgeSuccesses = clashDiceResults.filter((d: number) => d >= 5).length
-    }
+    const targetRecordForDodge: any = targetParticipantForTurn?.type === 'digimon'
+      ? await readCombatRecord('digimon', targetParticipantForTurn.entityId, () => db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId)))
+      : targetParticipantForTurn?.type === 'tamer'
+        ? await readCombatRecord('tamer', targetParticipantForTurn.entityId, () => db.select().from(tamers).where(eq(tamers.id, targetParticipantForTurn.entityId))) : undefined
+    const targetQualitiesForDodge: any[] = targetRecordForDodge?.qualities ?? []
+    const defense = serverDodgeDefense(request, participants, targetRecordForDodge)
+    const cannotDodge = defense.blocked
+    const recounted = recountSubmittedDodge(request, defense, body.response.dodgeDiceResults ?? [])
+    if (recounted === null) throw createError({ statusCode: 400, message: 'Dodge dice must be integers from 1 to 6' })
+    body.response.dodgeDiceResults = recounted.rolls
+    body.response.dodgeDicePool = recounted.dicePool
+    let dodgeSuccesses = recounted.successes
 
     // Digizoid Armor: Brown's 1 automatic dodge success, resets once per round
     let brownArmorAutoDodgeConsumed = false
@@ -359,14 +339,18 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       }
     }
 
+    body.response.dodgeSuccesses = dodgeSuccesses
+    Object.assign(newResponse.response, {
+      dodgeDiceResults: recounted.rolls, dodgeDicePool: recounted.dicePool, dodgeSuccesses,
+    })
     const netSuccesses = accuracySuccesses - dodgeSuccesses
-    const hit = netSuccesses >= 0
+    const hit = netSuccesses >= 0 && (!request.data?.fatefulAccuracy || accuracySuccesses > 0)
 
     // Look up attack definition
     let attackDef: any = null
     let attackerQualitiesForST: any[] = []
     if (attackerParticipant?.type === 'digimon') {
-      const [attackerDigimonForDef] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
+      const attackerDigimonForDef = await readCombatRecord('digimon', request.data.attackerEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId)))
       if (attackerDigimonForDef?.attacks) {
         const attacksList = attackerDigimonForDef.attacks
         attackDef = attacksList?.find((a: any) => a.id === request.data.attackId)
@@ -394,10 +378,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let potencyStat = 'bit'
       if (hit && attackDef?.effect) {
         const attackerDerived = attackerParticipant?.type === 'digimon'
-          ? await getDigimonDerivedStats(request.data.attackerEntityId) : null
+          ? await getDigimonDerivedStats(request.data.attackerEntityId, attackerParticipant) : null
         const dodgeTargetParticipant = participants.find((p: any) => p.id === request.targetParticipantId)
         const targetDerived = dodgeTargetParticipant?.type === 'digimon'
-          ? await getDigimonDerivedStats(request.data.targetEntityId) : null
+          ? await getDigimonDerivedStats(request.data.targetEntityId, dodgeTargetParticipant) : null
         const result = calculateEffectPotency(attackDef.effect, attackerDerived, targetDerived)
         potency = result.potency
         potencyStat = result.potencyStat
@@ -492,7 +476,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         hit,
         dodgeDicePool: body.response.dodgeDicePool,
         dodgeDiceResults: body.response.dodgeDiceResults ?? [],
-        dodgeSuccesses: body.response.dodgeSuccesses,
+        dodgeSuccesses,
+        accuracySuccesses,
+        accuracyDicePool: request.data.accuracyDice?.length,
+        accuracyDiceResults: request.data.accuracyDice,
         netSuccesses,
       }
 
@@ -504,7 +491,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       if (!hit && request.targetParticipantId) {
         const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
         if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
-          const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+          const tgtDig = await readCombatRecord('digimon', request.data.targetEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId)))
           const tgtQ = tgtDig?.qualities || []
           if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
             const caResult = await triggerCounterattack({
@@ -537,7 +524,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let armorPiercing = 0
 
       if (attackerParticipant?.type === 'digimon') {
-        const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
+        const attackerDigimon = await readCombatRecord('digimon', request.data.attackerEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId)))
 
         if (attackerDigimon) {
           const baseStats = attackerDigimon.baseStats
@@ -584,7 +571,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let attackerMoodValue = 3
       let attackerTotalArmor = 0
       if (attackerParticipant?.type === 'digimon') {
-        const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId))
+        const attackerDigimon = await readCombatRecord('digimon', request.data.attackerEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.attackerEntityId)))
         if (attackerDigimon) {
           const baseStats = attackerDigimon.baseStats
           const bonusStats = (attackerDigimon as any).bonusStats
@@ -617,7 +604,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let targetMoodValue = 3
       let targetDigizoidChoiceId: string | undefined
       if (targetParticipant?.type === 'digimon') {
-        const [targetDigimon] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+        const targetDigimon = await readCombatRecord('digimon', request.data.targetEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId)))
         targetDigimonRef = targetDigimon
         if (targetDigimon) {
           const targetBaseStats = targetDigimon.baseStats
@@ -644,7 +631,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
           targetArmor += (targetParticipant as any)?.blackArmorRoundBonus?.armor ?? 0
         }
       } else if (targetParticipant?.type === 'tamer') {
-        const [targetTamer] = await db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId))
+        const targetTamer = await readCombatRecord('tamer', request.data.targetEntityId, () => db.select().from(tamers).where(eq(tamers.id, request.data.targetEntityId)))
         if (targetTamer) {
           const attrs = targetTamer.attributes
           const skills = targetTamer.skills
@@ -690,7 +677,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       // Calculate final damage
       let damageDealt = 0
       if (hit) {
-        const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+        const effectiveArmor = Math.max(0, (request.data?.counterBlow ? Math.floor(targetArmor / 2) : targetArmor) - armorPiercing)
         damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
         // Selective Targeting: area attacks don't damage allies
         if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
@@ -749,9 +736,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let damageEffectPotencyStat = 'bit'
       if (hit && attackDef?.effect) {
         const atkDerived = attackerParticipant?.type === 'digimon'
-          ? await getDigimonDerivedStats(request.data.attackerEntityId) : null
+          ? await getDigimonDerivedStats(request.data.attackerEntityId, attackerParticipant) : null
         const tgtDerived = targetParticipant?.type === 'digimon'
-          ? await getDigimonDerivedStats(request.data.targetEntityId) : null
+          ? await getDigimonDerivedStats(request.data.targetEntityId, targetParticipant) : null
         const result = calculateEffectPotency(attackDef.effect, atkDerived, tgtDerived)
         damageEffectPotency = result.potency
         damageEffectPotencyStat = result.potencyStat
@@ -763,7 +750,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         const reflectRange = getReflectArmorRange(targetDigizoidChoiceId)
         if (reflectRange && attackDef?.range === reflectRange) {
           const attackerDerivedForReflect = attackerParticipant?.type === 'digimon'
-            ? await getDigimonDerivedStats(request.data.attackerEntityId) : null
+            ? await getDigimonDerivedStats(request.data.attackerEntityId, attackerParticipant) : null
           const attackerCpu = attackerDerivedForReflect?.cpu ?? 0
           reflectDamageToAttacker = Math.max(1, attackerCpu * 2 - attackerTotalArmor)
         }
@@ -895,6 +882,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         }
       }
 
+      participants = preserveEnduringSouls(participants, encounter.participants)
+
       // Push/Pull map displacement (map mode only)
       let pushPullLogNote: string | null = null
       if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && encounter.mapId) {
@@ -933,8 +922,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
             updatedAt: new Date(),
           }).where(eq(evolutionLines.id, damagedTarget.evolutionLineId))
 
-          const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
-          const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+          const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => db.select().from(digimon).where(eq(digimon.id, oldEntityId)))
+          const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
 
           const devolvedQualities = newDigimon?.qualities || []
           const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
@@ -982,12 +971,15 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         targetArmor: targetArmor,
         ...(hit && clashArmorBonus > 0 ? { clashArmorBonus } : {}),
         armorPiercing: armorPiercing,
-        effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
+        effectiveArmor: hit ? Math.max(0, (request.data?.counterBlow ? Math.floor(targetArmor / 2) : targetArmor) - armorPiercing) : undefined,
         finalDamage: hit ? damageDealt : 0,
         hit: hit,
         dodgeDicePool: body.response.dodgeDicePool,
         dodgeDiceResults: body.response.dodgeDiceResults ?? [],
-        dodgeSuccesses: body.response.dodgeSuccesses,
+        dodgeSuccesses,
+        accuracySuccesses,
+        accuracyDicePool: request.data.accuracyDice?.length,
+        accuracyDiceResults: request.data.accuracyDice,
       }
 
       battleLog = [...battleLog, dodgeLogEntry, ...(autoDevolveLog ? [autoDevolveLog] : [])]
@@ -999,7 +991,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       if (!hit && request.targetParticipantId) {
         const targetParticipantForCA = participants.find((p: any) => p.id === request.targetParticipantId)
         if (targetParticipantForCA?.type === 'digimon' && !targetParticipantForCA.usedCounterattackThisCombat) {
-          const [tgtDig] = await db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId))
+          const tgtDig = await readCombatRecord('digimon', request.data.targetEntityId, () => db.select().from(digimon).where(eq(digimon.id, request.data.targetEntityId)))
           const tgtQ = tgtDig?.qualities || []
           if ((tgtQ as any[]).some((q: any) => q.id === 'counterattack')) {
             const caResult = await triggerCounterattack({
@@ -1054,6 +1046,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       }
 
     } // end damage attack branch
+
+    const strikeLast = queueStrikeLastCounter(updateData.participants ?? participants, updateData.pendingRequests ?? pendingRequests, request)
+    updateData.participants = strikeLast.participants
+    updateData.pendingRequests = strikeLast.pendingRequests
   }
 
   // === HEALTH-ROLLED: Positive [P] effect duration from Health roll ===
@@ -1091,10 +1087,11 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       let potency = 0
       let potencyStat = 'bit'
       if (request.data.attackerEntityId) {
-        const attackerDerived = await getDigimonDerivedStats(request.data.attackerEntityId)
+        const healthAttackerParticipant = participants.find((p: any) => p.id === request.data.attackerParticipantId)
+        const attackerDerived = await getDigimonDerivedStats(request.data.attackerEntityId, healthAttackerParticipant)
         const healthTargetParticipant = participants.find((p: any) => p.id === request.targetParticipantId)
         const targetDerived = healthTargetParticipant?.type === 'digimon' && request.data.targetEntityId
-          ? await getDigimonDerivedStats(request.data.targetEntityId) : null
+          ? await getDigimonDerivedStats(request.data.targetEntityId, healthTargetParticipant) : null
         const result = calculateEffectPotency(effectName, attackerDerived, targetDerived)
         potency = result.potency
         potencyStat = result.potencyStat
@@ -1186,16 +1183,18 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
     const counterattackerName = request.data?.counterattackerName || 'Digimon'
     const originalAttackerName = request.data?.originalAttackerName || 'Unknown'
 
+    const counterattackerBefore = participants.find((p: any) => p.id === counterattackerParticipantId)
+    const counterOrderModifiers = getAttackOrderModifiers(counterattackerBefore)
     const accuracySuccesses = body.response.accuracySuccesses!
     const accuracyDiceResults = body.response.accuracyDiceResults!
     const accuracyDicePool = body.response.accuracyDicePool!
     const attackId = body.response.attackId!
     const attackName = body.response.attackName || 'Counterattack'
 
-    // Mark used
+    // Strike Last spends its own daily order, never the quality's once-per-combat use.
     participants = participants.map((p: any) =>
       p.id === counterattackerParticipantId
-        ? { ...p, usedCounterattackThisCombat: true }
+        ? { ...consumeAttackOrders(p), ...(request.data?.strikeLast ? {} : { usedCounterattackThisCombat: true }) }
         : p,
     )
 
@@ -1256,7 +1255,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       originalAttackerIsPlayer = true
       originalAttackerTamerId = originalAttacker.entityId
     } else if (originalAttacker?.type === 'digimon') {
-      const [origDig] = await db.select().from(digimon).where(eq(digimon.id, originalAttacker.entityId))
+      const origDig = await readCombatRecord('digimon', originalAttacker.entityId, () => db.select().from(digimon).where(eq(digimon.id, originalAttacker.entityId)))
       if (origDig?.partnerId && !origDig.isEnemy) {
         originalAttackerIsPlayer = true
         originalAttackerTamerId = origDig.partnerId
@@ -1266,10 +1265,11 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
     // Look up the chosen attack definition
     let chosenAttack: any = null
     if (counterattacker?.type === 'digimon') {
-      const [caDig] = await db.select().from(digimon).where(eq(digimon.id, counterattacker.entityId))
+      const caDig = await readCombatRecord('digimon', counterattacker.entityId, () => db.select().from(digimon).where(eq(digimon.id, counterattacker.entityId)))
       if (caDig?.attacks) {
         const attacks = caDig.attacks
-        chosenAttack = (attacks as any[]).find((a: any) => a.id === attackId) || null
+        const definition = (attacks as any[]).find((a: any) => a.id === attackId) || null
+        chosenAttack = definition ? { ...definition, orderModifiers: counterOrderModifiers } : null
       }
     }
 
@@ -1303,6 +1303,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
           batteryCount: 0,
           clashAttack: false,
           halfDodge: true,
+          finishingTouch: counterOrderModifiers.successThreshold === 4,
+          counterBlow: !!request.data?.counterBlow,
+          suppressPower: !!request.data?.suppressPower || counterOrderModifiers.suppressPower,
           isCounterattack: true,
         },
       }
@@ -1330,6 +1333,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         currentTurnIndex: encounter.currentTurnIndex ?? 0,
         houseRules,
         counterattack: true,
+        counterBlow: !!request.data?.counterBlow,
         encounterId,
       })
 
@@ -1383,10 +1387,11 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         })
       } else {
         // Digimon was at champion+ — update the rookie entity's DB record directly
-        const [rookieDigi] = await db.select().from(digimon).where(eq(digimon.id, rookieDigimonId))
+        const rookieDigi = await readCombatRecord('digimon', rookieDigimonId, () => db.select().from(digimon).where(eq(digimon.id, rookieDigimonId)))
         if (rookieDigi) {
           const newWounds = Math.max(0, (rookieDigi.currentWounds ?? 0) - digimonSuccesses)
           await db.update(digimon).set({ currentWounds: newWounds, updatedAt: new Date() }).where(eq(digimon.id, rookieDigimonId))
+          invalidateCombatRecord('digimon', rookieDigimonId)
         }
       }
     }
@@ -1454,13 +1459,14 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
     if (!firstUse && inspirationCost > 0) {
       const targetParticipant = participants.find((p: any) => p.id === targetParticipantId)
       if (targetParticipant?.type === 'tamer') {
-        const [tamer] = await db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId))
+        const tamer = await readCombatRecord('tamer', targetParticipant.entityId, () => db.select().from(tamers).where(eq(tamers.id, targetParticipant.entityId)))
         if (tamer) {
           const newInspiration = Math.max(0, (tamer.inspiration ?? 0) - inspirationCost)
           await db.update(tamers).set({
             inspiration: newInspiration,
             updatedAt: new Date(),
           }).where(eq(tamers.id, tamer.id))
+          invalidateCombatRecord('tamer', tamer.id)
         }
       }
     }

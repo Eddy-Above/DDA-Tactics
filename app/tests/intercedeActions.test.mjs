@@ -92,6 +92,54 @@ function legacyNpcAttack(state, rows = []) {
   }).default
 }
 
+test('legacy NPC damage consumes Enduring Soul before saving or removing a defeated enemy', async () => {
+  const actor = unit('attacker', { isEnemy: true })
+  const target = unit('target', { isEnemy: true, currentWounds: 3, enduringSoulAvailable: true })
+  const attack = legacyNpcAttack(encounter([actor, target]), [
+    { id: 'attacker', name: 'Attacker', baseStats: { damage: 5 }, qualities: [], attacks: [{ id: 'attack', type: 'damage', tags: [] }] },
+    { id: 'target', name: 'Target', baseStats: { armor: 0 }, qualities: [] },
+  ])
+  const body = {
+    participantId: 'attacker', targetId: 'target', attackId: 'attack',
+    accuracyDicePool: 1, accuracySuccesses: 1, accuracyDiceResults: [6],
+    dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [],
+  }
+  const first = await attack(body)
+  const saved = first.participants.find(p => p.id === 'target')
+  assert.equal(saved.currentWounds, saved.maxWounds - 1)
+  assert.equal(saved.enduringSoulAvailable, false)
+  assert.equal(saved.enduringSoulUsed, true)
+  assert.deepEqual(first.turnOrder, ['attacker', 'target'])
+  assert.equal(first.battleLog.some(entry => entry.effects?.includes('Defeated')), false)
+
+  const second = await attack(body)
+  assert.deepEqual(second.participants.map(p => p.id), ['attacker'])
+  assert.equal(second.battleLog.filter(entry => entry.effects?.includes('Defeated')).length, 1)
+})
+
+test('legacy NPC Enduring Soul prevents automatic devolution and preserves evolution history', async () => {
+  const actor = unit('attacker')
+  const history = [{ entityId: 'rookie', maxWounds: 4, wounds: 1, stageIndex: 0 }]
+  const target = unit('target', {
+    currentWounds: 3, enduringSoulAvailable: true, evolutionLineId: 'line', woundsHistory: history,
+  })
+  const attack = legacyNpcAttack(encounter([actor, target]), [
+    { id: 'attacker', name: 'Attacker', baseStats: { damage: 5 }, qualities: [], attacks: [{ id: 'attack', type: 'damage', tags: [] }] },
+    { id: 'target', name: 'Target', baseStats: { armor: 0 }, qualities: [] },
+  ])
+  const result = await attack({
+    participantId: 'attacker', targetId: 'target', attackId: 'attack',
+    accuracyDicePool: 1, accuracySuccesses: 1, accuracyDiceResults: [6],
+    dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [],
+  })
+  const saved = result.participants.find(p => p.id === 'target')
+  assert.equal(saved.currentWounds, saved.maxWounds - 1)
+  assert.equal(saved.entityId, 'target')
+  assert.equal(saved.enduringSoulUsed, true)
+  assert.deepEqual(saved.woundsHistory, history)
+  assert.equal(result.battleLog.some(entry => entry.effects?.includes('Auto-Devolve')), false)
+})
+
 for (const type of ['tamer', 'digimon']) {
   for (const wrap of [false, true]) {
     test(`client turn start repays ${type} debt once${wrap ? ' after a round reset' : ''}`, async () => {

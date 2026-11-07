@@ -3,6 +3,7 @@ import type { Attack } from '../types'
 import type { CombatParticipant } from './useEncounters'
 import { getAreaShape } from '../utils/areaShapes'
 import { prepareAttackAccuracy } from '../utils/attackAccuracy'
+import { getAttackOrderModifiers } from '../utils/specialOrderCombat'
 
 export interface ClashAreaAttackContext {
   controllerId: string
@@ -26,7 +27,7 @@ export interface ClashAttackDependencies {
   getEncounter: () => { id: string; participants: readonly CombatParticipant[] } | null | undefined
   canAct?: () => boolean
   getParticipantAttacks: (participant: CombatParticipant) => Attack[]
-  getAttackStats: (participant: CombatParticipant, attack: Attack) => { accuracy: number }
+  getAttackStats: (participant: CombatParticipant, attack: Attack, targetIds?: readonly string[]) => { accuracy: number; automaticSuccesses?: number }
   submitAttack: (encounterId: string, body: ClashAttackRequest) => Promise<unknown>
   refreshEncounter: (encounterId: string) => Promise<unknown>
   beginAreaAttack: (participant: CombatParticipant, attack: Attack) => void | Promise<void>
@@ -99,8 +100,11 @@ export function useClashAttack(deps: ClashAttackDependencies) {
       return
     }
 
-    const accuracyPool = deps.getAttackStats(participant, attack).accuracy
-    const { rolls: accuracyDiceResults, successes: accuracySuccesses } = prepareAttackAccuracy(accuracyPool)
+    const attackStats = deps.getAttackStats(participant, attack, [clash.opponentParticipantId])
+    const accuracyPool = attackStats.accuracy
+    const { rolls: accuracyDiceResults, successes: accuracySuccesses } = prepareAttackAccuracy(accuracyPool, {}, {
+      ...getAttackOrderModifiers(participant), automaticSuccesses: attackStats.automaticSuccesses,
+    })
 
     try {
       await deps.submitAttack(encounter.id, {

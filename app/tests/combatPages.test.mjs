@@ -4,6 +4,7 @@ import { ref, shallowRef } from 'vue'
 import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const { prepareAttackAccuracy, snapshotAttackRiders } = loadTypeScript('utils/attackAccuracy.ts')
+const { getAttackOrderModifiers } = loadTypeScript('utils/specialOrderCombat.ts')
 const gmPage = 'pages/campaigns/[campaignId]/encounters/[id].vue'
 const playerPage = 'pages/campaigns/[campaignId]/player/[tamerId].vue'
 const finalDice = [5, 3, 4, 5, 6]
@@ -51,6 +52,7 @@ function createCombatPage(role, responseExtras = {}) {
       attacker: 'Agumon', target: 'Goblimon', opponent: 'Ogremon',
     }[participant.id] }),
     snapshotAttackRiders,
+    getAttackOrderModifiers,
     prepareAttackAccuracy: (baseAccuracy, riders, options = {}) => {
       events.push('accuracy')
       accuracyCalls.push({ baseAccuracy, riders: { ...riders }, options })
@@ -104,7 +106,7 @@ test('the real GM single-target handler submits shared accuracy and logs the Hug
   assert.deepEqual(fixture.dependencies.selectedTargetIds.value, [])
   await operation
   fixture.assertNoErrors()
-  assert.deepEqual(fixture.accuracyCalls, [{ baseAccuracy: 3, riders: initialRiders, options: {} }])
+  assert.deepEqual(fixture.accuracyCalls, [{ baseAccuracy: 3, riders: initialRiders, options: { halfDodge: false, successThreshold: 5, suppressPower: false, automaticSuccesses: undefined } }])
   assert.deepEqual(fixture.requests, [[
     '/api/encounters/encounter-1/actions/intercede-offer',
     { method: 'POST', body: {
@@ -191,10 +193,10 @@ test('the real player single handler spends the +5 Inspiration before dice and p
   await operation
   fixture.assertNoErrors()
   assert.deepEqual(fixture.accuracyCalls, [{
-    baseAccuracy: 3, riders: initialRiders, options: { actOfInspiration: true },
+    baseAccuracy: 3, riders: initialRiders, options: { actOfInspiration: true, halfDodge: false, successThreshold: 5, suppressPower: false, automaticSuccesses: undefined },
   }])
   assert.deepEqual(fixture.dependencies.accuracyReview.value, {
-    dicePool: 10, rolls: [6, 5, 4, 5, 6, 5, 6, 3, 4, 5], successes: 7,
+    dicePool: 10, rolls: [6, 5, 4, 5, 6, 5, 6, 3, 4, 5], successes: 7, successThreshold: 5, automaticSuccesses: 0,
   })
   assert.deepEqual(fixture.dependencies.accuracyReviewContext.value, {
     participant: fixture.attacker, attack: fixture.attack, target: fixture.target, ...initialRiders,
@@ -213,10 +215,10 @@ test('the real player area handler hands shape, shared accuracy and clash contex
   await fixture.load().confirmAreaAttack([fixture.target], shape)
   fixture.assertNoErrors()
   assert.deepEqual(fixture.accuracyCalls, [{
-    baseAccuracy: 3, riders: initialRiders, options: { actOfInspiration: false },
+    baseAccuracy: 3, riders: initialRiders, options: { actOfInspiration: false, halfDodge: false, successThreshold: 5, suppressPower: false, automaticSuccesses: undefined },
   }])
   assert.deepEqual(fixture.dependencies.accuracyReview.value, {
-    dicePool: 5, rolls: finalDice, successes: 3,
+    dicePool: 5, rolls: finalDice, successes: 3, successThreshold: 5, automaticSuccesses: 0,
   })
   assert.deepEqual(fixture.dependencies.accuracyReviewContext.value, {
     participant: fixture.attacker, attack: fixture.attack, target: fixture.target,

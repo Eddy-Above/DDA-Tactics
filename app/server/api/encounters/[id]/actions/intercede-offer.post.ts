@@ -34,6 +34,10 @@ import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/uti
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercedePasses'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
+import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatRecordCache'
+import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '~/utils/specialOrderCombat'
+import { combatAttackStats } from '~/utils/combatDice'
+import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -55,6 +59,9 @@ interface IntercedeOfferBody {
   clashAttack?: boolean         // If true, target's dodge pool is halved (clash controller attack)
   clashNoInterceptTargetId?: string  // Area clash attack (Pass): this one target (the clash opponent) cannot be interceded
   areaShapeData?: AreaShapeData | null  // Snapshot for recomputing AoE cells (Throw Ally Out of Blast)
+  strikeFast?: boolean
+  finishingTouch?: boolean
+  suppressPower?: boolean
 }
 
 export default defineEventHandler(async (event) => {
@@ -67,14 +74,14 @@ export default defineEventHandler(async (event) => {
   // Creating an offer rewrites the same pending array as answering one. Keep both creation and
   // automatic passes in the decision queue so neither can restore a consumed offer or erase a
   // defense that another request just added.
-  return serializeIntercedeClaim(encounterId, async () => {
+  return serializeIntercedeClaim(encounterId, () => withCombatRecords(async () => {
     const result = await createIntercedeOffers(encounterId, body)
     if (passableOfferOwners(result).length === 0) return result
     const answered = await applyActivePasses(encounterId)
     if (!answered) return result
     const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
     return fresh ? { ...result, ...fresh } : result
-  })
+  }))
 })
 
 async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBody) {
@@ -126,6 +133,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       : Promise.resolve([]),
   ])
   const digimonById = new Map(allParticipantDigimon.map((d: any) => [d.id, d]))
+  primeCombatRecords('digimon', allParticipantDigimon)
+  primeCombatRecords('tamer', allParticipantTamers)
   const tamerById = new Map(allParticipantTamers.map((t: any) => [t.id, t]))
 
   // Spatial map state (for intercede reach check)
@@ -173,6 +182,23 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   if (!attacker) {
     throw createError({ statusCode: 404, message: 'Attacker not found' })
   }
+
+  const orderModifiers = body.skipActionDeduction && body.attackData?.orderModifiers
+    ? body.attackData.orderModifiers : getAttackOrderModifiers(attacker)
+  if (orderModifiers.suppressPower && body.hugePowerUsed) {
+    throw createError({ statusCode: 400, message: 'Huge Power and Overkill cannot trigger with this Special Order' })
+  }
+  body.strikeFast = !!orderModifiers.halfDodge
+  body.finishingTouch = orderModifiers.successThreshold === 4
+  body.suppressPower = !!orderModifiers.suppressPower
+  body.attackData = { ...body.attackData, orderModifiers }
+  const declaredAttack: any = digimonById.get(attacker.entityId)?.attacks?.find((a: any) => a.id === body.attackId)
+  if (body.finishingTouch) body.accuracySuccesses = body.accuracyDice.filter(d => d >= 4).length
+    + combatAttackStats(digimonById.get(attacker.entityId), attacker, declaredAttack ?? body.attackData).automaticSuccesses
+  if (declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(attacker)) {
+    throw createError({ statusCode: 400, message: `Signature Move is available from round ${signatureReadyRound(attacker)}` })
+  }
+  participants = participants.map((p: any) => p.id === attacker.id ? consumeAttackOrders(p) : p)
 
   // While clashing, a participant cannot Dodge attacks from OUTSIDE the clash. An attack from the
   // participant's own clash opponent (same clashId) is a Clash Attack and uses the half-dodge
@@ -547,6 +573,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             attackerParticipantId: body.attackerId,
             targetParticipantId: tid,
             attackDef: areaAttackDef,
+            halfDodge: body.strikeFast,
             accuracySuccesses: body.accuracySuccesses,
             accuracyDice: body.accuracyDice,
             round: encounter.round || 0,
@@ -589,6 +616,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             houseRules,
             clashAttack: body.clashAttack,
             cannotDodge: targetCannotDodge(participants.find((p: any) => p.id === tid)),
+            strikeFast: body.strikeFast,
             totalTargetCount,
             mapRecord: mapRecord ?? undefined,
             participantPositions: participantPositions ?? undefined,
@@ -622,6 +650,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             attackerParticipantId: body.attackerId,
             targetParticipantId: tid,
             attackDef: areaAttackDef,
+            halfDodge: body.strikeFast,
             accuracySuccesses: body.accuracySuccesses,
             accuracyDice: body.accuracyDice,
             round: encounter.round || 0,
@@ -832,8 +861,16 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       hit: false,
     }
 
+    const missOffers = await offerStrikeLastOnMiss(participants, pendingRequests, {
+      id: missLog.id, attackerId: body.attackerId, targetIds: [body.targetId!], round: encounter.round,
+      attackerName, attackName: body.attackName || 'Attack',
+    }, campaignLevel as any, {
+      digimon: async id => digimonById.get(id),
+      tamer: async id => (await db.select().from(tamers).where(eq(tamers.id, id)))[0],
+    })
     await db.update(encounters).set({
       participants,
+      pendingRequests: missOffers as any,
       battleLog: [...battleLog, missLog],
       updatedAt: new Date(),
     }).where(eq(encounters.id, encounterId))
@@ -867,6 +904,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         attackerParticipantId: body.attackerId,
         targetParticipantId: body.targetId!,
         attackDef,
+        halfDodge: body.strikeFast,
         accuracySuccesses: body.accuracySuccesses,
         accuracyDice: body.accuracyDice,
         round: encounter.round || 0,
@@ -1220,6 +1258,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           attackerParticipantId: body.attackerId,
           targetParticipantId: body.targetId!,
           attackDef,
+          halfDodge: body.strikeFast,
           accuracySuccesses: body.accuracySuccesses,
           accuracyDice: body.accuracyDice,
           round: encounter.round || 0,
@@ -1311,6 +1350,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           attackerParticipantId: body.attackerId,
           targetParticipantId: body.targetId!,
           attackDef,
+          halfDodge: body.strikeFast,
           accuracySuccesses: body.accuracySuccesses,
           accuracyDice: body.accuracyDice,
           round: encounter.round || 0,
@@ -1358,6 +1398,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           houseRules,
           clashAttack: body.clashAttack,
           cannotDodge: targetCannotDodge(target),
+          strikeFast: body.strikeFast,
           mapRecord: mapRecord ?? undefined,
           participantPositions: participantPositions ?? undefined,
           encounterId,

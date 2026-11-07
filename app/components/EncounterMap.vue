@@ -200,6 +200,7 @@ import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composabl
 import { useMapEditor } from '~/composables/useMapEditor'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
+import { getAllStatEffectModifier, applyDerivedStatEffects } from '~/data/attackConstants'
 import type { MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { chebyshev } from '~/utils/pathfinding'
@@ -373,7 +374,7 @@ const attackerStats = computed(() => {
   if (!participant || participant.type !== 'digimon') return { range: 0, effectiveLimit: 0, meleeRange: 1 }
   const d = props.digimonMap[participant.entityId]
   if (!d) return { range: 0, effectiveLimit: 0, meleeRange: 1 }
-  const derived = calculateDigimonDerivedStats(d.baseStats, d.stage, d.size)
+  const derived = applyDerivedStatEffects(calculateDigimonDerivedStats(d.baseStats, d.stage, d.size), participant.activeEffects ?? [])
   const reachRanks = (d.qualities as any[]).find(q => q.id === 'reach')?.ranks ?? 0
   return {
     range: derived.range,
@@ -647,7 +648,7 @@ function npcMoveCaps(participantId: string) {
     qualities = []
   } else {
     const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
-    budget = applyStanceToMovement(dInfo?.movement ?? 4, p.currentStance, stageBonus)
+    budget = applyStanceToMovement((dInfo?.movement ?? 4) + getAllStatEffectModifier(p.activeEffects ?? []), p.currentStance, stageBonus)
     qualities = dInfo?.qualities ?? []
   }
   const caps = movement.detectCapabilities(qualities, budget, 0, 0)
@@ -681,7 +682,7 @@ function throwCaps(thrownParticipantId: string, controllerId: string) {
     budget = tInfo?.body ?? 0
   } else {
     const cInfo = digimonMapForCanvas.value[controller.entityId] as any
-    budget = cInfo ? calculateDigimonDerivedStats(cInfo.baseStats, cInfo.stage, cInfo.size).body : 0
+    budget = cInfo ? applyDerivedStatEffects(calculateDigimonDerivedStats(cInfo.baseStats, cInfo.stage, cInfo.size), controller.activeEffects ?? []).body : 0
   }
 
   const thrownInfo = digimonMapForCanvas.value[thrown.entityId] as any
@@ -885,11 +886,35 @@ function cancelThrowAllyAim() {
   movement.clearMovement()
 }
 
+let lastHoveredMovementCell: string | null = null
+
+// A cached path belongs to one geometry/occupancy snapshot. Deep, synchronous
+// invalidation also covers edits that keep the same map or position object.
+watch([
+  map, positions,
+  () => props.encounter.destructibleStates,
+  () => props.encounter.participants,
+  () => props.digimonMap,
+  () => props.tamerMap,
+], () => {
+  lastHoveredMovementCell = null
+  movement.invalidateSearch()
+  movement.activePath.value = []
+}, { deep: true, flush: 'sync' })
+
+watch([npcMoveParticipantId, throwAimContext, throwAllyAimContext, movement.reachableCells], () => {
+  lastHoveredMovementCell = null
+}, { deep: true, flush: 'sync' })
+
 function onCellHovered(cell: Vec3 | null) {
   if (!cell || !npcMoveParticipantId.value || !map.value) {
+    lastHoveredMovementCell = null
     movement.activePath.value = []
     return
   }
+  const hoverKey = `${npcMoveParticipantId.value}:${cell.x},${cell.y},${cell.z}`
+  if (hoverKey === lastHoveredMovementCell) return
+  lastHoveredMovementCell = hoverKey
   if (throwAimContext.value) {
     const ctx = throwCaps(throwAimContext.value.thrownTargetId, throwAimContext.value.controllerId)
     if (!ctx) return

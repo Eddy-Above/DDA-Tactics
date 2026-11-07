@@ -38,7 +38,7 @@ export async function applyGuidingLightAuras(
   campaignLevel: 'standard' | 'enhanced' | 'extreme',
   houseRules?: { stunMaxDuration1?: boolean }
 ): Promise<{ participants: any[]; changed: boolean }> {
-  const digimonParticipants = participants.filter((p) => p.type === 'digimon' && !p.inReserve)
+  const digimonParticipants = participants.filter((p) => p.type === 'digimon' && !p.inReserve && !p.isMinion && !p.summonerId && !p.summonedByParticipantId)
 
   const digimonRows = new Map<string, Digimon>()
   for (const p of digimonParticipants) {

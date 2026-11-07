@@ -148,6 +148,7 @@ export async function resolveIntercedeGroupIfDecided(
   const isSupportAttack = data.isSupportAttack || false
   const attackDef = data.attackData || null
   const supportParams = {
+    halfDodge: !!data.attackData?.orderModifiers?.halfDodge,
     participants,
     battleLog,
     pendingRequests,
@@ -238,6 +239,7 @@ export async function resolveIntercedeGroupIfDecided(
 
   // Damage attack — auto-resolve (roll dodge, calculate damage)
   const result = await resolveNpcAttack({
+    strikeFast: !!data.attackData?.orderModifiers?.halfDodge,
     participants, battleLog,
     attackerParticipantId: data.attackerId,
     targetParticipantId: data.targetId,

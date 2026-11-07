@@ -9,6 +9,7 @@ import { resolveParticipantName } from './participantName'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { getRoomPositions } from './encounterRoom'
 import { chebyshev } from './gridDistance'
+import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
 
 // Damage over time — [Poison] and [Burn]. Both their damage and their duration countdown are
 // resolved here, server-side, so a tick and its countdown always happen together (a 3-round
@@ -84,6 +85,7 @@ function roundsLeftNote(effectName: string, remaining: number): string {
  */
 export function applyWoundDamage(p: any, amount: number): void {
   if (amount <= 0) return
+  const previousWounds = p.currentWounds || 0
   const tempAvailable = p.currentTempWounds ?? 0
   const tempAbsorb = Math.min(tempAvailable, amount)
   if (tempAbsorb > 0) {
@@ -93,6 +95,7 @@ export function applyWoundDamage(p: any, amount: number): void {
     }
   }
   p.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + (amount - tempAbsorb))
+  preserveEnduringSoul(p, previousWounds)
 }
 
 /** Effects a digimon's qualities make it immune to: Naturewalk: Fire can't be [Burned]. */

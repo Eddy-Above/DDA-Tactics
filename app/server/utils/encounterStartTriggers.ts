@@ -37,7 +37,6 @@ export async function applyEncounterStartTriggers(
     const idx = STAGE_ORDER.indexOf(d.stage as any)
     if (idx > mainEnemyStageIdx) mainEnemyStageIdx = idx
   }
-  if (mainEnemyStageIdx === -1) return participants
 
   const tamerRows = new Map<string, Tamer>()
 
@@ -73,8 +72,11 @@ export async function applyEncounterStartTriggers(
     }
 
     const unlockedOrders = getUnlockedSpecialOrders(tamer.attributes as any, tamer.xpBonuses as any, campaignLevel)
-    if (!unlockedOrders.some((o) => o.name === 'Challenger')) {
-      updated.push(p)
+    const initialized = { ...p, enduringSoulAvailable: unlockedOrders.some(o => o.name === 'Enduring Soul'), enduringSoulUsed: false,
+      strikeFastReady: false, finishingTouchReady: false, decimationReady: false, strikeLastCounter: undefined,
+      quickReactionDiceBonus: 0 }
+    if (mainEnemyStageIdx < 0 || !unlockedOrders.some((o) => o.name === 'Challenger')) {
+      updated.push(initialized)
       continue
     }
 
@@ -95,7 +97,7 @@ export async function applyEncounterStartTriggers(
     const shouldOverride = !houseRules?.maxTempWoundsRule || tempWoundsGranted >= currentTemp
 
     const next: any = {
-      ...p,
+      ...initialized,
       activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, houseRules),
     }
     if (shouldOverride) {
