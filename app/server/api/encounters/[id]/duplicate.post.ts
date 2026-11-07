@@ -51,6 +51,12 @@ function resetParticipantForFreshCopy(p: any): any {
   }
 }
 
+function copyOptOuts(optOuts: any, mode: 'fresh' | 'snapshot'): any {
+  const copy = structuredClone(optOuts ?? {})
+  if (mode === 'fresh') delete copy.temporaryPasses
+  return copy
+}
+
 export default defineEventHandler(async (event) => {
   const sourceId = getRouterParam(event, 'id')
   const body = await readBody<DuplicateEncounterBody>(event) ?? {}
@@ -106,8 +112,10 @@ export default defineEventHandler(async (event) => {
     pendingRequests: [],
     requestResponses: [],
     visibleToPlayers: false,
-    // Participant ids are kept verbatim (above), so the opt-out lists stay valid as-is
-    intercedeOptOuts: structuredClone(source.intercedeOptOuts ?? {}),
+    // Participant ids are kept verbatim (above), so the opt-out lists stay valid as-is. A pass
+    // ("Pass until my next turn") belongs to one live combat: a fresh copy starts a new one, but a
+    // snapshot is the same moment — turnsStarted is copied with the participants — so it keeps them.
+    intercedeOptOuts: copyOptOuts(source.intercedeOptOuts, mode),
 
     participantPositions: room.participantPositions,
     destructibleStates: room.destructibleStates,

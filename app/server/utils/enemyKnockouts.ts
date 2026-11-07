@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, digimon, encounters, campaigns } from '../db'
 import type { GameMap, Vec3 } from '../../types'
-import { applyDeferredIntercedeCost } from '../../utils/intercedeActions'
+import { applyDeferredIntercedeCost, recordTurnStart } from '../../utils/intercedeActions'
 import { applyEffectToParticipant } from './applyEffect'
 import { resolveParticipantName } from './participantName'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
@@ -208,6 +208,7 @@ async function startTurn(participants: any[], participantId: string | undefined)
   nextParticipant.dodgePenalty = 0
   nextParticipant.hasDirectedThisTurn = false
   applyDeferredIntercedeCost(nextParticipant)
+  recordTurnStart(nextParticipant)
   if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
     nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
     nextParticipant.actionsRemaining.simple = Math.max(

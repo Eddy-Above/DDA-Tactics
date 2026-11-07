@@ -7,6 +7,9 @@ export function useMapWebSocket(encounterId: Ref<string | null>, basePath: 'enco
   const connected = ref(false)
   const messageQueue: string[] = []
   const handlers = new Set<MessageHandler>()
+  const reconnectHandlers = new Set<() => void>()
+  // True once this encounter's socket has opened; the next open after a drop is a reconnect.
+  let hasOpened = false
   let retryCount = 0
   let retryTimeout: ReturnType<typeof setTimeout> | null = null
   let destroyed = false
@@ -23,6 +26,9 @@ export function useMapWebSocket(encounterId: Ref<string | null>, basePath: 'enco
     socket.onopen = () => {
       connected.value = true
       retryCount = 0
+      // Pushes sent while the socket was down are gone for good; let the page resync.
+      if (hasOpened) for (const handler of reconnectHandlers) handler()
+      hasOpened = true
       // Flush queued messages
       while (messageQueue.length > 0) {
         const raw = messageQueue.shift()!
@@ -66,6 +72,12 @@ export function useMapWebSocket(encounterId: Ref<string | null>, basePath: 'enco
     return () => handlers.delete(handler)
   }
 
+  /** Called when the socket reopens after a drop (not on the first connection). */
+  function onReconnect(handler: () => void) {
+    reconnectHandlers.add(handler)
+    return () => reconnectHandlers.delete(handler)
+  }
+
   function disconnect() {
     destroyed = true
     if (retryTimeout) clearTimeout(retryTimeout)
@@ -77,11 +89,12 @@ export function useMapWebSocket(encounterId: Ref<string | null>, basePath: 'enco
     disconnect()
     destroyed = false
     retryCount = 0
+    hasOpened = false
     if (id) connect()
   })
 
   onMounted(() => { if (encounterId.value) connect() })
   onUnmounted(disconnect)
 
-  return { connected, send, onMessage, disconnect }
+  return { connected, send, onMessage, onReconnect, disconnect }
 }

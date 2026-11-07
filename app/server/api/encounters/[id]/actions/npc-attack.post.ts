@@ -3,7 +3,7 @@ import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../.
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage, EddySoulRules } from '../../../../../types'
-import { applyDeferredIntercedeCost } from '../../../../../utils/intercedeActions'
+import { applyDeferredIntercedeCost, recordTurnStart } from '../../../../../utils/intercedeActions'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../../utils/resolveSupportAttack'
@@ -598,6 +598,7 @@ export default defineEventHandler(async (event) => {
         nextParticipant.dodgePenalty = 0
         nextParticipant.hasDirectedThisTurn = false
         applyDeferredIntercedeCost(nextParticipant)
+        recordTurnStart(nextParticipant)
         if (nextParticipant.pendingSimpleActionPenalty && nextParticipant.pendingSimpleActionPenalty > 0) {
           nextParticipant.actionsRemaining = nextParticipant.actionsRemaining || { simple: 2 }
           nextParticipant.actionsRemaining.simple = Math.max(

@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, type Encounter } from '../../../db'
+import { serializeIntercedeClaim } from '../../../utils/intercedeClaims'
 
 interface CreateRequestBody {
   type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'health-roll' | 'recovery-check' | 'divine-protection-offer'
@@ -25,6 +26,11 @@ export default defineEventHandler(async (event) => {
       message: 'type and targetTamerId are required',
     })
   }
+
+  return serializeIntercedeClaim(encounterId, () => createRequest(encounterId, body))
+})
+
+async function createRequest(encounterId: string, body: CreateRequestBody) {
 
   // Fetch encounter
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
@@ -86,4 +92,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   return updated
-})
+}

@@ -352,6 +352,9 @@ export async function resolveAreaIntercedeGroup({
         batteryCount: groupData.batteryCount ?? 0,
         clashAttack: groupData.clashAttack || false,
         totalTargetCount: originalTargetIds.length,
+        // The cast these requests came from (the no-offer area path sets it too): the player page
+        // defends everything one cast hit among a player's characters in a single panel.
+        intercedeGroupId: groupData.intercedeGroupId,
       },
     })
   }

@@ -72,7 +72,10 @@ function createCombatPage(role, responseExtras = {}) {
     tamer: shallowRef({ id: 'tamer-entity' }),
     actOfInspirationEnabled: ref(false),
     actOfInspirationCost: ref(4),
-    handleSpendInspiration: async (...args) => { events.push('spend'); spends.push(args) },
+    handleSpendInspiration: async (...args) => { events.push('spend'); spends.push(args); return true },
+    applyActionResult: async result => {
+      if (result) dependencies.currentEncounter.value = result
+    },
     accuracyReview: shallowRef(null),
     accuracyReviewContext: shallowRef(null),
     showAccuracyReview: ref(false),
@@ -184,7 +187,7 @@ test('the real player single handler spends the +5 Inspiration before dice and p
   fixture.dependencies.hugePowerEnabled.value = false
   fixture.dependencies.hugePowerRank2Enabled.value = false
   fixture.dependencies.actOfInspirationEnabled.value = false
-  completeSpend()
+  completeSpend(true)
   await operation
   fixture.assertNoErrors()
   assert.deepEqual(fixture.accuracyCalls, [{
@@ -227,6 +230,21 @@ test('the real player area handler hands shape, shared accuracy and clash contex
   assert.equal(fixture.attackSubmissions.length, 0)
   assert.equal(fixture.clashActions.length, 0, 'the player clash ends only after review submits the attack')
 })
+
+for (const area of [false, true]) {
+  test(`a refused Act of Inspiration does not roll or submit a ${area ? 'area' : 'single-target'} attack`, async () => {
+    const fixture = createCombatPage('player')
+    fixture.dependencies.actOfInspirationEnabled.value = true
+    fixture.dependencies.handleSpendInspiration = async () => false
+    const handlers = fixture.load()
+    if (area) await handlers.confirmAreaAttack([fixture.target])
+    else await handlers.confirmAttack(fixture.target)
+    assert.equal(fixture.accuracyCalls.length, 0)
+    assert.equal(fixture.dependencies.showAccuracyReview.value, false)
+    assert.equal(fixture.requests.length, 0)
+    assert.equal(fixture.attackSubmissions.length, 0)
+  })
+}
 
 function createIntercedePage(role) {
   const encounter = {

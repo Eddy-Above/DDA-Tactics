@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../../db'
+import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
@@ -11,6 +12,11 @@ export default defineEventHandler(async (event) => {
       message: 'Encounter ID and Response ID are required',
     })
   }
+
+  return serializeIntercedeClaim(encounterId, () => deleteResponse(encounterId, responseId))
+})
+
+async function deleteResponse(encounterId: string, responseId: string) {
 
   // Fetch encounter
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
@@ -46,4 +52,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   return updated
-})
+}

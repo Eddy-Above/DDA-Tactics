@@ -32,6 +32,8 @@ import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
+import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercedePasses'
+import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
 interface IntercedeOfferBody {
   attackerId: string
@@ -58,11 +60,24 @@ interface IntercedeOfferBody {
 export default defineEventHandler(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeOfferBody>(event)
-
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   }
 
+  // Creating an offer rewrites the same pending array as answering one. Keep both creation and
+  // automatic passes in the decision queue so neither can restore a consumed offer or erase a
+  // defense that another request just added.
+  return serializeIntercedeClaim(encounterId, async () => {
+    const result = await createIntercedeOffers(encounterId, body)
+    if (passableOfferOwners(result).length === 0) return result
+    const answered = await applyActivePasses(encounterId)
+    if (!answered) return result
+    const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return fresh ? { ...result, ...fresh } : result
+  })
+})
+
+async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBody) {
   if (!body.attackerId || !body.attackId) {
     throw createError({ statusCode: 400, message: 'attackerId and attackId are required' })
   }
@@ -1547,4 +1562,4 @@ export default defineEventHandler(async (event) => {
   }
 
   return updated
-})
+}

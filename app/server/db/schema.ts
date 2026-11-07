@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import type { CreationRules, ScenePreset } from '../../types'
 import type { EncounterIntercedeOptOuts } from '../../utils/intercedeOptOuts'
@@ -230,6 +230,8 @@ export const digimon = pgTable('digimon', {
 
 export const encounters = pgTable('encounters', {
   id: text('id').primaryKey(),
+  // Incremented by the database on every update, in row-write order (migration 0023).
+  revision: bigint('revision', { mode: 'number' }).notNull().default(0),
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
 
@@ -324,6 +326,7 @@ export const encounters = pgTable('encounters', {
     tankBusterUsedAtThresholds?: number[]
     mapPosition?: { x: number; y: number; z: number }
     lastMovedRound?: number
+    turnsStarted?: number
     blackArmorRoundBonus?: { armor: number; dodge: number }
     brownArmorAutoDodgeAvailable?: boolean
   }>>(),
@@ -379,6 +382,10 @@ export const encounters = pgTable('encounters', {
     targetParticipantId?: string
     timestamp: string
     data?: any
+    /** Set by responses.post when the request is first answered. It survives deleting the
+     *  response, so a dismissed result can never turn the request back into an open prompt, and
+     *  a repeat submission (double click, retry, second tab) is a no-op instead of a second hit. */
+    answeredAt?: string
   }>>(),
 
   // Player responses to requests

@@ -14,13 +14,26 @@ import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
-import { isAttackedFromOutsideClash } from '~/utils/clashRules'
+import {
+  groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, type DodgeDefenseContext,
+} from '~/utils/areaDefense'
+import { useAreaDefenseBatch, type DefenseRoll, type SubmitOutcome } from '~/composables/useAreaDefenseBatch'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
-import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts'
-import { evolutionFormsKey } from '~/utils/evolutionForms'
+import { getTargetOptOuts, isOfferSuppressed } from '~/utils/intercedeOptOuts'
+import { useIntercedePass } from '~/composables/useIntercedePass'
+import {
+  createEncounterSnapshotGate, shapeActionResponse, battleLogTotal, newBattleLogEntries, isEncounterShownToTamer, needsFullReload,
+  type SnapshotSource,
+} from '~/utils/encounterSnapshot'
+import {
+  ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, createRecordRefreshQueue,
+  type CombatActionKind, type RecordRefreshPlan,
+} from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
+import { useAutoDismiss } from '~/composables/useAutoDismiss'
+import { isRequestAnswered } from '~/utils/requestState'
 import { prepareAttackAccuracy, snapshotAttackRiders, type AccuracyRollResult } from '~/utils/attackAccuracy'
 
 definePageMeta({
@@ -156,6 +169,8 @@ const intercedeOptionsSelections = ref<Set<string>>(new Set())
 const savingIntercedeOptions = ref(false)
 const attackResultQueue = ref<Array<{
   responseId: string
+  /** The dodge request this result answered; absent for results rebuilt from the battle log. */
+  requestId?: string
   attackerName: string
   attackName: string
   targetName: string
@@ -194,6 +209,15 @@ const attackResultData = computed(() => {
   return attackResultQueue.value.length > 0 ? attackResultQueue.value[0] : null
 })
 
+function isAttackResultGroupComplete(group: typeof attackResultQueue.value = attackResultGroup.value): boolean {
+  if (group.length === 0) return false
+  const groupId = group[0].groupId
+  const expected = groupId ? attackResultGroupTotals.value[groupId] : undefined
+  return expected == null || group.length >= expected
+}
+
+const attackResultVisible = computed(() => showAttackResultModal.value && isAttackResultGroupComplete())
+
 // Dodge result modal state - shown to the defender after they submit their dodge roll
 const showDodgeResultModal = ref(false)
 const dodgeResponseId = ref<string | null>(null)
@@ -229,6 +253,42 @@ const intercedeResultData = ref<{
   armorPiercing: number
   effectiveArmor: number
 } | null>(null)
+// Bumped each time a result is set, so a result that replaces another restarts its countdown
+// even when its numbers are identical.
+const intercedeResultSerial = ref(0)
+const clashCheckResultSerial = ref(0)
+
+// Server response ids whose result this page already dismissed. A stale push that still carries
+// the response must not rebuild a result the player has seen.
+const dismissedResponseIds = new Set<string>()
+
+// Completed results leave on their own after 5 s. Each dialog's Close button calls the same
+// `dismiss()` as its timer, so automatic and manual dismissal share one cleanup and run once.
+// Dialogs awaiting a decision (dodge/counterattack/intercede prompts, accuracy review) have no
+// key here and never time out; the battle log keeps every result after it is dismissed.
+const attackResultDismissal = useAutoDismiss({
+  key: () => {
+    const first = attackResultData.value
+    if (!attackResultVisible.value || !first) return null
+    return `${activeEncounter.value?.id}:${first.groupId ?? first.responseId}:${attackResultGroup.value.length}`
+  },
+  cleanup: () => cleanupAttackResultGroup(),
+})
+const dodgeResultDismissal = useAutoDismiss({
+  key: () => (showDodgeResultModal.value && dodgeResultData.value
+    ? `${activeEncounter.value?.id}:${dodgeRequestId.value ?? dodgeResponseId.value ?? 'dodge-result'}`
+    : null),
+  cleanup: () => cleanupDodgeResult(),
+})
+const intercedeResultDismissal = useAutoDismiss({
+  key: () => (showIntercedeResultModal.value && intercedeResultData.value ? intercedeResultSerial.value : null),
+  cleanup: () => closeIntercedeResultModal(),
+})
+const clashCheckResultDismissal = useAutoDismiss({
+  // A clash result still PENDING the opponent's roll is not finished: it stays until it resolves.
+  key: () => (clashCheckResultData.value && !clashCheckResultData.value.waiting ? clashCheckResultSerial.value : null),
+  cleanup: () => closeClashCheckResult(),
+})
 
 // Attribute/Skill roll modal state
 const showAttributeRollModal = ref(false)
@@ -272,8 +332,10 @@ const {
   },
   getWarpTargets: participant => getParticipantEvolutionOptions(participant).warpTargets ?? [],
   spendInspiration: (encounterId, participantId) => spendInspiration(encounterId, participantId, 'reroll', 1),
-  refresh: loadData,
-  afterReroll: loadData,
+  // The composable's API does not hand back the encounter, so resync it directly (one gated GET
+  // plus the records a digivolution touches) instead of reloading everything.
+  refresh: () => resyncCombatState('digivolve'),
+  afterReroll: () => resyncCombatState('spend-inspiration'),
   inspirationLoading: inspirationSpendLoading,
   onError: message => alert(message),
 })
@@ -336,30 +398,149 @@ let refreshInterval: ReturnType<typeof setInterval>
 const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(activeEncounterIdForWs)
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
-let lastEncounterStateVersion = -1
-let lastEncounterStateId: string | null = null
-encounterWs.onMessage((msg) => {
+// One gate for everything that can replace the encounter on this page: pushes, the encounter GET
+// and the response to an action the player just took. See utils/encounterSnapshot.ts.
+const encounterGate = createEncounterSnapshotGate()
+const recordRefreshQueue = createRecordRefreshQueue()
+
+// Digimon records the player's own characters can be (the `loadData` candidate rule needs them).
+function ownedDigimonIds(): Set<string> {
+  return new Set(partnerDigimon.value.map((d) => d.id))
+}
+
+// Refetch only what a combat update touched. An evolution or devolution moves a stage and swaps a
+// participant's record; a stat edit changes a record without changing its id; some actions rewrite
+// the player's Tamer. Nothing else is reloaded.
+async function refreshAffectedRecords(plan: RecordRefreshPlan) {
+  return recordRefreshQueue.run(() => refreshRecords(plan))
+}
+
+async function refreshRecords(plan: RecordRefreshPlan) {
+  const owner = tamer.value
+  const jobs: Promise<unknown>[] = []
+
+  if (plan.digimonIds.length > 0) {
+    jobs.push((async () => {
+      try {
+        const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${plan.digimonIds.join(',')}`)
+        allDigimon.value = mergeRecordsById(allDigimon.value, envelope.data)
+        const partnerIds = new Set(partnerDigimon.value.map((d) => d.id))
+        const partnerUpdates = envelope.data.filter((d) => partnerIds.has(d.id))
+        if (partnerUpdates.length > 0) partnerDigimon.value = mergeRecordsById(partnerDigimon.value, partnerUpdates)
+      } catch (e) {
+        console.error('Failed to refresh digimon records:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.partnerDigimon) {
+    jobs.push((async () => {
+      try {
+        await fetchDigimon({ partnerId: owner.id, campaignId: campaignId.value })
+        const fetched = digimonList.value.filter((d: Digimon) => d.partnerId === owner.id)
+        const merged = new Map(mergeRecordsById(partnerDigimon.value, fetched).map((d) => [d.id, d]))
+        partnerDigimon.value = fetched.map((d) => merged.get(d.id)!)
+        const encounterIds = new Set(allDigimon.value.map((d) => d.id))
+        allDigimon.value = mergeRecordsById(allDigimon.value, partnerDigimon.value.filter((d) => encounterIds.has(d.id)))
+      } catch (e) {
+        console.error('Failed to refresh partner digimon:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.tamerIds.includes(owner.id)) {
+    jobs.push((async () => {
+      try {
+        const fresh = await fetchTamer(owner.id)
+        if (fresh) {
+          tamer.value = mergeRecordsById(tamer.value ? [tamer.value] : [], [fresh])[0]
+          allTamers.value = mergeRecordsById(allTamers.value, [fresh])
+        }
+      } catch (e) {
+        console.error('Failed to refresh tamer:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.evolutionLines) jobs.push(fetchEvolutionLines(owner.id, campaignId.value))
+  await Promise.all(jobs)
+}
+
+// The one way a pushed, fetched or action-returned encounter replaces what this page shows. It
+// drops anything older than what is already applied (a slow response must never undo a newer
+// push), hands off to the full load when the encounter no longer belongs on this dashboard, then
+// recomputes this player's requests and grouped results and refetches only the records it touched.
+async function applyEncounterUpdate(
+  incoming: any,
+  source: SnapshotSource,
+  options: { version?: number; action?: CombatActionKind } = {},
+): Promise<boolean> {
+  const owner = tamer.value
+  const previous = activeEncounter.value
+  if (!incoming || !owner) return false
+  if (previous && incoming.id !== previous.id) return false
+  // Nothing is shown yet (or no longer): only the full load decides which encounter that is.
+  if (!previous && source !== 'fetch') return false
+
+  if (!encounterGate.accept(incoming, { source, version: options.version })) {
+    // Composable helpers assign each response into currentEncounter before we see it; restore the base.
+    currentEncounter.value = previous as any
+    const plan = planRecordRefresh(previous, previous, { tamerId: owner.id, knownDigimonIds: new Set(allDigimon.value.map((d) => d.id)) }, options.action ? ACTION_RECORD_HINTS[options.action] : null)
+    if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
+    return false
+  }
+
+  const next: any = shapeActionResponse(incoming, previous)
+  if (needsFullReload(next, owner.id, ownedDigimonIds())) {
+    currentEncounter.value = previous as any
+    void loadData()
+    return false
+  }
+
+  activeEncounter.value = next
+  // Keep the composable's base in sync too — nextTurn() and other composable methods compute from
+  // it, and a stale base made the player's End Turn over-advance the initiative each round.
+  currentEncounter.value = next
+  myRequests.value = getMyPendingRequests(next, owner.id)
+  reconstructAttackResults(next, owner)
+
+  const plan = planRecordRefresh(
+    previous,
+    next,
+    { tamerId: owner.id, knownDigimonIds: new Set(allDigimon.value.map((d) => d.id)) },
+    options.action ? ACTION_RECORD_HINTS[options.action] : null,
+  )
+  if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
+  return true
+}
+
+// Targeted resync for recovery and for flows whose API does not hand back the encounter: one
+// encounter GET through the gate plus the records it touched, instead of the full load. With
+// nothing on screen yet, the full load is what decides which encounter to show.
+async function resyncCombatState(action?: CombatActionKind) {
+  const id = activeEncounter.value?.id
+  if (!id) {
+    await loadData()
+    return
+  }
+  const fetched = await $fetch<Encounter>(`/api/encounters/${id}`).catch(() => null)
+  if (!fetched) return // the next push or the 120 s poll retries
+  await applyEncounterUpdate(fetched, 'fetch', { action })
+}
+
+// Applies the encounter an action returned. When the action returned none (its request failed,
+// which the caller has already reported), a targeted resync stands in; neither reloads everything.
+async function applyActionResult(result: any, action?: CombatActionKind) {
+  if (result && result.id) {
+    await applyEncounterUpdate(result, 'action', { action })
+    return
+  }
+  await resyncCombatState(action)
+}
+
+function handleEncounterSocketMessage(msg: any) {
   if (msg.type === 'encounter-state') {
-    if (msg.encounterId !== lastEncounterStateId) {
-      lastEncounterStateId = msg.encounterId
-      lastEncounterStateVersion = -1
-    }
-    if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
-    lastEncounterStateVersion = msg.version
-    // A digivolve/devolve from another client (e.g. the GM's Manage modal) moves the
-    // evolution line's currentStageIndex, which the Digivolve/Devolve options read
-    const formsChanged = evolutionFormsKey(activeEncounter.value) !== evolutionFormsKey(msg.encounter)
-    activeEncounter.value = msg.encounter as any
-    // Keep the composable's currentEncounter in sync too — nextTurn() and other
-    // composable methods compute from it, and a stale base caused the player's
-    // End Turn to over-advance the initiative each round (mirrors the GM page).
-    currentEncounter.value = msg.encounter as any
-    syncEncounterDigimon()
-    if (formsChanged && tamer.value) fetchEvolutionLines(tamer.value.id, campaignId.value)
-    if (tamer.value) {
-      myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
-      reconstructAttackResults(activeEncounter.value!, tamer.value)
-    }
+    void applyEncounterUpdate(msg.encounter, 'ws', { version: msg.version })
     return
   }
   if (msg.type !== 'encounter-updated') return
@@ -368,7 +549,11 @@ encounterWs.onMessage((msg) => {
     encounterUpdateDebounce = null
     loadData()
   }, 200)
-})
+}
+
+encounterWs.onMessage((msg) => handleEncounterSocketMessage(msg))
+// A dropped socket misses pushes; resync once it is back (the 120 s poll remains the backstop).
+encounterWs.onReconnect(() => { void resyncCombatState() })
 
 // Reconstruct attack results from persisted responses (handles page refresh
 // and live pushes) — finds dodge-rolled responses to my pending attacks that
@@ -389,8 +574,9 @@ function reconstructAttackResults(encounter: Encounter, fetchedTamer: Tamer) {
   for (const resp of responses) {
     if (resp.response?.type !== 'dodge-rolled') continue
     if (!myPartIds.has(resp.attackerParticipantId)) continue
-    // Skip if already in queue
+    // Skip if already in queue, or if the player already saw and dismissed it
     if (attackResultQueue.value.some((r) => r.responseId === resp.id)) continue
+    if (dismissedResponseIds.has(resp.id)) continue
     // Skip if already being tracked as pending
     if (pendingAttacks.value.some((pa) => pa.participantId === resp.attackerParticipantId && pa.targetParticipantId === resp.participantId)) continue
 
@@ -442,7 +628,7 @@ async function syncEncounterDigimon() {
   try {
     const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${missingIds.join(',')}`)
     if (envelope.data.length > 0) {
-      allDigimon.value = [...allDigimon.value, ...envelope.data]
+      allDigimon.value = mergeRecordsById(allDigimon.value, envelope.data)
     }
   } catch (e) {
     console.error('Failed to sync encounter digimon:', e)
@@ -450,6 +636,10 @@ async function syncEncounterDigimon() {
 }
 
 async function loadData() {
+  return recordRefreshQueue.run(loadFullData)
+}
+
+async function loadFullData() {
   loading.value = true
   try {
     // Phase 1: parallel — all fetches that only need campaignId or tamerId
@@ -475,18 +665,9 @@ async function loadData() {
       // Every published encounter this tamer belongs to. A tamer can legitimately be
       // queued into more than one, so pick deliberately instead of taking whichever
       // happened to come back first.
-      const candidates = encounters.value.filter((e) => {
-        if (e.phase !== 'combat' && e.phase !== 'setup' && e.phase !== 'initiative') return false
-        const pts = (e.participants as CombatParticipant[]) || []
-        const isParticipant = pts.some(
-          (p) =>
-            (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
-            (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
-        )
-        const reqs = (e.pendingRequests as any[]) || []
-        const hasPendingRequests = reqs.some((r) => r.targetTamerId === fetchedTamer.id)
-        return isParticipant || hasPendingRequests
-      })
+      // (The same rule applyEncounterUpdate uses to decide an encounter no longer belongs here.)
+      const partnerIds = ownedDigimonIds()
+      const candidates = encounters.value.filter((e) => isEncounterShownToTamer(e, fetchedTamer.id, partnerIds))
 
       // Whatever is actually waiting on this player wins; then a live fight; then the
       // most recently touched (the list arrives ordered by updatedAt).
@@ -515,7 +696,16 @@ async function loadData() {
 
         // Fetch full encounter to ensure all JSON fields (e.g. mapId) are present
         const fullEncounter = await fetchEncounter(active.id)
-        activeEncounter.value = (fullEncounter ?? active) as any
+        // The list copy has no battle log, so it only stands in when nothing for this encounter is
+        // held yet. A GET that was overtaken by a newer push or response is dropped by the gate and
+        // the page keeps the newer state.
+        const incoming = fullEncounter ?? (activeEncounter.value?.id === active.id ? null : active)
+        if (incoming && encounterGate.accept(incoming, { source: 'fetch' })) {
+          activeEncounter.value = incoming as any
+          currentEncounter.value = incoming as any
+        } else {
+          currentEncounter.value = activeEncounter.value as any
+        }
         await syncEncounterDigimon()
         // Extract my pending requests
         myRequests.value = getMyPendingRequests(activeEncounter.value!, fetchedTamer.id)
@@ -525,6 +715,7 @@ async function loadData() {
       } else {
         activeEncounter.value = null
         myRequests.value = []
+        encounterGate.reset()
       }
     }
 
@@ -882,6 +1073,22 @@ const myTamerParticipant = computed(() =>
 // Targets I've said I never want to be asked to intercede for (this encounter)
 const myIntercedeOptOuts = computed(() => getTargetOptOuts(activeEncounter.value as any, tamer.value?.id))
 
+// "Pass until my next turn": a temporary "don't ask me to intercede" for this encounter. Unlike the
+// permanent opt-outs above it ends by itself when my Tamer's next turn starts, and it lives on the
+// encounter, so it follows me across tabs and reconnects.
+const {
+  busy: intercedePassBusy,
+  isPassing: isPassingOnIntercede,
+  start: startIntercedePass,
+  resume: resumeIntercedePass,
+} = useIntercedePass({
+  encounter: () => activeEncounter.value as any,
+  ownerId: () => tamer.value?.id,
+  send: (encounterId, body) => $fetch<any>(`/api/encounters/${encounterId}/actions/intercede-pass`, { method: 'POST', body }),
+  apply: (result) => applyActionResult(result, 'intercede-pass'),
+  onError: (message) => alert(message),
+})
+
 const currentCombatInspiration = computed(() => {
   const inCombat = myTamerParticipant.value
   if (inCombat && (inCombat as any).currentInspiration !== undefined) return (inCombat as any).currentInspiration as number
@@ -990,7 +1197,58 @@ const activeClashes = computed(() => {
 
 const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type === 'digimon-selection'))
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
-const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
+// Area defenses: an area attack that hits two or more of my characters makes one dodge request per
+// target. They are defended together in one panel per cast (useAreaDefenseBatch) instead of one
+// modal after another. A request without a cast id (single-target attacks, counterattacks) is its
+// own group, so it keeps the modal below.
+const myUnansweredDodgeRequests = computed(() => {
+  const responses = (activeEncounter.value?.requestResponses as any[]) || []
+  return myRequests.value.filter((r) => r.type === 'dodge-roll' && !isRequestAnswered(r, responses, tamer.value?.id))
+})
+const pendingAreaDefenseGroup = computed(() =>
+  groupDodgeRequests(myUnansweredDodgeRequests.value).find((g) => g.isCast && g.requests.length >= 2) ?? null,
+)
+
+const areaDefenseBatch = useAreaDefenseBatch({
+  defense: (request) => defenseFor(request),
+  currentInspiration: () => currentCombatInspiration.value,
+  actOfInspirationCost: () => actOfInspirationCost.value,
+  spend: (kind, amount) => handleSpendInspiration(kind, amount),
+  submit: (request, roll) => submitAreaDefense(request, roll),
+  isAnswered: (request) => isRequestAnswered(request, (activeEncounter.value?.requestResponses as any[]) || [], tamer.value?.id),
+  isTargetPresent: (request) =>
+    ((activeEncounter.value?.participants as any[]) || []).some((p) => p.id === request.targetParticipantId),
+})
+
+// The panel closes itself five seconds after the last defense is in, or on Close; both run the same
+// cleanup (cancel each request, delete each response) as the single dodge result.
+const areaDefenseDismissal = useAutoDismiss({
+  key: () => (areaDefenseBatch.active.value && areaDefenseBatch.isSettled.value ? areaDefenseBatch.groupId.value : null),
+  cleanup: () => cleanupAreaDefense(),
+})
+
+// Requests the panel owns, plus the cast about to open it: neither may also show the single modal.
+const areaDefenseRequestIds = computed(() => {
+  const ids = new Set<string>()
+  if (areaDefenseBatch.active.value) for (const entry of areaDefenseBatch.entries.value) ids.add(entry.requestId)
+  const group = pendingAreaDefenseGroup.value
+  if (group && (!areaDefenseBatch.active.value || group.groupId === areaDefenseBatch.groupId.value)) {
+    for (const request of group.requests) ids.add(request.id)
+  }
+  return ids
+})
+
+const currentDodgeRequest = computed(() =>
+  myRequests.value.find((r) => r.type === 'dodge-roll' && !areaDefenseRequestIds.value.has(r.id)),
+)
+
+// Opens the panel for a cast that hit several of my characters, and keeps it in step with every
+// encounter update (rolls are kept; protected or removed targets stop being asked for).
+watch(
+  () => [myRequests.value, activeEncounter.value?.requestResponses, activeEncounter.value?.participants],
+  () => syncAreaDefenseBatch(),
+  { immediate: true },
+)
 const currentHealthRequest = computed(() => myRequests.value.find((r) => r.type === 'health-roll'))
 const currentThrowImpactRequest = computed(() => myRequests.value.find((r) => r.type === 'throw-impact-attack'))
 const currentIntercedeRequest = computed(() => myRequests.value.find((r) => r.type === 'intercede-offer'))
@@ -1035,16 +1293,24 @@ watch(() => currentIntercedeRequest.value?.id, (newId) => {
   playerIntercedeAreaChosenTarget.value = null
   if (!newId) return
   const req = currentIntercedeRequest.value
-  // Never prompt about a target I opted out of. The server already filters these out and clears
-  // queued ones on save; this catches an offer created in the same instant as a save.
-  if (req && isOfferFullyOptedOut(req, myIntercedeOptOuts.value)) {
-    handleIntercedeSkip()
+  // Never prompt about a target I opted out of, or while I am passing. The server already filters
+  // these out and answers queued ones when the preference is saved; this catches an offer created
+  // in the same instant.
+  if (req && isOfferSuppressed(activeEncounter.value as any, req)) {
+    void autoSkipSuppressedOffer(req.id)
     return
   }
   // Auto-skip if the player has no eligible interceptors for this offer
   if (req && !req.data?.isAreaAttack && intercedeOptions.value.length === 0) {
     handleIntercedeSkip()
   }
+})
+
+// A pass can start while a prompt is already on screen (set from another tab, or the offer was
+// created in the same instant the pass was): answer it instead of leaving it for me.
+watch(isPassingOnIntercede, (passing) => {
+  const req = currentIntercedeRequest.value
+  if (passing && req && isOfferSuppressed(activeEncounter.value as any, req)) void autoSkipSuppressedOffer(req.id)
 })
 
 // If the chosen area-attack target is claimed by someone else and drops out of our
@@ -1139,81 +1405,34 @@ const hasUnrespondedDodgeRequest = computed(() => {
   if (!dodgeRequest) return false
 
   const responses = (activeEncounter.value.requestResponses as any[]) || []
-  const hasResponse = responses.some((r) => r.requestId === dodgeRequest.id && r.tamerId === tamer.value!.id)
-
-  return !hasResponse
+  return !isRequestAnswered(dodgeRequest, responses, tamer.value.id)
 })
+
+// Where a Dodge pool comes from: this page owns the records and stat rules, utils/areaDefense.ts the math
+// (shared by the one-at-a-time modal below and the per-target area defense panel).
+const dodgeDefenseContext = computed<DodgeDefenseContext>(() => ({
+  participants: (activeEncounter.value?.participants as CombatParticipant[]) || [],
+  findDigimon: (id) => allDigimon.value.find((d) => d.id === id),
+  findTamer: (id) => allTamers.value.find((t) => t.id === id),
+  digimonDodge: (digi) => calcDigimonStats(digi).dodge,
+  tamerDodgePool: (targetTamer) => calcTamerStats(targetTamer, eddySoulRules.value).dodgePool,
+}))
+
+function defenseFor(request: any) {
+  return computeDodgeDefense(request, dodgeDefenseContext.value)
+}
 
 // Attacked from outside the target's clash: the target cannot dodge at all. Checked against live
 // clash state too, since dodge-rolls created after an intercede window don't carry the flag.
 const dodgeBlockedByClash = computed(() => {
   const request = currentDodgeRequest.value
-  if (!request) return false
-  if (request.data?.cannotDodge) return true
-  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
-  const attacker = participants.find((p) => p.id === request.data?.attackerParticipantId)
-  const target = participants.find((p) => p.id === request.targetParticipantId)
-  return isAttackedFromOutsideClash(attacker, target)
+  return request ? isDodgeBlocked(request, dodgeDefenseContext.value.participants) : false
 })
 
 // Dodge dice pool for the target participant in a dodge request (reduced by successive dodge penalty)
 const dodgeDicePool = computed(() => {
   if (!activeEncounter.value || !currentDodgeRequest.value) return 3
-
-  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
-  const targetParticipant = participants.find((p) => p.id === currentDodgeRequest.value!.targetParticipantId)
-  if (!targetParticipant) return 3
-
-  let pool = 3
-  if (targetParticipant.type === 'digimon') {
-    const digi = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
-    if (digi) {
-      const darkEvoBonus = (digi as any).isDarkEvolution ? 2 : 0
-      const rawStats: StatBlock = {
-        accuracy: (digi.baseStats?.accuracy ?? 0) + ((digi as any).bonusStats?.accuracy ?? 0) + darkEvoBonus,
-        damage: (digi.baseStats?.damage ?? 0) + ((digi as any).bonusStats?.damage ?? 0) + darkEvoBonus,
-        dodge: (digi.baseStats?.dodge ?? 0) + ((digi as any).bonusStats?.dodge ?? 0) + darkEvoBonus,
-        armor: (digi.baseStats?.armor ?? 0) + ((digi as any).bonusStats?.armor ?? 0) + darkEvoBonus,
-      }
-      const resolvedStats = applyStatSwaps(rawStats, targetParticipant.statSwaps)
-      const qualityDodgeBonus = calcDigimonStats(digi).dodge - rawStats.dodge
-      pool = resolvedStats.dodge + qualityDodgeBonus || 3
-      // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of calcDigimonStats)
-      pool += (targetParticipant as any).blackArmorRoundBonus?.dodge ?? 0
-    }
-  } else if (targetParticipant.type === 'tamer') {
-    const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
-    if (targetTamer) {
-      const derived = calcTamerStats(targetTamer, eddySoulRules.value)
-      pool = derived.dodgePool || 3
-    }
-  }
-
-  pool = applyStanceToDodge(pool, targetParticipant.currentStance)
-  const penalty = currentDodgeRequest.value?.data?.dodgePenalty ?? 0
-  pool = Math.max(1, pool - penalty)
-
-  // Active effect dodge modifiers
-  const dodgeEffectMods = getEffectStatModifiers(targetParticipant.activeEffects || [])
-  pool += dodgeEffectMods.dodge
-
-  // Add Directed effect bonus to dodge pool
-  const directedEffect = targetParticipant.activeEffects?.find(e => e.name === 'Directed')
-  if (directedEffect?.value) {
-    pool += directedEffect.value
-  }
-
-  // Attacked from outside the clash: the target cannot dodge at all.
-  if (dodgeBlockedByClash.value) {
-    return 0
-  }
-
-  // Counterattack: target rolls only half their Dodge Pool
-  if (currentDodgeRequest.value?.data?.halfDodge) {
-    pool = Math.max(1, Math.floor(pool / 2))
-  }
-
-  return Math.max(1, pool)
+  return defenseFor(currentDodgeRequest.value).pool
 })
 
 const counterattackAccuracyPool = computed(() => {
@@ -1736,7 +1955,9 @@ const {
   getParticipantAttacks,
   getAttackStats,
   submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
-  refreshEncounter: fetchEncounter,
+  // The clash-action response is not handed back; resync the encounter through the gate (it used
+  // to fetch into the composable only, leaving this page's copy to the next push).
+  refreshEncounter: () => resyncCombatState('clash'),
   beginAreaAttack: (participant, attack) => {
     showMapView.value = true
     selectAttackAndShowTargets(participant, attack)
@@ -1875,7 +2096,7 @@ async function usePlayerAction(participant: CombatParticipant, actionType: 'move
   target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
   await updateEncounter(activeEncounter.value.id, { participants })
 
-  await addBattleLogEntry(activeEncounter.value.id, {
+  const updated = await addBattleLogEntry(activeEncounter.value.id, {
     round: activeEncounter.value.round,
     actorId: target.id,
     actorName: getParticipantName(target) || 'Unknown',
@@ -1885,7 +2106,7 @@ async function usePlayerAction(participant: CombatParticipant, actionType: 'move
     damage: null,
     effects: [],
   })
-  await loadData()
+  await applyActionResult(updated, 'move')
 }
 
 // Direct action - opens target selector
@@ -1910,7 +2131,7 @@ async function confirmPlayerDirect(targetDigimon: CombatParticipant) {
   if (!tamerParticipant) return
 
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/direct`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/direct`, {
       method: 'POST',
       body: {
         participantId: tamerParticipant.id,
@@ -1919,7 +2140,7 @@ async function confirmPlayerDirect(targetDigimon: CombatParticipant) {
       },
     })
     showDirectTargetSelector.value = false
-    await loadData()
+    await applyActionResult(updated, 'direct')
   } catch (e: any) {
     console.error('Direct failed:', e)
     alert(e?.data?.message || 'Failed to execute Direct')
@@ -2041,11 +2262,11 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
 
   // Devolve — proceed directly (no willpower roll)
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/digivolve`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/digivolve`, {
       method: 'POST',
       body: { participantId: participant.id, targetChainIndex },
     })
-    await loadData()
+    await applyActionResult(updated, 'devolve')
   } catch (e: any) {
     console.error('Devolve failed:', e)
     alert(e?.data?.message || 'Failed to devolve')
@@ -2081,8 +2302,8 @@ async function handleModeChangeSwap(participant: CombatParticipant, statA: Swapp
     }
   }
 
-  await modeChange(activeEncounter.value.id, participant.id, newSwaps)
-  await fetchEncounter(activeEncounter.value.id)
+  const updated = await modeChange(activeEncounter.value.id, participant.id, newSwaps)
+  await applyActionResult(updated, 'mode-change')
 }
 
 function openAttributeRollModal(attr: string) {
@@ -2200,7 +2421,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
-      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+      if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
     const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
@@ -2251,7 +2472,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
-      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+      if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
     const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
@@ -2277,6 +2498,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
 }
 
 async function confirmAccuracyReview() {
+  if (inspirationSpendLoading.value) return
   if (!accuracyReview.value || !accuracyReviewContext.value || !activeEncounter.value || !tamer.value) return
 
   confirmingAttack.value = true
@@ -2289,7 +2511,8 @@ async function confirmAccuracyReview() {
       const targets = ctx.areaTargets
       // Shared groupId so all targets' results from this AoE cast show in a single popup
       const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+      // Counted from the true log length: the page's copy is trimmed to the last 50 entries
+      const battleLogBefore = battleLogTotal(activeEncounter.value)
 
       // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
       const result = await performAttack(
@@ -2310,8 +2533,7 @@ async function confirmAccuracyReview() {
       if (ctx.clashAreaAttack) await executeClashAction(ctx.clashAreaAttack.controllerId, 'end')
 
       if (result) {
-        const returnedBattleLog = (result.battleLog as any[]) || []
-        const newEntries = returnedBattleLog.slice(preBattleLogLength)
+        const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
 
         // Drop targets fully shielded by the attacker's Selective Targeting (server-decided):
         // they get no dodge prompt and must not be awaited in the combined result modal.
@@ -2376,15 +2598,16 @@ async function confirmAccuracyReview() {
 
         if (accuracySuccesses === 0 && effectiveTargets.length > 0) maybeShowGroupModal(areaGroupId)
         if (effectiveTargets.length === 0) delete attackResultGroupTotals.value[areaGroupId]
-        await loadData()
+        await applyActionResult(result, 'attack')
       } else {
         console.error('Failed to perform area attack')
         alert(encountersError.value || 'Failed to perform area attack')
       }
     } else {
       const target = ctx.target
-      // Capture battle log length before attack so we only check NEW entries for immediate resolution
-      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+      // Capture the log length before the attack so we only check NEW entries for immediate resolution
+      // (the true length: the page's copy is trimmed to the last 50 entries)
+      const battleLogBefore = battleLogTotal(activeEncounter.value)
 
       const result = await performAttack(
         activeEncounter.value.id,
@@ -2436,8 +2659,7 @@ async function confirmAccuracyReview() {
         } else {
           // Check if the attack was immediately resolved (NPC auto-resolve, no interceptors)
           // Only search NEW entries (added during this request) to avoid matching previous attacks
-          const returnedBattleLog = (result.battleLog as any[]) || []
-          const newEntries = returnedBattleLog.slice(preBattleLogLength)
+          const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
           const resolvedLogEntry = [...newEntries].reverse().find(
             (entry: any) =>
               (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
@@ -2476,8 +2698,8 @@ async function confirmAccuracyReview() {
           }
         }
 
-        // Refresh to see updated state
-        await loadData()
+        // Show the state the attack returned
+        await applyActionResult(result, 'attack')
       } else {
         console.error('Failed to perform attack')
         alert(encountersError.value || 'Failed to perform attack')
@@ -2654,6 +2876,7 @@ function showAttackResult(
   // Add to queue to handle multiple attacks in one turn
   attackResultQueue.value.push({
     responseId: dodgeResponse.id,
+    requestId: dodgeRequest?.id,
     attackerName: tamer.value?.name || 'You',
     attackName: pendingAttack.attackName,
     targetName: pendingAttack.targetName,
@@ -2735,35 +2958,62 @@ function maybeShowGroupModal(groupId?: string) {
   }
 }
 
-async function closeAttackResultModal() {
-  // Get all results in the current group (all targets of one AoE attack share a groupId)
-  const group = attackResultGroup.value
-  if (group.length === 0) return
-  const closedGroupId = group[0].groupId
+// Server-issued response ids look like `resp-…`; results built locally from misses or the
+// battle log use `miss-…` / `log-…` and have nothing to delete.
+function isServerResponseId(id?: string | null): id is string {
+  return !!id && id.startsWith('resp-')
+}
 
-  // Delete the responses backing each result in the group
-  for (const result of group) {
-    if (result.responseId && activeEncounter.value) {
-      try {
-        await deleteResponse(activeEncounter.value.id, result.responseId)
-      } catch (error) {
-        console.error('Failed to delete response:', error)
-        // Continue closing modal even if delete fails
-      }
+// The one cleanup for a finished dodge exchange: cancel the request AND delete the response, so
+// neither a stale prompt nor a stale result can come back. Each step tolerates the other having
+// already run (another client, the GM, or an earlier dismissal), and failures never block closing.
+async function cleanupDodgeExchange(
+  requestId?: string | null,
+  responseId?: string | null,
+  encounterId: string | null | undefined = activeEncounter.value?.id,
+) {
+  if (!encounterId) return
+  if (requestId) {
+    try {
+      await cancelRequest(encounterId, requestId)
+    } catch (error) {
+      console.error('Failed to cancel dodge request:', error)
     }
   }
+  if (isServerResponseId(responseId)) {
+    try {
+      await deleteResponse(encounterId, responseId)
+    } catch (error) {
+      console.error('Failed to delete response:', error)
+    }
+  }
+}
 
-  // Remove all results in the closed group from the queue
-  attackResultQueue.value = attackResultQueue.value.filter(r => r.groupId !== closedGroupId)
+// Closes the head group of attack results: all targets of one AoE attack share a groupId. Used by
+// the Close button and the 5 s timer alike (attackResultDismissal.dismiss()).
+async function cleanupAttackResultGroup() {
+  const group = [...attackResultGroup.value]
+  if (!isAttackResultGroupComplete(group)) return
+  const encounterId = activeEncounter.value?.id ?? null
+  const closedGroupId = group[0].groupId
 
-  if (closedGroupId) {
+  // Clear the exchange behind each result in the group
+  for (const result of group) {
+    await cleanupDodgeExchange(result.requestId, result.responseId, encounterId)
+    dismissedResponseIds.add(result.responseId)
+  }
+
+  // A different encounter/result may have arrived while the exchange cleanup was waiting.
+  if ((activeEncounter.value?.id ?? null) !== encounterId) return
+  const closedResponseIds = new Set(group.map(result => result.responseId))
+  attackResultQueue.value = attackResultQueue.value.filter(r => !closedResponseIds.has(r.responseId))
+
+  if (closedGroupId && !attackResultQueue.value.some(r => r.groupId === closedGroupId)) {
     delete attackResultGroupTotals.value[closedGroupId]
   }
 
-  // Keep modal open if there are more results to show, close otherwise
-  if (attackResultQueue.value.length === 0) {
-    showAttackResultModal.value = false
-  }
+  // A queued successor can still be waiting for another target's defense.
+  showAttackResultModal.value = isAttackResultGroupComplete()
 }
 
 // Clear selection
@@ -2797,8 +3047,8 @@ async function submitDigimonSelection(digimonId: string | null) {
     console.log('Digimon selection response result:', result)
 
     if (result) {
-      // Refresh to clear the request (modal will close automatically)
-      await loadData()
+      // The returned encounter no longer holds the request (modal will close automatically)
+      await applyActionResult(result, 'request-response')
     } else {
       console.error('Failed to submit digimon selection - response was falsy')
       // Keep the selection visible even on failure so user knows their click registered
@@ -2859,7 +3109,7 @@ async function submitInitiativeRoll() {
     if (result) {
       // Reset and refresh
       initiativeRollResult.value = null
-      await loadData()
+      await applyActionResult(result, 'request-response')
     } else {
       console.error('Failed to submit initiative roll')
     }
@@ -2869,11 +3119,11 @@ async function submitInitiativeRoll() {
 }
 
 async function rollDodgeDice() {
-  if (hasRolledDodge.value) return
+  if (hasRolledDodge.value || inspirationSpendLoading.value) return
   let pool = dodgeDicePool.value
   if (dodgeActOfInspirationEnabled.value && !dodgeBlockedByClash.value) {
+    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     pool += 5
-    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
   for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
@@ -2882,11 +3132,11 @@ async function rollDodgeDice() {
 }
 
 async function rollCounterattackDice() {
-  if (hasRolledCounterattack.value || !counterattackSelectedAttack.value) return
+  if (hasRolledCounterattack.value || inspirationSpendLoading.value || !counterattackSelectedAttack.value) return
   let pool = counterattackAccuracyPool.value
   if (counterattackActOfInspirationEnabled.value) {
+    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     pool += 5
-    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
   for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
@@ -2895,6 +3145,7 @@ async function rollCounterattackDice() {
 }
 
 async function submitDodgeRoll() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentDodgeRequest.value || !tamer.value || !dodgeRollResult.value) return
 
   // Capture context before submitting (loadData() will change currentDodgeRequest)
@@ -2928,7 +3179,7 @@ async function submitDodgeRoll() {
       }
       dodgeRequestId.value = capturedRequest.id
 
-      // Extract the dodge result from the API response before calling loadData()
+      // Extract the dodge result from the API response before applying it
       const battleLog = (result.battleLog as any[]) || []
       const isSupportDodge = capturedRequest.data?.isSupportAttack === true
       const dodgeEntry = battleLog.findLast(
@@ -2955,7 +3206,7 @@ async function submitDodgeRoll() {
         showDodgeResultModal.value = true
       }
 
-      await loadData()
+      await applyActionResult(result, 'dodge')
     } else {
       console.error('Failed to submit dodge roll')
     }
@@ -2964,10 +3215,65 @@ async function submitDodgeRoll() {
   }
 }
 
+// Starts, updates or closes the area defense panel from the player's current dodge requests.
+function syncAreaDefenseBatch() {
+  if (!areaDefenseBatch.active.value) {
+    const group = pendingAreaDefenseGroup.value
+    if (group) areaDefenseBatch.open(group.groupId, group.requests)
+    return
+  }
+  const groupId = areaDefenseBatch.groupId.value
+  areaDefenseBatch.reconcile(myRequests.value.filter((r) => r.type === 'dodge-roll' && r.data?.intercedeGroupId === groupId))
+}
+
+function areaDefenseName(request: any): string {
+  return resolveParticipantName(request.targetParticipantId) || request.data?.targetName || 'Target'
+}
+
+// Sends one target's roll from the area defense panel, exactly as held. A failed send reports back
+// instead of throwing, so the panel keeps the roll and can resend it.
+async function submitAreaDefense(request: any, roll: DefenseRoll): Promise<SubmitOutcome> {
+  if (!activeEncounter.value || !tamer.value) return { ok: false, message: 'Not connected to the encounter. Try again.' }
+  try {
+    const result = await respondToRequest(activeEncounter.value.id, request.id, tamer.value.id, {
+      type: 'dodge-rolled',
+      participantId: request.targetParticipantId,
+      dodgeDicePool: roll.dicePool,
+      dodgeSuccesses: roll.successes,
+      dodgeDiceResults: roll.rolls,
+      timestamp: new Date().toISOString(),
+    })
+    if (!result) return { ok: false, message: 'The server did not accept this defense. Try again.' }
+    const mine = ((result.requestResponses as any[]) || []).find((r) => r.requestId === request.id && r.tamerId === tamer.value!.id)
+    const summary = summarizeDodgeResult((result.battleLog as any[]) || [], request)
+    await applyActionResult(result, 'dodge')
+    return { ok: true, responseId: mine?.id ?? null, summary }
+  } catch (e: any) {
+    console.error('Error submitting area defense:', e)
+    return { ok: false, message: e?.data?.message || 'Could not send this defense. Try again.' }
+  }
+}
+
+// Closes the area defense panel (Close button and 5 s timer alike): every request is cancelled and
+// every response deleted, as for a single dodge result, then the panel is cleared. The battle log
+// keeps every result.
+async function cleanupAreaDefense() {
+  const encounterId = activeEncounter.value?.id
+  const groupId = areaDefenseBatch.groupId.value
+  for (const { requestId, responseId } of areaDefenseBatch.cleanupTargets()) {
+    await cleanupDodgeExchange(requestId, responseId, encounterId)
+    if (responseId) dismissedResponseIds.add(responseId)
+  }
+  if (activeEncounter.value?.id !== encounterId || areaDefenseBatch.groupId.value !== groupId) return
+  areaDefenseBatch.close()
+  syncAreaDefenseBatch()
+}
+
 async function declineCounterattack() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value) return
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentCounterattackRequest.value.id,
       tamer.value.id,
@@ -2976,16 +3282,17 @@ async function declineCounterattack() {
     counterattackRollResult.value = null
     counterattackSelectedAttack.value = null
     hasRolledCounterattack.value = false
-    await loadData()
+    await applyActionResult(result, 'counterattack')
   } catch (error) {
     console.error('Error declining counterattack:', error)
   }
 }
 
 async function submitCounterattack() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value || !counterattackRollResult.value || !counterattackSelectedAttack.value) return
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentCounterattackRequest.value.id,
       tamer.value.id,
@@ -3001,27 +3308,28 @@ async function submitCounterattack() {
     counterattackRollResult.value = null
     counterattackSelectedAttack.value = null
     hasRolledCounterattack.value = false
-    await loadData()
+    await applyActionResult(result, 'counterattack')
   } catch (error) {
     console.error('Error submitting counterattack:', error)
   }
 }
 
-async function closeDodgeResultModal() {
-  // Auto-dismiss: mirrors GM dismiss flow (cancelRequest + deleteResponse + fetchEncounter)
-  if (activeEncounter.value) {
-    try {
-      if (dodgeRequestId.value) {
-        await cancelRequest(activeEncounter.value.id, dodgeRequestId.value)
-      }
-      if (dodgeResponseId.value) {
-        await deleteResponse(activeEncounter.value.id, dodgeResponseId.value)
-      }
-      await fetchEncounter(activeEncounter.value.id)
-    } catch (error) {
-      console.error('Failed to dismiss dodge response:', error)
-    }
-  }
+// Dismisses the defender's dodge result (Close button and 5 s timer, via dodgeResultDismissal).
+// Mirrors the GM's dismiss flow: cancel the request, delete the response.
+async function cleanupDodgeResult() {
+  const encounterId = activeEncounter.value?.id ?? null
+  const requestId = dodgeRequestId.value
+  const responseId = dodgeResponseId.value
+  const result = dodgeResultData.value
+  if (!result) return
+
+  await cleanupDodgeExchange(requestId, responseId, encounterId)
+  if (responseId) dismissedResponseIds.add(responseId)
+  const sameResult = requestId || responseId
+    ? dodgeRequestId.value === requestId && dodgeResponseId.value === responseId
+    : dodgeResultData.value === result
+  if ((activeEncounter.value?.id ?? null) !== encounterId || !sameResult) return
+
   showDodgeResultModal.value = false
   dodgeResultData.value = null
   hasRolledDodge.value = false
@@ -3052,14 +3360,15 @@ async function submitHealthRoll() {
     if (result) {
       healthRollResult.value = null
 
-      // Auto-dismiss the request after submission
+      // Auto-dismiss the request after submission; its result is the newer encounter
+      let latest = result
       try {
-        await cancelRequest(activeEncounter.value.id, capturedRequest.id)
+        latest = (await cancelRequest(activeEncounter.value.id, capturedRequest.id)) ?? result
       } catch (e) {
         // Request may already be cleaned up
       }
 
-      await loadData()
+      await applyActionResult(latest, 'health')
     } else {
       console.error('Failed to submit health roll')
     }
@@ -3089,7 +3398,7 @@ async function confirmThrowImpactAttack() {
     }
     const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
-    const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+    const battleLogBefore = battleLogTotal(activeEncounter.value)
 
     const result = await performAttack(
       activeEncounter.value.id,
@@ -3106,8 +3415,7 @@ async function confirmThrowImpactAttack() {
     )
 
     if (result) {
-      const returnedBattleLog = (result.battleLog as any[]) || []
-      const newEntries = returnedBattleLog.slice(preBattleLogLength)
+      const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
 
       for (const target of targets) {
         if (accuracySuccesses === 0) {
@@ -3161,13 +3469,14 @@ async function confirmThrowImpactAttack() {
 
       if (accuracySuccesses === 0) showAttackResultModal.value = true
 
+      let latest = result
       try {
-        await cancelRequest(activeEncounter.value.id, request.id)
+        latest = (await cancelRequest(activeEncounter.value.id, request.id)) ?? result
       } catch (e) {
         // Request may already be cleaned up
       }
 
-      await loadData()
+      await applyActionResult(latest, 'throw-impact')
     } else {
       console.error('Failed to perform throw impact attack')
       alert(encountersError.value || 'Failed to perform throw impact attack')
@@ -3182,7 +3491,7 @@ async function submitRecoveryRoll() {
   if (!activeEncounter.value || !currentRecoveryCheckRequest.value || !tamer.value || !recoveryRollResult.value) return
   const capturedRequest = currentRecoveryCheckRequest.value
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       capturedRequest.id,
       tamer.value.id,
@@ -3196,7 +3505,7 @@ async function submitRecoveryRoll() {
     )
     recoveryRollResult.value = null
     hasRolledRecovery.value = false
-    await loadData()
+    await applyActionResult(result, 'recovery')
   } catch (error) {
     console.error('Error submitting recovery roll:', error)
   }
@@ -3205,6 +3514,17 @@ async function submitRecoveryRoll() {
 function closeIntercedeResultModal() {
   showIntercedeResultModal.value = false
   intercedeResultData.value = null
+}
+
+// Clash check outcomes are completed results too (while PENDING they are not: see the key above).
+function showClashCheckResult(result: NonNullable<typeof clashCheckResultData.value>) {
+  clashCheckResultData.value = result
+  clashCheckResultSerial.value++
+}
+
+async function closeClashCheckResult() {
+  clashCheckResultData.value = null
+  await resyncCombatState('clash')
 }
 
 // Targets this player (tamer + partner digimon) is eligible to protect for an area-attack offer
@@ -3320,7 +3640,7 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
       body,
     })
 
-    // Extract the intercede result from the API response before calling loadData()
+    // Extract the intercede result from the API response before applying it
     if (result) {
       const battleLog = (result.battleLog as any[]) || []
       const intercedeEntry = battleLog.findLast(
@@ -3346,11 +3666,12 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
           armorPiercing: intercedeEntry.armorPiercing,
           effectiveArmor: intercedeEntry.effectiveArmor,
         }
+        intercedeResultSerial.value++
         showIntercedeResultModal.value = true
       }
     }
 
-    await loadData()
+    await applyActionResult(result, 'intercede-claim')
   } catch (e: any) {
     if (e?.statusCode === 409) {
       alert(e?.data?.message || 'This intercede offer is no longer available.')
@@ -3363,19 +3684,38 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
   }
 }
 
+// Answers a prompt I already declined (opted out, or passing) without bothering me. The server
+// usually has answered it already, so a failure is only logged: the next update removes the prompt.
+const autoSkipsInFlight = new Set<string>()
+async function autoSkipSuppressedOffer(requestId: string) {
+  if (!activeEncounter.value || autoSkipsInFlight.has(requestId)) return
+  autoSkipsInFlight.add(requestId)
+  try {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+      method: 'POST',
+      body: { requestId },
+    })
+    await applyActionResult(updated, 'intercede-skip')
+  } catch (e: any) {
+    console.error('Auto-skip of a declined intercede prompt failed:', e)
+  } finally {
+    autoSkipsInFlight.delete(requestId)
+  }
+}
+
 // Intercede: Skip (let original target handle it)
 async function handleIntercedeSkip() {
   if (!activeEncounter.value || !currentIntercedeRequest.value) return
 
   intercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
         requestId: currentIntercedeRequest.value.id,
       },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-skip')
   } catch (e: any) {
     console.error('Intercede skip failed:', e)
     alert(e?.data?.message || 'Failed to skip intercede')
@@ -3395,7 +3735,7 @@ async function handleIntercedeOptOut() {
 
   intercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
         requestId: request.id,
@@ -3403,7 +3743,7 @@ async function handleIntercedeOptOut() {
         optOutTargetIds: [targetId],
       },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-optouts')
   } catch (e: any) {
     console.error('Intercede opt-out failed:', e)
     alert(e?.data?.message || 'Failed to opt out')
@@ -3435,11 +3775,11 @@ async function handleSaveIntercedeOptions() {
     const optOuts = allIds.filter(id => !intercedeOptionsSelections.value.has(id))
     // The server also clears any prompt already queued for me about a target I just unchecked
     // (area prompts lose just those targets), in the same request.
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
       method: 'POST',
       body: { ownerId: tamer.value.id, intercedeOptOuts: optOuts },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-optouts')
 
     showIntercedeOptionsModal.value = false
   } catch (e: any) {
@@ -3457,13 +3797,13 @@ async function handleDivineProtectionUsed() {
   if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
   divineProtectionLoading.value = true
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentDivineProtectionRequest.value.id,
       tamer.value.id,
       { type: 'divine-protection-used' },
     )
-    await loadData()
+    await applyActionResult(result, 'divine-protection')
   } catch (e: any) {
     console.error('Divine Protection failed:', e)
     alert(e?.data?.message || 'Failed to invoke Divine Protection')
@@ -3476,13 +3816,13 @@ async function handleDivineProtectionDeclined() {
   if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
   divineProtectionLoading.value = true
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentDivineProtectionRequest.value.id,
       tamer.value.id,
       { type: 'divine-protection-declined' },
     )
-    await loadData()
+    await applyActionResult(result, 'divine-protection')
   } catch (e: any) {
     console.error('Divine Protection declined failed:', e)
     alert(e?.data?.message || 'Failed to decline Divine Protection')
@@ -3495,15 +3835,17 @@ async function handleDivineProtectionDeclined() {
 async function handleSpendInspiration(
   spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
   amount: number,
-) {
-  if (!activeEncounter.value || !myTamerParticipant.value) return
+): Promise<boolean> {
+  if (inspirationSpendLoading.value || !activeEncounter.value || !myTamerParticipant.value) return false
   inspirationSpendLoading.value = true
   try {
-    await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
-    await loadData()
+    const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
+    await applyActionResult(result, 'spend-inspiration')
+    return !!result
   } catch (e: any) {
     console.error('Inspiration spend failed:', e)
     alert(e?.data?.message || 'Failed to spend Inspiration')
+    return false
   } finally {
     inspirationSpendLoading.value = false
   }
@@ -3512,11 +3854,11 @@ async function handleSpendInspiration(
 async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
   if (!activeEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName, targetId },
     })
-    await loadData()
+    await applyActionResult(updated, 'special-order')
     showPlayerSpecialOrdersModal.value = false
   } catch (e: any) {
     console.error('Special order failed:', e)
@@ -3527,11 +3869,11 @@ async function handleUseSpecialOrder(participant: CombatParticipant, orderName: 
 async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
   if (!activeEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName },
     })
-    await loadData()
+    await applyActionResult(updated, 'skill-order')
   } catch (e: any) {
     console.error('Skill order failed:', e)
     alert(e?.data?.message || 'Failed to use skill order')
@@ -3912,7 +4254,7 @@ async function handleInitiateClash(participantId: string, targetId: string, preR
     // If clash resolved immediately (NPC target auto-rolled), show the outcome
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     if (updatedParticipant?.clash && updatedParticipant.clash.pendingRoll === undefined) {
-      clashCheckResultData.value = {
+      showClashCheckResult({
         youControl: updatedParticipant.clash.isController ?? false,
         waiting: false,
         opponentName: target ? getEntityName(target) : '?',
@@ -3920,7 +4262,7 @@ async function handleInitiateClash(participantId: string, targetId: string, preR
         playerRollDice: bodyDiceResults,
         bodyBonus: actor ? getParticipantBodyScore(actor) : 0,
         opponentRollTotal: response?.opponentRollTotal,
-      }
+      })
     }
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to initiate clash')
@@ -3953,7 +4295,7 @@ async function handleClashCheck(participantId: string, preRolled?: { roll: numbe
     })
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
-    clashCheckResultData.value = {
+    showClashCheckResult({
       youControl: updatedParticipant?.clash?.isController ?? false,
       waiting,
       opponentName,
@@ -3961,7 +4303,7 @@ async function handleClashCheck(participantId: string, preRolled?: { roll: numbe
       playerRollDice: diceResults,
       bodyBonus,
       opponentRollTotal: response?.opponentRollTotal,
-    }
+    })
     clashCheckRollResult.value = null
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash check')
@@ -3988,7 +4330,7 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
     })
     const updatedParticipant = (response?.participants as any[])?.find((p: any) => p.id === participantId)
     const waiting = updatedParticipant?.clash?.pendingRoll !== undefined
-    clashCheckResultData.value = {
+    showClashCheckResult({
       youControl: updatedParticipant?.clash?.isController ?? false,
       waiting,
       opponentName,
@@ -3996,7 +4338,7 @@ async function handleClashCheckFromRequest(preRolled?: { roll: number; diceResul
       playerRollDice: diceResults,
       bodyBonus,
       opponentRollTotal: response?.opponentRollTotal,
-    }
+    })
     clashCheckRollResult.value = null
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash response')
@@ -4077,10 +4419,9 @@ async function handleEndTurn() {
   endingTurn.value = true
   try {
     const updated = await nextTurn(activeEncounter.value.id, digimonMap.value, houseRules.value)
-    if (updated) {
-      activeEncounter.value = updated as any
-      await syncEncounterDigimon()
-    }
+    // The PUT's own response, through the same gate as every other snapshot: it can no longer
+    // overwrite a push that arrived while the request was in flight.
+    if (updated) await applyEncounterUpdate(updated, 'action', { action: 'end-turn' })
   } finally {
     endingTurn.value = false
   }
@@ -4435,6 +4776,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   >
                     {{ endingTurn ? 'Ending...' : 'End Turn' }}
                   </button>
+                  <IntercedePassNotice v-if="isPassingOnIntercede" :busy="intercedePassBusy" @resume="resumeIntercedePass" />
                   <button
                     v-if="myTamerParticipant"
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
@@ -4571,6 +4913,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
                   @click="handleIntercedeSkip"
                   class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors"
                 >{{ intercedeLoading ? 'Processing…' : 'Skip All' }}</button>
+                <button
+                  v-if="!isPassingOnIntercede"
+                  :disabled="intercedeLoading || intercedePassBusy"
+                  class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+                  title="Skip every intercede prompt, including later ones, until your next turn starts"
+                  @click="startIntercedePass"
+                >
+                  {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+                </button>
               </div>
             </div>
             <!-- Direct / Bolster Direct map target picker (shown when player clicks Direct from map radial) -->
@@ -5185,6 +5536,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
                 :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
                 @click="showMapView = !showMapView"
               >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
+              <IntercedePassNotice v-if="isPassingOnIntercede" :busy="intercedePassBusy" @resume="resumeIntercedePass" />
               <button
                 class="text-xs px-3 py-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 hover:text-white rounded transition-colors"
                 @click="openIntercedeOptions"
@@ -6195,7 +6547,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
             </div>
 
             <button
-              :disabled="hasRolledDodge"
+              :disabled="hasRolledDodge || inspirationSpendLoading"
               @click="rollDodgeDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
@@ -6234,12 +6586,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :current-inspiration="currentCombatInspiration"
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
-            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+            :spend-inspiration="handleSpendInspiration"
           />
         </div>
 
         <button
-          :disabled="!dodgeRollResult"
+          :disabled="!dodgeRollResult || inspirationSpendLoading"
           @click="submitDodgeRoll"
           class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
@@ -6247,6 +6599,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </button>
       </div>
     </div>
+  </Teleport>
+
+  <!-- Area attack defenses: one panel per cast for every one of my characters it hit -->
+  <Teleport to="body">
+    <AreaDefensePanel
+      v-if="areaDefenseBatch.active.value"
+      :views="areaDefenseBatch.views.value"
+      :name-for="areaDefenseName"
+      :inspiration="currentCombatInspiration"
+      :max-inspiration="maxCombatInspiration"
+      :act-cost="actOfInspirationCost"
+      :settled="areaDefenseBatch.isSettled.value"
+      :running="areaDefenseBatch.running.value"
+      @toggle-act="areaDefenseBatch.toggleAct"
+      @roll="areaDefenseBatch.rollOne"
+      @reroll="areaDefenseBatch.rerollOne"
+      @add-die="areaDefenseBatch.addDieOne"
+      @submit="areaDefenseBatch.submitOne"
+      @roll-all="areaDefenseBatch.rollAllUnrolled"
+      @submit-ready="areaDefenseBatch.submitReady"
+      @close="areaDefenseDismissal.dismiss()"
+    />
   </Teleport>
 
   <!-- Counterattack Prompt Modal -->
@@ -6312,7 +6686,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
             </div>
 
             <button
-              :disabled="hasRolledCounterattack || !counterattackSelectedAttack"
+              :disabled="hasRolledCounterattack || !counterattackSelectedAttack || inspirationSpendLoading"
               @click="rollCounterattackDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
@@ -6349,13 +6723,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :current-inspiration="currentCombatInspiration"
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
-            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+            :spend-inspiration="handleSpendInspiration"
           />
         </div>
 
         <div class="flex gap-2">
           <button
-            :disabled="!counterattackRollResult || !counterattackSelectedAttack"
+            :disabled="!counterattackRollResult || !counterattackSelectedAttack || inspirationSpendLoading"
             @click="submitCounterattack"
             class="flex-1 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
           >
@@ -6363,6 +6737,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </button>
           <button
             @click="declineCounterattack"
+            :disabled="inspirationSpendLoading"
             class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
           >
             Decline
@@ -6406,11 +6781,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
           :current-inspiration="currentCombatInspiration"
           :max-inspiration="maxCombatInspiration"
           :loading="inspirationSpendLoading"
-          @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+          :spend-inspiration="handleSpendInspiration"
         />
 
         <button
-          :disabled="confirmingAttack"
+          :disabled="confirmingAttack || inspirationSpendLoading"
           @click="confirmAccuracyReview"
           class="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
@@ -6673,7 +7048,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
 
           <button
             class="w-full bg-digimon-dark-600 hover:bg-digimon-dark-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-            @click="clashCheckResultData = null; loadData()"
+            @click="clashCheckResultDismissal.dismiss()"
           >
             Close
           </button>
@@ -6786,6 +7161,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
             >
               {{ intercedeLoading ? 'Processing...' : 'Skip All' }}
             </button>
+            <button
+              v-if="!isPassingOnIntercede"
+              :disabled="intercedeLoading || intercedePassBusy"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+              title="Skip every intercede prompt, including later ones, until your next turn starts"
+              @click="startIntercedePass"
+            >
+              {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+            </button>
           </div>
         </template>
 
@@ -6836,6 +7220,21 @@ async function handleBreakClash(participantId: string, clashId: string) {
             >
               {{ intercedeLoading ? 'Processing...' : 'Skip' }}
             </button>
+            <button
+              v-if="!isPassingOnIntercede"
+              :disabled="intercedeLoading || intercedePassBusy"
+              class="w-full bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 disabled:cursor-not-allowed text-yellow-200 px-4 py-2 rounded-lg text-sm transition-colors"
+              title="Skip every intercede prompt, including later ones, until your next turn starts"
+              @click="startIntercedePass"
+            >
+              {{ intercedePassBusy ? 'Passing…' : 'Pass until my next turn' }}
+            </button>
+            <p v-if="!isPassingOnIntercede" class="text-xs text-digimon-dark-400 text-center -mt-1">
+              Skips every intercede prompt until your next turn starts. Prompts that offer Quick Reaction still appear.
+            </p>
+            <p v-else class="text-xs text-yellow-300 text-center">
+              You are passing, but this prompt offers Quick Reaction, so it still needs an answer.
+            </p>
             <button
               v-if="currentIntercedeRequest.data?.isAreaAttack"
               :disabled="intercedeLoading"
@@ -7163,7 +7562,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
   <!-- Attack Result Modal -->
   <Teleport to="body">
     <div
-      v-if="showAttackResultModal && attackResultData"
+      v-if="attackResultVisible && attackResultData"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-orange-500 max-h-[85vh] overflow-y-auto">
@@ -7260,7 +7659,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeAttackResultModal"
+            @click="attackResultDismissal.dismiss()"
             class="px-6 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
@@ -7358,7 +7757,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeDodgeResultModal"
+            @click="dodgeResultDismissal.dismiss()"
             class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
@@ -7423,7 +7822,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <!-- Close Button -->
         <div class="flex justify-end">
           <button
-            @click="closeIntercedeResultModal"
+            @click="intercedeResultDismissal.dismiss()"
             class="px-6 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-medium transition-colors"
           >
             Close
@@ -7587,6 +7986,10 @@ async function handleBreakClash(participantId: string, clashId: string) {
         <p class="text-sm text-digimon-dark-400 mb-4">
           Select which participants you want to be asked to intercede for. Unchecked participants will be skipped.
         </p>
+        <div v-if="isPassingOnIntercede" class="mb-4">
+          <IntercedePassNotice :busy="intercedePassBusy" @resume="resumeIntercedePass" />
+          <p class="text-xs text-digimon-dark-400 mt-1">Your selections below are kept and apply again once the pass ends.</p>
+        </div>
         <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
           <button
             v-for="p in (visibleParticipants as any[]).filter((p: any) => p.type !== 'gm' && !p.inReserve && p.id !== myTamerParticipant!.id)"

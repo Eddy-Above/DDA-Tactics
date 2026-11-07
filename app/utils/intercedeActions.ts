@@ -12,3 +12,12 @@ export function applyDeferredIntercedeCost(participant: IntercedeActionState): v
   participant.actionsRemaining.simple = Math.max(0, participant.actionsRemaining.simple - penalty)
   participant.interceptPenalty = 0
 }
+
+/**
+ * Count a turn start for this participant. Every place a turn starts calls this next to
+ * `applyDeferredIntercedeCost`; a "Pass until my next turn" remembers the counter it was set at and
+ * is in force only while the counter is unchanged (see `getActiveTemporaryPass`).
+ */
+export function recordTurnStart(participant: { turnsStarted?: number }): void {
+  participant.turnsStarted = (participant.turnsStarted ?? 0) + 1
+}
