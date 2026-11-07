@@ -14,6 +14,11 @@
     @keydown.stop="onKeydown"
   >
     <svg :viewBox="`${-extent} ${-extent} ${diameter} ${diameter}`" class="radial-svg" aria-label="Character action wheel">
+      <defs>
+        <clipPath v-for="sector in childSectors" :id="sector.clipId" :key="sector.clipId" clipPathUnits="userSpaceOnUse">
+          <path :d="sector.path" />
+        </clipPath>
+      </defs>
       <circle class="hub-outline" :r="innerRadius - 6" />
       <g
         v-for="sector in rootSectors"
@@ -67,12 +72,19 @@
       >
         <title>{{ sector.item.label }}{{ sector.item.description ? ` — ${sector.item.description}` : '' }}</title>
         <path class="sector-shape" :d="sector.path" />
-        <g :transform="`translate(${sector.position.x}, ${sector.position.y})`" class="sector-content">
-          <text v-if="sector.item.active" class="choice-current" :y="-9 - sector.lines.length * 5">✓ CURRENT</text>
-          <text class="sector-label" :y="4 - (sector.lines.length - 1) * 6">
-            <tspan v-for="(line, index) in sector.lines" :key="index" x="0" :dy="index ? 12 : 0">{{ line }}</tspan>
-          </text>
-          <text v-if="sector.item.children" class="branch-indicator" :y="13 + sector.lines.length * 6">›</text>
+        <g :clip-path="sector.rows ? `url(#${sector.clipId})` : undefined">
+          <g :transform="`translate(${sector.position.x}, ${sector.position.y})`" class="sector-content">
+            <template v-if="sector.rows">
+              <text v-for="(row, index) in sector.rows" :key="index" :class="rowClass[row.kind]" :x="row.x ?? 0" :y="row.y">{{ row.text }}</text>
+            </template>
+            <template v-else>
+              <text v-if="sector.item.active" class="choice-current" :y="-9 - sector.lines.length * 5">✓ CURRENT</text>
+              <text class="sector-label" :y="4 - (sector.lines.length - 1) * 6">
+                <tspan v-for="(line, index) in sector.lines" :key="index" x="0" :dy="index ? 12 : 0">{{ line }}</tspan>
+              </text>
+              <text v-if="sector.item.children" class="branch-indicator" :y="13 + sector.lines.length * 6">›</text>
+            </template>
+          </g>
         </g>
       </g>
     </svg>
@@ -91,9 +103,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import type { MapRadialItem } from '~/types/mapRadial'
-import { fitRadialArc, radialPoint, radialSectorPath, wrapRadialLabel } from '~/utils/radialMenu'
+import { fitRadialArc, radialDetailRows, radialPoint, radialSectorPath, wrapRadialLabel } from '~/utils/radialMenu'
+import type { RadialRowKind, RadialTextMeasure } from '~/utils/radialMenu'
 
 const props = defineProps<{
   items: MapRadialItem[]
@@ -109,6 +122,44 @@ const emit = defineEmits<{
 }>()
 
 const menuRef = ref<HTMLDivElement | null>(null)
+const menuId = `map-radial-${useId()}`
+const fontRevision = ref(0)
+let textContext: CanvasRenderingContext2D | null = null
+let fontFamily = 'sans-serif'
+let disposed = false
+// Keep these in step with the SVG text classes below; measurements include glyph overhangs.
+const textStyles: Record<RadialRowKind, { size: number; weight: number; spacing: number }> = {
+  current: { size: 7, weight: 700, spacing: .6 },
+  label: { size: 10.5, weight: 600, spacing: .05 },
+  meta: { size: 8.5, weight: 600, spacing: 0 },
+  effect: { size: 9, weight: 700, spacing: 0 },
+  tags: { size: 8, weight: 400, spacing: 0 },
+}
+const textMeasurements = new Map<string, ReturnType<RadialTextMeasure>>()
+const measureText: RadialTextMeasure = (text, kind) => {
+  const key = `${kind}:${text}`
+  const cached = textMeasurements.get(key)
+  if (cached) return cached
+  const style = textStyles[kind]
+  const context = textContext!
+  context.font = `${style.weight} ${style.size}px ${fontFamily}`
+  context.textAlign = 'center'
+  const metrics = context.measureText(text)
+  const measurement = {
+    width: Math.max(metrics.width, Math.abs(metrics.actualBoundingBoxLeft) * 2, Math.abs(metrics.actualBoundingBoxRight) * 2) + style.spacing * Array.from(text).length,
+    ascent: Math.max(metrics.fontBoundingBoxAscent || 0, metrics.actualBoundingBoxAscent, style.size * .95),
+    descent: Math.max(metrics.fontBoundingBoxDescent || 0, metrics.actualBoundingBoxDescent, style.size * .3),
+  }
+  textMeasurements.set(key, measurement)
+  return measurement
+}
+function refreshTextMetrics() {
+  if (disposed || typeof document === 'undefined' || !(menuRef.value instanceof HTMLElement)) return
+  textContext ??= document.createElement('canvas').getContext('2d')
+  fontFamily = getComputedStyle(menuRef.value).fontFamily
+  textMeasurements.clear()
+  fontRevision.value++
+}
 const branchIds = ref<string[]>([])
 const rootPage = ref(0)
 const childPage = ref(0)
@@ -144,13 +195,26 @@ function paged(items: MapRadialItem[], page: number, capacity: number): MapRadia
 }
 
 function sectors(items: MapRadialItem[], inner: number, outer: number, start: number, sweep: number, child = false) {
+  void fontRevision.value
   const width = sweep / Math.max(1, items.length)
-  return items.map((item, index) => ({
-    item,
-    path: radialSectorPath(inner, outer, start + index * width + 1.1, start + (index + 1) * width - 1.1),
-    position: radialPoint((inner + outer) / 2, start + (index + 0.5) * width),
-    lines: wrapRadialLabel(item.label, child ? 15 : 11, 3),
-  }))
+  return items.map((item, index) => {
+    const geometry = { inner, outer, start: start + index * width + 1.1, end: start + (index + 1) * width - 1.1 }
+    return {
+      item,
+      clipId: `${menuId}-child-${index}`,
+      path: radialSectorPath(inner, outer, geometry.start, geometry.end),
+      position: radialPoint((inner + outer) / 2, start + (index + 0.5) * width),
+      lines: wrapRadialLabel(item.label, child ? 15 : 11, 3),
+      rows: child ? radialDetailRows(item, geometry, textContext ? measureText : undefined) : null,
+    }
+  })
+}
+const rowClass: Record<RadialRowKind, string> = {
+  current: 'choice-current',
+  label: 'sector-label',
+  meta: 'sector-meta',
+  effect: 'sector-effect',
+  tags: 'sector-tags',
 }
 const rootSectors = computed(() => {
   const items = paged(props.items, rootPage.value, rootCapacity.value)
@@ -246,8 +310,19 @@ function onKeydown(event: KeyboardEvent) {
 watch(() => props.items, () => {
   if (branchIds.value.length && !branch.value) { branchIds.value = []; childPage.value = 0 }
 })
-onMounted(() => { void focusFirst('root') })
-onBeforeUnmount(() => hover(null))
+onMounted(() => {
+  refreshTextMetrics()
+  if (typeof document !== 'undefined') {
+    document.fonts?.addEventListener('loadingdone', refreshTextMetrics)
+    void document.fonts?.ready.then(refreshTextMetrics)
+  }
+  void focusFirst('root')
+})
+onBeforeUnmount(() => {
+  disposed = true
+  if (typeof document !== 'undefined') document.fonts?.removeEventListener('loadingdone', refreshTextMetrics)
+  hover(null)
+})
 </script>
 
 <style scoped>
@@ -272,6 +347,9 @@ onBeforeUnmount(() => hover(null))
 .sector-symbol { fill: theme('colors.digimon.dark.100'); text-anchor: middle; font-size: 18px; }
 .branch-indicator { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 18px; }
 .choice-current { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 7px; font-weight: 700; letter-spacing: .6px; }
+.sector-meta { fill: theme('colors.digimon.dark.100'); text-anchor: middle; font-size: 8.5px; font-weight: 600; }
+.sector-effect { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 9px; font-weight: 700; }
+.sector-tags { fill: theme('colors.digimon.dark.200'); text-anchor: middle; font-size: 8px; }
 .radial-hub-button { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; gap: 4px; padding: 2px 9px; border: 1px solid theme('colors.digimon.orange.600'); border-radius: 999px; background: theme('colors.digimon.dark.900'); color: theme('colors.digimon.dark.100'); font-size: 9px; font-weight: 600; line-height: 17px; pointer-events: auto; cursor: pointer; }
 .radial-hub-button span { font-size: 16px; font-weight: 400; }
 .radial-hub-button:hover, .radial-hub-button:focus-visible { outline: 2px solid theme('colors.digimon.orange.400'); outline-offset: 2px; background: theme('colors.digimon.orange.800'); color: white; }

@@ -19,7 +19,7 @@ import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOr
 import { getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects, getAllStatEffectModifier } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
-import { getAttackBadges } from '~/utils/attackBadges'
+import { attackRadialItem, getAttackBadges } from '~/utils/attackBadges'
 import {
   groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, getPaidDodgeDiceBonus, type DodgeDefenseContext,
 } from '~/utils/areaDefense'
@@ -1827,15 +1827,7 @@ const mapRadialOptions = computed(() => {
   }> = {}
   for (const p of myParticipants.value) {
     options[p.id] = {
-      attacks: getParticipantAttacks(p).map(attack => {
-        const badges = getAttackBadges(attack)
-        return {
-          id: attack.id,
-          label: attack.name,
-          description: [attack.range, badges.aoe, badges.charge ? 'Charge' : null, badges.ap, badges.effect].filter(Boolean).join(' · '),
-          disabled: !canUseAttack(p, attack),
-        }
-      }),
+      attacks: getParticipantAttacks(p).map(attack => attackRadialItem(attack, !canUseAttack(p, attack))),
       stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),
