@@ -14,6 +14,7 @@ import { useDigimonStats } from './useDigimonStats'
 import { useDigimonQualities } from './useDigimonQualities'
 import { useDigimonAttacks } from './useDigimonAttacks'
 import type { CreateDigimonData } from './useDigimon'
+import { calculateEffectiveBaseMovement, getSpeedyMaxRanks } from '../utils/movementQualities'
 
 export interface DigimonFormData extends CreateDigimonData {
   nickname: string
@@ -33,50 +34,6 @@ export interface DigimonFormData extends CreateDigimonData {
   evolvesFromId: string | null
   evolutionPathIds: string[]
   syncBonusDP: boolean
-}
-
-/**
- * Calculate the effective base movement after all base movement modifiers
- * Used to determine true max ranks for Speedy quality
- */
-function calculateEffectiveBaseMovement(
-  stageBase: number,
-  qualities: Array<{ id: string; ranks?: number; choiceId?: string }> = []
-): number {
-  let effective = stageBase
-
-  // Data Optimization modifiers
-  const dataOpt = qualities.find((q) => q.id === 'data-optimization')
-  if (dataOpt?.choiceId === 'speed-striker') effective += 2
-  if (dataOpt?.choiceId === 'guardian') effective -= 1
-
-  // Data Specialization modifiers
-  const dataSpec = qualities.find((q) => q.id === 'data-specialization')
-  if (dataSpec?.choiceId === 'mobile-artillery') effective -= 1
-
-  // Negative quality modifiers
-  const bulky = qualities.find((q) => q.id === 'bulky')
-  if (bulky) effective -= (bulky.ranks || 0) * 3
-
-  // Boosting quality modifiers
-  const instinct = qualities.find((q) => q.id === 'instinct')
-  if (instinct) effective += instinct.ranks || 0
-
-  return Math.max(1, effective)
-}
-
-/**
- * Get the max ranks allowed for Speedy based on effective base movement
- * Speedy can add up to 2x base (or 3x with Advanced Movement)
- * So max ranks = effective base / 2 (rounded up)
- */
-function getSpeedyMaxRanks(
-  effectiveBase: number,
-  hasAdvancedMovement: boolean = false
-): number {
-  // Speedy: +2 per rank, capped at 2x base (or 3x with Advanced Movement)
-  // Max useful ranks = base movement / 2
-  return hasAdvancedMovement ? Math.ceil(effectiveBase / 2) : Math.floor(effectiveBase / 2)
 }
 
 export function useDigimonForm(initialData?: Partial<DigimonFormData>, eddySoulRules?: Ref<EddySoulRules | undefined>) {

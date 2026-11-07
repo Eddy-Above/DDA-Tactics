@@ -131,9 +131,9 @@ export function useTamers() {
   // Derived stat calculations
   function calculateDerivedStats(tamer: Tamer, eddySoulRules?: EddySoulRules) {
     const { attributes, skills } = tamer
-    const xp = tamer.xpBonuses ?? { attributes: { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0 }, skills: { dodge: 0, fight: 0, stealth: 0, athletics: 0, endurance: 0, featsOfStrength: 0, manipulate: 0, perform: 0, persuasion: 0, computer: 0, survival: 0, knowledge: 0, perception: 0, decipherIntent: 0, bravery: 0 }, inspiration: 0 }
-    const totalAttr = (key: keyof TamerAttributes) => attributes[key] + (xp.attributes[key] ?? 0)
-    const totalSkill = (key: keyof TamerSkills) => skills[key] + (xp.skills[key] ?? 0)
+    const xp = tamer.xpBonuses
+    const totalAttr = (key: keyof TamerAttributes) => (attributes[key] || 0) + (xp?.attributes[key] || 0)
+    const totalSkill = (key: keyof TamerSkills) => (skills[key] || 0) + (xp?.skills[key] || 0)
     return {
       woundBoxes: Math.max(2, totalAttr('body') + totalSkill('endurance')),
       speed: totalAttr('agility') + totalSkill('survival'),

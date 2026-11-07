@@ -33,6 +33,7 @@ import type { MapRadialItem } from '~/types/mapRadial'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
+import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 
 definePageMeta({
   title: 'Encounter',
@@ -347,39 +348,26 @@ function hasSetupRequest(tamerEntityId: string): boolean {
   )
 }
 
-// Get display name with numbering for duplicate digimon
+function getParticipantBaseName(participant: CombatParticipant): string {
+  const record = participant.type === 'digimon'
+    ? digimonMap.value.get(participant.entityId)
+    : tamerMap.value.get(participant.entityId)
+  return record?.name || 'Unknown'
+}
+
+function isEnemyForDisplayName(participant: CombatParticipant): boolean {
+  return (participant.isEnemy ?? digimonMap.value.get(participant.entityId)?.isEnemy) === true
+}
+
+const participantDisplayNames = computed(() => buildParticipantDisplayNames(
+  (currentEncounter.value?.participants as CombatParticipant[]) || [],
+  getParticipantBaseName,
+  isEnemyForDisplayName,
+))
+
+// Only enemies receive sequence suffixes; the shared map is cached for the roster.
 function getDisplayName(participant: CombatParticipant): string {
-  const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
-
-  let baseName: string
-  if (participant.type === 'digimon') {
-    baseName = digimonMap.value.get(participant.entityId)?.name || 'Unknown'
-  } else {
-    baseName = tamerMap.value.get(participant.entityId)?.name || 'Unknown'
-  }
-
-  if (participant.type === 'digimon') {
-    if (participant.seq !== undefined) {
-      // Stable: use the seq assigned at add-time so names don't shift when others are removed
-      const otherSameName = participants.some(p =>
-        p.id !== participant.id && p.type === 'digimon' &&
-        (digimonMap.value.get(p.entityId)?.name || 'Unknown') === baseName
-      )
-      if (participant.seq > 1 || otherSameName) return `${baseName} ${participant.seq}`
-    } else {
-      // Legacy fallback for participants without seq
-      const duplicates = participants.filter(p =>
-        p.type === 'digimon' &&
-        (digimonMap.value.get(p.entityId)?.name || 'Unknown') === baseName
-      )
-      if (duplicates.length > 1) {
-        const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
-        const index = sorted.findIndex(p => p.id === participant.id)
-        return `${baseName} ${index + 1}`
-      }
-    }
-  }
-  return baseName
+  return participantDisplayNames.value[participant.id] ?? getParticipantBaseName(participant)
 }
 
 // Get entity details for a participant

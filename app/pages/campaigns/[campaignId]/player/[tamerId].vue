@@ -45,6 +45,7 @@ import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/us
 import { useReactionOrders, type ReactionOrderOption } from '~/composables/useReactionOrders'
 import { isRequestAnswered } from '~/utils/requestState'
 import { prepareAttackAccuracy, snapshotAttackRiders, type AccuracyRollResult } from '~/utils/attackAccuracy'
+import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 
 definePageMeta({
   layout: 'player',
@@ -982,23 +983,7 @@ const totalSkills = computed(() => {
 
 const tamerStats = computed(() => {
   if (!tamer.value) return null
-
-  // Calculate derived stats using total values (base + xpBonuses)
-  return {
-    woundBoxes: Math.max(2, getTotalAttribute('body') + getTotalSkill('endurance')),
-    speed: getTotalAttribute('agility') + getTotalSkill('survival'),
-    accuracyPool: eddySoulRules.value?.accuracyIsAgilityAthletics
-      ? getTotalAttribute('agility') + getTotalSkill('athletics')
-      : getTotalAttribute('agility') + getTotalSkill('fight'),
-    dodgePool: getTotalAttribute('agility') + getTotalSkill('dodge'),
-    armor: eddySoulRules.value?.armorIsWillpowerEndurance
-      ? getTotalAttribute('willpower') + getTotalSkill('endurance')
-      : getTotalAttribute('body') + getTotalSkill('endurance'),
-    damage: eddySoulRules.value?.damageIsBodyFeatsOfStrength
-      ? getTotalAttribute('body') + getTotalSkill('featsOfStrength')
-      : getTotalAttribute('body') + getTotalSkill('fight'),
-    maxInspiration: Math.max(1, getTotalAttribute('willpower')),
-  }
+  return calcTamerStats(tamer.value, eddySoulRules.value)
 })
 
 const specialOrders = computed(() => {
@@ -1697,45 +1682,31 @@ const turnCycleLength = computed(() => {
   return Math.max(1, turnOrder.length - 1)
 })
 
-function getParticipantName(participant: CombatParticipant): string {
+function getParticipantNameDigimon(participant: CombatParticipant) {
+  return partnerDigimon.value.find(digimon => digimon.id === participant.entityId)
+    || allDigimon.value.find(digimon => digimon.id === participant.entityId)
+}
+
+function getParticipantBaseName(participant: CombatParticipant): string {
   if (participant.type === 'tamer') {
-    // Look up the tamer by entityId from all available tamers
     const participantTamer = allTamers.value.find((t) => t.id === participant.entityId)
     return participantTamer?.name || 'Unknown'
   }
-  // For digimon, try to find in partner digimon first
-  let digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  if (!digimon) digimon = allDigimon.value.find((d) => d.id === participant.entityId)
-  const baseName = digimon?.name || 'Unknown'
+  return getParticipantNameDigimon(participant)?.name || 'Unknown'
+}
 
-  if (activeEncounter.value) {
-    const participants = activeEncounter.value.participants as CombatParticipant[]
-    if (participant.seq !== undefined) {
-      // Stable: use the seq assigned at add-time so names don't shift when others are removed
-      const otherSameName = participants.some(p => {
-        if (p.id === participant.id || p.type !== 'digimon') return false
-        const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
-                  allDigimon.value.find(d => d.id === p.entityId)
-        return (d?.name || 'Unknown') === baseName
-      })
-      if (participant.seq > 1 || otherSameName) return `${baseName} ${participant.seq}`
-    } else {
-      // Legacy fallback for participants without seq
-      const duplicates = participants.filter(p => {
-        if (p.type !== 'digimon') return false
-        const d = partnerDigimon.value.find(d => d.id === p.entityId) ||
-                  allDigimon.value.find(d => d.id === p.entityId)
-        return (d?.name || 'Unknown') === baseName
-      })
-      if (duplicates.length > 1) {
-        const sorted = [...duplicates].sort((a, b) => a.id.localeCompare(b.id))
-        const index = sorted.findIndex(p => p.id === participant.id)
-        return `${baseName} ${index + 1}`
-      }
-    }
-  }
+function isEnemyForDisplayName(participant: CombatParticipant): boolean {
+  return (participant.isEnemy ?? getParticipantNameDigimon(participant)?.isEnemy) === true
+}
 
-  return baseName
+const participantDisplayNames = computed(() => buildParticipantDisplayNames(
+  (activeEncounter.value?.participants as CombatParticipant[]) || [],
+  getParticipantBaseName,
+  isEnemyForDisplayName,
+))
+
+function getParticipantName(participant: CombatParticipant): string {
+  return participantDisplayNames.value[participant.id] ?? getParticipantBaseName(participant)
 }
 
 // Check if a digimon participant has a partner tamer in this encounter

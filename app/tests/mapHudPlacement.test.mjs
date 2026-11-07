@@ -266,3 +266,29 @@ test('a new placement round expands a minimised HUD, but ending one does not tou
   await nextTick()
   assert.equal(byClass(host.root, 'hud-icon').length, 1, 'a manual minimise sticks when placement ends')
 })
+
+test('HUD numbers only enemy Digimon, with persisted classification taking priority over entity records', async () => {
+  const sameName = { name: 'Alex', currentWounds: 0, woundBoxes: 6 }
+  const { host, state } = mount({
+    isDm: true,
+    participants: [
+      { id: 't1', type: 'tamer', entityId: 't1', seq: 9, isEnemy: true },
+      { id: 't2', type: 'tamer', entityId: 't2' },
+      { id: 'p1', type: 'digimon', entityId: 'p1', seq: 7, isEnemy: false },
+      { id: 'p2', type: 'digimon', entityId: 'p2', seq: 8 },
+      { id: 'e1', type: 'digimon', entityId: 'e1', seq: 1 },
+      { id: 'e2', type: 'digimon', entityId: 'e2', seq: 2, isEnemy: true },
+    ],
+    tamerMap: { t1: { ...sameName }, t2: { ...sameName } },
+    digimonMap: {
+      p1: { ...sameName, isEnemy: true }, p2: { ...sameName, isEnemy: false },
+      e1: { ...sameName, isEnemy: true }, e2: { ...sameName, isEnemy: false },
+    },
+  })
+  const names = () => byClass(host.root, 'hud-name').map(textOf)
+  assert.deepEqual(names(), ['Alex', 'Alex', 'Alex', 'Alex', 'Alex 1', 'Alex 2'])
+  state.digimonMap.e1.isEnemy = false
+  await nextTick()
+  assert.deepEqual(names(), ['Alex', 'Alex', 'Alex', 'Alex', 'Alex', 'Alex 2'])
+  host.render(null, host.root)
+})
