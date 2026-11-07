@@ -47,6 +47,8 @@
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
+          :draggable-participant-ids="draggableParticipantIds"
+          :external-drag-participant-id="hudDragId"
           :gm-move-participant-id="gmMoveParticipantId"
           :charge-mode="chargeMode"
           :charge-move-participant-id="chargeMoveParticipantId"
@@ -57,6 +59,7 @@
           @stance-selected="(id, stance) => emit('stance-selected', id, stance)"
           @action-selected="(id, action, choiceId) => emit('action-selected', id, action, choiceId)"
           @unit-placed="onCanvasPlace"
+          @unit-dragged="onUnitDragged"
           @unit-moved="onCombatMove"
           @cell-draw="onCellDraw"
           @wall-edit="onWallEdit"
@@ -85,48 +88,6 @@
         </div>
       </ClientOnly>
 
-      <!-- Overlay: Placement panel (left side) -->
-      <div v-if="showPanel" class="overlay overlay-left">
-        <!-- Collapsed: mid-fight the roster shouldn't sit over the board. Still surfaces how
-             many are waiting, and who is armed for placement, so it stays discoverable. -->
-        <button
-          v-if="placementCollapsed"
-          class="placement-collapsed"
-          :class="{ armed: !!selectedId }"
-          @click="placementCollapsed = false"
-        >
-          <span class="placement-collapsed-icon">📍</span>
-          <span class="placement-collapsed-label">
-            {{ selectedParticipant ? `Placing ${getNameForParticipant(selectedParticipant)}` : placementPanelTitle }}
-          </span>
-          <span class="placement-collapsed-count">{{ eligibleParticipants.length }}</span>
-        </button>
-
-        <div v-else class="placement-panel">
-          <div class="placement-panel-title">
-            <span>{{ placementPanelTitle }}</span>
-            <button class="placement-collapse-btn" title="Collapse" @click="placementCollapsed = true">−</button>
-          </div>
-          <div
-            v-for="p in eligibleParticipants"
-            :key="p.id"
-            class="placement-card"
-            :class="{ selected: selectedId === p.id, placed: !!positions[p.id] }"
-            @click="selectParticipant(p.id)"
-          >
-            <div class="placement-avatar">
-              <img v-if="getSpriteUrl(p)" :src="getSpriteUrl(p) ?? undefined" class="placement-avatar-img" />
-              <div v-else class="placement-avatar-fallback">{{ getNameForParticipant(p)[0] }}</div>
-            </div>
-            <span class="placement-name">{{ getNameForParticipant(p) }}</span>
-            <span v-if="positions[p.id]" class="placed-badge">✓</span>
-          </div>
-          <div class="placement-hint">
-            {{ selectedId ? 'Click a tile to place' : 'Select a character above' }}
-          </div>
-        </div>
-      </div>
-
       <!-- Overlay: Battle Log (right side) -->
       <div v-if="!editorMode" class="overlay overlay-right">
         <MapBattleLog
@@ -138,7 +99,8 @@
         />
       </div>
 
-      <!-- Overlay: Player HUD (bottom-left) -->
+      <!-- Overlay: Player HUD (bottom-left). Also the placement control: while placement is active
+           its cards are clicked to arm, or dragged onto the map. -->
       <div class="overlay overlay-bottom-left">
         <MapPlayerHUD
           :participants="liveParticipants"
@@ -147,6 +109,14 @@
           :is-dm="isDm"
           :my-tamer-id="myTamerId"
           :my-participant-ids="myParticipantIds"
+          :placement-active="placementActive"
+          :setup-placement="isSetupPlacement"
+          :placeable-ids="placeableIds"
+          :placed-ids="placedIds"
+          :armed-id="selectedId"
+          @select-placement="selectParticipant"
+          @placement-drag-start="id => hudDragId = id"
+          @placement-drag-end="hudDragId = null"
         />
       </div>
 
@@ -208,6 +178,7 @@ import { getAllStatEffectModifier, applyDerivedStatEffects } from '~/data/attack
 import type { MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules'
 import { chebyshev } from '~/utils/pathfinding'
+import { dropRoute, getDraggableParticipantIds, getPlaceableParticipantIds, isSetupPhase } from '~/utils/placementRules'
 import { closedDoorsCrossedByPath } from '~/utils/mapDoors'
 import { segmentCells } from '~/utils/lineOfSight'
 import type { MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
@@ -413,7 +384,7 @@ const digimonMapForCanvas = computed(() => {
   return out
 })
 
-// ── Placement panel ─────────────────────────────────────────────────────────
+// ── Placement & movement state ──────────────────────────────────────────────
 const selectedId = ref<string | null>(null)
 const npcMoveParticipantId = ref<string | null>(null)
 // GM free-move: the participant the GM is repositioning (free teleport, no action cost, any turn)
@@ -436,67 +407,50 @@ const mapSelectedAttack = computed(() =>
   isChargeAttack.value && chargeMode.value === null && !chargeAttackInFlight.value ? null : props.selectedAttack
 )
 
-// The GM can place units at any point in a live encounter, not just during setup —
-// reinforcements deployed from reserve (and anyone who joined mid-combat) need a way onto
-// the board. Hidden once the encounter has ended.
-const showPanel = computed(() =>
+// During setup the whole roster is offered and a card can be clicked to pick a unit back up and
+// re-place it. Once combat is underway that would silently yank a placed unit off the board
+// (selectParticipant deletes its position), so only unplaced units are offered — repositioning
+// a placed one is what GM free-move (and, for the GM, dragging) is for.
+const isSetupPlacement = computed(() => isSetupPhase(props.encounter.phase))
+
+// Who the HUD offers for placement. The rules live in utils/placementRules.ts so they can be
+// tested without a canvas.
+const placeableIds = computed(() => getPlaceableParticipantIds({
+  participants: props.encounter.participants,
+  positions: positions.value,
+  isDm: props.isDm,
+  phase: props.encounter.phase,
+  myParticipantIds: props.myParticipantIds,
+}))
+const placedIds = computed(() => Object.keys(positions.value))
+
+// The HUD is the placement control; this switches its cards into placement mode. The GM can
+// place units at any point in a live encounter, not just during setup — reinforcements deployed
+// from reserve (and anyone who joined mid-combat) need a way onto the board. Off once the
+// encounter has ended.
+const placementActive = computed(() =>
   !props.editorMode &&
-  ((props.isDm && props.encounter.phase !== 'ended' && eligibleParticipants.value.length > 0) ||
+  ((props.isDm && props.encounter.phase !== 'ended' && placeableIds.value.length > 0) ||
     (props.playerPlacementMode ?? false))
 )
 
-// During setup the whole roster is listed and cards can be clicked to pick a unit back up and
-// re-place it. Once combat is underway that would silently yank a placed unit off the board
-// (selectParticipant deletes its position), so only unplaced units are offered — repositioning
-// a placed one is what GM free-move is for.
-const isSetupPlacement = computed(() =>
-  props.encounter.phase === 'setup' || props.encounter.phase === 'initiative'
+// Tokens already on the map that may be dragged elsewhere (GM: any live phase; player: own
+// characters during setup only).
+const draggableParticipantIds = computed(() =>
+  props.editorMode
+    ? []
+    : getDraggableParticipantIds({
+        participants: props.encounter.participants,
+        positions: positions.value,
+        isDm: props.isDm,
+        phase: props.encounter.phase,
+        myParticipantIds: props.myParticipantIds,
+      })
 )
 
-const placementPanelTitle = computed(() => {
-  if (!props.isDm) return 'Place Your Digimon'
-  return isSetupPlacement.value ? 'Place Units' : 'Deploy to Map'
-})
-
-// Placement is the main activity during setup, so the roster sits open. Once the fight is
-// running it's an occasional errand (a reserve deploy, a late joiner) and shouldn't cover the
-// board — start collapsed. Keyed off isSetupPlacement rather than a separate phase test so it
-// can't drift from the sibling full-roster/unplaced-only behaviour above.
-//
-// `immediate` collapses it from the very first render when the map is opened mid-combat, and
-// re-running on phase change means Start Combat tucks the panel away by itself. A manual
-// toggle therefore lasts until the next phase change, which is the right lifetime for it.
-const placementCollapsed = ref(false)
-watch(isSetupPlacement, (isSetup) => { placementCollapsed.value = !isSetup }, { immediate: true })
-
-// Shown on the collapsed pill: collapsing while a unit is armed leaves MapCanvas in placing
-// mode (:placing-participant-id), and that state would otherwise be invisible.
-const selectedParticipant = computed(() =>
-  selectedId.value
-    ? props.encounter.participants.find(p => p.id === selectedId.value) ?? null
-    : null
-)
-
-const eligibleParticipants = computed(() => {
-  const mine = props.myParticipantIds ?? []
-  const roster = props.encounter.participants.filter(p => {
-    if ((p as any).inReserve) return false          // not deployed yet
-    if (props.isDm) return true                     // GM places anyone, not just enemies
-    return mine.includes(p.id)
-  })
-  if (isSetupPlacement.value) return roster
-  return roster.filter(p => !positions.value[p.id])
-})
-
-function getNameForParticipant(p: CombatParticipant) {
-  if (p.type === 'tamer') return tamerMapForCanvas.value[p.entityId]?.name ?? '?'
-  return digimonMapForCanvas.value[p.entityId]?.name ?? '?'
-}
-
-function getSpriteUrl(p: CombatParticipant): string | null {
-  if (p.type === 'tamer') return tamerMapForCanvas.value[p.entityId]?.spriteUrl ?? null
-  return digimonMapForCanvas.value[p.entityId]?.spriteUrl ?? null
-}
+// The HUD card currently being dragged. MapCanvas needs it during `dragover`, when the browser
+// hides dataTransfer contents.
+const hudDragId = ref<string | null>(null)
 
 function selectParticipant(id: string) {
   if (selectedId.value === id) {
@@ -516,6 +470,18 @@ function onCanvasPlace(participantId: string, cell: Vec3) {
   positions.value = { ...positions.value, [participantId]: cell }
   selectedId.value = null
   ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position: cell, path: [], version: 0 })
+}
+
+// A drag finished on a valid cell: either a token moved on the canvas or a HUD card dropped on it.
+// MapCanvas already enforced the surface rules (players: spawn areas only; GM: anywhere), so this
+// only decides how the drop is committed. One `unit-moved` goes out per drop — never per cell
+// crossed — so the server's Guiding Light recompute isn't hammered by a long drag.
+function onUnitDragged(participantId: string, cell: Vec3) {
+  hudDragId.value = null
+  // The drag was offered by state that may have moved on (phase change, unit removed mid-drag).
+  if (!draggableParticipantIds.value.includes(participantId) && !placeableIds.value.includes(participantId)) return
+  if (dropRoute(props.encounter.phase, !!positions.value[participantId]) === 'gm-move') onGmMove(participantId, cell)
+  else onCanvasPlace(participantId, cell)
 }
 
 function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
@@ -1097,116 +1063,8 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
   z-index: 20;
 }
 .overlay-top-left   { top: 10px; left: 10px; }
-.overlay-left       { top: 60px; left: 10px; bottom: 10px; display: flex; flex-direction: column; justify-content: center; pointer-events: none; }
 .overlay-right      { top: 10px; right: 10px; bottom: var(--overlay-bottom, 10px); display: flex; flex-direction: column; justify-content: flex-start; }
 .overlay-bottom-left  { bottom: var(--overlay-bottom, 10px); left: 10px; }
 .overlay-bottom-right { bottom: var(--overlay-bottom, 10px); right: 10px; }
 .overlay-property   { top: 50%; right: 10px; transform: translateY(-50%); }
-.placement-panel {
-  pointer-events: auto;
-  background: rgba(10, 12, 25, 0.92);
-  border: 1px solid #334;
-  border-radius: 8px;
-  padding: 10px;
-  width: 180px;
-  max-height: 70vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.placement-panel-title {
-  font-size: 10px;
-  font-weight: 700;
-  color: #8899aa;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding-bottom: 5px;
-  border-bottom: 1px solid #334;
-  margin-bottom: 2px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-.placement-collapse-btn {
-  background: none;
-  border: none;
-  color: #667;
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 2px;
-  cursor: pointer;
-  transition: color 0.12s;
-}
-.placement-collapse-btn:hover { color: #fff; }
-
-/* Collapsed pill. .overlay-left is pointer-events: none, so this must re-enable them. */
-.placement-collapsed {
-  pointer-events: auto;
-  align-self: flex-start;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  background: rgba(10, 12, 25, 0.92);
-  border: 1px solid #334;
-  border-radius: 8px;
-  padding: 7px 10px;
-  cursor: pointer;
-  color: #8899aa;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  transition: border-color 0.12s, color 0.12s;
-}
-.placement-collapsed:hover { border-color: #446; color: #fff; }
-.placement-collapsed.armed { border-color: #f97316; color: #fff; }
-.placement-collapsed-icon { font-size: 13px; line-height: 1; }
-.placement-collapsed-label { white-space: nowrap; }
-.placement-collapsed-count {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: #223;
-  color: #aabbcc;
-  font-size: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.placement-collapsed.armed .placement-collapsed-count { background: #f97316; color: #1a1e30; }
-.placement-card {
-  padding: 5px 8px;
-  border-radius: 5px;
-  cursor: pointer;
-  border: 1px solid #334;
-  background: #1a1e30;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: #bbc;
-  transition: background 0.12s;
-}
-.placement-card:hover { background: #242840; border-color: #446; }
-.placement-card.selected { border-color: #f97316; background: #3a1a05; color: #fff; }
-.placement-card.placed { opacity: 0.6; }
-.placement-avatar {
-  width: 32px; height: 32px;
-  border-radius: 4px;
-  overflow: hidden;
-  flex-shrink: 0;
-  background: #223;
-}
-.placement-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.placement-avatar-fallback {
-  width: 100%; height: 100%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 700; color: #aabbcc;
-}
-.placement-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.placed-badge { font-size: 10px; color: #22cc55; flex-shrink: 0; }
-.placement-hint { font-size: 10px; color: #556; margin-top: 3px; text-align: center; }
 </style>

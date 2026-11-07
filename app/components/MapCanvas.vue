@@ -1,5 +1,12 @@
 <template>
-  <div ref="containerRef" class="map-canvas-container" @wheel.prevent="onWheel">
+  <div
+    ref="containerRef"
+    class="map-canvas-container"
+    @wheel.prevent="onWheel"
+    @dragover="onExternalDragOver"
+    @dragleave="onExternalDragLeave"
+    @drop="onExternalDrop"
+  >
     <canvas ref="canvasRef" class="map-canvas" />
     <!-- Y-clip + ghost walls controls -->
     <div class="map-view-controls">
@@ -86,6 +93,8 @@ import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/mo
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
+import { evaluatePlacement, type PlacementEvaluation } from '~/utils/placementRules'
+import { createTokenDragController } from '~/utils/tokenDrag'
 import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
@@ -113,6 +122,8 @@ const props = defineProps<{
   reachableCells: Set<string>
   activePath: Vec3[]
   placingParticipantId: string | null
+  draggableParticipantIds?: string[]   // placed tokens the viewer may press-and-drag to a new cell
+  externalDragParticipantId?: string | null  // a HUD card currently being dragged over the map
   gmMoveParticipantId: string | null   // GM free-move: reposition this participant onto any valid tile
   npcMoveParticipantId: string | null
   chargeMode: 'before' | 'after' | null
@@ -125,6 +136,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'unit-placed', participantId: string, position: Vec3): void
+  // A drag ended on a cell that passed the placement rules (token dragged, or HUD card dropped).
+  (e: 'unit-dragged', participantId: string, position: Vec3): void
   (e: 'unit-moved', participantId: string, position: Vec3, path: Vec3[]): void
   (e: 'cell-clicked', cell: Vec3): void
   (e: 'cell-draw', start: Vec3, end: Vec3): void
@@ -599,6 +612,12 @@ onMounted(() => {
   window.addEventListener('resize', onResize)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
+  // Capture phase: must run before OrbitControls' own (bubble-phase) pointerdown so a token press
+  // can switch the camera controls off before they start panning.
+  canvasRef.value!.addEventListener('pointerdown', onTokenPointerDown, { capture: true })
+  window.addEventListener('pointermove', onTokenPointerMove)
+  window.addEventListener('pointerup', onTokenPointerUp)
+  window.addEventListener('pointercancel', onTokenPointerCancel)
   canvasRef.value!.addEventListener('click', onCanvasClick)
   canvasRef.value!.addEventListener('mousemove', onMouseMove)
   canvasRef.value!.addEventListener('mousedown', onMouseDown)
@@ -628,6 +647,11 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keyup', onKeyUp)
+  canvasRef.value?.removeEventListener('pointerdown', onTokenPointerDown, { capture: true })
+  window.removeEventListener('pointermove', onTokenPointerMove)
+  window.removeEventListener('pointerup', onTokenPointerUp)
+  window.removeEventListener('pointercancel', onTokenPointerCancel)
+  tokenDrag.dispose()
   for (const tex of blendTextureCache.values()) tex.dispose()
   blendTextureCache.clear()
 })
@@ -1306,6 +1330,7 @@ function applyKeyMovement() {
 function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
   if (e.key === 'Escape') {
+    if (tokenDrag.abort()) return   // Esc ends a token drag in progress
     if (radialParticipantId.value) { closeRadial(); return }
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); emit('attack-cancelled'); return }
   }
@@ -2007,6 +2032,9 @@ function onMouseMove(event: MouseEvent) {
     return
   }
 
+  // A token is being dragged: the pointer handlers own the preview, so skip hover raycasts.
+  if (tokenDrag.isPressed()) return
+
   updateTargetHover(event)
 
   // Movement mode — ghost + distance label + path preview
@@ -2192,7 +2220,148 @@ function tryReticuleTarget(participantId: string): boolean {
   return true
 }
 
+// ── Placement validation + drag-to-place ────────────────────────────────────
+// One rule set for every way of putting a character on the map: clicking a tile while armed, GM
+// free-move, dragging a token already on the map, and dropping a HUD card onto the map. Players
+// may only land on spawn areas, the GM anywhere; walls/solid voxels and other units block both.
+// The decision itself is utils/placementRules.ts `evaluatePlacement`; this just gathers its inputs.
+const isPlacementSurface = (h: THREE.Intersection) =>
+  h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel'
+
+function placementTileCount(participantId: string): number {
+  const p = props.participants.find(pp => pp.id === participantId)
+  const size: DigimonSize = p?.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
+  const gig = p?.type === 'digimon' ? props.digimonMap[p.entityId]?.giganticDimensions : null
+  return getSizeParams(size, gig).tileCount
+}
+
+// Resolves a surface hit into the cell `participantId` would land on and whether that is allowed.
+// An invalid result still carries its cell so a drag can show where the drop would have gone.
+function evaluatePlacementAt(surfaceHit: THREE.Intersection, participantId: string): PlacementEvaluation {
+  return evaluatePlacement({
+    hit: {
+      type: surfaceHit.object.userData.type,
+      tile: surfaceHit.object.userData.tile,
+      voxel: surfaceHit.object.userData.voxel,
+      point: surfaceHit.point,
+    },
+    isDm: props.isDm,
+    participantId,
+    tileCount: placementTileCount(participantId),
+    isBlocked: cell => !!props.map && mapVoxelBlocksMovement(props.map, cell),
+    occupants: props.participants.map(p => {
+      const position = props.participantPositions[p.id]
+      return { id: p.id, position, tileCount: position ? placementTileCount(p.id) : 0 }
+    }),
+  })
+}
+
+// Where a drop at the pointer would land `participantId`; null when the pointer isn't over the map.
+function dropTargetAt(event: MouseEvent, participantId: string): PlacementEvaluation | null {
+  const surfaceHit = getIntersection(event).find(isPlacementSurface)
+  return surfaceHit ? evaluatePlacementAt(surfaceHit, participantId) : null
+}
+
+// Green footprint where the drop would land, red where it would be refused.
+function showDropGhost(placement: PlacementEvaluation | null) {
+  hoverGhostGroup.clear()
+  if (!placement) return
+  const color = placement.valid ? 0x00ff88 : 0xff3333
+  for (let dx = 0; dx < placement.tileCount; dx++) {
+    for (let dz = 0; dz < placement.tileCount; dz++) {
+      hoverGhostGroup.add(makeTileGhostMesh({ x: placement.cell.x + dx, y: placement.cell.y, z: placement.cell.z + dz }, color))
+    }
+  }
+}
+
+// ── Dragging a token that is already on the map ──
+// Pointer events rather than mouse events so touch works too. The press is taken in the capture
+// phase and OrbitControls is switched off before its own pointerdown runs: left mouse is mapped to
+// PAN, so without that the camera would slide under the token being dragged.
+// The gesture itself (threshold, camera lock, Escape, click suppression, re-checking the offer at
+// the drop) lives in utils/tokenDrag.ts; this supplies its Three.js/DOM effects.
+let suppressNextClick = false
+
+// The `click` that follows a real drag's release would otherwise open a radial on whatever is
+// under the cursor. Dropped on the next tick in case no click is ever dispatched (release outside
+// the canvas).
+function swallowNextClick() {
+  suppressNextClick = true
+  setTimeout(() => { suppressNextClick = false }, 0)
+}
+
+const tokenDrag = createTokenDragController<PointerEvent>({
+  draggableIds: () => props.draggableParticipantIds,
+  // A drag must not collide with any other mode that already owns the left button.
+  allowed: () => {
+    if (props.isDm && props.activeTool !== 'select') return false              // map editing
+    if (movingParticipantId.value || props.chargeMode) return false            // move / charge aiming
+    if (props.selectedAttack || isAreaTargeting.value) return false            // attack aiming
+    if (props.placingParticipantId || props.gmMoveParticipantId) return false  // click placement / GM free-move
+    if (reticuleParticipantIds.value.length > 0) return false                  // picking a target
+    return true
+  },
+  tokenAt: (event) => {
+    const spriteHit = getIntersection(event).find(h => h.object.userData.type === 'sprite')
+    return (spriteHit?.object.userData.participantId as string | undefined) ?? null
+  },
+  preview: (event, participantId) => showDropGhost(dropTargetAt(event, participantId)),
+  resolveDrop: (event, participantId) => {
+    const placement = dropTargetAt(event, participantId)
+    return placement?.valid ? placement.cell : null
+  },
+  commit: (participantId, cell) => emit('unit-dragged', participantId, cell),
+  clearPreview: () => { if (hoverGhostGroup) hoverGhostGroup.clear() },
+  lockCamera: () => { if (controls) controls.enabled = false },
+  unlockCamera: () => { if (controls) controls.enabled = props.activeTool === 'select' },
+  setCursor: (cursor) => { if (canvasRef.value) canvasRef.value.style.cursor = cursor },
+  begin: () => { closeRadial(); clickedHealthBar.value = null; setHoveredTarget(null) },
+  swallowNextClick,
+})
+
+// Window-level so a drag keeps tracking when the pointer leaves the canvas; the controller ignores
+// anything that isn't part of a gesture it started.
+const onTokenPointerDown = (e: PointerEvent) => tokenDrag.pointerDown(e)
+const onTokenPointerMove = (e: PointerEvent) => tokenDrag.pointerMove(e)
+const onTokenPointerUp = (e: PointerEvent) => tokenDrag.pointerUp(e)
+const onTokenPointerCancel = () => tokenDrag.pointerCancel()
+
+// ── Dropping a HUD card onto the map ──
+// Native drag-and-drop: the drag starts in the HUD, outside the canvas, so OrbitControls never
+// sees it. The id arrives through a prop because browsers hide dataTransfer contents during
+// `dragover`, which is when the preview has to be drawn. The handlers sit on the container so a
+// drop onto a label or overlay inside the map still counts.
+function onExternalDragOver(event: DragEvent) {
+  const participantId = props.externalDragParticipantId
+  if (!participantId) return
+  const placement = dropTargetAt(event, participantId)
+  showDropGhost(placement)
+  if (placement?.valid) {
+    event.preventDefault()   // the only way to mark a spot as a legal drop target
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  } else if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'none'
+  }
+}
+
+function onExternalDragLeave(event: DragEvent) {
+  // dragleave also fires when crossing between children of the container; only react to really leaving it.
+  const container = containerRef.value
+  if (container && event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return
+  if (hoverGhostGroup) hoverGhostGroup.clear()
+}
+
+function onExternalDrop(event: DragEvent) {
+  const participantId = props.externalDragParticipantId
+  if (!participantId) return
+  event.preventDefault()
+  const placement = dropTargetAt(event, participantId)
+  hoverGhostGroup.clear()
+  if (placement?.valid) emit('unit-dragged', participantId, placement.cell)
+}
+
 function onCanvasClick(event: MouseEvent) {
+  if (suppressNextClick) { suppressNextClick = false; return }
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
 
@@ -2283,47 +2452,16 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  const placementSurfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
+  const placementSurfaceHit = hits.find(isPlacementSurface)
 
   // Placement (Setup) / GM free-move — a character is chosen; clicking a tile/voxel places (teleports)
   // them onto any valid surface. Same footprint/occupancy validation for both.
   const placeId = props.placingParticipantId ?? props.gmMoveParticipantId
   if (placeId && placementSurfaceHit) {
-    const hitType = placementSurfaceHit.object.userData.type
-    const tile = placementSurfaceHit.object.userData.tile as { y: number; isSpawnPoint?: boolean } | undefined
-    const voxel = placementSurfaceHit.object.userData.voxel as { x: number; y: number; z: number; isSpawnPoint?: boolean } | undefined
-    if (!props.isDm) {
-      if (hitType === 'voxel') {
-        if (!voxel?.isSpawnPoint) return
-      } else if (!tile?.isSpawnPoint) return
-    }
-    const cell: Vec3 = hitType === 'voxel' && voxel
-      ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
-      : { x: Math.floor(placementSurfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(placementSurfaceHit.point.z) }
-    // Reject if any other placed participant occupies the same tile footprint
-    const placing = props.participants.find(pp => pp.id === placeId)
-    const placingSize: DigimonSize = placing?.type === 'digimon' ? (props.digimonMap[placing.entityId]?.size ?? 'medium') : 'medium'
-    const placingGig = placing?.type === 'digimon' ? props.digimonMap[placing.entityId]?.giganticDimensions : null
-    const { tileCount: pCount } = getSizeParams(placingSize, placingGig)
-    for (let dx = 0; dx < pCount; dx++) {
-      for (let dz = 0; dz < pCount; dz++) {
-        if (props.map && mapVoxelBlocksMovement(props.map, { x: cell.x + dx, y: cell.y, z: cell.z + dz })) return
-      }
-    }
-    const occupied = props.participants.some(p => {
-      if (p.id === placeId) return false
-      const oPos = props.participantPositions[p.id]
-      if (!oPos || oPos.y !== cell.y) return false
-      const oSize: DigimonSize = p.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
-      const oGig = p.type === 'digimon' ? props.digimonMap[p.entityId]?.giganticDimensions : null
-      const { tileCount: oCount } = getSizeParams(oSize, oGig)
-      // AABB overlap on XZ plane
-      return cell.x < oPos.x + oCount && cell.x + pCount > oPos.x &&
-             cell.z < oPos.z + oCount && cell.z + pCount > oPos.z
-    })
-    if (occupied) return
-    if (props.placingParticipantId) emit('unit-placed', placeId, cell)
-    else emit('gm-moved', placeId, cell)
+    const placement = evaluatePlacementAt(placementSurfaceHit, placeId)
+    if (!placement.valid) return
+    if (props.placingParticipantId) emit('unit-placed', placeId, placement.cell)
+    else emit('gm-moved', placeId, placement.cell)
     return
   }
 
@@ -2489,6 +2627,12 @@ watch(() => props.activeTool, (tool) => {
   if (tool !== 'select') closeRadial()
   if (controls) controls.enabled = (tool === 'select')
 }, { immediate: true })
+
+// A HUD drag that ends anywhere but a valid cell (dropped off the map, or Esc) leaves its preview
+// behind, since `dragleave`/`drop` never fire for a refused spot.
+watch(() => props.externalDragParticipantId, (id) => {
+  if (!id && hoverGhostGroup) hoverGhostGroup.clear()
+})
 
 // Enter NPC movement mode when EncounterMap signals reachable cells are ready
 watch(() => props.npcMoveParticipantId, id => {
