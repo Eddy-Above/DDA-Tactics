@@ -18,7 +18,14 @@ import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 import { getTargetOptOuts, isOfferFullyOptedOut } from '~/utils/intercedeOptOuts'
-import { evolutionFormsKey } from '~/utils/evolutionForms'
+import {
+  createEncounterSnapshotGate, shapeActionResponse, battleLogTotal, newBattleLogEntries, isEncounterShownToTamer, needsFullReload,
+  type SnapshotSource,
+} from '~/utils/encounterSnapshot'
+import {
+  ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById,
+  type CombatActionKind, type RecordRefreshPlan,
+} from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { useAutoDismiss } from '~/composables/useAutoDismiss'
@@ -312,8 +319,10 @@ const {
   },
   getWarpTargets: participant => getParticipantEvolutionOptions(participant).warpTargets ?? [],
   spendInspiration: (encounterId, participantId) => spendInspiration(encounterId, participantId, 'reroll', 1),
-  refresh: loadData,
-  afterReroll: loadData,
+  // The composable's API does not hand back the encounter, so resync it directly (one gated GET
+  // plus the records a digivolution touches) instead of reloading everything.
+  refresh: () => resyncCombatState('digivolve'),
+  afterReroll: () => resyncCombatState('spend-inspiration'),
   inspirationLoading: inspirationSpendLoading,
   onError: message => alert(message),
 })
@@ -376,30 +385,140 @@ let refreshInterval: ReturnType<typeof setInterval>
 const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(activeEncounterIdForWs)
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
-let lastEncounterStateVersion = -1
-let lastEncounterStateId: string | null = null
-encounterWs.onMessage((msg) => {
+// One gate for everything that can replace the encounter on this page: pushes, the encounter GET
+// and the response to an action the player just took. See utils/encounterSnapshot.ts.
+const encounterGate = createEncounterSnapshotGate()
+
+// Digimon records the player's own characters can be (the `loadData` candidate rule needs them).
+function ownedDigimonIds(): Set<string> {
+  return new Set(partnerDigimon.value.map((d) => d.id))
+}
+
+// Refetch only what a combat update touched. An evolution or devolution moves a stage and swaps a
+// participant's record; a stat edit changes a record without changing its id; some actions rewrite
+// the player's Tamer. Nothing else is reloaded.
+async function refreshAffectedRecords(plan: RecordRefreshPlan) {
+  const owner = tamer.value
+  const jobs: Promise<unknown>[] = []
+
+  if (plan.digimonIds.length > 0) {
+    jobs.push((async () => {
+      try {
+        const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${plan.digimonIds.join(',')}`)
+        allDigimon.value = mergeRecordsById(allDigimon.value, envelope.data)
+        const partnerIds = new Set(partnerDigimon.value.map((d) => d.id))
+        const partnerUpdates = envelope.data.filter((d) => partnerIds.has(d.id))
+        if (partnerUpdates.length > 0) partnerDigimon.value = mergeRecordsById(partnerDigimon.value, partnerUpdates)
+      } catch (e) {
+        console.error('Failed to refresh digimon records:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.partnerDigimon) {
+    jobs.push((async () => {
+      try {
+        await fetchDigimon({ partnerId: owner.id, campaignId: campaignId.value })
+        partnerDigimon.value = digimonList.value.filter((d: Digimon) => d.partnerId === owner.id)
+        const encounterIds = new Set(allDigimon.value.map((d) => d.id))
+        allDigimon.value = mergeRecordsById(allDigimon.value, partnerDigimon.value.filter((d) => encounterIds.has(d.id)))
+      } catch (e) {
+        console.error('Failed to refresh partner digimon:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.tamerIds.includes(owner.id)) {
+    jobs.push((async () => {
+      try {
+        const fresh = await fetchTamer(owner.id)
+        if (fresh) {
+          tamer.value = fresh
+          allTamers.value = allTamers.value.map((t) => (t.id === fresh.id ? fresh : t))
+        }
+      } catch (e) {
+        console.error('Failed to refresh tamer:', e)
+      }
+    })())
+  }
+
+  if (owner && plan.evolutionLines) jobs.push(fetchEvolutionLines(owner.id, campaignId.value))
+  await Promise.all(jobs)
+}
+
+// The one way a pushed, fetched or action-returned encounter replaces what this page shows. It
+// drops anything older than what is already applied (a slow response must never undo a newer
+// push), hands off to the full load when the encounter no longer belongs on this dashboard, then
+// recomputes this player's requests and grouped results and refetches only the records it touched.
+async function applyEncounterUpdate(
+  incoming: any,
+  source: SnapshotSource,
+  options: { version?: number; action?: CombatActionKind } = {},
+): Promise<boolean> {
+  const owner = tamer.value
+  const previous = activeEncounter.value
+  if (!incoming || !owner) return false
+  if (previous && incoming.id !== previous.id) return false
+  // Nothing is shown yet (or no longer): only the full load decides which encounter that is.
+  if (!previous && source !== 'fetch') return false
+
+  if (!encounterGate.accept(incoming, { source, version: options.version })) {
+    // Composable helpers assign each response into currentEncounter before we see it; restore the base.
+    currentEncounter.value = previous as any
+    return false
+  }
+
+  const next: any = source === 'action' ? shapeActionResponse(incoming, previous) : incoming
+  if (needsFullReload(next, owner.id, ownedDigimonIds())) {
+    currentEncounter.value = previous as any
+    void loadData()
+    return false
+  }
+
+  activeEncounter.value = next
+  // Keep the composable's base in sync too — nextTurn() and other composable methods compute from
+  // it, and a stale base made the player's End Turn over-advance the initiative each round.
+  currentEncounter.value = next
+  myRequests.value = getMyPendingRequests(next, owner.id)
+  reconstructAttackResults(next, owner)
+
+  const plan = planRecordRefresh(
+    previous,
+    next,
+    { tamerId: owner.id, knownDigimonIds: new Set(allDigimon.value.map((d) => d.id)) },
+    options.action ? ACTION_RECORD_HINTS[options.action] : null,
+  )
+  if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
+  return true
+}
+
+// Targeted resync for recovery and for flows whose API does not hand back the encounter: one
+// encounter GET through the gate plus the records it touched, instead of the full load. With
+// nothing on screen yet, the full load is what decides which encounter to show.
+async function resyncCombatState(action?: CombatActionKind) {
+  const id = activeEncounter.value?.id
+  if (!id) {
+    await loadData()
+    return
+  }
+  const fetched = await fetchEncounter(id)
+  if (!fetched) return // the next push or the 120 s poll retries
+  await applyEncounterUpdate(fetched, 'fetch', { action })
+}
+
+// Applies the encounter an action returned. When the action returned none (its request failed,
+// which the caller has already reported), a targeted resync stands in; neither reloads everything.
+async function applyActionResult(result: any, action?: CombatActionKind) {
+  if (result && result.id) {
+    await applyEncounterUpdate(result, 'action', { action })
+    return
+  }
+  await resyncCombatState(action)
+}
+
+function handleEncounterSocketMessage(msg: any) {
   if (msg.type === 'encounter-state') {
-    if (msg.encounterId !== lastEncounterStateId) {
-      lastEncounterStateId = msg.encounterId
-      lastEncounterStateVersion = -1
-    }
-    if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
-    lastEncounterStateVersion = msg.version
-    // A digivolve/devolve from another client (e.g. the GM's Manage modal) moves the
-    // evolution line's currentStageIndex, which the Digivolve/Devolve options read
-    const formsChanged = evolutionFormsKey(activeEncounter.value) !== evolutionFormsKey(msg.encounter)
-    activeEncounter.value = msg.encounter as any
-    // Keep the composable's currentEncounter in sync too — nextTurn() and other
-    // composable methods compute from it, and a stale base caused the player's
-    // End Turn to over-advance the initiative each round (mirrors the GM page).
-    currentEncounter.value = msg.encounter as any
-    syncEncounterDigimon()
-    if (formsChanged && tamer.value) fetchEvolutionLines(tamer.value.id, campaignId.value)
-    if (tamer.value) {
-      myRequests.value = getMyPendingRequests(activeEncounter.value!, tamer.value.id)
-      reconstructAttackResults(activeEncounter.value!, tamer.value)
-    }
+    void applyEncounterUpdate(msg.encounter, 'ws', { version: msg.version })
     return
   }
   if (msg.type !== 'encounter-updated') return
@@ -408,7 +527,11 @@ encounterWs.onMessage((msg) => {
     encounterUpdateDebounce = null
     loadData()
   }, 200)
-})
+}
+
+encounterWs.onMessage((msg) => handleEncounterSocketMessage(msg))
+// A dropped socket misses pushes; resync once it is back (the 120 s poll remains the backstop).
+encounterWs.onReconnect(() => { void resyncCombatState() })
 
 // Reconstruct attack results from persisted responses (handles page refresh
 // and live pushes) — finds dodge-rolled responses to my pending attacks that
@@ -516,18 +639,9 @@ async function loadData() {
       // Every published encounter this tamer belongs to. A tamer can legitimately be
       // queued into more than one, so pick deliberately instead of taking whichever
       // happened to come back first.
-      const candidates = encounters.value.filter((e) => {
-        if (e.phase !== 'combat' && e.phase !== 'setup' && e.phase !== 'initiative') return false
-        const pts = (e.participants as CombatParticipant[]) || []
-        const isParticipant = pts.some(
-          (p) =>
-            (p.type === 'tamer' && p.entityId === fetchedTamer.id) ||
-            (p.type === 'digimon' && partnerDigimon.value.some((d) => d.id === p.entityId))
-        )
-        const reqs = (e.pendingRequests as any[]) || []
-        const hasPendingRequests = reqs.some((r) => r.targetTamerId === fetchedTamer.id)
-        return isParticipant || hasPendingRequests
-      })
+      // (The same rule applyEncounterUpdate uses to decide an encounter no longer belongs here.)
+      const partnerIds = ownedDigimonIds()
+      const candidates = encounters.value.filter((e) => isEncounterShownToTamer(e, fetchedTamer.id, partnerIds))
 
       // Whatever is actually waiting on this player wins; then a live fight; then the
       // most recently touched (the list arrives ordered by updatedAt).
@@ -556,7 +670,16 @@ async function loadData() {
 
         // Fetch full encounter to ensure all JSON fields (e.g. mapId) are present
         const fullEncounter = await fetchEncounter(active.id)
-        activeEncounter.value = (fullEncounter ?? active) as any
+        // The list copy has no battle log, so it only stands in when nothing for this encounter is
+        // held yet. A GET that was overtaken by a newer push or response is dropped by the gate and
+        // the page keeps the newer state.
+        const incoming = fullEncounter ?? (activeEncounter.value?.id === active.id ? null : active)
+        if (incoming && encounterGate.accept(incoming, { source: 'fetch' })) {
+          activeEncounter.value = incoming as any
+          currentEncounter.value = incoming as any
+        } else {
+          currentEncounter.value = activeEncounter.value as any
+        }
         await syncEncounterDigimon()
         // Extract my pending requests
         myRequests.value = getMyPendingRequests(activeEncounter.value!, fetchedTamer.id)
@@ -566,6 +689,7 @@ async function loadData() {
       } else {
         activeEncounter.value = null
         myRequests.value = []
+        encounterGate.reset()
       }
     }
 
@@ -1775,7 +1899,9 @@ const {
   getParticipantAttacks,
   getAttackStats,
   submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
-  refreshEncounter: fetchEncounter,
+  // The clash-action response is not handed back; resync the encounter through the gate (it used
+  // to fetch into the composable only, leaving this page's copy to the next push).
+  refreshEncounter: () => resyncCombatState('clash'),
   beginAreaAttack: (participant, attack) => {
     showMapView.value = true
     selectAttackAndShowTargets(participant, attack)
@@ -1914,7 +2040,7 @@ async function usePlayerAction(participant: CombatParticipant, actionType: 'move
   target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
   await updateEncounter(activeEncounter.value.id, { participants })
 
-  await addBattleLogEntry(activeEncounter.value.id, {
+  const updated = await addBattleLogEntry(activeEncounter.value.id, {
     round: activeEncounter.value.round,
     actorId: target.id,
     actorName: getParticipantName(target) || 'Unknown',
@@ -1924,7 +2050,7 @@ async function usePlayerAction(participant: CombatParticipant, actionType: 'move
     damage: null,
     effects: [],
   })
-  await loadData()
+  await applyActionResult(updated, 'move')
 }
 
 // Direct action - opens target selector
@@ -1949,7 +2075,7 @@ async function confirmPlayerDirect(targetDigimon: CombatParticipant) {
   if (!tamerParticipant) return
 
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/direct`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/direct`, {
       method: 'POST',
       body: {
         participantId: tamerParticipant.id,
@@ -1958,7 +2084,7 @@ async function confirmPlayerDirect(targetDigimon: CombatParticipant) {
       },
     })
     showDirectTargetSelector.value = false
-    await loadData()
+    await applyActionResult(updated, 'direct')
   } catch (e: any) {
     console.error('Direct failed:', e)
     alert(e?.data?.message || 'Failed to execute Direct')
@@ -2080,11 +2206,11 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
 
   // Devolve — proceed directly (no willpower roll)
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/digivolve`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/digivolve`, {
       method: 'POST',
       body: { participantId: participant.id, targetChainIndex },
     })
-    await loadData()
+    await applyActionResult(updated, 'devolve')
   } catch (e: any) {
     console.error('Devolve failed:', e)
     alert(e?.data?.message || 'Failed to devolve')
@@ -2120,8 +2246,8 @@ async function handleModeChangeSwap(participant: CombatParticipant, statA: Swapp
     }
   }
 
-  await modeChange(activeEncounter.value.id, participant.id, newSwaps)
-  await fetchEncounter(activeEncounter.value.id)
+  const updated = await modeChange(activeEncounter.value.id, participant.id, newSwaps)
+  await applyActionResult(updated, 'mode-change')
 }
 
 function openAttributeRollModal(attr: string) {
@@ -2328,7 +2454,8 @@ async function confirmAccuracyReview() {
       const targets = ctx.areaTargets
       // Shared groupId so all targets' results from this AoE cast show in a single popup
       const areaGroupId = `area-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+      // Counted from the true log length: the page's copy is trimmed to the last 50 entries
+      const battleLogBefore = battleLogTotal(activeEncounter.value)
 
       // Single call for all targets — deducts action once and delegates to intercede-offer with targetIds
       const result = await performAttack(
@@ -2349,8 +2476,7 @@ async function confirmAccuracyReview() {
       if (ctx.clashAreaAttack) await executeClashAction(ctx.clashAreaAttack.controllerId, 'end')
 
       if (result) {
-        const returnedBattleLog = (result.battleLog as any[]) || []
-        const newEntries = returnedBattleLog.slice(preBattleLogLength)
+        const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
 
         // Drop targets fully shielded by the attacker's Selective Targeting (server-decided):
         // they get no dodge prompt and must not be awaited in the combined result modal.
@@ -2415,15 +2541,16 @@ async function confirmAccuracyReview() {
 
         if (accuracySuccesses === 0 && effectiveTargets.length > 0) maybeShowGroupModal(areaGroupId)
         if (effectiveTargets.length === 0) delete attackResultGroupTotals.value[areaGroupId]
-        await loadData()
+        await applyActionResult(result, 'attack')
       } else {
         console.error('Failed to perform area attack')
         alert(encountersError.value || 'Failed to perform area attack')
       }
     } else {
       const target = ctx.target
-      // Capture battle log length before attack so we only check NEW entries for immediate resolution
-      const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+      // Capture the log length before the attack so we only check NEW entries for immediate resolution
+      // (the true length: the page's copy is trimmed to the last 50 entries)
+      const battleLogBefore = battleLogTotal(activeEncounter.value)
 
       const result = await performAttack(
         activeEncounter.value.id,
@@ -2475,8 +2602,7 @@ async function confirmAccuracyReview() {
         } else {
           // Check if the attack was immediately resolved (NPC auto-resolve, no interceptors)
           // Only search NEW entries (added during this request) to avoid matching previous attacks
-          const returnedBattleLog = (result.battleLog as any[]) || []
-          const newEntries = returnedBattleLog.slice(preBattleLogLength)
+          const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
           const resolvedLogEntry = [...newEntries].reverse().find(
             (entry: any) =>
               (entry.action === 'Dodge' || entry.action === 'Dodge (Support)' || entry.effects?.includes('Intercede')) &&
@@ -2515,8 +2641,8 @@ async function confirmAccuracyReview() {
           }
         }
 
-        // Refresh to see updated state
-        await loadData()
+        // Show the state the attack returned
+        await applyActionResult(result, 'attack')
       } else {
         console.error('Failed to perform attack')
         alert(encountersError.value || 'Failed to perform attack')
@@ -2860,8 +2986,8 @@ async function submitDigimonSelection(digimonId: string | null) {
     console.log('Digimon selection response result:', result)
 
     if (result) {
-      // Refresh to clear the request (modal will close automatically)
-      await loadData()
+      // The returned encounter no longer holds the request (modal will close automatically)
+      await applyActionResult(result, 'request-response')
     } else {
       console.error('Failed to submit digimon selection - response was falsy')
       // Keep the selection visible even on failure so user knows their click registered
@@ -2922,7 +3048,7 @@ async function submitInitiativeRoll() {
     if (result) {
       // Reset and refresh
       initiativeRollResult.value = null
-      await loadData()
+      await applyActionResult(result, 'request-response')
     } else {
       console.error('Failed to submit initiative roll')
     }
@@ -2991,7 +3117,7 @@ async function submitDodgeRoll() {
       }
       dodgeRequestId.value = capturedRequest.id
 
-      // Extract the dodge result from the API response before calling loadData()
+      // Extract the dodge result from the API response before applying it
       const battleLog = (result.battleLog as any[]) || []
       const isSupportDodge = capturedRequest.data?.isSupportAttack === true
       const dodgeEntry = battleLog.findLast(
@@ -3018,7 +3144,7 @@ async function submitDodgeRoll() {
         showDodgeResultModal.value = true
       }
 
-      await loadData()
+      await applyActionResult(result, 'dodge')
     } else {
       console.error('Failed to submit dodge roll')
     }
@@ -3030,7 +3156,7 @@ async function submitDodgeRoll() {
 async function declineCounterattack() {
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value) return
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentCounterattackRequest.value.id,
       tamer.value.id,
@@ -3039,7 +3165,7 @@ async function declineCounterattack() {
     counterattackRollResult.value = null
     counterattackSelectedAttack.value = null
     hasRolledCounterattack.value = false
-    await loadData()
+    await applyActionResult(result, 'counterattack')
   } catch (error) {
     console.error('Error declining counterattack:', error)
   }
@@ -3048,7 +3174,7 @@ async function declineCounterattack() {
 async function submitCounterattack() {
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value || !counterattackRollResult.value || !counterattackSelectedAttack.value) return
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentCounterattackRequest.value.id,
       tamer.value.id,
@@ -3064,7 +3190,7 @@ async function submitCounterattack() {
     counterattackRollResult.value = null
     counterattackSelectedAttack.value = null
     hasRolledCounterattack.value = false
-    await loadData()
+    await applyActionResult(result, 'counterattack')
   } catch (error) {
     console.error('Error submitting counterattack:', error)
   }
@@ -3105,14 +3231,15 @@ async function submitHealthRoll() {
     if (result) {
       healthRollResult.value = null
 
-      // Auto-dismiss the request after submission
+      // Auto-dismiss the request after submission; its result is the newer encounter
+      let latest = result
       try {
-        await cancelRequest(activeEncounter.value.id, capturedRequest.id)
+        latest = (await cancelRequest(activeEncounter.value.id, capturedRequest.id)) ?? result
       } catch (e) {
         // Request may already be cleaned up
       }
 
-      await loadData()
+      await applyActionResult(latest, 'health')
     } else {
       console.error('Failed to submit health roll')
     }
@@ -3142,7 +3269,7 @@ async function confirmThrowImpactAttack() {
     }
     const accuracySuccesses = accuracyDiceResults.filter(d => d >= 5).length
 
-    const preBattleLogLength = (activeEncounter.value?.battleLog as any[])?.length || 0
+    const battleLogBefore = battleLogTotal(activeEncounter.value)
 
     const result = await performAttack(
       activeEncounter.value.id,
@@ -3159,8 +3286,7 @@ async function confirmThrowImpactAttack() {
     )
 
     if (result) {
-      const returnedBattleLog = (result.battleLog as any[]) || []
-      const newEntries = returnedBattleLog.slice(preBattleLogLength)
+      const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
 
       for (const target of targets) {
         if (accuracySuccesses === 0) {
@@ -3214,13 +3340,14 @@ async function confirmThrowImpactAttack() {
 
       if (accuracySuccesses === 0) showAttackResultModal.value = true
 
+      let latest = result
       try {
-        await cancelRequest(activeEncounter.value.id, request.id)
+        latest = (await cancelRequest(activeEncounter.value.id, request.id)) ?? result
       } catch (e) {
         // Request may already be cleaned up
       }
 
-      await loadData()
+      await applyActionResult(latest, 'throw-impact')
     } else {
       console.error('Failed to perform throw impact attack')
       alert(encountersError.value || 'Failed to perform throw impact attack')
@@ -3235,7 +3362,7 @@ async function submitRecoveryRoll() {
   if (!activeEncounter.value || !currentRecoveryCheckRequest.value || !tamer.value || !recoveryRollResult.value) return
   const capturedRequest = currentRecoveryCheckRequest.value
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       capturedRequest.id,
       tamer.value.id,
@@ -3249,7 +3376,7 @@ async function submitRecoveryRoll() {
     )
     recoveryRollResult.value = null
     hasRolledRecovery.value = false
-    await loadData()
+    await applyActionResult(result, 'recovery')
   } catch (error) {
     console.error('Error submitting recovery roll:', error)
   }
@@ -3268,7 +3395,7 @@ function showClashCheckResult(result: NonNullable<typeof clashCheckResultData.va
 
 async function closeClashCheckResult() {
   clashCheckResultData.value = null
-  await loadData()
+  await resyncCombatState('clash')
 }
 
 // Targets this player (tamer + partner digimon) is eligible to protect for an area-attack offer
@@ -3384,7 +3511,7 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
       body,
     })
 
-    // Extract the intercede result from the API response before calling loadData()
+    // Extract the intercede result from the API response before applying it
     if (result) {
       const battleLog = (result.battleLog as any[]) || []
       const intercedeEntry = battleLog.findLast(
@@ -3415,7 +3542,7 @@ async function handleIntercedeClaim(interceptorParticipantId: string, throwOptio
       }
     }
 
-    await loadData()
+    await applyActionResult(result, 'intercede-claim')
   } catch (e: any) {
     if (e?.statusCode === 409) {
       alert(e?.data?.message || 'This intercede offer is no longer available.')
@@ -3434,13 +3561,13 @@ async function handleIntercedeSkip() {
 
   intercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
         requestId: currentIntercedeRequest.value.id,
       },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-skip')
   } catch (e: any) {
     console.error('Intercede skip failed:', e)
     alert(e?.data?.message || 'Failed to skip intercede')
@@ -3460,7 +3587,7 @@ async function handleIntercedeOptOut() {
 
   intercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
         requestId: request.id,
@@ -3468,7 +3595,7 @@ async function handleIntercedeOptOut() {
         optOutTargetIds: [targetId],
       },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-optouts')
   } catch (e: any) {
     console.error('Intercede opt-out failed:', e)
     alert(e?.data?.message || 'Failed to opt out')
@@ -3500,11 +3627,11 @@ async function handleSaveIntercedeOptions() {
     const optOuts = allIds.filter(id => !intercedeOptionsSelections.value.has(id))
     // The server also clears any prompt already queued for me about a target I just unchecked
     // (area prompts lose just those targets), in the same request.
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/intercede-optouts`, {
       method: 'POST',
       body: { ownerId: tamer.value.id, intercedeOptOuts: optOuts },
     })
-    await loadData()
+    await applyActionResult(updated, 'intercede-optouts')
 
     showIntercedeOptionsModal.value = false
   } catch (e: any) {
@@ -3522,13 +3649,13 @@ async function handleDivineProtectionUsed() {
   if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
   divineProtectionLoading.value = true
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentDivineProtectionRequest.value.id,
       tamer.value.id,
       { type: 'divine-protection-used' },
     )
-    await loadData()
+    await applyActionResult(result, 'divine-protection')
   } catch (e: any) {
     console.error('Divine Protection failed:', e)
     alert(e?.data?.message || 'Failed to invoke Divine Protection')
@@ -3541,13 +3668,13 @@ async function handleDivineProtectionDeclined() {
   if (!activeEncounter.value || !currentDivineProtectionRequest.value || !tamer.value) return
   divineProtectionLoading.value = true
   try {
-    await respondToRequest(
+    const result = await respondToRequest(
       activeEncounter.value.id,
       currentDivineProtectionRequest.value.id,
       tamer.value.id,
       { type: 'divine-protection-declined' },
     )
-    await loadData()
+    await applyActionResult(result, 'divine-protection')
   } catch (e: any) {
     console.error('Divine Protection declined failed:', e)
     alert(e?.data?.message || 'Failed to decline Divine Protection')
@@ -3564,8 +3691,8 @@ async function handleSpendInspiration(
   if (!activeEncounter.value || !myTamerParticipant.value) return
   inspirationSpendLoading.value = true
   try {
-    await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
-    await loadData()
+    const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
+    await applyActionResult(result, 'spend-inspiration')
   } catch (e: any) {
     console.error('Inspiration spend failed:', e)
     alert(e?.data?.message || 'Failed to spend Inspiration')
@@ -3577,11 +3704,11 @@ async function handleSpendInspiration(
 async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
   if (!activeEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/special-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName, targetId },
     })
-    await loadData()
+    await applyActionResult(updated, 'special-order')
     showPlayerSpecialOrdersModal.value = false
   } catch (e: any) {
     console.error('Special order failed:', e)
@@ -3592,11 +3719,11 @@ async function handleUseSpecialOrder(participant: CombatParticipant, orderName: 
 async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
   if (!activeEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${activeEncounter.value.id}/actions/skill-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName },
     })
-    await loadData()
+    await applyActionResult(updated, 'skill-order')
   } catch (e: any) {
     console.error('Skill order failed:', e)
     alert(e?.data?.message || 'Failed to use skill order')
@@ -4142,10 +4269,9 @@ async function handleEndTurn() {
   endingTurn.value = true
   try {
     const updated = await nextTurn(activeEncounter.value.id, digimonMap.value, houseRules.value)
-    if (updated) {
-      activeEncounter.value = updated as any
-      await syncEncounterDigimon()
-    }
+    // The PUT's own response, through the same gate as every other snapshot: it can no longer
+    // overwrite a push that arrived while the request was in flight.
+    if (updated) await applyEncounterUpdate(updated, 'action', { action: 'end-turn' })
   } finally {
     endingTurn.value = false
   }

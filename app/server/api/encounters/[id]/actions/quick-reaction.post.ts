@@ -308,6 +308,7 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
   // Persist Quick Reaction to tamer's usedPerDayOrders
   await db.update(tamers).set({
     usedPerDayOrders: [...usedPerDayOrders, 'Quick Reaction'],
+    updatedAt: new Date(), // lets a page that refetches the Tamer see the change
   }).where(eq(tamers.id, tamerParticipant.entityId))
 
   // Add battle log entry

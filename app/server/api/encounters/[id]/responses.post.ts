@@ -1386,7 +1386,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         const [rookieDigi] = await db.select().from(digimon).where(eq(digimon.id, rookieDigimonId))
         if (rookieDigi) {
           const newWounds = Math.max(0, (rookieDigi.currentWounds ?? 0) - digimonSuccesses)
-          await db.update(digimon).set({ currentWounds: newWounds }).where(eq(digimon.id, rookieDigimonId))
+          await db.update(digimon).set({ currentWounds: newWounds, updatedAt: new Date() }).where(eq(digimon.id, rookieDigimonId))
         }
       }
     }

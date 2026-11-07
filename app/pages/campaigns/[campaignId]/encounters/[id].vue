@@ -13,7 +13,8 @@ import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChange
 import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
-import { evolutionFormsKey } from '~/utils/evolutionForms'
+import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encounterSnapshot'
+import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, type CombatActionKind, type RecordRefreshPlan } from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
@@ -132,14 +133,11 @@ const {
   },
   getWarpTargets: participant => getParticipantEvolutionOptions(participant).warpTargets ?? [],
   spendInspiration: (encounterId, participantId) => spendInspiration(encounterId, participantId, 'reroll', 1),
+  // The composable does not hand back the encounter: resync it through the gate, refetching only
+  // the Digimon, evolution lines and Tamer a digivolution touched (not every list in the campaign).
   refresh: async () => {
     if (!currentEncounter.value) return
-    await Promise.all([
-      fetchEncounter(currentEncounter.value.id),
-      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-      fetchEvolutionLines(),
-      fetchTamers(campaignId.value),
-    ])
+    await resyncEncounter('digivolve')
   },
   onError: message => alert(message),
 })
@@ -717,7 +715,7 @@ const {
   getParticipantAttacks,
   getAttackStats,
   submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
-  refreshEncounter: fetchEncounter,
+  refreshEncounter: () => resyncEncounter('clash'),
   beginAreaAttack: (participant, attack) => {
     showMapView.value = true
     selectAttackAndShowTargets(participant, attack)
@@ -1388,14 +1386,14 @@ async function handleGmSaveCharacterOptOuts() {
   if (!currentEncounter.value || !gmIntercedeRequest.value) return
   gmIntercedeLoading.value = true
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST',
       body: {
         requestId: gmIntercedeRequest.value.id,
         characterOptOuts: Array.from(gmOptOutSelections.value),
       }
     })
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'intercede-optouts')
     gmIntercedeView.value = 'main'
   } finally {
     gmIntercedeLoading.value = false
@@ -1947,11 +1945,9 @@ async function processResponse(response: any) {
     }
     // Dodge responses: damage already auto-calculated server-side. Just clean up.
     if (response.response.type === 'dodge-rolled') {
-      if (request) {
-        await cancelRequest(currentEncounter.value.id, request.id)
-      }
-      await deleteResponse(currentEncounter.value.id, response.id)
-      await fetchEncounter(currentEncounter.value.id)
+      const afterCancel = request ? await cancelRequest(currentEncounter.value.id, request.id) : null
+      const afterDelete = await deleteResponse(currentEncounter.value.id, response.id)
+      await applyActionResult(afterDelete ?? afterCancel, 'dodge')
     }
   } catch (error) {
     console.error('Error processing response:', error)
@@ -2189,15 +2185,11 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
 
   // Non-partner digimon or devolve — proceed directly
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
       method: 'POST',
       body: { participantId: participant.id, targetChainIndex },
     })
-    await Promise.all([
-      fetchEncounter(currentEncounter.value.id),
-      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-      fetchEvolutionLines(),
-    ])
+    await applyActionResult(updated, 'digivolve')
   } catch (e: any) {
     console.error('Digivolve failed:', e)
     alert(e?.data?.message || 'Failed to digivolve')
@@ -2262,14 +2254,11 @@ function getTamerSpecialOrders(participant: CombatParticipant) {
 async function handleUseSpecialOrder(participant: CombatParticipant, orderName: string, targetId?: string) {
   if (!currentEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/special-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/special-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName, targetId },
     })
-    await Promise.all([
-      fetchEncounter(currentEncounter.value.id),
-      fetchTamers(campaignId.value),
-    ])
+    await applyActionResult(updated, 'special-order')
     showSpecialOrdersModal.value = false
   } catch (e: any) {
     console.error('Special order failed:', e)
@@ -2298,14 +2287,11 @@ function isPassiveSkillOrder(order: { type: string }) {
 async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
   if (!currentEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/skill-order`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/skill-order`, {
       method: 'POST',
       body: { participantId: participant.id, orderName },
     })
-    await Promise.all([
-      fetchEncounter(currentEncounter.value.id),
-      fetchTamers(campaignId.value),
-    ])
+    await applyActionResult(updated, 'skill-order')
   } catch (e: any) {
     console.error('Skill order failed:', e)
     alert(e?.data?.message || 'Failed to use skill order')
@@ -2455,7 +2441,7 @@ async function confirmDirect(targetDigimon: CombatParticipant) {
   if (!tamer || tamer.type !== 'tamer') return
 
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/direct`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/direct`, {
       method: 'POST',
       body: {
         participantId: tamer.id,
@@ -2464,7 +2450,7 @@ async function confirmDirect(targetDigimon: CombatParticipant) {
       },
     })
     showDirectTargetSelector.value = false
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'direct')
   } catch (e: any) {
     console.error('Direct failed:', e)
     alert(e?.data?.message || 'Failed to execute Direct')
@@ -2611,11 +2597,11 @@ const cheerUpTargets = computed(() => {
 async function executeCheerUp() {
   if (!currentEncounter.value || cheerUpTargets.value.length === 0) return
   const target = cheerUpTargets.value[0]
-  await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/cheer-up`, {
+  const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/cheer-up`, {
     method: 'POST',
     body: { participantId: activeParticipant.value!.id, targetParticipantId: target.id },
   })
-  await fetchEncounter(currentEncounter.value.id)
+  await applyActionResult(updated)
 }
 
 // Force stance change (no action cost, Manage modal)
@@ -2645,15 +2631,11 @@ async function forceChangeStance(participantId: string, stance: CombatParticipan
 async function forceDigivolve(participant: CombatParticipant, targetChainIndex: number) {
   if (!currentEncounter.value) return
   try {
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
       method: 'POST',
       body: { participantId: participant.id, targetChainIndex, force: true },
     })
-    await Promise.all([
-      fetchEncounter(currentEncounter.value.id),
-      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-      fetchEvolutionLines(),
-    ])
+    await applyActionResult(updated, 'digivolve')
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to force digivolve')
   }
@@ -2818,10 +2800,8 @@ async function handleGmDodgeRoll(request: any) {
     )
 
     if (result) {
-      // Remove the processed request from pending list
-      await cancelRequest(currentEncounter.value.id, request.id)
-      // Refresh encounter to see updated state
-      await fetchEncounter(currentEncounter.value.id)
+      // Remove the processed request from pending list; its result is the newer encounter
+      await applyActionResult((await cancelRequest(currentEncounter.value.id, request.id)) ?? result, 'dodge')
     }
   } catch (error) {
     console.error('Error rolling dodge for GM:', error)
@@ -2846,39 +2826,94 @@ let refreshInterval: ReturnType<typeof setInterval>
 const currentEncounterIdForWs = computed(() => currentEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(currentEncounterIdForWs)
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
-let lastEncounterStateVersion = -1
-let lastEncounterStateId: string | null = null
-encounterWs.onMessage((msg) => {
+// One gate for everything that can replace the encounter on this page: pushes, GETs and the
+// responses to GM actions. See utils/encounterSnapshot.ts.
+const encounterGate = createEncounterSnapshotGate()
+// The newest snapshot the gate accepted. The composable assigns every GET and response into
+// currentEncounter before the gate sees it, so a rejected (older) one is replaced by this.
+let lastAppliedEncounter: any = null
+
+// Refetch only what a snapshot touched: Digimon the page has never loaded or whose participant
+// mirror changed, the evolution lines when a form changed, the Tamers after an order or digivolve.
+async function refreshAffectedRecords(plan: RecordRefreshPlan) {
+  const jobs: Promise<unknown>[] = []
+  if (plan.digimonIds.length > 0) {
+    jobs.push((async () => {
+      try {
+        const envelope = await $fetch<{ data: any[] }>(`/api/digimon?ids=${plan.digimonIds.join(',')}`)
+        digimonList.value = mergeRecordsById(digimonList.value, envelope.data)
+      } catch (e) {
+        console.error('Failed to refresh digimon records:', e)
+      }
+    })())
+  }
+  if (plan.evolutionLines) jobs.push(fetchEvolutionLines())
+  if (plan.tamerIds.length > 0) jobs.push(fetchTamers(campaignId.value))
+  await Promise.all(jobs)
+}
+
+// The one way a pushed, fetched or action-returned encounter replaces what this page shows: drop
+// anything older than what is applied, then refetch only the records it touched.
+async function applyEncounterUpdate(
+  incoming: any,
+  source: 'ws' | 'action' | 'fetch',
+  options: { version?: number; action?: CombatActionKind } = {},
+): Promise<boolean> {
+  if (!incoming) return false
+  if (!encounterGate.accept(incoming, { source, version: options.version })) {
+    if (lastAppliedEncounter && lastAppliedEncounter.id === incoming.id) currentEncounter.value = lastAppliedEncounter
+    return false
+  }
+  const previous = lastAppliedEncounter?.id === incoming.id ? lastAppliedEncounter : null
+  const next = source === 'action' ? shapeActionResponse(incoming, previous) : incoming
+  lastAppliedEncounter = next
+  currentEncounter.value = next as any
+  const plan = planRecordRefresh(
+    previous,
+    next,
+    { tamerId: '*', knownDigimonIds: new Set(digimonList.value.map((d: any) => d.id)) },
+    options.action ? ACTION_RECORD_HINTS[options.action] : null,
+  )
+  if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
+  return true
+}
+
+// Targeted resync for recovery and for flows whose API does not hand back the encounter.
+async function resyncEncounter(action?: CombatActionKind) {
+  const id = (currentEncounter.value?.id ?? route.params.id) as string
+  const fetched = await fetchEncounter(id)
+  if (fetched) await applyEncounterUpdate(fetched, 'fetch', { action })
+}
+
+// Applies the encounter an action returned; a failed request returns none, so resync instead.
+async function applyActionResult(result: any, action?: CombatActionKind) {
+  if (result && result.id) {
+    await applyEncounterUpdate(result, 'action', { action })
+    return
+  }
+  await resyncEncounter(action)
+}
+
+function handleEncounterSocketMessage(msg: any) {
   if (msg.type === 'encounter-state') {
-    if (msg.encounterId !== lastEncounterStateId) {
-      lastEncounterStateId = msg.encounterId
-      lastEncounterStateVersion = -1
-    }
-    if (typeof msg.version === 'number' && msg.version < lastEncounterStateVersion) return
-    lastEncounterStateVersion = msg.version
-    const formsKey = evolutionFormsKey(currentEncounter.value)
-    currentEncounter.value = msg.encounter as any
-    syncEncounterDigimon()
-    refreshEvolutionLinesIfFormsChanged(formsKey)
+    void applyEncounterUpdate(msg.encounter, 'ws', { version: msg.version })
     return
   }
   if (msg.type !== 'encounter-updated') return
   if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
   encounterUpdateDebounce = setTimeout(async () => {
     encounterUpdateDebounce = null
-    const formsKey = evolutionFormsKey(currentEncounter.value)
-    await fetchEncounter(route.params.id as string)
-    await syncEncounterDigimon()
-    refreshEvolutionLinesIfFormsChanged(formsKey)
+    await resyncEncounter()
   }, 200)
-})
-
-// A digivolve/devolve from another client (e.g. a player's Willpower roll) moves the evolution
-// line's currentStageIndex, which the Digivolve/Devolve and Manage-modal options read
-function refreshEvolutionLinesIfFormsChanged(formsKeyBefore: string) {
-  if (evolutionFormsKey(currentEncounter.value) !== formsKeyBefore) fetchEvolutionLines()
 }
 
+encounterWs.onMessage((msg) => handleEncounterSocketMessage(msg))
+// A dropped socket misses pushes; resync once it is back (the 120 s poll remains the backstop).
+encounterWs.onReconnect(() => { void resyncEncounter() })
+
+// (A digivolve/devolve from another client moves an evolution line's currentStageIndex, which the
+// Digivolve/Devolve and Manage-modal options read; planRecordRefresh notices the changed form and
+// applyEncounterUpdate refetches the lines.)
 async function syncEncounterDigimon() {
   const participants: any[] = (currentEncounter.value?.participants as any[]) ?? []
   const knownIds = new Set(digimonList.value.map(d => d.id))
@@ -2911,15 +2946,14 @@ onMounted(async () => {
   }
 
   await syncEncounterDigimon()
+  // Seed the gate with the initial load so a response that was in flight before it cannot undo it
+  if (currentEncounter.value && encounterGate.accept(currentEncounter.value, { source: 'fetch' })) {
+    lastAppliedEncounter = currentEncounter.value
+  }
 
   // Auto-refresh encounter as a low-frequency fallback; the WebSocket above
   // handles near-instant updates while connected.
-  refreshInterval = setInterval(async () => {
-    const formsKey = evolutionFormsKey(currentEncounter.value)
-    await fetchEncounter(route.params.id as string)
-    await syncEncounterDigimon()
-    refreshEvolutionLinesIfFormsChanged(formsKey)
-  }, 120000)
+  refreshInterval = setInterval(() => { void resyncEncounter() }, 120000)
 })
 
 onUnmounted(() => {
@@ -3014,8 +3048,8 @@ async function handleModeChangeSwap(participant: CombatParticipant, statA: Swapp
     }
   }
 
-  await modeChange(currentEncounter.value.id, participant.id, newSwaps)
-  await fetchEncounter(currentEncounter.value.id)
+  const updated = await modeChange(currentEncounter.value.id, participant.id, newSwaps)
+  await applyActionResult(updated, 'mode-change')
 }
 
 // Inspiration handlers
@@ -3123,13 +3157,13 @@ async function handleInitiateClash(participantId: string, targetId: string) {
       bodyDiceResults.push(Math.floor(Math.random() * 6) + 1)
     }
     const bodyRoll = bodyDiceResults.reduce((a, b) => a + b, 0)
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/clash-initiate`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/clash-initiate`, {
       method: 'POST',
       body: { participantId, targetId, tamerId, bodyRoll, bodyDiceResults },
     })
     showTargetSelector.value = false
     selectedAttack.value = null
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'clash')
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to initiate clash')
   }
@@ -3147,11 +3181,11 @@ async function handleClashCheck(participantId: string) {
       diceResults.push(Math.floor(Math.random() * 6) + 1)
     }
     const roll = diceResults.reduce((a, b) => a + b, 0)
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/clash-check`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/clash-check`, {
       method: 'POST',
       body: { clashId: participant.clash.clashId, participantId, tamerId, roll, diceResults },
     })
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'clash')
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to submit clash check')
   }
@@ -3164,7 +3198,7 @@ async function executeClashAction(participantId: string, actionType: 'attack' | 
   if (!participant?.clash?.clashId) return
   try {
     const tamerId = participant.type === 'tamer' ? participant.entityId : undefined
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/clash-action`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/clash-action`, {
       method: 'POST',
       body: {
         clashId: participant.clash.clashId,
@@ -3174,7 +3208,7 @@ async function executeClashAction(participantId: string, actionType: 'attack' | 
         landingPos: options?.landingPos,
       },
     })
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'clash')
   } catch (e: any) {
     alert(e?.data?.message || `Failed to execute clash ${actionType}`)
   }
@@ -3245,11 +3279,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
       diceResults.push(Math.floor(Math.random() * 6) + 1)
     }
     const roll = diceResults.reduce((a, b) => a + b, 0)
-    await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/clash-break`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/clash-break`, {
       method: 'POST',
       body: { clashId, breakerId: participantId, tamerId, roll, diceResults },
     })
-    await fetchEncounter(currentEncounter.value.id)
+    await applyActionResult(updated, 'clash')
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to break clash')
   }
