@@ -52,6 +52,10 @@
           :charge-move-participant-id="chargeMoveParticipantId"
           :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
           :eddy-soul-rules="eddySoulRules"
+          :radial-options="radialOptions"
+          @attack-selected="(id, attackId) => emit('attack-selected', id, attackId)"
+          @stance-selected="(id, stance) => emit('stance-selected', id, stance)"
+          @action-selected="(id, action, choiceId) => emit('action-selected', id, action, choiceId)"
           @unit-placed="onCanvasPlace"
           @unit-moved="onCombatMove"
           @cell-draw="onCellDraw"
@@ -190,7 +194,7 @@
 
 <script setup lang="ts">
 import type {
-  GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules,
+  GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules, Stance,
 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { getAreaShape, computePassLanding } from '~/utils/areaShapes'
@@ -206,6 +210,7 @@ import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules
 import { chebyshev } from '~/utils/pathfinding'
 import { closedDoorsCrossedByPath } from '~/utils/mapDoors'
 import { segmentCells } from '~/utils/lineOfSight'
+import type { MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
@@ -229,6 +234,7 @@ const props = defineProps<{
   editorMode?: boolean
   selectableParticipantIds?: string[]
   eddySoulRules?: EddySoulRules
+  radialOptions?: Record<string, MapRadialOptions>
   bottomOverlayOffset?: number   // px from viewport bottom for bottom-anchored overlays; defaults to 10 via CSS fallback
 }>()
 
@@ -241,6 +247,9 @@ const emit = defineEmits<{
   (e: 'attack-cancelled'): void
   (e: 'throw-landing-selected', controllerId: string, thrownTargetId: string, landingPos: Vec3): void
   (e: 'throw-ally-landing-selected', interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3): void
+  (e: 'attack-selected', participantId: string, attackId: string): void
+  (e: 'stance-selected', participantId: string, stance: Stance): void
+  (e: 'action-selected', participantId: string, action: MapRadialChoiceAction, choiceId: string): void
   // Note: 'move' is handled internally in EncounterMap
 }>()
 

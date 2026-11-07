@@ -7,7 +7,8 @@ import { combatAttackStats } from '~/utils/combatDice'
 import type { Tamer, Digimon, Encounter } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
-import type { DigimonStage, EddySoulRules, Vec3 } from '~/types'
+import type { DigimonStage, EddySoulRules, Stance, Vec3 } from '~/types'
+import type { MapRadialItem } from '~/types/mapRadial'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { computeAreaCellsFromData } from '~/utils/areaShapes'
 import { vec3Key } from '~/utils/mapGeometry'
@@ -1815,6 +1816,102 @@ const playerAttackOptions = computed(() => {
   if (!p) return []
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
 })
+
+const mapRadialOptions = computed(() => {
+  const options: Record<string, {
+    attacks: MapRadialItem[]
+    stances: MapRadialItem[]
+    direct?: MapRadialItem[]
+    digivolve?: MapRadialItem[]
+    'mode-change'?: MapRadialItem[]
+  }> = {}
+  for (const p of myParticipants.value) {
+    options[p.id] = {
+      attacks: getParticipantAttacks(p).map(attack => {
+        const badges = getAttackBadges(attack)
+        return {
+          id: attack.id,
+          label: attack.name,
+          description: [attack.range, badges.aoe, badges.charge ? 'Charge' : null, badges.ap, badges.effect].filter(Boolean).join(' · '),
+          disabled: !canUseAttack(p, attack),
+        }
+      }),
+      stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
+        id: stance,
+        label: stance[0].toUpperCase() + stance.slice(1),
+        description: p.currentStance === stance ? 'Current stance' : '1 Simple Action',
+        active: p.currentStance === stance,
+        disabled: p.currentStance === stance || !!p.clash || (p.actionsRemaining?.simple || 0) < 1,
+      })),
+    }
+    if (p.type === 'tamer') {
+      options[p.id].direct = [
+        { id: 'direct', label: 'Direct', description: `1 Simple Action · Range ${directRanges.value.direct}`, disabled: directActionDisabled.value },
+        { id: 'bolster', label: 'Bolster Direct', description: `2 Simple Actions · Range ${directRanges.value.bolsterDirect}`, disabled: bolsterDirectActionDisabled.value },
+      ]
+    } else {
+      const evolution = getParticipantEvolutionOptions(p)
+      options[p.id].digivolve = evolution.evolveTargets.map((target: any) => ({
+        id: String(target.chainIndex),
+        label: `Digivolve → ${target.species}`,
+        description: 'Willpower check',
+      }))
+      if (evolution.canDevolve && evolution.devolveTarget) {
+        options[p.id].digivolve!.push({
+          id: String(evolution.devolveTarget.chainIndex),
+          label: `Devolve → ${evolution.devolveTarget.species}`,
+          description: 'Return to previous form',
+        })
+      }
+      options[p.id]['mode-change'] = getModeChangePairs(p, digimonMap.value).map(pair => ({
+        id: `${pair.a}:${pair.b}`,
+        label: pair.label,
+        description: isSwapActive(p, pair) ? 'Active · Select to revert' : 'Swap combat stats',
+        active: isSwapActive(p, pair),
+        disabled: !canUseModeChangeSwap(p, digimonMap.value, eddySoulRules.value),
+      }))
+    }
+  }
+  return options
+})
+
+function onMapAttackSelected(participantId: string, attackId: string) {
+  const p = myParticipants.value.find(x => x.id === participantId)
+  if (!p) return
+  const attack = getParticipantAttacks(p).find(a => a.id === attackId)
+  if (!attack || !canUseAttack(p, attack)) return
+  playerAttackParticipantId.value = null
+  selectAttackAndShowTargets(p, attack)
+}
+
+function onMapStanceSelected(participantId: string, stance: Stance) {
+  const p = myParticipants.value.find(x => x.id === participantId)
+  if (!p) return
+  mapStanceDigimonParticipantId.value = null
+  return changePlayerStance(p, stance)
+}
+
+function onMapActionSelected(participantId: string, action: 'direct' | 'digivolve' | 'mode-change', choiceId: string) {
+  const p = myParticipants.value.find(x => x.id === participantId)
+  const choice = mapRadialOptions.value[participantId]?.[action]?.find(item => item.id === choiceId)
+  if (!p || !choice || choice.disabled) return
+  if (action === 'direct' && p.type === 'tamer') {
+    mapDirectMode.value = { bolstered: choiceId === 'bolster' }
+    showDirectChoicePicker.value = false
+  } else if (action === 'digivolve' && p.type === 'digimon') {
+    const evolution = getParticipantEvolutionOptions(p)
+    const target = evolution.evolveTargets.find((entry: any) => String(entry.chainIndex) === choiceId)
+      ?? (evolution.canDevolve && String(evolution.devolveTarget?.chainIndex) === choiceId ? evolution.devolveTarget : null)
+    if (!target) return
+    mapDigivolveDigimonParticipantId.value = null
+    return handleDigivolve(p, target.chainIndex)
+  } else if (action === 'mode-change' && p.type === 'digimon') {
+    const pair = getModeChangePairs(p, digimonMap.value).find(entry => `${entry.a}:${entry.b}` === choiceId)
+    if (!pair) return
+    mapModeChangeDigimonParticipantId.value = null
+    return handleModeChangeSwap(p, pair.a, pair.b)
+  }
+}
 
 const {
   clashAttackActorId,
@@ -4811,11 +4908,15 @@ async function handleBreakClash(participantId: string, clashId: string) {
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"
               :selected-attack="mapSelectedAttackProp"
+              :radial-options="mapRadialOptions"
               :selectable-participant-ids="intercedeMapTargetIds.length ? intercedeMapTargetIds : directMapTargetIds"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               :eddy-soul-rules="eddySoulRules"
               @encounter-updated="() => {}"
+              @attack-selected="onMapAttackSelected"
+              @stance-selected="onMapStanceSelected"
+              @action-selected="onMapActionSelected"
               @player-action="(id, action) => {
                 if (action === 'attack')         playerAttackParticipantId        = playerAttackParticipantId        === id ? null : id
                 else if (action === 'direct')    showDirectChoicePicker = !showDirectChoicePicker

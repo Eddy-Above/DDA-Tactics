@@ -53,89 +53,18 @@
       class="move-distance-label"
       :style="{ left: hoveredMoveScreen.x + 'px', top: hoveredMoveScreen.y + 'px' }"
     >{{ hoveredMoveDistance }} m</div>
-    <!-- NPC radial action menu -->
-    <div
-      v-if="npcRadialScreen && npcRadialId"
-      class="npc-radial-menu"
-      :style="{ left: npcRadialScreen.x + 'px', top: npcRadialScreen.y + 'px' }"
-    >
-      <template v-if="npcClashButtons === 'controlled'">
-        <div class="npc-radial-clash-group">
-          <button class="npc-radial-btn clash" disabled>Controlled</button>
-        </div>
-      </template>
-      <template v-else-if="npcClashButtons">
-        <div class="npc-radial-clash-group">
-          <button v-for="btn in npcClashButtons" :key="btn.action" class="npc-radial-btn clash" :disabled="btn.disabled" @click="npcAction(btn.action)">{{ btn.label }}</button>
-        </div>
-      </template>
-      <template v-else>
-        <button class="npc-radial-btn move"   :disabled="npcOutOfActions" @click="npcAction('move')">Move</button>
-        <button class="npc-radial-btn stance" @click="npcAction('stance')">Stance</button>
-        <button class="npc-radial-btn attack" :disabled="npcOutOfActions" @click="npcAction('attack')">Attack</button>
-        <button class="npc-radial-btn clash"  :disabled="npcOutOfActions" @click="npcAction('clash')">Clash</button>
-        <button v-if="isDm" class="npc-radial-btn gm-move" @click="gmMove(npcRadialId!)">GM Move</button>
-        <div v-if="npcDoorButtons.length" class="npc-radial-door-group">
-          <button
-            v-for="d in npcDoorButtons" :key="d.id" class="npc-radial-btn door"
-            @mouseenter="highlightDoor(d.id)" @mouseleave="highlightDoor(null)"
-            @click="radialToggleDoor(d.id, !d.isOpen)"
-          >{{ d.label }}</button>
-        </div>
-      </template>
-    </div>
-    <!-- GM-only radial: free-reposition any character on any turn (no action cost, no distance limit) -->
-    <div
-      v-if="isDm && gmRadialScreen && gmRadialId"
-      class="npc-radial-menu"
-      :style="{ left: gmRadialScreen.x + 'px', top: gmRadialScreen.y + 'px' }"
-    >
-      <div class="npc-radial-clash-group">
-        <button class="npc-radial-btn gm-move" @click="gmMove(gmRadialId)">GM Move</button>
-      </div>
-    </div>
-    <!-- Player radial action menu -->
-    <div
-      v-if="playerRadialScreen && playerRadialId"
-      class="npc-radial-menu"
-      :style="{ left: playerRadialScreen.x + 'px', top: playerRadialScreen.y + 'px' }"
-    >
-      <template v-if="radialPlayerClashButtons === 'controlled'">
-        <div class="npc-radial-clash-group">
-          <button class="npc-radial-btn player clash" disabled>Controlled</button>
-        </div>
-        <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-      </template>
-      <template v-else-if="radialPlayerClashButtons">
-        <div class="npc-radial-clash-group">
-          <button v-for="btn in radialPlayerClashButtons" :key="btn.action" class="npc-radial-btn player clash" :disabled="btn.disabled" @click="playerRadialAction(btn.action)">{{ btn.label }}</button>
-        </div>
-        <button v-if="playerRadialParticipantType === 'digimon'" class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-      </template>
-      <template v-else>
-        <button class="npc-radial-btn player move" :disabled="radialPlayerOutOfActions" @click="playerRadialMove()">Move</button>
-        <template v-if="playerRadialParticipantType === 'tamer'">
-          <button class="npc-radial-btn player direct" :disabled="directDisabled" @click="playerRadialAction('direct')">Direct</button>
-          <button class="npc-radial-btn player orders" @click="playerRadialAction('special-order')">Orders</button>
-          <button class="npc-radial-btn player stance tamer-stance" @click="playerRadialAction('stance')">Stance</button>
-          <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
-        </template>
-        <template v-else-if="playerRadialParticipantType === 'digimon'">
-          <button class="npc-radial-btn player attack"    :disabled="radialPlayerOutOfActions" @click="playerRadialAction('attack')">Attack</button>
-          <button class="npc-radial-btn player stance digimon-stance" @click="playerRadialAction('stance')">Stance</button>
-          <button class="npc-radial-btn player digivolve" :disabled="digivolveDisabled" @click="playerRadialAction('digivolve')">Digivolve</button>
-          <button v-if="hasModeChangeQuality" class="npc-radial-btn player mode-change" :disabled="modeChangeDisabled" @click="playerRadialAction('mode-change')">Mode Change</button>
-          <button class="npc-radial-btn player clash" :disabled="radialPlayerOutOfActions" @click="playerRadialAction('clash')">Clash</button>
-        </template>
-        <div v-if="playerDoorButtons.length" class="npc-radial-door-group player">
-          <button
-            v-for="d in playerDoorButtons" :key="d.id" class="npc-radial-btn door"
-            @mouseenter="highlightDoor(d.id)" @mouseleave="highlightDoor(null)"
-            @click="radialToggleDoor(d.id, !d.isOpen)"
-          >{{ d.label }}</button>
-        </div>
-      </template>
-    </div>
+    <MapRadialMenu
+      v-if="radialParticipantId && radialScreen"
+      :key="radialParticipantId"
+      :items="radialItems"
+      :center="radialScreen"
+      :bounds="radialBounds"
+      :label="participantDisplayNames[radialParticipantId] ?? 'Participant'"
+      :token-radius="radialTokenRadius"
+      @select="onRadialSelect"
+      @hover="onRadialHover"
+      @close="closeRadial"
+    />
   </div>
 </template>
 
@@ -157,6 +86,7 @@ import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/mo
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
+import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
@@ -190,6 +120,7 @@ const props = defineProps<{
   showSpawnIndicators?: boolean
   selectableParticipantIds?: string[]
   eddySoulRules?: EddySoulRules
+  radialOptions?: Record<string, MapRadialOptions>
 }>()
 
 const emit = defineEmits<{
@@ -214,6 +145,9 @@ const emit = defineEmits<{
   (e: 'wall-selected', wallId: string): void
   (e: 'map-changed'): void
   (e: 'door-toggle', doorId: string, isOpen: boolean): void
+  (e: 'attack-selected', participantId: string, attackId: string): void
+  (e: 'stance-selected', participantId: string, stance: Stance): void
+  (e: 'action-selected', participantId: string, action: MapRadialChoiceAction, choiceId: string): void
 }>()
 
 // ── Participant display names matching encounter page getDisplayName logic ───
@@ -378,6 +312,117 @@ function radialDoorButtons(participantId: string | null): { id: string; isOpen: 
 }
 const npcDoorButtons = computed(() => radialDoorButtons(npcRadialId.value))
 const playerDoorButtons = computed(() => radialDoorButtons(playerRadialId.value))
+const radialBounds = ref({ width: 0, height: 0 })
+const radialParticipantId = computed(() => npcRadialId.value ?? playerRadialId.value ?? gmRadialId.value)
+const radialScreen = computed(() => npcRadialScreen.value ?? playerRadialScreen.value ?? gmRadialScreen.value)
+const radialTokenRadius = computed(() => {
+  const overlay = radialParticipantId.value ? characterOverlays.value[radialParticipantId.value] : null
+  return overlay ? overlay.w / 2 : 24
+})
+
+function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, disabled: boolean): MapRadialItem {
+  const options = radialParticipantId.value ? props.radialOptions?.[radialParticipantId.value] : undefined
+  const choices = options?.[action === 'attack' ? 'attacks' : action === 'stance' ? 'stances' : action]
+  const labels = { attack: 'Attack', stance: 'Stance', direct: 'Direct', digivolve: 'Digivolve', 'mode-change': 'Mode Change' }
+  return {
+    id: action,
+    label: labels[action],
+    icon: action,
+    disabled,
+    // An omitted options prop keeps the existing action event available to other map consumers.
+    children: choices ? (choices.length ? choices.map(choice => ({ ...choice, id: `${action}:${choice.id}` })) : [
+      { id: `empty:${action}`, label: 'No options', disabled: true },
+    ]) : undefined,
+  }
+}
+
+const radialItems = computed<MapRadialItem[]>(() => {
+  if (gmRadialId.value) return [{ id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely' }]
+  const isNpc = !!npcRadialId.value
+  const clashButtons = isNpc ? npcClashButtons.value : radialPlayerClashButtons.value
+  const outOfActions = isNpc ? npcOutOfActions.value : radialPlayerOutOfActions.value
+  const items: MapRadialItem[] = []
+  if (clashButtons === 'controlled') {
+    items.push({ id: 'controlled', label: 'Controlled', icon: 'clash', disabled: true })
+  } else if (clashButtons) {
+    items.push(...clashButtons.map(button => ({ id: button.action, label: button.label, icon: 'clash', disabled: button.disabled })))
+  } else {
+    items.push({ id: 'move', label: 'Move', icon: 'move', disabled: outOfActions })
+    if (isNpc || playerRadialParticipantType.value === 'digimon') {
+      items.push(radialChoiceGroup('attack', outOfActions))
+    } else if (playerRadialParticipantType.value === 'tamer') {
+      items.push(
+        radialChoiceGroup('direct', directDisabled.value),
+        { id: 'special-order', label: 'Orders', icon: 'orders' },
+      )
+    }
+    items.push(radialChoiceGroup('stance', outOfActions))
+    if (!isNpc && hasModeChangeQuality.value) {
+      items.push(radialChoiceGroup('mode-change', modeChangeDisabled.value))
+    }
+    items.push({ id: 'clash', label: 'Clash', icon: 'clash', disabled: outOfActions })
+    if (isNpc && props.isDm) items.push({ id: 'gm-move', label: 'GM Move', icon: 'gm-move' })
+    const doors = isNpc ? npcDoorButtons.value : playerDoorButtons.value
+    if (doors.length) items.push({ id: 'doors', label: 'Doors', icon: 'door', children: doors.map(door => ({
+      id: `door:${door.id}`, label: door.label, icon: 'door', description: 'Free action',
+    })) })
+  }
+  if (!isNpc && playerRadialParticipantType.value === 'digimon') {
+    items.push(radialChoiceGroup('digivolve', digivolveDisabled.value))
+  }
+  return items
+})
+
+function closeRadial() {
+  highlightDoor(null)
+  npcRadialId.value = null
+  npcRadialScreen.value = null
+  playerRadialId.value = null
+  playerRadialScreen.value = null
+  gmRadialId.value = null
+  gmRadialScreen.value = null
+}
+
+function onRadialHover(item: MapRadialItem | null) {
+  highlightDoor(item?.id.startsWith('door:') ? item.id.slice(5) : null)
+}
+
+function enabledRadialLeaf(items: MapRadialItem[], id: string): MapRadialItem | undefined {
+  for (const item of items) {
+    if (item.disabled) continue
+    if (item.children) {
+      const leaf = enabledRadialLeaf(item.children, id)
+      if (leaf) return leaf
+    } else if (item.id === id) return item
+  }
+}
+
+function onRadialSelect(item: MapRadialItem) {
+  const participantId = radialParticipantId.value
+  // Re-check the live tree: a server update may have exhausted the parent action
+  // or removed a choice while its submenu was open.
+  if (!participantId || !enabledRadialLeaf(radialItems.value, item.id)) return
+  if (item.id.startsWith('attack:')) {
+    closeRadial()
+    emit('attack-selected', participantId, item.id.slice(7))
+  } else if (item.id.startsWith('stance:')) {
+    closeRadial()
+    emit('stance-selected', participantId, item.id.slice(7) as Stance)
+  } else if (['direct:', 'digivolve:', 'mode-change:'].some(prefix => item.id.startsWith(prefix))) {
+    const separator = item.id.indexOf(':')
+    closeRadial()
+    emit('action-selected', participantId, item.id.slice(0, separator) as MapRadialChoiceAction, item.id.slice(separator + 1))
+  } else if (item.id.startsWith('door:')) {
+    const door = props.map?.doors.find(door => door.id === item.id.slice(5))
+    if (door) radialToggleDoor(door.id, !door.isOpen)
+  } else if (item.id === 'gm-move') {
+    gmMove(participantId)
+  } else if (npcRadialId.value) {
+    npcAction(item.id as Parameters<typeof npcAction>[0])
+  } else if (playerRadialId.value) {
+    playerRadialAction(item.id as Parameters<typeof playerRadialAction>[0])
+  }
+}
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
@@ -591,6 +636,7 @@ onUnmounted(() => {
 function initScene() {
   const canvas = canvasRef.value!
   const container = containerRef.value!
+  radialBounds.value = { width: container.clientWidth, height: container.clientHeight }
 
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
   renderer.setPixelRatio(window.devicePixelRatio)
@@ -1195,62 +1241,27 @@ function updateCharacterOverlays() {
   characterOverlays.value = overlays
 }
 
-// Keep NPC radial menu pinned as camera moves
-function updateNpcRadial() {
-  if (!npcRadialId.value) return
-  const p = props.participants.find(x => x.id === npcRadialId.value)
-  const pos = p && props.participantPositions[p.id]
-  if (pos) {
-    const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
-    npcRadialScreen.value = worldToScreen2D(v) ?? npcRadialScreen.value
-  }
-}
-
-// Keep player radial menu pinned as camera moves
-function updatePlayerRadial() {
-  if (!playerRadialId.value) return
-  const p = props.participants.find(x => x.id === playerRadialId.value)
-  const pos = p && props.participantPositions[p.id]
-  if (pos) {
-    const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
-    playerRadialScreen.value = worldToScreen2D(v) ?? playerRadialScreen.value
-  }
-}
-
-// Keep GM radial menu pinned as camera moves
-function updateGmRadial() {
-  if (!gmRadialId.value) return
-  const p = props.participants.find(x => x.id === gmRadialId.value)
-  const pos = p && props.participantPositions[p.id]
-  if (pos) {
-    const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
-    gmRadialScreen.value = worldToScreen2D(v) ?? gmRadialScreen.value
-  }
+// Share the portrait's projected center, including large-token footprints and camera zoom.
+function updateRadialScreen() {
+  const id = radialParticipantId.value
+  const overlay = id ? characterOverlays.value[id] : null
+  const screen = overlay ? { x: overlay.x, y: overlay.y + overlay.h / 2 } : null
+  npcRadialScreen.value = npcRadialId.value ? screen : null
+  playerRadialScreen.value = playerRadialId.value ? screen : null
+  gmRadialScreen.value = gmRadialId.value ? screen : null
 }
 
 // GM free-move: close the GM radial and tell the parent to enter reposition mode for `id`.
 function gmMove(id: string) {
-  gmRadialId.value = null
-  gmRadialScreen.value = null
-  npcRadialId.value = null
-  npcRadialScreen.value = null
+  closeRadial()
   emit('gm-move', id)
-}
-
-function playerRadialMove() {
-  if (!playerRadialId.value) return
-  const id = playerRadialId.value
-  playerRadialId.value = null
-  playerRadialScreen.value = null
-  // Let EncounterMap call computeReachable (same path as NPC move) so reachableCells is populated
-  emit('player-action', id, 'move')
 }
 
 function playerRadialAction(action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction) {
   if (!playerRadialId.value) return
-  emit('player-action', playerRadialId.value, action)
-  playerRadialId.value = null
-  playerRadialScreen.value = null
+  const id = playerRadialId.value
+  closeRadial()
+  emit('player-action', id, action)
 }
 
 // Tints the door a radial door button refers to, so neighbouring doors can be told apart.
@@ -1267,12 +1278,8 @@ function highlightDoor(doorId: string | null) {
 
 // Open/close a door from the radial (a free action), then close the radial like any other action.
 function radialToggleDoor(doorId: string, isOpen: boolean) {
-  highlightDoor(null)
+  closeRadial()
   emit('door-toggle', doorId, isOpen)
-  npcRadialId.value = null
-  npcRadialScreen.value = null
-  playerRadialId.value = null
-  playerRadialScreen.value = null
 }
 
 // ── Animation loop ─────────────────────────────────────────────────────────
@@ -1297,7 +1304,9 @@ function applyKeyMovement() {
 }
 
 function onKeyDown(e: KeyboardEvent) {
+  if (e.defaultPrevented) return
   if (e.key === 'Escape') {
+    if (radialParticipantId.value) { closeRadial(); return }
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); emit('attack-cancelled'); return }
   }
   if (e.key === 'q' || e.key === 'Q') { stepAzimuth(-AZIMUTH_STEP); return }
@@ -1326,9 +1335,7 @@ function animate() {
 
   // HTML token overlays + NPC/player radial pin
   updateCharacterOverlays()
-  updateNpcRadial()
-  updatePlayerRadial()
-  updateGmRadial()
+  updateRadialScreen()
 
   // Sync movement highlight with reactive data
   updateMovementHighlights()
@@ -2334,7 +2341,10 @@ function onCanvasClick(event: MouseEvent) {
     // GM clicking an NPC — only show combat radial when it's that NPC's active turn
     if (props.isDm && (p as any).isEnemy) {
       if (p.id === props.activeParticipantId) {
-        npcRadialId.value = npcRadialId.value === p.id ? null : p.id
+        const wasOpen = npcRadialId.value === p.id
+        closeRadial()
+        if (!wasOpen) npcRadialId.value = p.id
+        updateRadialScreen()
         return
       }
       // Non-active-turn enemy: fall through to the GM radial below.
@@ -2343,22 +2353,16 @@ function onCanvasClick(event: MouseEvent) {
     // GM: clicking any token that didn't open the combat radial (off-turn NPCs and player-owned
     // tokens, on anyone's turn) opens the GM free-reposition radial.
     if (props.isDm) {
-      if (gmRadialId.value === participantId) {
-        gmRadialId.value = null
-        gmRadialScreen.value = null
-      } else {
-        gmRadialId.value = participantId
-        const pos = props.participantPositions[participantId]
-        if (pos) {
-          const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
-          gmRadialScreen.value = worldToScreen2D(v) ?? null
-        }
-      }
+      const wasOpen = gmRadialId.value === participantId
+      closeRadial()
+      if (!wasOpen) gmRadialId.value = participantId
+      updateRadialScreen()
       return
     }
 
     const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
     if (info && !props.myParticipantIds.includes(participantId)) {
+      closeRadial()
       const screen = worldToScreen2D(spriteHit.point)
       const anyP = p as any
       const currentWounds = anyP.currentWounds ?? info.currentWounds
@@ -2377,29 +2381,17 @@ function onCanvasClick(event: MouseEvent) {
     if (props.myParticipantIds.includes(participantId) &&
         props.activeParticipantId !== null &&
         props.myParticipantIds.includes(props.activeParticipantId)) {
-      if (playerRadialId.value === participantId) {
-        playerRadialId.value = null
-        playerRadialScreen.value = null
-      } else {
-        playerRadialId.value = participantId
-        const pos = props.participantPositions[participantId]
-        if (pos) {
-          const v = new THREE.Vector3(pos.x + 0.5, pos.y * TILE_SIZE + TILE_H + 2, pos.z + 0.5)
-          playerRadialScreen.value = worldToScreen2D(v) ?? null
-        }
-      }
+      const wasOpen = playerRadialId.value === participantId
+      closeRadial()
+      if (!wasOpen) playerRadialId.value = participantId
+      updateRadialScreen()
     }
     return
   }
 
   // Click empty space — close health bar, NPC radial, player radial, GM radial, exit move mode
   clickedHealthBar.value = null
-  npcRadialId.value = null
-  npcRadialScreen.value = null
-  playerRadialId.value = null
-  playerRadialScreen.value = null
-  gmRadialId.value = null
-  gmRadialScreen.value = null
+  closeRadial()
   if (!pendingMovePos.value) movingParticipantId.value = null
 }
 
@@ -2433,8 +2425,7 @@ function cancelMove() {
 function npcAction(action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction) {
   const id = npcRadialId.value
   if (!id) return
-  npcRadialId.value = null
-  npcRadialScreen.value = null
+  closeRadial()
   emit('npc-action', id, action)
 }
 
@@ -2442,6 +2433,7 @@ function npcAction(action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialA
 function onResize() {
   const container = containerRef.value
   if (!container) return
+  radialBounds.value = { width: container.clientWidth, height: container.clientHeight }
   camera.aspect = container.clientWidth / container.clientHeight
   camera.updateProjectionMatrix()
   renderer.setSize(container.clientWidth, container.clientHeight)
@@ -2477,7 +2469,13 @@ watch(
 )
 
 watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () => {
+  closeRadial()
   if (scene) buildSprites()
+})
+
+watch(radialParticipantId, id => { if (id) keysHeld.clear() })
+watch(() => props.participants.map(p => p.id).join(','), () => {
+  if (radialParticipantId.value && !props.participants.some(p => p.id === radialParticipantId.value)) closeRadial()
 })
 
 // Outlines follow the targetable set (red), and the green hover drops once its participant stops
@@ -2488,6 +2486,7 @@ watch(reticuleParticipantIds, ids => {
 })
 
 watch(() => props.activeTool, (tool) => {
+  if (tool !== 'select') closeRadial()
   if (controls) controls.enabled = (tool === 'select')
 }, { immediate: true })
 
@@ -2529,6 +2528,7 @@ watch(movingParticipantId, id => {
 })
 
 watch(() => props.selectedAttack, (attack, prevAttack) => {
+  if (attack) closeRadial()
   if (!attack) {
     clearAoeState()
     blastCenterY.value = 0
@@ -2764,72 +2764,4 @@ defineExpose({ movingParticipantId })
   z-index: 28;
   white-space: nowrap;
 }
-.npc-radial-menu { position: absolute; pointer-events: auto; z-index: 35; }
-.npc-radial-btn {
-  position: absolute;
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  background: #1a2040;
-  color: #fff;
-  border: 1px solid #4466cc;
-  transform: translateX(-50%);
-}
-.npc-radial-btn.move   { top: -38px; left: -55px; }
-.npc-radial-btn.stance { top: -68px; left: 0; }
-.npc-radial-btn.attack { top: -38px; left: 55px; }
-/* Standalone (non-clash-state) Clash button in the normal radial fan. Grouped clash-state
-   buttons override this with position: static inside .npc-radial-clash-group. */
-.npc-radial-btn.clash  { top: 30px; left: 0; }
-.npc-radial-clash-group {
-  position: absolute;
-  top: 12px;
-  left: 0;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-.npc-radial-clash-group .npc-radial-btn {
-  position: static;
-  transform: none;
-}
-.npc-radial-btn:hover:not(:disabled)  { background: #2a3480; }
-.npc-radial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.npc-radial-btn.player { background: #0e2e1a; border-color: #44cc88; }
-.npc-radial-btn.player.move   { top: -70px; left: 0; }
-.npc-radial-btn.player.attack { top: -38px; left: 45px; }
-.npc-radial-btn.player.digivolve { top: -38px; left: -45px; }
-.npc-radial-btn.player.direct         { top: -24px; left: -66px; }
-.npc-radial-btn.player.orders         { top: -24px; left: 66px; }
-.npc-radial-btn.player.tamer-stance   { top: -75px; left: -107px; }
-.npc-radial-btn.player.digimon-stance { top: 0; left: 0; }
-.npc-radial-btn.player.mode-change    { top: -75px; left: 90px; }
-.npc-radial-btn.player.clash          { top: 30px; left: 0; }
-.npc-radial-btn.player:hover:not(:disabled)  { background: #1a4a30; }
-.npc-radial-btn.player:disabled { opacity: 0.4; cursor: not-allowed; }
-/* GM-only free-move button (purple). In the combat NPC radial it sits below Clash; in the
-   standalone GM radial it is centered by the clash-group flex layout (position: static). */
-.npc-radial-btn.gm-move { top: 62px; left: 0; background: #3a1a4a; border-color: #cc66ff; white-space: nowrap; }
-.npc-radial-btn.gm-move:hover:not(:disabled) { background: #4a2560; }
-/* Open/Close Door (free action), stacked under the fan: below GM Move in the NPC radial,
-   below Clash in the player radial. */
-.npc-radial-door-group {
-  position: absolute;
-  top: 94px;
-  left: 0;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-.npc-radial-door-group.player { top: 62px; }
-.npc-radial-door-group .npc-radial-btn { position: static; transform: none; }
-.npc-radial-btn.door { background: #3a2a10; border-color: #cc9944; }
-.npc-radial-btn.door:hover:not(:disabled) { background: #4a3818; }
 </style>

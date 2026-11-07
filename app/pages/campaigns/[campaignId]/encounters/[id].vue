@@ -28,7 +28,8 @@ import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/us
 import { useReactionOrders } from '~/composables/useReactionOrders'
 import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
 import { isRequestAnswered } from '~/utils/requestState'
-import type { Vec3 } from '~/types'
+import type { Stance, Vec3 } from '~/types'
+import type { MapRadialItem } from '~/types/mapRadial'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
@@ -548,6 +549,47 @@ const npcAttackOptions = computed(() => {
   if (!p) return []
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
 })
+
+const mapRadialOptions = computed(() => {
+  const options: Record<string, { attacks: MapRadialItem[]; stances: MapRadialItem[] }> = {}
+  for (const p of (currentEncounter.value?.participants ?? []) as CombatParticipant[]) {
+    options[p.id] = {
+      attacks: getParticipantAttacks(p).map(attack => {
+        const badges = getAttackBadges(attack)
+        return {
+          id: attack.id,
+          label: attack.name,
+          description: [attack.range, badges.aoe, badges.charge ? 'Charge' : null, badges.ap, badges.effect].filter(Boolean).join(' · '),
+          disabled: !canUseAttack(p, attack),
+        }
+      }),
+      stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
+        id: stance,
+        label: stance[0].toUpperCase() + stance.slice(1),
+        description: p.currentStance === stance ? 'Current stance' : '1 Simple Action',
+        active: p.currentStance === stance,
+        disabled: p.currentStance === stance || !!p.clash || (p.actionsRemaining?.simple || 0) < 1,
+      })),
+    }
+  }
+  return options
+})
+
+function onMapAttackSelected(participantId: string, attackId: string) {
+  const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === participantId)
+  if (!p) return
+  const attack = getParticipantAttacks(p).find(a => a.id === attackId)
+  if (!attack || !canUseAttack(p, attack)) return
+  npcAttackParticipantId.value = null
+  selectAttackAndShowTargets(p, attack)
+}
+
+function onMapStanceSelected(participantId: string, stance: Stance) {
+  const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === participantId)
+  if (!p || p.currentStance === stance) return
+  npcStanceParticipantId.value = null
+  return changeStance(stance, participantId)
+}
 
 const {
   clashAttackActorId,
@@ -3484,10 +3526,13 @@ function onMapAttackCancelled() {
           :tamer-map="tamerMapForMap"
           :digimon-map="digimonMapForMap"
           :selected-attack="mapSelectedAttackProp"
+          :radial-options="mapRadialOptions"
           :player-placement-mode="false"
           :eddy-soul-rules="eddySoulRules"
           @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
           @npc-action="onNpcAction"
+          @attack-selected="onMapAttackSelected"
+          @stance-selected="onMapStanceSelected"
           @target-selected="onMapTargetSelected"
           @area-attack-confirmed="onMapAreaAttackConfirmed"
           @attack-cancelled="onMapAttackCancelled"
