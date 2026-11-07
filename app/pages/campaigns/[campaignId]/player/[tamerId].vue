@@ -27,7 +27,7 @@ import {
   type SnapshotSource,
 } from '~/utils/encounterSnapshot'
 import {
-  ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById,
+  ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, createRecordRefreshQueue,
   type CombatActionKind, type RecordRefreshPlan,
 } from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
@@ -209,6 +209,15 @@ const attackResultData = computed(() => {
   return attackResultQueue.value.length > 0 ? attackResultQueue.value[0] : null
 })
 
+function isAttackResultGroupComplete(group: typeof attackResultQueue.value = attackResultGroup.value): boolean {
+  if (group.length === 0) return false
+  const groupId = group[0].groupId
+  const expected = groupId ? attackResultGroupTotals.value[groupId] : undefined
+  return expected == null || group.length >= expected
+}
+
+const attackResultVisible = computed(() => showAttackResultModal.value && isAttackResultGroupComplete())
+
 // Dodge result modal state - shown to the defender after they submit their dodge roll
 const showDodgeResultModal = ref(false)
 const dodgeResponseId = ref<string | null>(null)
@@ -260,14 +269,14 @@ const dismissedResponseIds = new Set<string>()
 const attackResultDismissal = useAutoDismiss({
   key: () => {
     const first = attackResultData.value
-    if (!showAttackResultModal.value || !first) return null
-    return `${first.groupId ?? first.responseId}:${attackResultGroup.value.length}`
+    if (!attackResultVisible.value || !first) return null
+    return `${activeEncounter.value?.id}:${first.groupId ?? first.responseId}:${attackResultGroup.value.length}`
   },
   cleanup: () => cleanupAttackResultGroup(),
 })
 const dodgeResultDismissal = useAutoDismiss({
   key: () => (showDodgeResultModal.value && dodgeResultData.value
-    ? (dodgeRequestId.value ?? dodgeResponseId.value ?? 'dodge-result')
+    ? `${activeEncounter.value?.id}:${dodgeRequestId.value ?? dodgeResponseId.value ?? 'dodge-result'}`
     : null),
   cleanup: () => cleanupDodgeResult(),
 })
@@ -392,6 +401,7 @@ let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
 // One gate for everything that can replace the encounter on this page: pushes, the encounter GET
 // and the response to an action the player just took. See utils/encounterSnapshot.ts.
 const encounterGate = createEncounterSnapshotGate()
+const recordRefreshQueue = createRecordRefreshQueue()
 
 // Digimon records the player's own characters can be (the `loadData` candidate rule needs them).
 function ownedDigimonIds(): Set<string> {
@@ -402,6 +412,10 @@ function ownedDigimonIds(): Set<string> {
 // participant's record; a stat edit changes a record without changing its id; some actions rewrite
 // the player's Tamer. Nothing else is reloaded.
 async function refreshAffectedRecords(plan: RecordRefreshPlan) {
+  return recordRefreshQueue.run(() => refreshRecords(plan))
+}
+
+async function refreshRecords(plan: RecordRefreshPlan) {
   const owner = tamer.value
   const jobs: Promise<unknown>[] = []
 
@@ -423,7 +437,9 @@ async function refreshAffectedRecords(plan: RecordRefreshPlan) {
     jobs.push((async () => {
       try {
         await fetchDigimon({ partnerId: owner.id, campaignId: campaignId.value })
-        partnerDigimon.value = digimonList.value.filter((d: Digimon) => d.partnerId === owner.id)
+        const fetched = digimonList.value.filter((d: Digimon) => d.partnerId === owner.id)
+        const merged = new Map(mergeRecordsById(partnerDigimon.value, fetched).map((d) => [d.id, d]))
+        partnerDigimon.value = fetched.map((d) => merged.get(d.id)!)
         const encounterIds = new Set(allDigimon.value.map((d) => d.id))
         allDigimon.value = mergeRecordsById(allDigimon.value, partnerDigimon.value.filter((d) => encounterIds.has(d.id)))
       } catch (e) {
@@ -437,8 +453,8 @@ async function refreshAffectedRecords(plan: RecordRefreshPlan) {
       try {
         const fresh = await fetchTamer(owner.id)
         if (fresh) {
-          tamer.value = fresh
-          allTamers.value = allTamers.value.map((t) => (t.id === fresh.id ? fresh : t))
+          tamer.value = mergeRecordsById(tamer.value ? [tamer.value] : [], [fresh])[0]
+          allTamers.value = mergeRecordsById(allTamers.value, [fresh])
         }
       } catch (e) {
         console.error('Failed to refresh tamer:', e)
@@ -469,10 +485,12 @@ async function applyEncounterUpdate(
   if (!encounterGate.accept(incoming, { source, version: options.version })) {
     // Composable helpers assign each response into currentEncounter before we see it; restore the base.
     currentEncounter.value = previous as any
+    const plan = planRecordRefresh(previous, previous, { tamerId: owner.id, knownDigimonIds: new Set(allDigimon.value.map((d) => d.id)) }, options.action ? ACTION_RECORD_HINTS[options.action] : null)
+    if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
     return false
   }
 
-  const next: any = source === 'action' ? shapeActionResponse(incoming, previous) : incoming
+  const next: any = shapeActionResponse(incoming, previous)
   if (needsFullReload(next, owner.id, ownedDigimonIds())) {
     currentEncounter.value = previous as any
     void loadData()
@@ -505,7 +523,7 @@ async function resyncCombatState(action?: CombatActionKind) {
     await loadData()
     return
   }
-  const fetched = await fetchEncounter(id)
+  const fetched = await $fetch<Encounter>(`/api/encounters/${id}`).catch(() => null)
   if (!fetched) return // the next push or the 120 s poll retries
   await applyEncounterUpdate(fetched, 'fetch', { action })
 }
@@ -610,7 +628,7 @@ async function syncEncounterDigimon() {
   try {
     const envelope = await $fetch<{ data: Digimon[] }>(`/api/digimon?ids=${missingIds.join(',')}`)
     if (envelope.data.length > 0) {
-      allDigimon.value = [...allDigimon.value, ...envelope.data]
+      allDigimon.value = mergeRecordsById(allDigimon.value, envelope.data)
     }
   } catch (e) {
     console.error('Failed to sync encounter digimon:', e)
@@ -618,6 +636,10 @@ async function syncEncounterDigimon() {
 }
 
 async function loadData() {
+  return recordRefreshQueue.run(loadFullData)
+}
+
+async function loadFullData() {
   loading.value = true
   try {
     // Phase 1: parallel — all fetches that only need campaignId or tamerId
@@ -2399,7 +2421,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
-      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+      if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
     const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
@@ -2450,7 +2472,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     })
     const useActOfInspiration = actOfInspirationEnabled.value
     if (useActOfInspiration) {
-      await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
+      if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     }
     const { rolls, dicePool, successes } = prepareAttackAccuracy(baseAccuracy, riders, {
       actOfInspiration: useActOfInspiration,
@@ -2476,6 +2498,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
 }
 
 async function confirmAccuracyReview() {
+  if (inspirationSpendLoading.value) return
   if (!accuracyReview.value || !accuracyReviewContext.value || !activeEncounter.value || !tamer.value) return
 
   confirmingAttack.value = true
@@ -2944,8 +2967,11 @@ function isServerResponseId(id?: string | null): id is string {
 // The one cleanup for a finished dodge exchange: cancel the request AND delete the response, so
 // neither a stale prompt nor a stale result can come back. Each step tolerates the other having
 // already run (another client, the GM, or an earlier dismissal), and failures never block closing.
-async function cleanupDodgeExchange(requestId?: string | null, responseId?: string | null) {
-  const encounterId = activeEncounter.value?.id
+async function cleanupDodgeExchange(
+  requestId?: string | null,
+  responseId?: string | null,
+  encounterId: string | null | undefined = activeEncounter.value?.id,
+) {
   if (!encounterId) return
   if (requestId) {
     try {
@@ -2966,27 +2992,28 @@ async function cleanupDodgeExchange(requestId?: string | null, responseId?: stri
 // Closes the head group of attack results: all targets of one AoE attack share a groupId. Used by
 // the Close button and the 5 s timer alike (attackResultDismissal.dismiss()).
 async function cleanupAttackResultGroup() {
-  const group = attackResultGroup.value
-  if (group.length === 0) return
+  const group = [...attackResultGroup.value]
+  if (!isAttackResultGroupComplete(group)) return
+  const encounterId = activeEncounter.value?.id ?? null
   const closedGroupId = group[0].groupId
 
   // Clear the exchange behind each result in the group
   for (const result of group) {
-    await cleanupDodgeExchange(result.requestId, result.responseId)
+    await cleanupDodgeExchange(result.requestId, result.responseId, encounterId)
     dismissedResponseIds.add(result.responseId)
   }
 
-  // Remove all results in the closed group from the queue
-  attackResultQueue.value = attackResultQueue.value.filter(r => r.groupId !== closedGroupId)
+  // A different encounter/result may have arrived while the exchange cleanup was waiting.
+  if ((activeEncounter.value?.id ?? null) !== encounterId) return
+  const closedResponseIds = new Set(group.map(result => result.responseId))
+  attackResultQueue.value = attackResultQueue.value.filter(r => !closedResponseIds.has(r.responseId))
 
-  if (closedGroupId) {
+  if (closedGroupId && !attackResultQueue.value.some(r => r.groupId === closedGroupId)) {
     delete attackResultGroupTotals.value[closedGroupId]
   }
 
-  // Keep modal open if there are more results to show, close otherwise
-  if (attackResultQueue.value.length === 0) {
-    showAttackResultModal.value = false
-  }
+  // A queued successor can still be waiting for another target's defense.
+  showAttackResultModal.value = isAttackResultGroupComplete()
 }
 
 // Clear selection
@@ -3092,11 +3119,11 @@ async function submitInitiativeRoll() {
 }
 
 async function rollDodgeDice() {
-  if (hasRolledDodge.value) return
+  if (hasRolledDodge.value || inspirationSpendLoading.value) return
   let pool = dodgeDicePool.value
   if (dodgeActOfInspirationEnabled.value && !dodgeBlockedByClash.value) {
+    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     pool += 5
-    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
   for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
@@ -3105,11 +3132,11 @@ async function rollDodgeDice() {
 }
 
 async function rollCounterattackDice() {
-  if (hasRolledCounterattack.value || !counterattackSelectedAttack.value) return
+  if (hasRolledCounterattack.value || inspirationSpendLoading.value || !counterattackSelectedAttack.value) return
   let pool = counterattackAccuracyPool.value
   if (counterattackActOfInspirationEnabled.value) {
+    if (!(await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value))) return
     pool += 5
-    await handleSpendInspiration('act-of-inspiration', actOfInspirationCost.value)
   }
   const rolls: number[] = []
   for (let i = 0; i < pool; i++) rolls.push(Math.floor(Math.random() * 6) + 1)
@@ -3118,6 +3145,7 @@ async function rollCounterattackDice() {
 }
 
 async function submitDodgeRoll() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentDodgeRequest.value || !tamer.value || !dodgeRollResult.value) return
 
   // Capture context before submitting (loadData() will change currentDodgeRequest)
@@ -3230,14 +3258,19 @@ async function submitAreaDefense(request: any, roll: DefenseRoll): Promise<Submi
 // every response deleted, as for a single dodge result, then the panel is cleared. The battle log
 // keeps every result.
 async function cleanupAreaDefense() {
+  const encounterId = activeEncounter.value?.id
+  const groupId = areaDefenseBatch.groupId.value
   for (const { requestId, responseId } of areaDefenseBatch.cleanupTargets()) {
-    await cleanupDodgeExchange(requestId, responseId)
+    await cleanupDodgeExchange(requestId, responseId, encounterId)
     if (responseId) dismissedResponseIds.add(responseId)
   }
+  if (activeEncounter.value?.id !== encounterId || areaDefenseBatch.groupId.value !== groupId) return
   areaDefenseBatch.close()
+  syncAreaDefenseBatch()
 }
 
 async function declineCounterattack() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value) return
   try {
     const result = await respondToRequest(
@@ -3256,6 +3289,7 @@ async function declineCounterattack() {
 }
 
 async function submitCounterattack() {
+  if (inspirationSpendLoading.value) return
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value || !counterattackRollResult.value || !counterattackSelectedAttack.value) return
   try {
     const result = await respondToRequest(
@@ -3283,8 +3317,19 @@ async function submitCounterattack() {
 // Dismisses the defender's dodge result (Close button and 5 s timer, via dodgeResultDismissal).
 // Mirrors the GM's dismiss flow: cancel the request, delete the response.
 async function cleanupDodgeResult() {
-  await cleanupDodgeExchange(dodgeRequestId.value, dodgeResponseId.value)
-  if (dodgeResponseId.value) dismissedResponseIds.add(dodgeResponseId.value)
+  const encounterId = activeEncounter.value?.id ?? null
+  const requestId = dodgeRequestId.value
+  const responseId = dodgeResponseId.value
+  const result = dodgeResultData.value
+  if (!result) return
+
+  await cleanupDodgeExchange(requestId, responseId, encounterId)
+  if (responseId) dismissedResponseIds.add(responseId)
+  const sameResult = requestId || responseId
+    ? dodgeRequestId.value === requestId && dodgeResponseId.value === responseId
+    : dodgeResultData.value === result
+  if ((activeEncounter.value?.id ?? null) !== encounterId || !sameResult) return
+
   showDodgeResultModal.value = false
   dodgeResultData.value = null
   hasRolledDodge.value = false
@@ -3791,12 +3836,12 @@ async function handleSpendInspiration(
   spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
   amount: number,
 ): Promise<boolean> {
-  if (!activeEncounter.value || !myTamerParticipant.value) return false
+  if (inspirationSpendLoading.value || !activeEncounter.value || !myTamerParticipant.value) return false
   inspirationSpendLoading.value = true
   try {
     const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
     await applyActionResult(result, 'spend-inspiration')
-    return true
+    return !!result
   } catch (e: any) {
     console.error('Inspiration spend failed:', e)
     alert(e?.data?.message || 'Failed to spend Inspiration')
@@ -6502,7 +6547,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
             </div>
 
             <button
-              :disabled="hasRolledDodge"
+              :disabled="hasRolledDodge || inspirationSpendLoading"
               @click="rollDodgeDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
@@ -6541,12 +6586,12 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :current-inspiration="currentCombatInspiration"
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
-            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+            :spend-inspiration="handleSpendInspiration"
           />
         </div>
 
         <button
-          :disabled="!dodgeRollResult"
+          :disabled="!dodgeRollResult || inspirationSpendLoading"
           @click="submitDodgeRoll"
           class="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
@@ -6641,7 +6686,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
             </div>
 
             <button
-              :disabled="hasRolledCounterattack || !counterattackSelectedAttack"
+              :disabled="hasRolledCounterattack || !counterattackSelectedAttack || inspirationSpendLoading"
               @click="rollCounterattackDice"
               :class="[
                 'w-full text-white px-4 py-2 rounded-lg font-semibold transition-colors',
@@ -6678,13 +6723,13 @@ async function handleBreakClash(participantId: string, clashId: string) {
             :current-inspiration="currentCombatInspiration"
             :max-inspiration="maxCombatInspiration"
             :loading="inspirationSpendLoading"
-            @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+            :spend-inspiration="handleSpendInspiration"
           />
         </div>
 
         <div class="flex gap-2">
           <button
-            :disabled="!counterattackRollResult || !counterattackSelectedAttack"
+            :disabled="!counterattackRollResult || !counterattackSelectedAttack || inspirationSpendLoading"
             @click="submitCounterattack"
             class="flex-1 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
           >
@@ -6692,6 +6737,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
           </button>
           <button
             @click="declineCounterattack"
+            :disabled="inspirationSpendLoading"
             class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-300 px-4 py-2 rounded-lg font-semibold transition-colors"
           >
             Decline
@@ -6735,11 +6781,11 @@ async function handleBreakClash(participantId: string, clashId: string) {
           :current-inspiration="currentCombatInspiration"
           :max-inspiration="maxCombatInspiration"
           :loading="inspirationSpendLoading"
-          @spend-inspiration="({ spendType, amount }) => handleSpendInspiration(spendType, amount)"
+          :spend-inspiration="handleSpendInspiration"
         />
 
         <button
-          :disabled="confirmingAttack"
+          :disabled="confirmingAttack || inspirationSpendLoading"
           @click="confirmAccuracyReview"
           class="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
@@ -7516,7 +7562,7 @@ async function handleBreakClash(participantId: string, clashId: string) {
   <!-- Attack Result Modal -->
   <Teleport to="body">
     <div
-      v-if="showAttackResultModal && attackResultData"
+      v-if="attackResultVisible && attackResultData"
       class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
     >
       <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-2xl border-2 border-orange-500 max-h-[85vh] overflow-y-auto">

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
+import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import type { CreationRules, ScenePreset } from '../../types'
 import type { EncounterIntercedeOptOuts } from '../../utils/intercedeOptOuts'
@@ -230,6 +230,8 @@ export const digimon = pgTable('digimon', {
 
 export const encounters = pgTable('encounters', {
   id: text('id').primaryKey(),
+  // Incremented by the database on every update, in row-write order (migration 0023).
+  revision: bigint('revision', { mode: 'number' }).notNull().default(0),
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
 

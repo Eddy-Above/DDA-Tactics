@@ -192,6 +192,7 @@ function fixture() {
     ...decisionMocks,
     '~/utils/specialOrders': { getUnlockedSpecialOrders: unexpected },
     '~/server/utils/resolveAreaIntercedeGroup': { isAreaTargetCovered: unexpected },
+    '~/server/utils/intercedePasses': { applyActivePasses: unexpected },
   }).default
   return {
     enteredClaim, releaseClaim, decisionReads, preferenceWrites, decisionWrites, resourceWrites,

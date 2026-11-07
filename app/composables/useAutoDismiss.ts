@@ -23,13 +23,13 @@ export interface AutoDismissOptions {
  *
  * The countdown starts when `key` becomes non-null, restarts when it changes, and is cancelled
  * when the result goes away, when `dismiss()` runs and when the owning scope (component) is
- * disposed. `dismiss()` is the only way `cleanup` runs, and it ignores a second call while the
- * first is still in flight, so a click that races the timer cleans up once.
+ * disposed. `dismiss()` is the only way `cleanup` runs, and it ignores another call for the same
+ * result while its cleanup is in flight. A replacement result keeps its own dismissal lifecycle.
  */
 export function useAutoDismiss(options: AutoDismissOptions) {
   const delayMs = options.delayMs ?? RESULT_AUTO_DISMISS_MS
   let timer: ReturnType<typeof setTimeout> | null = null
-  let running = false
+  const running = new Set<ReturnType<AutoDismissOptions['key']>>()
 
   function cancel() {
     if (timer !== null) {
@@ -39,13 +39,14 @@ export function useAutoDismiss(options: AutoDismissOptions) {
   }
 
   async function dismiss() {
+    const key = options.key()
+    if (running.has(key)) return
     cancel()
-    if (running) return
-    running = true
+    running.add(key)
     try {
       await options.cleanup()
     } finally {
-      running = false
+      running.delete(key)
     }
   }
 

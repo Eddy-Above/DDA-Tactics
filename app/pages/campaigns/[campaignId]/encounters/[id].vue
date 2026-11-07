@@ -14,7 +14,7 @@ import { getAttackBadges } from '~/utils/attackBadges'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encounterSnapshot'
-import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, type CombatActionKind, type RecordRefreshPlan } from '~/utils/combatRecords'
+import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, createRecordRefreshQueue, type CombatActionKind, type RecordRefreshPlan } from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
@@ -1105,7 +1105,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
         },
       })
       if (intercedResult) {
-        currentEncounter.value = intercedResult as any
+        await applyActionResult(intercedResult, 'attack')
       }
       // Add attack log entry
       const entity = getEntityDetails(participant)
@@ -1199,7 +1199,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
           clashNoInterceptTargetId: clashCtx?.opponentId,
         },
       })
-      if (result) currentEncounter.value = result as any
+      if (result) await applyActionResult(result, 'attack')
     } catch (e: any) {
       console.error('Area attack failed:', e)
       alert(e?.data?.message || 'Area attack failed')
@@ -1261,7 +1261,7 @@ async function handlePlayerIntercedeSkip(requestId: string, optOut = false) {
     method: 'POST',
     body: { requestId, optOut },
   })
-  if (result) currentEncounter.value = result as any
+  if (result) await applyActionResult(result, 'intercede-skip')
 }
 
 // GM intercede response functions
@@ -1283,7 +1283,7 @@ async function handleGmIntercedeClaim(requestId: string, interceptorId: string, 
       method: 'POST', body
     })
 
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'intercede-claim')
     showGmIntercedeModal.value = false
   } catch (e: any) {
     if (e?.statusCode === 409) {
@@ -1304,7 +1304,7 @@ async function handleGmIntercedeSkip(requestId: string, optOut = false) {
     const result = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/intercede-skip`, {
       method: 'POST', body: { requestId, optOut }
     })
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'intercede-skip')
     showGmIntercedeModal.value = false
     gmIntercedeRequest.value = null
   } finally {
@@ -1331,7 +1331,7 @@ async function handleGmIntercedeOptOut() {
       showGmIntercedeModal.value = false
       gmIntercedeRequest.value = null
     }
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'intercede-optouts')
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to opt out of interceding')
   } finally {
@@ -1351,7 +1351,7 @@ async function handleQuickReaction(request: any) {
       method: 'POST',
       body: { requestId: request.id, tamerParticipantId: tamerParticipant.id },
     })
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'quick-reaction')
   } catch (e: any) {
     alert(e?.data?.message || 'Quick Reaction failed')
   }
@@ -1373,7 +1373,7 @@ async function handleGmQuickReaction() {
     })
     showGmIntercedeModal.value = false
     gmIntercedeRequest.value = null
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'quick-reaction')
   } catch (e: any) {
     alert(e?.data?.message || 'Quick Reaction failed')
   } finally {
@@ -1419,7 +1419,7 @@ async function handleSaveGmIntercedeOptOuts() {
       method: 'POST',
       body: { ownerId: GM_OPT_OUT_OWNER, intercedeOptOuts: Array.from(intercedeOptOutSelections.value) },
     })
-    if (result) currentEncounter.value = result as any
+    if (result) await applyActionResult(result, 'intercede-optouts')
     showIntercedeOptOuts.value = false
   } catch (e: any) {
     alert(e?.data?.message || 'Failed to save intercede targets')
@@ -2006,12 +2006,13 @@ async function handleEngageCombat() {
 async function handleNextTurn() {
   if (!currentEncounter.value) return
 
-  await nextTurn(
+  const updated = await nextTurn(
     currentEncounter.value.id,
     digimonMap.value,
     houseRules.value,
     (p) => getEntityDetails(p)?.name ?? null,
   )
+  await applyActionResult(updated, 'end-turn')
 }
 
 // End combat — opens the modal to choose recovery check or immediate end
@@ -2027,7 +2028,7 @@ async function executeEndCombatSequence(skipDevolve = false) {
 
   if (!skipDevolve) {
     // Refresh evolution lines and devolve all partner digimon to rookie
-    await fetchEvolutionLines()
+    await recordRefreshQueue.run(() => fetchEvolutionLines())
     for (const p of participants) {
       if (p.type === 'digimon' && p.evolutionLineId) {
         const evoLine = evolutionLines.value.find(l => l.id === p.evolutionLineId)
@@ -2096,7 +2097,7 @@ async function handleRequestRecoveryChecks() {
   showEndCombatModal.value = false
 
   const encounterId = currentEncounter.value.id
-  await fetchEvolutionLines()
+  await recordRefreshQueue.run(() => fetchEvolutionLines())
 
   // Devolve all partner digimon to rookie
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
@@ -2115,7 +2116,7 @@ async function handleRequestRecoveryChecks() {
   }
 
   // Reload evolution lines so we have fresh rookieDigimonId data
-  await fetchEvolutionLines()
+  await recordRefreshQueue.run(() => fetchEvolutionLines())
 
   // Send one recovery-check request per non-enemy tamer participant
   for (const p of participants) {
@@ -2829,6 +2830,7 @@ let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
 // One gate for everything that can replace the encounter on this page: pushes, GETs and the
 // responses to GM actions. See utils/encounterSnapshot.ts.
 const encounterGate = createEncounterSnapshotGate()
+const recordRefreshQueue = createRecordRefreshQueue()
 // The newest snapshot the gate accepted. The composable assigns every GET and response into
 // currentEncounter before the gate sees it, so a rejected (older) one is replaced by this.
 let lastAppliedEncounter: any = null
@@ -2836,6 +2838,10 @@ let lastAppliedEncounter: any = null
 // Refetch only what a snapshot touched: Digimon the page has never loaded or whose participant
 // mirror changed, the evolution lines when a form changed, the Tamers after an order or digivolve.
 async function refreshAffectedRecords(plan: RecordRefreshPlan) {
+  return recordRefreshQueue.run(() => refreshRecords(plan))
+}
+
+async function refreshRecords(plan: RecordRefreshPlan) {
   const jobs: Promise<unknown>[] = []
   if (plan.digimonIds.length > 0) {
     jobs.push((async () => {
@@ -2860,12 +2866,22 @@ async function applyEncounterUpdate(
   options: { version?: number; action?: CombatActionKind } = {},
 ): Promise<boolean> {
   if (!incoming) return false
+  // Some composable methods assign their response before returning it. Preserve a genuinely newer
+  // displayed row before deciding whether to restore the last accepted snapshot.
+  const previous = lastAppliedEncounter?.id === incoming.id ? lastAppliedEncounter : null
+  const displayed = currentEncounter.value
+  if (displayed && displayed !== incoming && displayed.id === incoming.id && encounterGate.accept(displayed, { source: 'action' })) {
+    lastAppliedEncounter = shapeActionResponse(displayed, lastAppliedEncounter)
+  }
   if (!encounterGate.accept(incoming, { source, version: options.version })) {
     if (lastAppliedEncounter && lastAppliedEncounter.id === incoming.id) currentEncounter.value = lastAppliedEncounter
+    const held = lastAppliedEncounter?.id === incoming.id ? lastAppliedEncounter : null
+    const plan = planRecordRefresh(previous, held, { tamerId: '*', knownDigimonIds: new Set(digimonList.value.map((d: any) => d.id)) }, options.action ? ACTION_RECORD_HINTS[options.action] : null)
+    if (!isEmptyPlan(plan)) await refreshAffectedRecords(plan)
     return false
   }
-  const previous = lastAppliedEncounter?.id === incoming.id ? lastAppliedEncounter : null
-  const next = source === 'action' ? shapeActionResponse(incoming, previous) : incoming
+  const held = lastAppliedEncounter?.id === incoming.id ? lastAppliedEncounter : previous
+  const next = shapeActionResponse(incoming, held)
   lastAppliedEncounter = next
   currentEncounter.value = next as any
   const plan = planRecordRefresh(
@@ -2881,7 +2897,7 @@ async function applyEncounterUpdate(
 // Targeted resync for recovery and for flows whose API does not hand back the encounter.
 async function resyncEncounter(action?: CombatActionKind) {
   const id = (currentEncounter.value?.id ?? route.params.id) as string
-  const fetched = await fetchEncounter(id)
+  const fetched = await $fetch<Encounter>(`/api/encounters/${id}`).catch(() => null)
   if (fetched) await applyEncounterUpdate(fetched, 'fetch', { action })
 }
 
@@ -2924,7 +2940,7 @@ async function syncEncounterDigimon() {
   try {
     const envelope = await $fetch<{ data: any[] }>(`/api/digimon?ids=${missingIds.join(',')}`)
     if (envelope.data.length > 0) {
-      digimonList.value = [...digimonList.value, ...envelope.data]
+      digimonList.value = mergeRecordsById(digimonList.value, envelope.data)
     }
   } catch (e) {
     console.error('Failed to sync encounter digimon:', e)
@@ -2932,24 +2948,26 @@ async function syncEncounterDigimon() {
 }
 
 onMounted(async () => {
-  await Promise.all([
-    loadCampaign(),
-    fetchEncounter(route.params.id as string),
-    fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-    fetchTamers(campaignId.value),
-    fetchEvolutionLines(),
-  ])
+  let initialEncounter: Encounter | null = null
+  await recordRefreshQueue.run(async () => {
+    const results = await Promise.all([
+      loadCampaign(),
+      $fetch<Encounter>(`/api/encounters/${route.params.id}`).catch(() => null),
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+      fetchTamers(campaignId.value),
+      fetchEvolutionLines(),
+    ])
+    initialEncounter = results[1]
+  })
+
+  if (initialEncounter) await applyEncounterUpdate(initialEncounter, 'fetch')
 
   // Auto-open map view when refreshing during active combat
   if ((currentEncounter.value as any)?.mapId && currentEncounter.value?.phase === 'combat') {
     showMapView.value = true
   }
 
-  await syncEncounterDigimon()
-  // Seed the gate with the initial load so a response that was in flight before it cannot undo it
-  if (currentEncounter.value && encounterGate.accept(currentEncounter.value, { source: 'fetch' })) {
-    lastAppliedEncounter = currentEncounter.value
-  }
+  await recordRefreshQueue.run(syncEncounterDigimon)
 
   // Auto-refresh encounter as a low-frequency fallback; the WebSocket above
   // handles near-instant updates while connected.

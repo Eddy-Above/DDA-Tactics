@@ -10,7 +10,7 @@ import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnoc
 import { loadCampaignCombatContext } from '../../utils/combatContext'
 import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
 
-type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>>
+type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>>
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -42,7 +42,7 @@ export default defineEventHandler(async (event) => {
 
   // Intercede opt-outs are written only by the intercede-optouts/intercede-skip endpoints (under a
   // row lock). Ignore them here so a client PUT built from an older copy can't revert them.
-  const { intercedeOptOuts: _managedByOptOutEndpoints, ...updatableFields } = body
+  const { intercedeOptOuts: _managedByOptOutEndpoints, revision: _databaseRevision, ...updatableFields } = body as UpdateEncounterBody & { revision?: unknown }
 
   const updateData: Partial<Encounter> = {
     ...updatableFields,

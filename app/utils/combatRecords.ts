@@ -8,6 +8,7 @@ export type CombatActionKind =
   | 'intercede-claim' | 'intercede-skip' | 'intercede-optouts' | 'intercede-pass' | 'divine-protection'
   | 'digivolve' | 'devolve' | 'mode-change'
   | 'special-order' | 'skill-order' | 'spend-inspiration'
+  | 'quick-reaction'
   | 'clash' | 'move' | 'stance' | 'end-turn' | 'request-response'
 
 export interface RecordHint {
@@ -30,6 +31,7 @@ export const ACTION_RECORD_HINTS: Readonly<Partial<Record<CombatActionKind, Reco
   'special-order': { tamer: true },
   'skill-order': { tamer: true },
   'spend-inspiration': { tamer: true },
+  'quick-reaction': { tamer: true },
   recovery: { partnerDigimon: true },
 }
 
@@ -116,7 +118,22 @@ export function mergeRecordsById<T extends { id: string; updatedAt?: unknown }>(
     const fresh = byId.get(record.id)
     if (!fresh) return record
     byId.delete(record.id)
+    const heldStamp = record.updatedAt instanceof Date ? record.updatedAt.getTime() : Date.parse(String(record.updatedAt ?? ''))
+    const freshStamp = fresh.updatedAt instanceof Date ? fresh.updatedAt.getTime() : Date.parse(String(fresh.updatedAt ?? ''))
+    if (Number.isFinite(heldStamp) && Number.isFinite(freshStamp) && freshStamp < heldStamp) return record
     return String(fresh.updatedAt ?? '') === String(record.updatedAt ?? '') && record.updatedAt !== undefined ? record : fresh
   })
   return [...merged, ...byId.values()]
+}
+
+/** Serialize record reads through their assignment, including eager composable fetch helpers. */
+export function createRecordRefreshQueue() {
+  let previous: Promise<unknown> = Promise.resolve()
+  return {
+    run<T>(refresh: () => Promise<T>): Promise<T> {
+      const operation = previous.then(refresh, refresh)
+      previous = operation.catch(() => {})
+      return operation
+    },
+  }
 }

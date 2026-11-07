@@ -115,8 +115,12 @@ function createServer(initial) {
   const tables = Object.fromEntries(['encounters', 'digimon', 'tamers', 'campaigns', 'evolutionLines', 'maps']
     .map(name => [name, { name, id: name }]))
   const npcResolutions = []
+  const tamerRecords = Object.fromEntries(['tamer-1', 'tamer-2'].map(id => [id, {
+    id, name: id, attributes: { intelligence: 0 }, xpBonuses: null, usedPerDayOrders: [],
+  }]))
   let lockTail = Promise.resolve()
   let roomGate = null
+  let npcResolution = null
 
   function read(table, filter, snapshot) {
     if (table === tables.encounters) return [copy(snapshot ?? stored)]
@@ -124,14 +128,16 @@ function createServer(initial) {
       const ids = filter.values ?? [filter.value]
       return ids.filter(id => digimonRows[id]).map(id => copy(digimonRows[id]))
     }
-    if (table === tables.tamers) return []
+    if (table === tables.tamers) return (filter.values ?? [filter.value])
+      .filter(id => tamerRecords[id]).map(id => copy(tamerRecords[id]))
     throw new Error(`unexpected ${table.name} read`)
   }
   const db = {
     select: () => ({ from: table => ({ where: async filter => read(table, filter) }) }),
-    update: table => ({ set: fields => ({ where: async () => {
-      assert.equal(table, tables.encounters)
-      stored = { ...stored, ...copy(fields) }
+    update: table => ({ set: fields => ({ where: async filter => {
+      if (table === tables.encounters) stored = { ...stored, ...copy(fields) }
+      else if (table === tables.tamers) tamerRecords[filter.value] = { ...tamerRecords[filter.value], ...copy(fields) }
+      else assert.fail(`unexpected ${table.name} write`)
     } }) }),
     // A transaction reads FOR UPDATE and holds the row until it commits: the next one waits.
     transaction: async callback => {
@@ -169,6 +175,7 @@ function createServer(initial) {
 
   const npcResolver = async params => {
     npcResolutions.push({ attacker: params.attackerParticipantId, target: params.targetParticipantId })
+    if (npcResolution) return npcResolution(params)
     return {
       participants: params.participants,
       battleLog: [...params.battleLog, { id: `npc-${params.targetParticipantId}`, action: 'NPC resolved' }],
@@ -228,15 +235,21 @@ function createServer(initial) {
   const passEndpoint = endpoint('intercede-pass', { '~/server/utils/intercedePasses': passes })
   const skipEndpoint = endpoint('intercede-skip')
   const optOutEndpoint = endpoint('intercede-optouts')
+  const quickReactionEndpoint = endpoint('quick-reaction', {
+    '~/server/utils/intercedePasses': passes,
+    '~/server/utils/resolveAreaIntercedeGroup': areaModule,
+  })
 
   return {
-    preferences, passes, decision, dbModule, tables, npcResolutions, read, db,
+    preferences, passes, decision, dbModule, tables, npcResolutions, read, db, tamerRecords,
+    onNpcResolution: resolve => { npcResolution = resolve },
     holdNextDecision: () => { roomGate = { entered: deferred(), release: deferred() }; return roomGate },
     state: () => copy(stored),
     set: change => { stored = { ...stored, ...copy(change) } },
     pass: (ownerId, action = 'start') => passEndpoint({ encounterId: 'encounter', body: { ownerId, action } }),
     skip: (requestId, body = {}) => skipEndpoint({ encounterId: 'encounter', body: { requestId, ...body } }),
     saveOptOuts: (ownerId, list) => optOutEndpoint({ encounterId: 'encounter', body: { ownerId, intercedeOptOuts: list } }),
+    quickReaction: requestId => quickReactionEndpoint({ encounterId: 'encounter', body: { requestId, tamerParticipantId: 'tamer-p1' } }),
   }
 }
 
@@ -556,6 +569,49 @@ test('Pass leaves an offer that carries a Quick Reaction standing', async () => 
   assert.deepEqual(offerIds(f.state()), ['qr'])
 })
 
+test('Pass stops declining later attacks as soon as an earlier resolution starts its owner turn', async () => {
+  const f = createServer(withPass(encounterRow({ pendingRequests: [
+    singleOffer('first', 'group-first', 'tamer-1', 'npc-ally'),
+    singleOffer('later', 'group-later', 'tamer-1', 'mon-2'),
+  ] })))
+  // Reflected damage can defeat the active NPC, starting the passing Tamer's next turn.
+  f.onNpcResolution(params => ({
+    participants: params.participants.map(p => p.id === 'tamer-p1' ? { ...p, turnsStarted: 1 } : p),
+    battleLog: params.battleLog, turnOrder: params.turnOrder, nextTurnIndex: 1,
+  }))
+  await f.pass('tamer-1')
+  assert.equal(getActiveTemporaryPass(f.state(), 'tamer-1'), null)
+  assert.deepEqual(offerIds(f.state()), ['later'], 'the next attack needs a fresh intercede decision')
+  assert.equal(f.state().pendingRequests.some(r => r.type === 'dodge-roll'), false)
+  assert.equal(f.npcResolutions.length, 1)
+})
+
+for (const passing of [false, true]) {
+  test(`spending Quick Reaction clears its stale flag on other attacks${passing ? ' and resumes automatic passing' : ''}`, async () => {
+    let row = encounterRow({ pendingRequests: [
+      singleOffer('qr-first', 'group-first', 'tamer-1', 'mon-1', { canUseQuickReaction: true, quickReactionDiceCount: 3 }),
+      singleOffer('qr-later', 'group-later', 'tamer-1', 'mon-1', { canUseQuickReaction: true, quickReactionDiceCount: 3 }),
+      singleOffer('other-owner', 'group-other', 'tamer-2', 'mon-2', { canUseQuickReaction: true, quickReactionDiceCount: 3 }),
+    ] })
+    if (passing) row = withPass(row)
+    const f = createServer(row)
+    f.tamerRecords['tamer-1'].attributes.intelligence = 5
+    await f.quickReaction('qr-first')
+    const state = f.state()
+    assert.deepEqual(f.tamerRecords['tamer-1'].usedPerDayOrders, ['Quick Reaction'])
+    assert.equal(state.participants.find(p => p.id === 'tamer-p1').interceptPenalty, 1)
+    const later = state.pendingRequests.find(r => r.id === 'qr-later')
+    if (passing) {
+      assert.equal(later, undefined, 'an unusable daily order must not leave a passing player blocked')
+      assert.equal(state.pendingRequests.filter(r => r.type === 'dodge-roll').length, 2)
+    } else {
+      assert.equal(later.data.canUseQuickReaction, false)
+      assert.equal(later.data.quickReactionDiceCount, 0)
+    }
+    assert.equal(state.pendingRequests.find(r => r.id === 'other-owner').data.canUseQuickReaction, true)
+  })
+}
+
 test('Pass validation: players in combat only, and a Tamer that is in the fight', async () => {
   const setup = createServer(encounterRow({ phase: 'setup' }))
   await assert.rejects(() => setup.pass('tamer-1'), error => error.statusCode === 409)
@@ -705,6 +761,27 @@ test('an expired pass prompts again: after the Tamer\'s next turn the same attac
   f.set({ participants })
   const result = await loadOfferHandler(f)({ encounterId: 'encounter', body: offerBody })
   assert.ok(result.pendingRequests.some(r => r.type === 'intercede-offer' && r.targetTamerId === 'tamer-1'))
+})
+
+test('new offer creation waits for an automatic pass and preserves the defense it creates', async () => {
+  const f = createServer(encounterRow({ pendingRequests: [
+    singleOffer('old-offer', 'old-group', 'tamer-1', 'mon-2'),
+  ] }))
+  const gate = f.holdNextDecision()
+  const passing = f.pass('tamer-1')
+  await gate.entered.promise
+  const attack = loadOfferHandler(f)({ encounterId: 'encounter', body: offerBody })
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(offerIds(f.state()), ['old-offer'], 'creation cannot write while the pass owns the decision queue')
+  } finally {
+    gate.release.resolve()
+  }
+  await Promise.all([passing, attack])
+  const state = f.state()
+  assert.equal(state.pendingRequests.filter(r => r.type === 'dodge-roll' && r.targetParticipantId === 'mon-2').length, 1)
+  assert.equal(state.pendingRequests.some(r => r.id === 'old-offer'), false)
+  assert.ok(state.pendingRequests.some(r => r.type === 'intercede-offer' && r.targetTamerId === 'GM'))
 })
 
 // --- combat end and copies -----------------------------------------------------------------------------

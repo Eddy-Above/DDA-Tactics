@@ -15,6 +15,8 @@ export type SnapshotSource = 'ws' | 'action' | 'fetch'
 
 interface SnapshotEncounter {
   id?: string
+  /** Database row revision, incremented atomically by the encounters UPDATE trigger. */
+  revision?: number | string | null
   updatedAt?: string | Date | null
   battleLog?: readonly unknown[] | null
   _battleLogTotal?: number
@@ -53,6 +55,14 @@ export function snapshotStamp(encounter: SnapshotEncounter | null | undefined): 
   return Number.isNaN(ms) ? null : ms
 }
 
+/** Read the authoritative token without losing bigint precision in JSON string responses. */
+export function snapshotRevision(encounter: SnapshotEncounter | null | undefined): bigint | null {
+  const value = encounter?.revision
+  if (typeof value === 'number' && (!Number.isSafeInteger(value) || value < 0)) return null
+  if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) return null
+  return BigInt(value)
+}
+
 /**
  * Gives an action response (a raw encounter row) the same shape as a pushed payload: the battle log
  * trimmed to the window with its true length, and, because positions are owned by the live room,
@@ -64,11 +74,13 @@ export function shapeActionResponse<T extends SnapshotEncounter>(raw: T, current
   const shaped: any = {
     ...raw,
     battleLog: entries,
-    _battleLogTotal: total,
-    _battleLogWasTrimmed: wasTrimmed,
+    _battleLogTotal: raw._battleLogTotal ?? total,
+    _battleLogWasTrimmed: raw._battleLogWasTrimmed ?? wasTrimmed,
   }
   if (raw.participants) shaped.participants = normalizeActionsRemaining(raw.participants)
-  if (current && current.id === raw.id) {
+  const carriesNewerRoomState = typeof raw.version === 'number'
+    && (typeof current?.version !== 'number' || raw.version >= current.version)
+  if (current && current.id === raw.id && !carriesNewerRoomState) {
     for (const key of ['participantPositions', 'destructibleStates', 'version'] as const) {
       if (current[key] !== undefined) shaped[key] = current[key]
     }
@@ -103,20 +115,21 @@ export interface EncounterSnapshotGate {
 }
 
 /**
- * One per page. Drops a snapshot that is older than one already applied, whatever channel it came
- * by: WebSocket pushes also keep the existing monotonic `version` guard. Equal timestamps pass —
- * they cannot be proven stale, and the same state arriving twice is harmless. Switching to another
- * encounter starts a fresh history.
+ * Database revisions order committed row changes across every channel, independently of request
+ * start timestamps and push arrival order. Legacy timestamps/push versions apply only before an
+ * authoritative revision has been seen. Switching encounters starts a fresh history.
  */
 export function createEncounterSnapshotGate(): EncounterSnapshotGate {
   let encounterId: string | null = null
   let newestVersion = -1
   let newestStamp: number | null = null
+  let newestRevision: bigint | null = null
 
   function reset() {
     encounterId = null
     newestVersion = -1
     newestStamp = null
+    newestRevision = null
   }
 
   return {
@@ -127,6 +140,14 @@ export function createEncounterSnapshotGate(): EncounterSnapshotGate {
         reset()
         encounterId = incoming.id ?? null
       }
+      const revision = snapshotRevision(incoming)
+      if (revision !== null) {
+        if (newestRevision !== null && revision < newestRevision) return false
+        newestRevision = revision
+        return true
+      }
+      // An unversioned response must not undo a database-versioned snapshot during rollout.
+      if (newestRevision !== null) return false
       if (source === 'ws' && typeof version === 'number') {
         if (version < newestVersion) return false
         newestVersion = version

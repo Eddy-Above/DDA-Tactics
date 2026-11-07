@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { afterEach, beforeEach, mock, test } from 'node:test'
+import { afterEach, beforeEach, describe, mock, test } from 'node:test'
 import { computed, effectScope, nextTick, ref } from 'vue'
 import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
@@ -8,13 +8,25 @@ const { useAutoDismiss, RESULT_AUTO_DISMISS_MS } = loadTypeScript('composables/u
 const { isRequestAnswered } = loadTypeScript('utils/requestState.ts')
 const PLAYER_PAGE = 'pages/campaigns/[campaignId]/player/[tamerId].vue'
 
+describe('completed combat result dismissal', () => {
+const scopes = []
 beforeEach(() => { mock.timers.enable({ apis: ['setTimeout'] }) })
-afterEach(() => { mock.timers.reset() })
+afterEach(() => {
+  for (const scope of scopes.splice(0)) scope.stop()
+  mock.timers.reset()
+})
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
 function setup(options) {
   const scope = effectScope()
+  scopes.push(scope)
   const dismissal = scope.run(() => useAutoDismiss(options))
   return { scope, ...dismissal }
 }
@@ -94,6 +106,36 @@ test('a click racing the timer runs cleanup once', async () => {
   assert.deepEqual(cleaned, ['start', 'end'])
 })
 
+test('a replacement keeps its own five-second dismissal while an older cleanup is in flight', async () => {
+  const key = ref('A')
+  const oldCleanup = deferred()
+  const cleaned = []
+  setup({
+    key: () => key.value,
+    cleanup: async () => {
+      const original = key.value
+      cleaned.push(`start ${original}`)
+      if (original === 'A') await oldCleanup.promise
+      cleaned.push(`end ${original}`)
+      if (key.value === original) key.value = null
+    },
+  })
+
+  mock.timers.tick(5000)
+  await flush()
+  assert.deepEqual(cleaned, ['start A'])
+  key.value = 'B'
+  mock.timers.tick(4999)
+  await flush()
+  assert.deepEqual(cleaned, ['start A'])
+  mock.timers.tick(1)
+  await flush()
+  assert.deepEqual(cleaned, ['start A', 'start B', 'end B'])
+  oldCleanup.resolve()
+  await flush()
+  assert.deepEqual(cleaned, ['start A', 'start B', 'end B', 'end A'])
+})
+
 test('disposing the owning scope cancels the countdown', async () => {
   const cleaned = []
   const { scope, isPending } = setup({ key: () => 'result', cleanup: () => { cleaned.push('x') } })
@@ -117,8 +159,9 @@ test('a request that was answered stays answered after its response is deleted',
 
 // --- the player page's real cleanup functions -----------------------------------------------
 
-function createPage({ failing = [] } = {}) {
+function createPage({ failing = [], onOperation } = {}) {
   const calls = []
+  const encounterCalls = []
   const activeEncounter = ref({ id: 'encounter-1' })
   const attackResultQueue = ref([])
   const attackResultGroupTotals = ref({})
@@ -134,14 +177,16 @@ function createPage({ failing = [] } = {}) {
   const showDodgeResultModal = ref(false)
   const hasRolledDodge = ref(true)
   const dismissedResponseIds = new Set()
-  const record = (name, failure) => async (...args) => {
+  const record = name => async (...args) => {
     calls.push([name, ...args.slice(1)])
+    encounterCalls.push([name, ...args])
+    await onOperation?.(name, ...args)
     if (failing.includes(`${name}:${args[1]}`)) throw new Error(`${name} failed`)
     return {}
   }
   const page = loadPageFunctions(
     PLAYER_PAGE,
-    ['isServerResponseId', 'cleanupDodgeExchange', 'cleanupAttackResultGroup', 'cleanupDodgeResult'],
+    ['isServerResponseId', 'isAttackResultGroupComplete', 'maybeShowGroupModal', 'cleanupDodgeExchange', 'cleanupAttackResultGroup', 'cleanupDodgeResult'],
     {
       activeEncounter, attackResultQueue, attackResultGroupTotals, showAttackResultModal, attackResultGroup,
       dodgeRequestId, dodgeResponseId, dodgeResultData, showDodgeResultModal, hasRolledDodge, dismissedResponseIds,
@@ -149,8 +194,10 @@ function createPage({ failing = [] } = {}) {
       console: { error: () => {}, log: () => {} },
     },
   )
+  const attackResultVisible = computed(() => showAttackResultModal.value && page.isAttackResultGroupComplete())
   return {
-    ...page, calls, activeEncounter, attackResultQueue, attackResultGroupTotals, showAttackResultModal, attackResultGroup,
+    ...page, calls, encounterCalls, activeEncounter, attackResultQueue, attackResultGroupTotals, showAttackResultModal,
+    attackResultGroup, attackResultVisible,
     dodgeRequestId, dodgeResponseId, dodgeResultData, showDodgeResultModal, hasRolledDodge, dismissedResponseIds,
   }
 }
@@ -215,6 +262,186 @@ test('dismissing a dodge result uses the same exchange cleanup and resets the di
   assert.ok(page.dismissedResponseIds.has('resp-d'))
 })
 
+test('old dodge cleanup only dismisses its captured result when a replacement arrives during the request', async () => {
+  const oldCancel = deferred()
+  const page = createPage({
+    onOperation: async (name, _encounterId, id) => {
+      if (name === 'cancelRequest' && id === 'req-A') await oldCancel.promise
+    },
+  })
+  page.dodgeRequestId.value = 'req-A'
+  page.dodgeResponseId.value = 'resp-A'
+  page.dodgeResultData.value = { name: 'A' }
+  page.showDodgeResultModal.value = true
+  const cleanup = page.cleanupDodgeResult()
+
+  page.dodgeRequestId.value = 'req-B'
+  page.dodgeResponseId.value = 'resp-B'
+  page.dodgeResultData.value = { name: 'B' }
+  oldCancel.resolve()
+  await cleanup
+
+  assert.deepEqual(page.calls, [['cancelRequest', 'req-A'], ['deleteResponse', 'resp-A']])
+  assert.equal(page.showDodgeResultModal.value, true)
+  assert.deepEqual(page.dodgeResultData.value, { name: 'B' })
+  assert.equal(page.dodgeRequestId.value, 'req-B')
+  assert.deepEqual([...page.dismissedResponseIds], ['resp-A'])
+})
+
+test('a retried response for the same dodge remains the same result while cleanup is pending', async () => {
+  const oldCancel = deferred()
+  const page = createPage({ onOperation: async name => {
+    if (name === 'cancelRequest') await oldCancel.promise
+  } })
+  page.dodgeRequestId.value = 'req-A'
+  page.dodgeResponseId.value = 'resp-A'
+  page.dodgeResultData.value = { name: 'A' }
+  page.showDodgeResultModal.value = true
+  const cleanup = page.cleanupDodgeResult()
+  page.dodgeResultData.value = { name: 'A', retry: true }
+  oldCancel.resolve()
+  await cleanup
+  assert.equal(page.showDodgeResultModal.value, false)
+  assert.equal(page.dodgeResultData.value, null)
+  assert.deepEqual([...page.dismissedResponseIds], ['resp-A'])
+})
+
+test('each replacement dodge result receives a full timer even if the old request cleanup remains blocked', async () => {
+  const oldCancel = deferred()
+  const page = createPage({
+    onOperation: async (name, _encounterId, id) => {
+      if (name === 'cancelRequest' && id === 'req-A') await oldCancel.promise
+    },
+  })
+  const show = id => {
+    page.dodgeRequestId.value = `req-${id}`
+    page.dodgeResponseId.value = `resp-${id}`
+    page.dodgeResultData.value = { name: id }
+    page.showDodgeResultModal.value = true
+  }
+  show('A')
+  setup({
+    key: () => page.showDodgeResultModal.value && page.dodgeResultData.value
+      ? `${page.activeEncounter.value?.id}:${page.dodgeRequestId.value}` : null,
+    cleanup: page.cleanupDodgeResult,
+  })
+  mock.timers.tick(5000)
+  await flush()
+  show('B')
+  mock.timers.tick(4999)
+  await flush()
+  assert.deepEqual(page.dodgeResultData.value, { name: 'B' })
+  mock.timers.tick(1)
+  await flush()
+  assert.equal(page.showDodgeResultModal.value, false)
+  assert.deepEqual([...page.dismissedResponseIds], ['resp-B'])
+
+  oldCancel.resolve()
+  await flush()
+  assert.deepEqual(new Set(page.dismissedResponseIds), new Set(['resp-A', 'resp-B']))
+  for (const id of ['req-A', 'req-B']) {
+    assert.equal(page.calls.filter(([name, requestId]) => name === 'cancelRequest' && requestId === id).length, 1)
+  }
+})
+
+test('dodge cleanup stays on its original encounter and does not clear a new encounter result', async () => {
+  const oldCancel = deferred()
+  const page = createPage({ onOperation: async name => {
+    if (name === 'cancelRequest') await oldCancel.promise
+  } })
+  page.dodgeRequestId.value = 'req-A'
+  page.dodgeResponseId.value = 'resp-A'
+  page.dodgeResultData.value = { name: 'A' }
+  page.showDodgeResultModal.value = true
+  const cleanup = page.cleanupDodgeResult()
+  page.activeEncounter.value = { id: 'encounter-2' }
+  page.dodgeRequestId.value = 'req-B'
+  page.dodgeResponseId.value = 'resp-B'
+  page.dodgeResultData.value = { name: 'B' }
+  oldCancel.resolve()
+  await cleanup
+
+  assert.deepEqual(page.encounterCalls, [
+    ['cancelRequest', 'encounter-1', 'req-A'], ['deleteResponse', 'encounter-1', 'resp-A'],
+  ])
+  assert.equal(page.showDodgeResultModal.value, true)
+  assert.deepEqual(page.dodgeResultData.value, { name: 'B' })
+  assert.deepEqual([...page.dismissedResponseIds], ['resp-A'])
+})
+
+test('an incomplete successor is hidden and gets no timer until all of its targets resolve', async () => {
+  const page = createPage()
+  page.attackResultQueue.value = [result('A', 1), result('B', 1)]
+  page.attackResultGroupTotals.value = { A: 1, B: 2 }
+  page.showAttackResultModal.value = true
+  const { isPending } = setup({
+    key: () => page.attackResultVisible.value
+      ? `${page.attackResultGroup.value[0].groupId}:${page.attackResultGroup.value.length}` : null,
+    cleanup: page.cleanupAttackResultGroup,
+  })
+
+  mock.timers.tick(5000)
+  await flush()
+  assert.deepEqual(page.attackResultQueue.value.map(r => r.responseId), ['resp-B-1'])
+  assert.equal(page.attackResultVisible.value, false)
+  assert.equal(isPending(), false)
+  mock.timers.tick(60_000)
+  await flush()
+  await page.cleanupAttackResultGroup()
+  assert.equal(page.attackResultQueue.value.length, 1, 'even manual cleanup cannot discard an incomplete cast')
+  assert.equal(page.attackResultGroupTotals.value.B, 2)
+
+  page.attackResultQueue.value.push(result('B', 2))
+  page.maybeShowGroupModal('B')
+  assert.equal(page.attackResultVisible.value, true)
+  mock.timers.tick(4999)
+  await flush()
+  assert.equal(page.attackResultQueue.value.length, 2)
+  mock.timers.tick(1)
+  await flush()
+  assert.equal(page.attackResultQueue.value.length, 0)
+  assert.equal(page.attackResultGroupTotals.value.B, undefined)
+  assert.deepEqual(page.calls, [
+    ['cancelRequest', 'req-A-1'], ['deleteResponse', 'resp-A-1'],
+    ['cancelRequest', 'req-B-1'], ['deleteResponse', 'resp-B-1'],
+    ['cancelRequest', 'req-B-2'], ['deleteResponse', 'resp-B-2'],
+  ])
+})
+
+test('a complete later group cannot expose an incomplete head group', () => {
+  const page = createPage()
+  page.attackResultQueue.value = [result('A', 1), result('B', 1)]
+  page.attackResultGroupTotals.value = { A: 2, B: 1 }
+  page.maybeShowGroupModal('B')
+  assert.equal(page.attackResultVisible.value, false)
+  assert.equal(page.isAttackResultGroupComplete(), false)
+})
+
+test('group cleanup keeps every delete on the captured encounter and preserves its replacement queue', async () => {
+  const oldCancel = deferred()
+  const page = createPage({ onOperation: async (name, _encounterId, id) => {
+    if (name === 'cancelRequest' && id === 'req-A-1') await oldCancel.promise
+  } })
+  page.attackResultQueue.value = [result('A', 1), result('A', 2)]
+  page.attackResultGroupTotals.value = { A: 2 }
+  page.showAttackResultModal.value = true
+  const cleanup = page.cleanupAttackResultGroup()
+  page.activeEncounter.value = { id: 'encounter-2' }
+  page.attackResultQueue.value = [result('B', 1)]
+  page.attackResultGroupTotals.value = { B: 1 }
+  oldCancel.resolve()
+  await cleanup
+
+  assert.ok(page.encounterCalls.every(([, encounterId]) => encounterId === 'encounter-1'))
+  assert.deepEqual(page.calls, [
+    ['cancelRequest', 'req-A-1'], ['deleteResponse', 'resp-A-1'],
+    ['cancelRequest', 'req-A-2'], ['deleteResponse', 'resp-A-2'],
+  ])
+  assert.deepEqual(page.attackResultQueue.value.map(r => r.groupId), ['B'])
+  assert.deepEqual(page.attackResultGroupTotals.value, { B: 1 })
+  assert.equal(page.attackResultVisible.value, true)
+})
+
 test('timer and Close button share one cleanup that runs once for an attack result group', async () => {
   const page = createPage()
   page.attackResultQueue.value = [result('g1', 1), result('g1', 2)]
@@ -252,6 +479,10 @@ test('the page only auto-dismisses finished results, wired through one dismissal
   }
   const clashKey = dismissals.find(([, name]) => name === 'clashCheckResultDismissal')[2]
   assert.match(clashKey, /!clashCheckResultData\.value\.waiting/, 'a PENDING clash result is not finished')
+  const attackKey = dismissals.find(([, name]) => name === 'attackResultDismissal')[2]
+  assert.match(attackKey, /attackResultVisible/, 'only the complete head group starts a result timer')
+  assert.ok(source.includes('v-if="attackResultVisible && attackResultData"'),
+    'the result dialog uses the same complete-head guard as its timer')
 
   for (const name of ['attackResultDismissal', 'dodgeResultDismissal', 'intercedeResultDismissal', 'clashCheckResultDismissal']) {
     assert.ok(source.includes(`@click="${name}.dismiss()"`), `${name} backs the dialog's Close button`)
@@ -346,4 +577,5 @@ test('overlapping submissions for one dodge are answered once', async () => {
   } finally {
     server.restore()
   }
+})
 })

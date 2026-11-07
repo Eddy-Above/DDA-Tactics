@@ -8,7 +8,7 @@ import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils/resolveAreaIntercedeGroup'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
-import { GM_OPT_OUT_OWNER, offerHasQuickReaction } from '~/utils/intercedeOptOuts'
+import { GM_OPT_OUT_OWNER, isOfferPassed } from '~/utils/intercedeOptOuts'
 
 // What happens once an intercede-offer is answered without anyone stepping in — a Skip, or an
 // opt-out clearing it. Shared by intercede-skip and intercede-optouts so an opt-out can clear
@@ -340,7 +340,7 @@ export async function pruneOptedOutOffers(
 }
 
 /**
- * Answers every intercede prompt already queued for the owners in `passedOwnerIds` (players with an
+ * Answers every intercede prompt already queued for players with an
  * active "Pass until my next turn") exactly as a plain Skip would: the owner's whole offer is
  * dropped — unlike an opt-out, an area offer is not kept open for other targets — and each attack
  * whose last open decision this was resolves through the same path (area group, dodge-roll for a
@@ -350,19 +350,18 @@ export async function pruneOptedOutOffers(
 export async function resolvePassedOffers(
   ctx: IntercedeDecisionContext,
   state: IntercedeDecisionState,
-  passedOwnerIds: string[],
+  encounter: any,
 ): Promise<IntercedeDecisionState> {
-  const passed = new Set(passedOwnerIds)
-  if (passed.size === 0) return state
-
   const offerIds = state.pendingRequests
-    .filter((r: any) => r.type === 'intercede-offer' && passed.has(r.targetTamerId) && !offerHasQuickReaction(r))
+    .filter((r: any) => r.type === 'intercede-offer')
     .map((r: any) => r.id)
 
   for (const offerId of offerIds) {
     // An earlier resolution in this loop may already have removed it
     const offer = state.pendingRequests.find((r: any) => r.id === offerId)
-    if (!offer) continue
+    // A preceding resolution can start the owner's next turn (for example, reflected damage
+    // defeats the active attacker). Recheck against that updated roster before declining again.
+    if (!offer || !isOfferPassed({ ...encounter, participants: state.participants }, offer)) continue
     state = { ...state, pendingRequests: state.pendingRequests.filter((r: any) => r.id !== offerId) }
     state = await resolveIntercedeGroupIfDecided(ctx, state, offer)
   }

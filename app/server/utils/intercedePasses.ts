@@ -35,7 +35,7 @@ export async function applyActivePasses(encounterId: string): Promise<boolean> {
 
   const ctx = await loadIntercedeDecisionContext(encounter)
   const initial = initialDecisionState(encounter)
-  const state = await resolvePassedOffers(ctx, initial, passing)
+  const state = await resolvePassedOffers(ctx, initial, encounter)
   if (state === initial) return false
   await persistDecisionState(encounter, state)
   return true

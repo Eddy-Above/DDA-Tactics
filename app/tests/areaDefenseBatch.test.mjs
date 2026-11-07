@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { afterEach, test } from 'node:test'
-import { createSSRApp, h, nextTick, ref } from 'vue'
+import { computed, createSSRApp, h, nextTick, ref, watch } from 'vue'
 import { renderToString } from '@vue/server-renderer'
 import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks, loadVueComponent } from './helpers/loadTypeScript.mjs'
 
@@ -602,24 +602,75 @@ test('the page opens the panel for a cast of two or more, keeps one-request atta
 test('closing the panel cancels every request and deletes every response once, then clears it', async () => {
   const calls = []
   const dismissedResponseIds = new Set()
+  const groupId = ref('cast-1')
   const { cleanupAreaDefense } = loadPageFunctions(PLAYER_PAGE, ['cleanupAreaDefense', 'cleanupDodgeExchange', 'isServerResponseId'], {
     activeEncounter: ref({ id: 'encounter' }),
     cancelRequest: async (_encounter, id) => { calls.push(['cancel', id]) },
     deleteResponse: async (_encounter, id) => { calls.push(['delete', id]) },
     dismissedResponseIds,
     areaDefenseBatch: {
+      groupId,
       cleanupTargets: () => [
         { requestId: 'a', responseId: 'resp-a' }, { requestId: 'b', responseId: 'resp-b' }, { requestId: 'c', responseId: null },
       ],
-      close: () => calls.push(['close']),
+      close: () => { groupId.value = null; calls.push(['close']) },
     },
+    syncAreaDefenseBatch: () => calls.push(['sync']),
     console,
   })
   await cleanupAreaDefense()
   assert.deepEqual(calls, [
-    ['cancel', 'a'], ['delete', 'resp-a'], ['cancel', 'b'], ['delete', 'resp-b'], ['cancel', 'c'], ['close'],
+    ['cancel', 'a'], ['delete', 'resp-a'], ['cancel', 'b'], ['delete', 'resp-b'], ['cancel', 'c'], ['close'], ['sync'],
   ])
   assert.deepEqual([...dismissedResponseIds], ['resp-a', 'resp-b'])
+})
+
+test('closing a settled batch immediately opens the next cast after all cleanup updates arrived', async () => {
+  const requests = [dodge('a', 'tamer-p'), dodge('b', 'mon-p'),
+    dodge('c', 'tamer-p', { intercedeGroupId: 'cast-2' }), dodge('d', 'mon-p', { intercedeGroupId: 'cast-2' })]
+  const { batch } = harness()
+  batch.open('cast-1', requests.slice(0, 2))
+  for (const entry of batch.entries.value) entry.status = 'submitted'
+  const myRequests = ref(requests)
+  const pending = computed(() => groupDodgeRequests(myRequests.value).find(g => g.isCast && g.requests.length >= 2))
+  const { syncAreaDefenseBatch, cleanupAreaDefense } = loadPageFunctions(PLAYER_PAGE,
+    ['syncAreaDefenseBatch', 'cleanupAreaDefense'], {
+      activeEncounter: ref({ id: 'encounter' }), areaDefenseBatch: batch, myRequests,
+      pendingAreaDefenseGroup: pending, dismissedResponseIds: new Set(),
+      cleanupDodgeExchange: async (requestId, _responseId, encounterId) => {
+        assert.equal(encounterId, 'encounter')
+        myRequests.value = myRequests.value.filter(request => request.id !== requestId)
+        await nextTick()
+      },
+    })
+  const stop = watch(myRequests, syncAreaDefenseBatch)
+  try {
+    await cleanupAreaDefense()
+    await nextTick()
+    assert.equal(batch.active.value, true)
+    assert.equal(batch.groupId.value, 'cast-2')
+    assert.deepEqual(batch.entries.value.map(entry => [entry.requestId, entry.status]), [['c', 'idle'], ['d', 'idle']])
+  } finally {
+    stop()
+  }
+})
+
+test('an old batch cleanup cannot close a batch from a newly selected encounter', async () => {
+  const { batch } = harness()
+  const activeEncounter = ref({ id: 'old' })
+  const cleaned = []
+  const { cleanupAreaDefense } = loadPageFunctions(PLAYER_PAGE, ['cleanupAreaDefense'], {
+    activeEncounter, areaDefenseBatch: batch, dismissedResponseIds: new Set(),
+    cleanupDodgeExchange: async (requestId, _responseId, encounterId) => {
+      cleaned.push([requestId, encounterId])
+      activeEncounter.value = { id: 'new' }
+      batch.open('new-cast', [dodge('new', 'mon-p')])
+    },
+    syncAreaDefenseBatch: unexpected,
+  })
+  await cleanupAreaDefense()
+  assert.equal(batch.groupId.value, 'new-cast')
+  assert.deepEqual(cleaned, [['a', 'old'], ['b', 'old'], ['c', 'old']])
 })
 
 test('sending a defense reports failure instead of throwing, keeps the roll out of it, and returns the response id and result', async () => {

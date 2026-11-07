@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeEach, mock, test } from 'node:test'
+import { afterEach, beforeEach, describe, mock, test } from 'node:test'
 import { ref } from 'vue'
 import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+
+describe('encounter snapshots and combat record refreshes', () => {
 
 const snapshot = loadTypeScript('utils/encounterSnapshot.ts')
 const records = loadTypeScript('utils/combatRecords.ts')
@@ -13,6 +15,7 @@ const {
 } = snapshot
 const { planRecordRefresh, isEmptyPlan, mergeRecordsById, ACTION_RECORD_HINTS } = records
 const PLAYER_PAGE = 'pages/campaigns/[campaignId]/player/[tamerId].vue'
+const GM_PAGE = 'pages/campaigns/[campaignId]/encounters/[id].vue'
 
 const at = (ms) => new Date(Date.UTC(2026, 10, 7, 12, 0, 0, ms)).toISOString()
 const entries = (from, to) => Array.from({ length: to - from }, (_, i) => ({ id: `log-${from + i}` }))
@@ -194,11 +197,17 @@ function createPage({ tamerId = 'tamer-1', initial = encounter({ updatedAt: at(1
     tamer, activeEncounter, currentEncounter, myRequests, allDigimon, partnerDigimon: partners, allTamers, digimonList,
     campaignId: ref('campaign-1'),
     encounterGate: createEncounterSnapshotGate(),
+    recordRefreshQueue: records.createRecordRefreshQueue(),
     encounterUpdateDebounce: null,
     getMyPendingRequests: (e, id) => (e.pendingRequests || []).filter(r => r.targetTamerId === id),
     reconstructAttackResults: (e) => { calls.reconstruct.push(e) },
     loadData: async () => { calls.loadData++ },
     $fetch: async (url) => {
+      if (dependencies.fetchOverride) return dependencies.fetchOverride(url)
+      if (url.startsWith('/api/encounters/')) {
+        calls.fetchEncounter.push(url.split('/').at(-1))
+        return dependencies.nextFetch
+      }
       calls.fetches.push(url)
       const ids = new URL(url, 'http://x').searchParams.get('ids')?.split(',') ?? []
       return { data: ids.map(id => ({ id, updatedAt: 'fresh' })) }
@@ -211,7 +220,7 @@ function createPage({ tamerId = 'tamer-1', initial = encounter({ updatedAt: at(1
     console: { error: () => {}, log: () => {} },
   }
   const page = loadPageFunctions(PLAYER_PAGE, [
-    'ownedDigimonIds', 'refreshAffectedRecords', 'applyEncounterUpdate', 'resyncCombatState', 'applyActionResult', 'handleEncounterSocketMessage',
+    'ownedDigimonIds', 'refreshAffectedRecords', 'refreshRecords', 'applyEncounterUpdate', 'resyncCombatState', 'applyActionResult', 'handleEncounterSocketMessage',
   ], dependencies)
   return { ...page, calls, tamer, activeEncounter, currentEncounter, myRequests, allDigimon, partners, allTamers, dependencies }
 }
@@ -423,7 +432,7 @@ test('the socket tells the page when it reopens after a drop, not on the first c
 
 // --- the server side of the ordering token ----------------------------------------------------------
 
-test('every encounter write stamps updatedAt, since it is what orders snapshots', () => {
+test('legacy encounter writes still stamp updatedAt during the revision rollout', () => {
   const root = new URL('../server/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
   const files = []
   const walk = (dir) => {
@@ -454,7 +463,7 @@ test('every encounter write stamps updatedAt, since it is what orders snapshots'
 })
 
 test('the encounter payload shares its log trimming and action migration with the pages', async () => {
-  const stored = encounter({ battleLog: entries(0, 70), participants: [{ id: 'a', actionsRemaining: { simple: 1, complex: 1 } }] })
+  const stored = encounter({ revision: 42, battleLog: entries(0, 70), participants: [{ id: 'a', actionsRemaining: { simple: 1, complex: 1 } }] })
   const { buildEncounterPayload } = loadTypeScriptWithMocks('server/utils/encounterPayload.ts', {
     '../db': { db: { select: () => ({ from: () => ({ where: async () => [stored] }) }) }, encounters: { id: 'id' } },
     'drizzle-orm': { eq: () => ({}) },
@@ -467,4 +476,177 @@ test('the encounter payload shares its log trimming and action migration with th
   assert.deepEqual(payload.participants[0].actionsRemaining, { simple: 1 })
   assert.deepEqual(payload.participantPositions, { room: true })
   assert.equal(payload.version, 4)
+  assert.equal(payload.revision, 42)
+})
+
+test('database revision orders commits even when request timestamps and push versions go backwards', () => {
+  const gate = createEncounterSnapshotGate()
+  assert.equal(gate.accept(encounter({ revision: 9, updatedAt: at(900) }), { source: 'ws', version: 900 }), true)
+  assert.equal(gate.accept(encounter({ revision: 10, updatedAt: at(100) }), { source: 'ws', version: 100 }), true,
+    'a later committed update can carry an earlier request-start timestamp')
+  assert.equal(gate.accept(encounter({ revision: 10, updatedAt: at(100) }), { source: 'fetch' }), true,
+    'authoritative GETs of that committed state remain applicable')
+  assert.equal(gate.accept(encounter({ revision: 9, updatedAt: at(950) }), { source: 'action' }), false)
+  assert.equal(gate.accept(encounter({ revision: undefined, updatedAt: at(999) }), { source: 'action' }), false,
+    'an unversioned response cannot override a revisioned row')
+})
+
+test('large database revision strings retain their ordering and malformed tokens are not trusted', () => {
+  const gate = createEncounterSnapshotGate()
+  assert.equal(gate.accept(encounter({ revision: '9007199254740993' }), { source: 'fetch' }), true)
+  assert.equal(gate.accept(encounter({ revision: '9007199254740992' }), { source: 'ws', version: 100 }), false)
+  assert.equal(snapshot.snapshotRevision({ revision: 'not-a-revision' }), null)
+  assert.equal(snapshot.snapshotRevision({ revision: -1 }), null)
+})
+
+test('shaping an already-windowed payload preserves its true log count and the newest room state', () => {
+  const held = encounter({ version: 12, participantPositions: { guard: { x: 12, y: 0, z: 0 } } })
+  const payload = encounter({ version: 11, battleLog: entries(20, 70), _battleLogTotal: 70, _battleLogWasTrimmed: true })
+  const shaped = shapeActionResponse(payload, held)
+  assert.equal(shaped._battleLogTotal, 70)
+  assert.equal(shaped._battleLogWasTrimmed, true)
+  assert.equal(shaped.version, 12)
+  assert.deepEqual(shaped.participantPositions, held.participantPositions)
+  const newerRoom = shapeActionResponse({ ...payload, version: 13 }, held)
+  assert.equal(newerRoom.version, 13)
+  assert.deepEqual(newerRoom.participantPositions, payload.participantPositions)
+})
+
+test('an older record response cannot replace newer stats, including Date versus ISO timestamps', () => {
+  const held = { id: 'agumon', updatedAt: new Date('2026-11-07T10:00:03.900Z'), accuracy: 8 }
+  const stale = { id: 'agumon', updatedAt: '2026-11-07T10:00:03.100Z', accuracy: 6 }
+  assert.strictEqual(mergeRecordsById([held], [stale])[0], held)
+})
+
+function createGmPage(initial = encounter({ revision: 1, updatedAt: at(100) })) {
+  const currentEncounter = ref(initial)
+  const calls = { fetches: [], fetchTamers: [], fetchEvolutionLines: [] }
+  const dependencies = {
+    ...snapshot, ...records,
+    currentEncounter, lastAppliedEncounter: initial,
+    encounterGate: createEncounterSnapshotGate(),
+    recordRefreshQueue: records.createRecordRefreshQueue(),
+    digimonList: ref([{ id: 'agumon', updatedAt: 'a1' }, { id: 'foe', updatedAt: 'f1' }]),
+    campaignId: ref('campaign-1'), route: { params: { id: initial.id } },
+    gmIntercedeRequest: ref({ id: 'offer', data: {} }), gmIntercedeLoading: ref(false),
+    showGmIntercedeModal: ref(true),
+    fetchTamers: async id => { calls.fetchTamers.push(id) },
+    fetchEvolutionLines: async () => { calls.fetchEvolutionLines.push('lines') },
+    $fetch: async url => {
+      if (dependencies.fetchOverride) return dependencies.fetchOverride(url)
+      calls.fetches.push(url)
+      if (url.includes('/api/digimon')) return { data: [] }
+      return dependencies.nextFetch
+    },
+    nextFetch: null, console: { error: () => {} }, alert: message => { throw new Error(message) },
+  }
+  const page = loadPageFunctions(GM_PAGE, [
+    'refreshAffectedRecords', 'refreshRecords', 'applyEncounterUpdate', 'applyActionResult',
+    'resyncEncounter', 'handleGmIntercedeClaim',
+  ], dependencies)
+  return { ...page, currentEncounter, calls, dependencies }
+}
+
+test('the real GM intercede action registers its returned state before a delayed stale push', async () => {
+  const page = createGmPage()
+  await page.applyEncounterUpdate(page.currentEncounter.value, 'fetch')
+  page.dependencies.nextFetch = encounter({ revision: 5, updatedAt: at(500), round: 3 })
+  await page.handleGmIntercedeClaim('offer', 'guard')
+  assert.equal(page.currentEncounter.value.revision, 5)
+  assert.equal(await page.applyEncounterUpdate(encounter({ revision: 2, updatedAt: at(200), round: 1 }), 'ws', { version: 99 }), false)
+  assert.equal(page.currentEncounter.value.revision, 5)
+  assert.equal(page.currentEncounter.value.round, 3)
+  assert.equal(page.dependencies.gmIntercedeLoading.value, false)
+})
+
+test('rejecting a stale GM push never restores older state over a newer composable result', async () => {
+  const page = createGmPage()
+  await page.applyEncounterUpdate(page.currentEncounter.value, 'fetch')
+  page.currentEncounter.value = encounter({ revision: 5, updatedAt: at(500), round: 4 })
+  assert.equal(await page.applyEncounterUpdate(encounter({ revision: 0, updatedAt: at(50) }), 'ws', { version: 99 }), false)
+  assert.equal(page.currentEncounter.value.revision, 5)
+  assert.equal(page.currentEncounter.value.round, 4)
+})
+
+for (const role of ['gm', 'player']) {
+  test(`a rejected ${role} action still refreshes its daily-order records`, async () => {
+    const page = role === 'gm' ? createGmPage() : createPage({ initial: encounter({ revision: 1 }) })
+    await page.applyEncounterUpdate(encounter({ revision: 3, updatedAt: at(900) }), 'ws', { version: 3 })
+    assert.equal(await page.applyEncounterUpdate(encounter({ revision: 2, updatedAt: at(700) }), 'action', { action: 'special-order' }), false)
+    assert.equal((page.currentEncounter.value).revision, 3)
+    if (role === 'gm') assert.deepEqual(page.calls.fetchTamers, ['campaign-1'])
+    else assert.deepEqual(page.calls.fetchTamer, ['tamer-1'])
+  })
+
+  test(`overlapping ${role} record refreshes finish in request order without regressing the latest snapshot`, async () => {
+    const page = role === 'gm' ? createGmPage() : createPage({ initial: encounter({ revision: 1 }) })
+    const reads = []
+    page.dependencies.fetchOverride = url => new Promise(resolve => { reads.push({ url, resolve }) })
+    const withWounds = (revision, maxWounds) => encounter({
+      revision,
+      participants: encounter().participants.map(p => p.id === 'mon-p' ? { ...p, maxWounds } : p),
+    })
+    const first = page.applyEncounterUpdate(withWounds(2, 14), 'ws', { version: 2 })
+    for (let i = 0; i < 20 && reads.length < 1; i++) await Promise.resolve()
+    const second = page.applyEncounterUpdate(withWounds(3, 18), 'ws', { version: 3 })
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    assert.equal(reads.length, 1, 'the next record fetch must wait through the first assignment')
+    reads[0].resolve({ data: [{ id: 'agumon', updatedAt: '2026-11-07T10:00:02Z', accuracy: 6 }] })
+    await first
+    for (let i = 0; i < 20 && reads.length < 2; i++) await Promise.resolve()
+    assert.equal(reads.length, 2)
+    reads[1].resolve({ data: [{ id: 'agumon', updatedAt: '2026-11-07T10:00:03Z', accuracy: 8 }] })
+    await second
+    const list = role === 'gm' ? page.dependencies.digimonList.value : page.allDigimon.value
+    assert.equal(list.find(d => d.id === 'agumon').accuracy, 8)
+    assert.equal(page.currentEncounter.value.revision, 3)
+  })
+}
+
+test('full player record loads share the refresh queue and a failed load does not stall the next refresh', async () => {
+  const queue = records.createRecordRefreshQueue()
+  const events = []
+  let release
+  const { loadData } = loadPageFunctions(PLAYER_PAGE, ['loadData'], {
+    recordRefreshQueue: queue,
+    loadFullData: () => new Promise(resolve => { events.push('full-load'); release = resolve }),
+  })
+  const full = loadData()
+  const targeted = queue.run(async () => { events.push('targeted') })
+  await Promise.resolve()
+  assert.deepEqual(events, ['full-load'])
+  release()
+  await Promise.all([full, targeted])
+  assert.deepEqual(events, ['full-load', 'targeted'])
+  await assert.rejects(queue.run(async () => { throw new Error('network') }), /network/)
+  assert.equal(await queue.run(async () => 'recovered'), 'recovered')
+})
+
+test('promoting a newer GM composable result still refreshes records changed from the previous accepted form', async () => {
+  const initial = encounter({ revision: 2 })
+  initial.participants = initial.participants.map(p => p.id === 'mon-p' ? { ...p, entityId: 'foe' } : p)
+  const page = createGmPage(initial)
+  await page.applyEncounterUpdate(initial, 'fetch')
+  const promoted = encounter({ revision: 3 })
+  page.currentEncounter.value = promoted
+  assert.equal(await page.applyEncounterUpdate({ ...initial, revision: 1 }, 'action', { action: 'attack' }), false)
+  assert.equal(page.currentEncounter.value.revision, 3)
+  assert.ok(page.calls.fetches.some(url => url.includes('/api/digimon?ids=agumon')), 'refresh the previously cached base form')
+  assert.deepEqual(page.calls.fetchEvolutionLines, ['lines'])
+  const fetchCount = page.calls.fetches.length
+  await page.applyEncounterUpdate(promoted, 'action', { action: 'attack' })
+  assert.equal(page.calls.fetches.length, fetchCount, 'the same form needs no repeat refresh')
+})
+
+test('a GM record transition retains newer promoted room state when the next database revision arrives', async () => {
+  const page = createGmPage(encounter({ revision: 2, version: 2 }))
+  await page.applyEncounterUpdate(page.currentEncounter.value, 'fetch')
+  const positions = { guard: { x: 5, y: 0, z: 0 } }
+  page.currentEncounter.value = encounter({ revision: 3, version: 5, participantPositions: positions })
+  await page.applyEncounterUpdate(encounter({ revision: 4, version: 4 }), 'action', { action: 'attack' })
+  assert.equal(page.currentEncounter.value.revision, 4)
+  assert.equal(page.currentEncounter.value.version, 5)
+  assert.deepEqual(page.currentEncounter.value.participantPositions, positions)
+})
+
 })

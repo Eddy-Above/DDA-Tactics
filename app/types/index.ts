@@ -631,6 +631,7 @@ export interface ActiveEffect {
 
 export interface Encounter {
   id: string
+  revision?: number             // database row revision; orders encounter snapshots across sources
   name: string
   description: string
   round: number

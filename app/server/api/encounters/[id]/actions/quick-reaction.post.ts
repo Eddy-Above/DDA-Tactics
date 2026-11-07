@@ -4,6 +4,7 @@ import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { STAGE_CONFIG } from '~/types'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
+import { applyActivePasses } from '~/server/utils/intercedePasses'
 
 interface QuickReactionBody {
   requestId: string
@@ -311,6 +312,14 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
     updatedAt: new Date(), // lets a page that refetches the Tamer see the change
   }).where(eq(tamers.id, tamerParticipant.entityId))
 
+  // Other attacks may already be waiting with the old daily-order flag. Once this Tamer spends
+  // Quick Reaction, those offers become ordinary intercede choices rather than usable QR offers.
+  pendingRequests = pendingRequests.map((offer: any) =>
+    offer.type === 'intercede-offer' && offer.targetTamerId === tamerParticipant.entityId && offer.data?.canUseQuickReaction
+      ? { ...offer, data: { ...offer.data, canUseQuickReaction: false, quickReactionDiceCount: 0 } }
+      : offer,
+  )
+
   // Add battle log entry
   const logEntry = {
     id: `log-${Date.now()}-qr`,
@@ -333,6 +342,10 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
     battleLog,
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
+
+  // This handler already owns the decision queue. Newly ordinary offers for a passing player can
+  // now be answered, without re-entering the queue or forfeiting any still-usable daily order.
+  await applyActivePasses(encounterId)
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!updated) {

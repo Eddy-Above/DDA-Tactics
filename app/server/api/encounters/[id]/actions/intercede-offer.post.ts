@@ -32,7 +32,6 @@ import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
-import type { H3Event } from 'h3'
 import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercedePasses'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
@@ -59,27 +58,26 @@ interface IntercedeOfferBody {
 }
 
 export default defineEventHandler(async (event) => {
-  const result = await createIntercedeOffers(event)
-
-  // A player who is passing ("Pass until my next turn") is never asked: offers just created for
-  // them are answered through the Skip flow before the attacker's response goes back. The common
-  // case, nobody passing, costs nothing: it is decided from the row the handler already returned.
-  const encounterId = getRouterParam(event, 'id')
-  if (!encounterId || passableOfferOwners(result).length === 0) return result
-  const answered = await serializeIntercedeClaim(encounterId, () => applyActivePasses(encounterId))
-  if (!answered) return result
-  const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-  return fresh ? { ...result, ...fresh } : result
-})
-
-async function createIntercedeOffers(event: H3Event) {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeOfferBody>(event)
-
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   }
 
+  // Creating an offer rewrites the same pending array as answering one. Keep both creation and
+  // automatic passes in the decision queue so neither can restore a consumed offer or erase a
+  // defense that another request just added.
+  return serializeIntercedeClaim(encounterId, async () => {
+    const result = await createIntercedeOffers(encounterId, body)
+    if (passableOfferOwners(result).length === 0) return result
+    const answered = await applyActivePasses(encounterId)
+    if (!answered) return result
+    const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return fresh ? { ...result, ...fresh } : result
+  })
+})
+
+async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBody) {
   if (!body.attackerId || !body.attackId) {
     throw createError({ statusCode: 400, message: 'attackerId and attackId are required' })
   }
