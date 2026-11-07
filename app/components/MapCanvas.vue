@@ -84,7 +84,7 @@ import type {
 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
-import { getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
+import { getMapVoxels, getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { buildVoxelSurface } from '~/utils/voxelSurface'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
@@ -93,7 +93,10 @@ import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/mo
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
-import { evaluatePlacement, type PlacementEvaluation } from '~/utils/placementRules'
+import {
+  evaluatePlacement, makeSpawnCellChecker,
+  type PlacementEvaluation, type PlacementFootprint,
+} from '~/utils/placementRules'
 import { createTokenDragController } from '~/utils/tokenDrag'
 import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
@@ -2228,12 +2231,17 @@ function tryReticuleTarget(participantId: string): boolean {
 const isPlacementSurface = (h: THREE.Intersection) =>
   h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel'
 
-function placementTileCount(participantId: string): number {
-  const p = props.participants.find(pp => pp.id === participantId)
-  const size: DigimonSize = p?.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
-  const gig = p?.type === 'digimon' ? props.digimonMap[p.entityId]?.giganticDimensions : null
-  return getSizeParams(size, gig).tileCount
+// The floor area a unit covers. Uses the same real width × depth as movement and occupancy
+// (getParticipantFootprintDims), not the square tile count the sprite is drawn with, so a gigantic
+// unit with unequal dimensions is validated over the cells it actually occupies.
+function placementFootprint(participantId: string): PlacementFootprint {
+  const { width, depth } = getParticipantFootprintDims(participantId)
+  return { width, depth }
 }
+
+// Which cells a player may stand on, rebuilt only when the map changes (a drag asks about every
+// footprint cell on every pointer move).
+const isSpawnCell = computed(() => makeSpawnCellChecker(props.map?.groundTiles ?? [], getMapVoxels(props.map)))
 
 // Resolves a surface hit into the cell `participantId` would land on and whether that is allowed.
 // An invalid result still carries its cell so a drag can show where the drop would have gone.
@@ -2247,11 +2255,12 @@ function evaluatePlacementAt(surfaceHit: THREE.Intersection, participantId: stri
     },
     isDm: props.isDm,
     participantId,
-    tileCount: placementTileCount(participantId),
+    footprint: placementFootprint(participantId),
     isBlocked: cell => !!props.map && mapVoxelBlocksMovement(props.map, cell),
+    isSpawnCell: cell => isSpawnCell.value(cell),
     occupants: props.participants.map(p => {
       const position = props.participantPositions[p.id]
-      return { id: p.id, position, tileCount: position ? placementTileCount(p.id) : 0 }
+      return { id: p.id, position, footprint: position ? placementFootprint(p.id) : { width: 0, depth: 0 } }
     }),
   })
 }
@@ -2267,8 +2276,8 @@ function showDropGhost(placement: PlacementEvaluation | null) {
   hoverGhostGroup.clear()
   if (!placement) return
   const color = placement.valid ? 0x00ff88 : 0xff3333
-  for (let dx = 0; dx < placement.tileCount; dx++) {
-    for (let dz = 0; dz < placement.tileCount; dz++) {
+  for (let dx = 0; dx < placement.footprint.width; dx++) {
+    for (let dz = 0; dz < placement.footprint.depth; dz++) {
       hoverGhostGroup.add(makeTileGhostMesh({ x: placement.cell.x + dx, y: placement.cell.y, z: placement.cell.z + dz }, color))
     }
   }
