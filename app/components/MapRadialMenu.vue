@@ -253,26 +253,28 @@ onBeforeUnmount(() => hover(null))
 <style scoped>
 .map-radial { position: absolute; z-index: 40; transform: translate(-50%, -50%); pointer-events: none; user-select: none; }
 .radial-svg { display: block; width: 100%; height: 100%; overflow: visible; pointer-events: none; filter: drop-shadow(0 4px 8px #0008); }
-.hub-outline { fill: none; stroke: #2a9ed9; stroke-width: 2; opacity: .8; }
+.hub-outline { fill: none; stroke: theme('colors.digimon.orange.500'); stroke-width: 2; opacity: .8; }
 .radial-sector { pointer-events: visiblePainted; outline: none; cursor: pointer; }
-.sector-shape { fill: #17222ff5; stroke: #29638a; stroke-width: 1.5; transition: fill .12s, stroke .12s; }
-.child-sector .sector-shape { fill: #172735f7; }
-.radial-sector:hover .sector-shape, .radial-sector:focus-visible .sector-shape { fill: #287fc2; stroke: #77d0ff; stroke-width: 2; }
-.radial-sector.selected .sector-shape { fill: #237fc4; stroke: #71caff; stroke-width: 2; }
-.radial-sector.active .sector-shape { fill: #204760; stroke: #58b6db; }
+.sector-shape { fill: theme('colors.digimon.dark.800'); stroke: theme('colors.digimon.dark.600'); stroke-width: 1.5; transition: fill .12s, stroke .12s; }
+.child-sector .sector-shape { fill: theme('colors.digimon.dark.900'); }
+.radial-sector:hover .sector-shape, .radial-sector:focus-visible .sector-shape { fill: theme('colors.digimon.orange.900'); stroke: theme('colors.digimon.orange.400'); stroke-width: 2; }
+.radial-sector.selected .sector-shape { fill: theme('colors.digimon.orange.700'); stroke: theme('colors.digimon.orange.400'); stroke-width: 2; }
+.radial-sector.active .sector-shape { fill: theme('colors.digimon.orange.950'); stroke: theme('colors.digimon.orange.500'); }
 .radial-sector.disabled { cursor: not-allowed; }
-.radial-sector.disabled .sector-shape { fill: #17202be8; stroke: #334456; }
+.radial-sector.disabled .sector-shape { fill: theme('colors.digimon.dark.900'); stroke: theme('colors.digimon.dark.700'); }
 .radial-sector.disabled .sector-content { opacity: .35; }
-.radial-sector.disabled:hover .sector-shape { fill: #17202be8; stroke: #334456; stroke-width: 1.5; }
-.sector-content { pointer-events: none; color: #d8e9f3; }
+.radial-sector.disabled:hover .sector-shape { fill: theme('colors.digimon.dark.900'); stroke: theme('colors.digimon.dark.700'); stroke-width: 1.5; }
+.radial-sector.active.disabled .sector-shape { fill: theme('colors.digimon.orange.950'); stroke: theme('colors.digimon.orange.500'); }
+.radial-sector.active.disabled .sector-content { opacity: .7; }
+.sector-content { pointer-events: none; color: theme('colors.digimon.dark.50'); }
 .sector-icon { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.sector-label { fill: #e7f1f8; text-anchor: middle; font-family: inherit; font-size: 10.5px; font-weight: 600; letter-spacing: .05px; }
-.sector-symbol { fill: #badfff; text-anchor: middle; font-size: 18px; }
-.branch-indicator { fill: #9cdbff; text-anchor: middle; font-size: 18px; }
-.choice-current { fill: #8bdcff; text-anchor: middle; font-size: 7px; font-weight: 700; letter-spacing: .6px; }
-.radial-hub-button { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; gap: 4px; padding: 2px 9px; border: 1px solid #39789e; border-radius: 999px; background: #101e2bea; color: #c1dcea; font-size: 9px; font-weight: 600; line-height: 17px; pointer-events: auto; cursor: pointer; }
+.sector-label { fill: theme('colors.digimon.dark.50'); text-anchor: middle; font-family: inherit; font-size: 10.5px; font-weight: 600; letter-spacing: .05px; }
+.sector-symbol { fill: theme('colors.digimon.dark.100'); text-anchor: middle; font-size: 18px; }
+.branch-indicator { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 18px; }
+.choice-current { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 7px; font-weight: 700; letter-spacing: .6px; }
+.radial-hub-button { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; gap: 4px; padding: 2px 9px; border: 1px solid theme('colors.digimon.orange.600'); border-radius: 999px; background: theme('colors.digimon.dark.900'); color: theme('colors.digimon.dark.100'); font-size: 9px; font-weight: 600; line-height: 17px; pointer-events: auto; cursor: pointer; }
 .radial-hub-button span { font-size: 16px; font-weight: 400; }
-.radial-hub-button:hover, .radial-hub-button:focus-visible { outline: 2px solid #7fd4ff; outline-offset: 2px; background: #246698; color: white; }
+.radial-hub-button:hover, .radial-hub-button:focus-visible { outline: 2px solid theme('colors.digimon.orange.400'); outline-offset: 2px; background: theme('colors.digimon.orange.800'); color: white; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (prefers-reduced-motion: reduce) { .sector-shape { transition: none; } }
 </style>
