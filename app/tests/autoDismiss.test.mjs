@@ -244,7 +244,7 @@ test('the page only auto-dismisses finished results, wired through one dismissal
   const source = readFileSync(new URL(`../${PLAYER_PAGE}`, import.meta.url), 'utf8')
   const dismissals = [...source.matchAll(/const (\w+Dismissal) = useAutoDismiss\(\{\s*(?:\/\/[^\n]*\s*)*key: ([\s\S]*?)\n  cleanup:/g)]
   assert.deepEqual(dismissals.map(match => match[1]).sort(),
-    ['attackResultDismissal', 'clashCheckResultDismissal', 'dodgeResultDismissal', 'intercedeResultDismissal'])
+    ['areaDefenseDismissal', 'attackResultDismissal', 'clashCheckResultDismissal', 'dodgeResultDismissal', 'intercedeResultDismissal'])
 
   for (const [, name, key] of dismissals) {
     assert.doesNotMatch(key, /has\w*Request|currentDodgeRequest|showAccuracyReview|myRequests/,
@@ -256,6 +256,8 @@ test('the page only auto-dismisses finished results, wired through one dismissal
   for (const name of ['attackResultDismissal', 'dodgeResultDismissal', 'intercedeResultDismissal', 'clashCheckResultDismissal']) {
     assert.ok(source.includes(`@click="${name}.dismiss()"`), `${name} backs the dialog's Close button`)
   }
+  // The area defense panel emits close instead of owning the button.
+  assert.ok(source.includes('@close="areaDefenseDismissal.dismiss()"'), 'areaDefenseDismissal backs the panel Close button')
 })
 
 // --- the server: a dodge is answered once -----------------------------------------------------

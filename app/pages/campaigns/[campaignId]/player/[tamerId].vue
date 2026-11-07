@@ -14,7 +14,10 @@ import { getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
 import { getAttackBadges } from '~/utils/attackBadges'
-import { isAttackedFromOutsideClash } from '~/utils/clashRules'
+import {
+  groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, type DodgeDefenseContext,
+} from '~/utils/areaDefense'
+import { useAreaDefenseBatch, type DefenseRoll, type SubmitOutcome } from '~/composables/useAreaDefenseBatch'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 import { getTargetOptOuts, isOfferSuppressed } from '~/utils/intercedeOptOuts'
@@ -1172,7 +1175,58 @@ const activeClashes = computed(() => {
 
 const currentDigimonRequest = computed(() => myRequests.value.find((r) => r.type === 'digimon-selection'))
 const currentInitiativeRequest = computed(() => myRequests.value.find((r) => r.type === 'initiative-roll'))
-const currentDodgeRequest = computed(() => myRequests.value.find((r) => r.type === 'dodge-roll'))
+// Area defenses: an area attack that hits two or more of my characters makes one dodge request per
+// target. They are defended together in one panel per cast (useAreaDefenseBatch) instead of one
+// modal after another. A request without a cast id (single-target attacks, counterattacks) is its
+// own group, so it keeps the modal below.
+const myUnansweredDodgeRequests = computed(() => {
+  const responses = (activeEncounter.value?.requestResponses as any[]) || []
+  return myRequests.value.filter((r) => r.type === 'dodge-roll' && !isRequestAnswered(r, responses, tamer.value?.id))
+})
+const pendingAreaDefenseGroup = computed(() =>
+  groupDodgeRequests(myUnansweredDodgeRequests.value).find((g) => g.isCast && g.requests.length >= 2) ?? null,
+)
+
+const areaDefenseBatch = useAreaDefenseBatch({
+  defense: (request) => defenseFor(request),
+  currentInspiration: () => currentCombatInspiration.value,
+  actOfInspirationCost: () => actOfInspirationCost.value,
+  spend: (kind, amount) => handleSpendInspiration(kind, amount),
+  submit: (request, roll) => submitAreaDefense(request, roll),
+  isAnswered: (request) => isRequestAnswered(request, (activeEncounter.value?.requestResponses as any[]) || [], tamer.value?.id),
+  isTargetPresent: (request) =>
+    ((activeEncounter.value?.participants as any[]) || []).some((p) => p.id === request.targetParticipantId),
+})
+
+// The panel closes itself five seconds after the last defense is in, or on Close; both run the same
+// cleanup (cancel each request, delete each response) as the single dodge result.
+const areaDefenseDismissal = useAutoDismiss({
+  key: () => (areaDefenseBatch.active.value && areaDefenseBatch.isSettled.value ? areaDefenseBatch.groupId.value : null),
+  cleanup: () => cleanupAreaDefense(),
+})
+
+// Requests the panel owns, plus the cast about to open it: neither may also show the single modal.
+const areaDefenseRequestIds = computed(() => {
+  const ids = new Set<string>()
+  if (areaDefenseBatch.active.value) for (const entry of areaDefenseBatch.entries.value) ids.add(entry.requestId)
+  const group = pendingAreaDefenseGroup.value
+  if (group && (!areaDefenseBatch.active.value || group.groupId === areaDefenseBatch.groupId.value)) {
+    for (const request of group.requests) ids.add(request.id)
+  }
+  return ids
+})
+
+const currentDodgeRequest = computed(() =>
+  myRequests.value.find((r) => r.type === 'dodge-roll' && !areaDefenseRequestIds.value.has(r.id)),
+)
+
+// Opens the panel for a cast that hit several of my characters, and keeps it in step with every
+// encounter update (rolls are kept; protected or removed targets stop being asked for).
+watch(
+  () => [myRequests.value, activeEncounter.value?.requestResponses, activeEncounter.value?.participants],
+  () => syncAreaDefenseBatch(),
+  { immediate: true },
+)
 const currentHealthRequest = computed(() => myRequests.value.find((r) => r.type === 'health-roll'))
 const currentThrowImpactRequest = computed(() => myRequests.value.find((r) => r.type === 'throw-impact-attack'))
 const currentIntercedeRequest = computed(() => myRequests.value.find((r) => r.type === 'intercede-offer'))
@@ -1332,76 +1386,31 @@ const hasUnrespondedDodgeRequest = computed(() => {
   return !isRequestAnswered(dodgeRequest, responses, tamer.value.id)
 })
 
+// Where a Dodge pool comes from: this page owns the records and stat rules, utils/areaDefense.ts the math
+// (shared by the one-at-a-time modal below and the per-target area defense panel).
+const dodgeDefenseContext = computed<DodgeDefenseContext>(() => ({
+  participants: (activeEncounter.value?.participants as CombatParticipant[]) || [],
+  findDigimon: (id) => allDigimon.value.find((d) => d.id === id),
+  findTamer: (id) => allTamers.value.find((t) => t.id === id),
+  digimonDodge: (digi) => calcDigimonStats(digi).dodge,
+  tamerDodgePool: (targetTamer) => calcTamerStats(targetTamer, eddySoulRules.value).dodgePool,
+}))
+
+function defenseFor(request: any) {
+  return computeDodgeDefense(request, dodgeDefenseContext.value)
+}
+
 // Attacked from outside the target's clash: the target cannot dodge at all. Checked against live
 // clash state too, since dodge-rolls created after an intercede window don't carry the flag.
 const dodgeBlockedByClash = computed(() => {
   const request = currentDodgeRequest.value
-  if (!request) return false
-  if (request.data?.cannotDodge) return true
-  const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
-  const attacker = participants.find((p) => p.id === request.data?.attackerParticipantId)
-  const target = participants.find((p) => p.id === request.targetParticipantId)
-  return isAttackedFromOutsideClash(attacker, target)
+  return request ? isDodgeBlocked(request, dodgeDefenseContext.value.participants) : false
 })
 
 // Dodge dice pool for the target participant in a dodge request (reduced by successive dodge penalty)
 const dodgeDicePool = computed(() => {
   if (!activeEncounter.value || !currentDodgeRequest.value) return 3
-
-  const participants = (activeEncounter.value.participants as CombatParticipant[]) || []
-  const targetParticipant = participants.find((p) => p.id === currentDodgeRequest.value!.targetParticipantId)
-  if (!targetParticipant) return 3
-
-  let pool = 3
-  if (targetParticipant.type === 'digimon') {
-    const digi = allDigimon.value.find((d) => d.id === targetParticipant.entityId)
-    if (digi) {
-      const darkEvoBonus = (digi as any).isDarkEvolution ? 2 : 0
-      const rawStats: StatBlock = {
-        accuracy: (digi.baseStats?.accuracy ?? 0) + ((digi as any).bonusStats?.accuracy ?? 0) + darkEvoBonus,
-        damage: (digi.baseStats?.damage ?? 0) + ((digi as any).bonusStats?.damage ?? 0) + darkEvoBonus,
-        dodge: (digi.baseStats?.dodge ?? 0) + ((digi as any).bonusStats?.dodge ?? 0) + darkEvoBonus,
-        armor: (digi.baseStats?.armor ?? 0) + ((digi as any).bonusStats?.armor ?? 0) + darkEvoBonus,
-      }
-      const resolvedStats = applyStatSwaps(rawStats, targetParticipant.statSwaps)
-      const qualityDodgeBonus = calcDigimonStats(digi).dodge - rawStats.dodge
-      pool = resolvedStats.dodge + qualityDodgeBonus || 3
-      // Digizoid Armor: Black's per-round rolled Dodge bonus (not part of calcDigimonStats)
-      pool += (targetParticipant as any).blackArmorRoundBonus?.dodge ?? 0
-    }
-  } else if (targetParticipant.type === 'tamer') {
-    const targetTamer = allTamers.value.find((t) => t.id === targetParticipant.entityId)
-    if (targetTamer) {
-      const derived = calcTamerStats(targetTamer, eddySoulRules.value)
-      pool = derived.dodgePool || 3
-    }
-  }
-
-  pool = applyStanceToDodge(pool, targetParticipant.currentStance)
-  const penalty = currentDodgeRequest.value?.data?.dodgePenalty ?? 0
-  pool = Math.max(1, pool - penalty)
-
-  // Active effect dodge modifiers
-  const dodgeEffectMods = getEffectStatModifiers(targetParticipant.activeEffects || [])
-  pool += dodgeEffectMods.dodge
-
-  // Add Directed effect bonus to dodge pool
-  const directedEffect = targetParticipant.activeEffects?.find(e => e.name === 'Directed')
-  if (directedEffect?.value) {
-    pool += directedEffect.value
-  }
-
-  // Attacked from outside the clash: the target cannot dodge at all.
-  if (dodgeBlockedByClash.value) {
-    return 0
-  }
-
-  // Counterattack: target rolls only half their Dodge Pool
-  if (currentDodgeRequest.value?.data?.halfDodge) {
-    pool = Math.max(1, Math.floor(pool / 2))
-  }
-
-  return Math.max(1, pool)
+  return defenseFor(currentDodgeRequest.value).pool
 })
 
 const counterattackAccuracyPool = computed(() => {
@@ -3178,6 +3187,56 @@ async function submitDodgeRoll() {
   }
 }
 
+// Starts, updates or closes the area defense panel from the player's current dodge requests.
+function syncAreaDefenseBatch() {
+  if (!areaDefenseBatch.active.value) {
+    const group = pendingAreaDefenseGroup.value
+    if (group) areaDefenseBatch.open(group.groupId, group.requests)
+    return
+  }
+  const groupId = areaDefenseBatch.groupId.value
+  areaDefenseBatch.reconcile(myRequests.value.filter((r) => r.type === 'dodge-roll' && r.data?.intercedeGroupId === groupId))
+}
+
+function areaDefenseName(request: any): string {
+  return resolveParticipantName(request.targetParticipantId) || request.data?.targetName || 'Target'
+}
+
+// Sends one target's roll from the area defense panel, exactly as held. A failed send reports back
+// instead of throwing, so the panel keeps the roll and can resend it.
+async function submitAreaDefense(request: any, roll: DefenseRoll): Promise<SubmitOutcome> {
+  if (!activeEncounter.value || !tamer.value) return { ok: false, message: 'Not connected to the encounter. Try again.' }
+  try {
+    const result = await respondToRequest(activeEncounter.value.id, request.id, tamer.value.id, {
+      type: 'dodge-rolled',
+      participantId: request.targetParticipantId,
+      dodgeDicePool: roll.dicePool,
+      dodgeSuccesses: roll.successes,
+      dodgeDiceResults: roll.rolls,
+      timestamp: new Date().toISOString(),
+    })
+    if (!result) return { ok: false, message: 'The server did not accept this defense. Try again.' }
+    const mine = ((result.requestResponses as any[]) || []).find((r) => r.requestId === request.id && r.tamerId === tamer.value!.id)
+    const summary = summarizeDodgeResult((result.battleLog as any[]) || [], request)
+    await applyActionResult(result, 'dodge')
+    return { ok: true, responseId: mine?.id ?? null, summary }
+  } catch (e: any) {
+    console.error('Error submitting area defense:', e)
+    return { ok: false, message: e?.data?.message || 'Could not send this defense. Try again.' }
+  }
+}
+
+// Closes the area defense panel (Close button and 5 s timer alike): every request is cancelled and
+// every response deleted, as for a single dodge result, then the panel is cleared. The battle log
+// keeps every result.
+async function cleanupAreaDefense() {
+  for (const { requestId, responseId } of areaDefenseBatch.cleanupTargets()) {
+    await cleanupDodgeExchange(requestId, responseId)
+    if (responseId) dismissedResponseIds.add(responseId)
+  }
+  areaDefenseBatch.close()
+}
+
 async function declineCounterattack() {
   if (!activeEncounter.value || !currentCounterattackRequest.value || !tamer.value) return
   try {
@@ -3731,15 +3790,17 @@ async function handleDivineProtectionDeclined() {
 async function handleSpendInspiration(
   spendType: 'reroll' | 'modifier' | 'act-of-inspiration' | 'fateful-intervention',
   amount: number,
-) {
-  if (!activeEncounter.value || !myTamerParticipant.value) return
+): Promise<boolean> {
+  if (!activeEncounter.value || !myTamerParticipant.value) return false
   inspirationSpendLoading.value = true
   try {
     const result = await spendInspiration(activeEncounter.value.id, myTamerParticipant.value.id, spendType, amount)
     await applyActionResult(result, 'spend-inspiration')
+    return true
   } catch (e: any) {
     console.error('Inspiration spend failed:', e)
     alert(e?.data?.message || 'Failed to spend Inspiration')
+    return false
   } finally {
     inspirationSpendLoading.value = false
   }
@@ -6493,6 +6554,28 @@ async function handleBreakClash(participantId: string, clashId: string) {
         </button>
       </div>
     </div>
+  </Teleport>
+
+  <!-- Area attack defenses: one panel per cast for every one of my characters it hit -->
+  <Teleport to="body">
+    <AreaDefensePanel
+      v-if="areaDefenseBatch.active.value"
+      :views="areaDefenseBatch.views.value"
+      :name-for="areaDefenseName"
+      :inspiration="currentCombatInspiration"
+      :max-inspiration="maxCombatInspiration"
+      :act-cost="actOfInspirationCost"
+      :settled="areaDefenseBatch.isSettled.value"
+      :running="areaDefenseBatch.running.value"
+      @toggle-act="areaDefenseBatch.toggleAct"
+      @roll="areaDefenseBatch.rollOne"
+      @reroll="areaDefenseBatch.rerollOne"
+      @add-die="areaDefenseBatch.addDieOne"
+      @submit="areaDefenseBatch.submitOne"
+      @roll-all="areaDefenseBatch.rollAllUnrolled"
+      @submit-ready="areaDefenseBatch.submitReady"
+      @close="areaDefenseDismissal.dismiss()"
+    />
   </Teleport>
 
   <!-- Counterattack Prompt Modal -->
