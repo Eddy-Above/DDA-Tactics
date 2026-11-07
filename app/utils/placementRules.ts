@@ -97,18 +97,37 @@ export function placementCellFromHit(hit: PlacementSurfaceHit): Vec3 {
   return { x: Math.floor(hit.point.x), y: hit.tile?.y ?? 0, z: Math.floor(hit.point.z) }
 }
 
-/** Overlap on the XZ plane of two square footprints anchored at `a` and `b` (tile counts per side). */
-export function footprintsOverlapXZ(a: Vec3, aCount: number, b: Vec3, bCount: number): boolean {
-  return a.x < b.x + bCount && a.x + aCount > b.x &&
-         a.z < b.z + bCount && a.z + aCount > b.z
+/** How many cells a unit covers along x (`width`) and z (`depth`) on the floor it stands on. */
+export interface PlacementFootprint { width: number; depth: number }
+
+/** Overlap on the XZ plane of two footprints anchored (at their min corner) at `a` and `b`. */
+export function footprintsOverlapXZ(a: Vec3, aSize: PlacementFootprint, b: Vec3, bSize: PlacementFootprint): boolean {
+  return a.x < b.x + bSize.width && a.x + aSize.width > b.x &&
+         a.z < b.z + bSize.depth && a.z + aSize.depth > b.z
+}
+
+/**
+ * Builds the "may a player stand here?" test from the map's spawn flags. A cell is a spawn cell
+ * when a flagged ground tile sits at it (a unit stands on a tile at the tile's own y), or when a
+ * flagged voxel sits directly below it (a unit stands on top of a voxel, at its y + 1). This is
+ * the same cell the click/drag resolves a hit to, so a hit and a footprint cell agree.
+ */
+export function makeSpawnCellChecker(
+  groundTiles: ReadonlyArray<{ x: number; y: number; z: number; isSpawnPoint?: boolean }>,
+  voxels: ReadonlyArray<{ x: number; y: number; z: number; isSpawnPoint?: boolean }>,
+): (cell: Vec3) => boolean {
+  const key = (x: number, y: number, z: number) => `${x},${y},${z}`
+  const spawnCells = new Set<string>()
+  for (const t of groundTiles) if (t.isSpawnPoint) spawnCells.add(key(t.x, t.y, t.z))
+  for (const v of voxels) if (v.isSpawnPoint) spawnCells.add(key(v.x, v.y + 1, v.z))
+  return cell => spawnCells.has(key(cell.x, cell.y, cell.z))
 }
 
 export interface PlacementOccupant {
   id: string
   /** Where it stands; undefined when it is not on the map. */
   position: Vec3 | undefined
-  /** Footprint side length in tiles. */
-  tileCount: number
+  footprint: PlacementFootprint
 }
 
 export interface PlacementCheck {
@@ -116,15 +135,17 @@ export interface PlacementCheck {
   isDm: boolean
   /** The unit being placed (it never blocks itself, so a unit can be nudged onto its own old cells). */
   participantId: string
-  tileCount: number
+  footprint: PlacementFootprint
   /** True when a solid voxel stops anything standing on this cell. Asked for every cell of the footprint. */
   isBlocked(cell: Vec3): boolean
+  /** True when a player may stand on this cell (see `makeSpawnCellChecker`). Asked for every cell of the footprint, players only. */
+  isSpawnCell(cell: Vec3): boolean
   occupants: PlacementOccupant[]
 }
 
 export interface PlacementEvaluation {
   cell: Vec3
-  tileCount: number
+  footprint: PlacementFootprint
   valid: boolean
 }
 
@@ -132,26 +153,31 @@ export interface PlacementEvaluation {
  * The one decision behind every way of putting a character on the map (click while armed, GM
  * free-move, dragging a token, dropping a HUD card): which cell would the unit land on, and is
  * that allowed? An invalid result still carries its cell so a drag can show where it would have
- * gone. The spawn-area boundary applies to players only; solid voxels and other units block
- * everyone, so the GM can't stack tokens or bury one in a wall either.
+ * gone.
+ *
+ * The spawn-area boundary applies to players only, and to the WHOLE footprint: a unit larger than
+ * one cell may not hang over a non-spawn cell just because its anchor sits on a spawn one. Solid
+ * voxels and other units block everyone, so the GM can't stack tokens or bury one in a wall either.
  */
 export function evaluatePlacement(check: PlacementCheck): PlacementEvaluation {
   const cell = placementCellFromHit(check.hit)
-  const { tileCount } = check
-  const refuse = (): PlacementEvaluation => ({ cell, tileCount, valid: false })
+  const { footprint } = check
+  const refuse = (): PlacementEvaluation => ({ cell, footprint, valid: false })
 
   if (!surfaceAllowsPlacement(check.isDm, check.hit)) return refuse()
-  for (let dx = 0; dx < tileCount; dx++) {
-    for (let dz = 0; dz < tileCount; dz++) {
-      if (check.isBlocked({ x: cell.x + dx, y: cell.y, z: cell.z + dz })) return refuse()
+  for (let dx = 0; dx < footprint.width; dx++) {
+    for (let dz = 0; dz < footprint.depth; dz++) {
+      const covered = { x: cell.x + dx, y: cell.y, z: cell.z + dz }
+      if (!check.isDm && !check.isSpawnCell(covered)) return refuse()
+      if (check.isBlocked(covered)) return refuse()
     }
   }
   const occupied = check.occupants.some(o =>
     o.id !== check.participantId &&
     !!o.position && o.position.y === cell.y &&
-    footprintsOverlapXZ(cell, tileCount, o.position, o.tileCount),
+    footprintsOverlapXZ(cell, footprint, o.position, o.footprint),
   )
-  return occupied ? refuse() : { cell, tileCount, valid: true }
+  return occupied ? refuse() : { cell, footprint, valid: true }
 }
 
 // ── Drag gesture ────────────────────────────────────────────────────────────
