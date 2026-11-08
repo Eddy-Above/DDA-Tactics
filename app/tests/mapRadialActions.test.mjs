@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { computed, ref, shallowRef } from 'vue'
-import { loadPageFunctions } from './helpers/loadTypeScript.mjs'
+import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
+
+const attackOptions = loadTypeScript('utils/combatAttackOptions.ts')
 
 const pages = {
   gm: 'pages/campaigns/[campaignId]/encounters/[id].vue',
@@ -14,10 +16,11 @@ function createMapActions(role) {
   const signature = { id: 'signature', name: 'Signature', range: 'ranged', tags: ['Signature Move'] }
   const record = { id: 'agumon', attacks: [attack, areaAttack, signature] }
   const actor = { id: 'actor', entityId: record.id, type: 'digimon', currentStance: 'neutral', actionsRemaining: { simple: 2 } }
-  const encounter = shallowRef({ id: 'encounter', round: 2, participants: [actor] })
+  const encounter = shallowRef({ id: 'encounter', round: 3, participants: [actor] })
   const updates = []
   const logs = []
   const dependencies = {
+    ...attackOptions,
     currentEncounter: encounter,
     activeEncounter: encounter,
     activeParticipant: computed(() => encounter.value.participants[0]),
@@ -27,7 +30,6 @@ function createMapActions(role) {
     eddySoulRules: ref({}),
     houseRules: ref({}),
     BASIC_ATTACKS: [],
-    signatureReadyRound: () => 0,
     selectedAttack: shallowRef(null),
     bolsterAttackEnabled: ref(true),
     bolsterAttackType: ref('damage'),
