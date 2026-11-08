@@ -3,6 +3,9 @@
 // =====================================
 
 import type { EncounterIntercedeOptOuts } from '../utils/intercedeOptOuts'
+import type { CombatParticipant } from './combat'
+
+export type { ActiveEffect, ClashState, CombatParticipant, StoredCombatParticipant } from './combat'
 
 // === Enums ===
 
@@ -549,97 +552,6 @@ export interface Digimon {
 }
 
 // === Encounter Types ===
-
-export interface ClashState {
-  clashId: string                    // Links both participants
-  opponentParticipantId: string      // The other participant in the clash
-  isController: boolean              // Does this participant currently control?
-  isPinned: boolean                  // Cannot act (pinned by controller)
-  cannotInitiateUntilRound?: number  // Set when clash ends (can't start new one until next round)
-  clashCheckNeeded: boolean          // True = round-start re-roll needed
-  pendingRoll?: number               // Stored roll awaiting opponent's response (player-vs-player)
-  reachInitiated?: boolean           // Was this clash started using Reach?
-  reachDistance?: number             // Meters away when initiated (ongoing roll penalty for Reach user)
-}
-
-export interface CombatParticipant {
-  id: string
-  type: 'tamer' | 'digimon'
-  entityId: string        // Reference to Tamer or Digimon ID
-  seq?: number            // Stable instance number assigned at add-time; never changes when others are removed
-  initiative: number
-  initiativeRoll: number  // The 3d6 roll result
-  actionsRemaining: {
-    simple: number
-    complex: number       // 1 complex = 2 simple
-  }
-  currentStance: Stance
-  activeEffects: ActiveEffect[]
-  isActive: boolean       // Currently taking turn
-  hasActed: boolean       // Has completed turn this round
-  hasAttemptedDigivolve?: boolean  // Has attempted digivolution this turn (evolve only, not devolve)
-  inReserve?: boolean     // Staged by the GM: excluded from turn order, the map and target lists until deployed
-  hasDirectedThisTurn?: boolean  // Tamer-only: has used Direct/Bolster Direct this turn
-  npcStageIndex?: number  // NPC-only: tracks current stage independently (allows multiple NPCs to share one evo line)
-  combatMonsterBonus?: number  // Combat Monster: cumulative damage bonus for next successful attack
-  totalHealth?: number         // Digimon-only: Base Health + Bonus DP Health (no quality modifiers, no stage wound bonus); used as Combat Monster cap
-  battery?: number              // Signature Move Battery: current charge
-  usedSignatureMoveThisTurn?: boolean  // Signature Move Battery: spent this turn
-  clash?: ClashState            // Active clash state (if currently clashing)
-  clashCooldownUntilRound?: number  // Cannot initiate a new clash until this round
-  usedFreeClashThisRound?: boolean  // Wrestlemania: free clash initiation used this round
-  stunActionReducedThisRound?: boolean  // Stun already reduced actions this round (prevents double-reduction at rollover)
-  moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
-  quickReactionDiceBonus?: number  // Quick Reaction: extra dodge dice pool remaining this round
-  lastMovedTurnKey?: string
-  strikeFastReady?: boolean
-  strikeFastTurnKey?: string
-  fatefulSpentRollIds?: string[]
-  finishingTouchReady?: boolean
-  decimationReady?: boolean
-  enduringSoulAvailable?: boolean
-  enduringSoulUsed?: boolean
-  strikeLastCounter?: { attackerId: string; groupId: string; tamerId: string }
-  isMinion?: boolean
-  summonerId?: string
-  summonedByParticipantId?: string
-  mapPosition?: Vec3  // 3D grid position on the encounter map
-  airborneByJump?: boolean  // Set when a unit intentionally jumped onto an air tile: at end of its turn it still falls to the ground but takes 0 fall damage, then the flag clears on landing. Optional — getFallerProfile derives it from the Jumper quality when unset
-  turnsStarted?: number  // Turns this participant has started this combat (every turn start bumps it); a "Pass until my next turn" is in force only while it is unchanged
-  lastMovedRound?: number  // Round this unit last moved (map move, Charge, Pass, Knockback/Pull, throw, intercede). Burn's stationary penalty hits a burned Digimon whose stamp isn't the round that just ended
-  statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
-  modeChangeFreeSwapsUsed?: number  // Mode Change X.0 Rank 2 EddySoul rule: free swaps used this combat (0-3)
-  currentInspiration?: number       // Tamer-only: live pool tracked during combat, initialized from DB totals
-  divineProtectionUsesThisBattle?: number  // Tamer-only: 0 = first use free, 1+ = costs 2 inspiration
-  pendingDivineProtectionDamage?: number   // Tamer-only: damage held while DP offer is awaiting player response
-  pendingSimpleActionPenalty?: number      // Tamer-only: simple actions to deduct at start of next turn (Divine Protection cost)
-  // Boss Qualities
-  seenAttackIds?: Record<string, number>   // Adaptive Intelligence: attackId → times seen by this participant
-  juggernauntBonuses?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', number>>  // Juggernaut: cumulative +2 stacks per round
-  timeControlUsed?: boolean                // Time Control: prevents re-triggering in same combat
-  dataAbsorbActive?: boolean               // Data Absorb: whether absorption mode is toggled on
-  dataAbsorbHealAmount?: number            // Data Absorb: wounds healed per round (BIT×2/4/6, set at toggle-on)
-  buggedSpecValues?: { bit: number; cpu: number; ram: number }  // Bug effect: rotated SPEC values while active
-  demoralizedAttributes?: Partial<Record<'agility' | 'body' | 'charisma' | 'intelligence' | 'willpower', number>>  // Demoralize: attribute → reduction amount
-  tormentorBonusStacks?: number            // Tormentor: stacking +2 per participant that failed the check
-  tankBusterUsedAtThresholds?: number[]    // Tank Buster: wound-% thresholds already consumed (e.g. [0.75, 0.50])
-  usedCounterattackThisCombat?: boolean    // Counterattack: set after use (Chain Counter conditionally skips setting this)
-  // Digizoid Armor
-  blackArmorRoundBonus?: { armor: number; dodge: number }  // Black Digizoid Armor: rolled fresh each round
-  brownArmorAutoDodgeAvailable?: boolean   // Brown Digizoid Armor: 1 free dodge success, resets each round
-}
-
-export interface ActiveEffect {
-  id: string
-  name: string
-  type: 'buff' | 'debuff' | 'status'
-  duration: number        // Rounds remaining
-  source: string          // Who applied it
-  description: string
-  value?: number          // Optional numeric value (used by Directed bonus, etc.)
-  potency?: number        // Effect strength (e.g., Immobilize potency = BIT value of applier)
-  potencyStat?: string    // Which spec stat drives potency ('bit', 'ram', 'cpu')
-}
 
 export interface Encounter {
   id: string

@@ -5,89 +5,9 @@ import type { Tamer } from '../server/db/schema'
 import type { AreaShapeData } from '../utils/areaShapes'
 import { applyDeferredIntercedeCost, recordTurnStart } from '../utils/intercedeActions'
 import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
+import type { CombatParticipant } from '../types/combat'
 
-export interface CombatParticipant {
-  id: string
-  type: 'tamer' | 'digimon'
-  entityId: string
-  seq?: number
-  initiative: number
-  initiativeRoll: number
-  actionsRemaining: { simple: number }
-  currentStance: 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
-  activeEffects: Array<{
-    id: string
-    name: string
-    type: 'buff' | 'debuff' | 'status'
-    duration: number
-    source: string
-    description: string
-    value?: number
-    potency?: number
-    potencyStat?: string
-  }>
-  isActive: boolean
-  hasActed: boolean
-  currentWounds: number
-  maxWounds: number
-  currentTempWounds?: number
-  usedAttackIds?: string[]
-  dodgePenalty?: number
-  evolutionLineId?: string
-  woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number }>
-  usedSpecialOrders?: string[]
-  usedSkillOrders?: string[]
-  interceptPenalty?: number
-  specialOrderDebt?: Record<string, number>
-  intercedeOptOuts?: string[]  // legacy — opt-outs now live on encounter.intercedeOptOuts (~/utils/intercedeOptOuts)
-  hasDirectedThisTurn?: boolean
-  digimonBolsterCount?: number
-  lastBitCpuBolsterRound?: number
-  lastHugePowerRound?: number
-  lastHugePowerRank2Round?: number
-  isEnemy?: boolean
-  inReserve?: boolean  // Staged by the GM: excluded from turn order, the map and target lists until deployed
-  airborneByJump?: boolean  // Set when a unit jumped onto an air tile: falls at end of turn but takes 0 fall damage, then clears. Optional — getFallerProfile derives it from the Jumper quality when unset
-  turnsStarted?: number  // Turns started this combat; bumped by activateParticipant / server startTurn (see utils/intercedeActions.ts recordTurnStart)
-  lastMovedRound?: number  // Round this unit last moved — set server-side by every movement path; Burn's stationary penalty reads it
-  battery?: number
-  usedSignatureMoveThisTurn?: boolean
-  combatMonsterBonus?: number
-  totalHealth?: number
-  hasAttemptedDigivolve?: boolean
-  npcStageIndex?: number
-  clash?: {
-    clashId: string
-    opponentParticipantId: string
-    isController: boolean
-    isPinned: boolean
-    clashPinsUsed?: number
-    clashCheckNeeded: boolean
-    pendingRoll?: number
-    reachInitiated?: boolean
-    reachDistance?: number
-  }
-  clashCooldownUntilRound?: number
-  usedFreeClashThisRound?: boolean
-  usedCounterattackThisCombat?: boolean
-  moodValue?: number  // Positive Reinforcement: mood meter (1–6, starts at 3)
-  currentInspiration?: number
-  divineProtectionUsesThisBattle?: number
-  pendingDivineProtectionDamage?: number
-  pendingSimpleActionPenalty?: number
-  statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
-  modeChangeFreeSwapsUsed?: number
-  quickReactionDiceBonus?: number
-  lastMovedTurnKey?: string
-  strikeFastReady?: boolean
-  finishingTouchReady?: boolean
-  decimationReady?: boolean
-  enduringSoulAvailable?: boolean
-  enduringSoulUsed?: boolean
-  stunActionReducedThisRound?: boolean
-  dataAbsorbActive?: boolean
-  maxPostTurnIntercedes?: number
-}
+export type { ActiveEffect, ClashState, CombatParticipant } from '../types/combat'
 
 export interface BattleLogEntry {
   id: string

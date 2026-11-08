@@ -1,6 +1,7 @@
 import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
 import type { CreationRules, ScenePreset } from '../../types'
+import type { StoredCombatParticipant } from '../../types/combat'
 import type { EncounterIntercedeOptOuts } from '../../utils/intercedeOptOuts'
 
 // =====================================
@@ -241,108 +242,7 @@ export const encounters = pgTable('encounters', {
   >(),
 
   // Participants with full combat state
-  participants: jsonb('participants').notNull().$type<Array<{
-    id: string
-    type: 'tamer' | 'digimon'
-    entityId: string
-    initiative: number
-    initiativeRoll: number
-    actionsRemaining: { simple: number }
-    currentStance: 'neutral' | 'defensive' | 'offensive' | 'sniper' | 'brave'
-    activeEffects: Array<{
-      id: string
-      name: string
-      type: 'buff' | 'debuff' | 'status'
-      duration: number
-      source: string
-      description: string
-      value?: number
-      potency?: number
-      potencyStat?: string
-    }>
-    isActive: boolean
-    hasActed: boolean
-    name?: string
-    currentWounds?: number
-    maxWounds?: number
-    currentTempWounds?: number
-    usedAttackIds?: string[]
-    dodgePenalty?: number
-    evolutionLineId?: string
-    woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number; totalHealth?: number }>
-    usedSpecialOrders?: string[]
-    usedSkillOrders?: string[]
-    interceptPenalty?: number
-    specialOrderDebt?: Record<string, number>
-    // Legacy: read-only fallback for encounters saved before the `intercede_opt_outs` column
-    intercedeOptOuts?: string[]
-    gmCharacterOptOuts?: Record<string, string[]>
-    hasDirectedThisTurn?: boolean
-    digimonBolsterCount?: number
-    lastBitCpuBolsterRound?: number
-    lastHugePowerRound?: number
-    lastHugePowerRank2Round?: number
-    isEnemy?: boolean
-    inReserve?: boolean
-    battery?: number
-    usedSignatureMoveThisTurn?: boolean
-    combatMonsterBonus?: number
-    totalHealth?: number
-    hasAttemptedDigivolve?: boolean
-    npcStageIndex?: number
-    clash?: {
-      clashId: string
-      opponentParticipantId: string
-      isController: boolean
-      isPinned: boolean
-      clashPinsUsed?: number
-      clashCheckNeeded: boolean
-      pendingRoll?: number
-      pendingRollDescription?: string
-      reachInitiated?: boolean
-      reachDistance?: number
-      cannotInitiateUntilRound?: number
-    }
-    clashCooldownUntilRound?: number
-    modeChangeFreeSwapsUsed?: number
-    usedFreeClashThisRound?: boolean
-    usedCounterattackThisCombat?: boolean
-    moodValue?: number
-    currentInspiration?: number
-    divineProtectionUsesThisBattle?: number
-    pendingDivineProtectionDamage?: number
-    pendingSimpleActionPenalty?: number
-    statSwaps?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', 'accuracy' | 'damage' | 'dodge' | 'armor'>>
-    quickReactionDiceBonus?: number
-    lastMovedTurnKey?: string
-    strikeFastReady?: boolean
-    strikeFastTurnKey?: string
-    fatefulSpentRollIds?: string[]
-    finishingTouchReady?: boolean
-    decimationReady?: boolean
-    enduringSoulAvailable?: boolean
-    enduringSoulUsed?: boolean
-    strikeLastCounter?: { attackerId: string; groupId: string; tamerId: string }
-    isMinion?: boolean
-    summonerId?: string
-    summonedByParticipantId?: string
-    stunActionReducedThisRound?: boolean
-    dataAbsorbActive?: boolean
-    dataAbsorbHealAmount?: number
-    maxPostTurnIntercedes?: number
-    seenAttackIds?: Record<string, number>
-    juggernauntBonuses?: Partial<Record<'accuracy' | 'damage' | 'dodge' | 'armor', number>>
-    timeControlUsed?: boolean
-    buggedSpecValues?: { bit: number; cpu: number; ram: number }
-    demoralizedAttributes?: Partial<Record<'agility' | 'body' | 'charisma' | 'intelligence' | 'willpower', number>>
-    tormentorBonusStacks?: number
-    tankBusterUsedAtThresholds?: number[]
-    mapPosition?: { x: number; y: number; z: number }
-    lastMovedRound?: number
-    turnsStarted?: number
-    blackArmorRoundBonus?: { armor: number; dodge: number }
-    brownArmorAutoDodgeAvailable?: boolean
-  }>>(),
+  participants: jsonb('participants').notNull().$type<StoredCombatParticipant[]>(),
 
   // Turn order (participant IDs)
   turnOrder: jsonb('turn_order').notNull().$type<string[]>(),

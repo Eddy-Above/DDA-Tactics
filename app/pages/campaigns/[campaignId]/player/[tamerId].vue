@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { getAttackOrderModifiers, signatureReadyRound } from '~/utils/specialOrderCombat'
+import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
+import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { applyFatefulPool } from '~/utils/fatefulIntervention'
 
 import { combatAttackStats } from '~/utils/combatDice'
@@ -1723,18 +1724,10 @@ function hasPartnerTamerInEncounter(digimonParticipant: CombatParticipant): bool
 function getParticipantAttacks(participant: CombatParticipant): any[] {
   if (participant.type !== 'digimon') return []
   const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  const attacks = digimon?.attacks || []
-  const usedIds = new Set(participant.usedAttackIds || [])
-  const filtered = attacks.filter((a: any) => {
-    if (usedIds.has(a.id)) return false
-    if (a.tags?.some((t: string) => /signature/i.test(t)) && (activeEncounter.value?.round ?? 0) < signatureReadyRound(participant)) return false
-    if (houseRules.value?.signatureMoveBattery && a.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
-      if (((participant as any).battery ?? 0) < 1) return false
-    }
-    return true
+  return availableCombatAttacks(participant, digimon?.attacks ?? [], BASIC_ATTACKS, {
+    round: activeEncounter.value?.round ?? 0,
+    houseRules: houseRules.value,
   })
-  const basicAttacks = BASIC_ATTACKS.filter(a => !usedIds.has(a.id))
-  return [...filtered, ...basicAttacks]
 }
 
 const attackStatRows = computed(() => {
@@ -1766,16 +1759,7 @@ function getAttackStats(participant: CombatParticipant, attack: any, targetIds?:
 }
 
 function canUseAttack(participant: CombatParticipant, attack: any): boolean {
-  if ((participant as any).clash) return false
-  let requiredActions = 1
-  if (eddySoulRules.value?.combatMonsterAreaAttackRequiresComplex) {
-    const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
-    const isAreaAttack = attack.tags?.some((t: string) => t.startsWith('Area Attack'))
-    if (combatMonsterBonus > 0 && isAreaAttack) {
-      requiredActions = 2
-    }
-  }
-  return (participant.actionsRemaining?.simple || 0) >= requiredActions
+  return canUseCombatAttack(participant, attack, eddySoulRules.value)
 }
 
 // Resolved participant + affordable attack/action options for the floating player attack picker
@@ -2094,41 +2078,16 @@ async function confirmPlayerDirect(targetDigimon: CombatParticipant) {
 
 // Check if an attack can be bolstered (player version)
 function canBolsterAttack(participant: CombatParticipant, attack: any): boolean {
-  if (participant.type !== 'digimon') return false
-  if ((participant.actionsRemaining?.simple || 0) < 2) return false
-  if ((participant.digimonBolsterCount ?? 0) >= 2) return false
-  if (attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) return false
-  // EddySoul: Combat Monster + Area Attack already requires Complex Action, cannot bolster
-  if (eddySoulRules.value?.combatMonsterAreaAttackRequiresComplex) {
-    const combatMonsterBonus = (participant as any).combatMonsterBonus ?? 0
-    const isAreaAttack = attack.tags?.some((t: string) => t.startsWith('Area Attack'))
-    if (combatMonsterBonus > 0 && isAreaAttack) return false
-  }
-  return true
+  return canBolsterCombatAttack(participant, attack, eddySoulRules.value)
 }
 
 // Check if Huge Power can be used on this attack
 function canUseHugePower(participant: CombatParticipant, attack: any): { rank1: boolean; rank2: boolean } {
-  if (participant.type !== 'digimon') return { rank1: false, rank2: false }
-  const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
-  const hpQuality = digimon?.qualities?.find((q: any) => q.id === 'huge-power')
-  if (!hpQuality) return { rank1: false, rank2: false }
-
-  const hpRank = hpQuality.ranks || 1
-  const currentRound = activeEncounter.value?.round || 0
-
-  if (eddySoulRules.value?.hugePowerOncePerTurn) {
-    // EddySoul: once per turn for all Huge Power usage
-    const canUse = participant.lastHugePowerRound !== currentRound
-    return { rank1: canUse, rank2: canUse && hpRank >= 2 }
-  }
-
-  // Standard: Rank 1 melee unlimited, ranged 1/round; Rank 2 1/round any
-  const rangedAvailable = participant.lastHugePowerRound !== currentRound
-  const rank1 = attack.range === 'melee' ? true : rangedAvailable
-  const rank2 = hpRank >= 2 && participant.lastHugePowerRank2Round !== currentRound
-    && (attack.range === 'melee' || rangedAvailable)
-  return { rank1, rank2 }
+  const digimon = participant.type === 'digimon' ? partnerDigimon.value.find((d) => d.id === participant.entityId) : undefined
+  return hugePowerAvailability(participant, attack, digimon?.qualities ?? [], {
+    round: activeEncounter.value?.round || 0,
+    eddySoulRules: eddySoulRules.value,
+  })
 }
 
 function canParticipantAct(participant: CombatParticipant): boolean {
