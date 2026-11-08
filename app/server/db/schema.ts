@@ -386,6 +386,18 @@ export const campaigns = pgTable('campaigns', {
 })
 
 // =====================================
+// Reward Grants Table
+// =====================================
+
+export const rewardGrants = pgTable('reward_grants', {
+  id: text('id').primaryKey(),
+  campaignId: text('campaign_id').notNull().references(() => campaigns.id, { onDelete: 'cascade' }),
+  payload: jsonb('payload').notNull().$type<import('../../types/rewards').RewardRequest>(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at').notNull().$defaultFn(() => new Date()),
+})
+
+// =====================================
 // Roll Log Table
 // =====================================
 

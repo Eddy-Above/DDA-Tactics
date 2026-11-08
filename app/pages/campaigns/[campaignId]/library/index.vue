@@ -35,6 +35,20 @@ const libraryItems = computed(() => [
     icon: '🗺',
     color: 'text-blue-400',
   },
+  {
+    name: 'Encounters',
+    description: 'Prepare and run campaign encounters',
+    path: `/campaigns/${campaignId.value}/encounters`,
+    icon: '⚔️',
+    color: 'text-digimon-orange-400',
+  },
+  {
+    name: 'Grant Rewards',
+    description: 'Grant XP, Inspiration and Digimon Bonus DP to individuals or the group',
+    path: `/campaigns/${campaignId.value}/library/rewards`,
+    icon: '🎁',
+    color: 'text-amber-400',
+  },
 ])
 </script>
 
@@ -43,7 +57,7 @@ const libraryItems = computed(() => [
     <div class="mb-8">
       <h1 class="font-display text-3xl font-bold text-white mb-2">Library</h1>
       <p class="text-digimon-dark-400">
-        Manage your campaign's Tamers and Digimon
+        Manage your campaign's characters, encounters, maps and rewards
       </p>
     </div>
 

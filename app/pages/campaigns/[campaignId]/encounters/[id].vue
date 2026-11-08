@@ -2925,6 +2925,12 @@ async function applyActionResult(result: any, action?: CombatActionKind) {
 }
 
 function handleEncounterSocketMessage(msg: any) {
+  if (msg.type === 'rewards-granted') {
+    if (msg.campaignId !== campaignId.value) return
+    void refreshAffectedRecords({ tamerIds: msg.tamerIds ?? [], digimonIds: msg.digimonIds ?? [], evolutionLines: false, partnerDigimon: false })
+    void resyncEncounter()
+    return
+  }
   if (msg.type === 'encounter-state') {
     void applyEncounterUpdate(msg.encounter, 'ws', { version: msg.version })
     return

@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, campaigns } from '../../../db'
 import { verifyPassword } from '../../../utils/password'
+import { issueCampaignDmCookie } from '../../../utils/campaignDm'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
@@ -24,5 +25,7 @@ export default defineEventHandler(async (event) => {
     return { valid: true }
   }
 
-  return { valid: verifyPassword(body.password, campaign.dmPasswordHash) }
+  const valid = verifyPassword(body.password, campaign.dmPasswordHash)
+  if (valid) issueCampaignDmCookie(event, campaign)
+  return { valid }
 })

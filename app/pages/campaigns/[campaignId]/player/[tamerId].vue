@@ -413,6 +413,12 @@ let refreshInterval: ReturnType<typeof setInterval>
 // Realtime sync: push-based refresh via the encounter's WebSocket room.
 const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(activeEncounterIdForWs)
+const rewardsWs = useMapWebSocket(computed(() => campaignId.value || null), 'campaigns')
+function handleCampaignRewardMessage(msg: any) {
+  if (msg.type === 'rewards-granted' && msg.campaignId === campaignId.value && Array.isArray(msg.tamerIds) && msg.tamerIds.includes(tamer.value?.id)) void loadData()
+}
+rewardsWs.onMessage(handleCampaignRewardMessage)
+rewardsWs.onReconnect(() => { void loadData() })
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
 // One gate for everything that can replace the encounter on this page: pushes, the encounter GET
 // and the response to an action the player just took. See utils/encounterSnapshot.ts.
