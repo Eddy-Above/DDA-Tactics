@@ -863,12 +863,14 @@ function cancelThrowAllyAim() {
 }
 
 let lastHoveredMovementCell: string | null = null
+// Cache map serialization independently of token, participant and record changes.
+const mapSignature = computed(() => JSON.stringify(map.value))
 
 // Polling recreates participant and character records. Compare movement inputs by
 // value so an unchanged snapshot (or a health/action update) keeps the hovered path.
 // Reading the nested values also tracks in-place geometry and occupancy edits.
 watch(() => JSON.stringify([
-  map.value, positions.value,
+  mapSignature.value, positions.value,
   (props.encounter.destructibleStates ?? [])
     .filter(s => s.currentWounds <= 0).map(s => s.structureId).sort(),
   props.encounter.participants.map(p => [

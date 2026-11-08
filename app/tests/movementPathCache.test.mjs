@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { effectScope, reactive, ref, watch } from 'vue'
+import { computed, effectScope, reactive, ref, watch } from 'vue'
 import ts from 'typescript'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
@@ -130,18 +130,18 @@ test('clearMovement drops the search; destinations outside its budget keep the e
   assert.equal(calls.astar, 2)
 })
 
-function hoverHarness() {
+function hoverHarness(mapData = floor()) {
   const source = readFileSync(new URL('../components/EncounterMap.vue', import.meta.url), 'utf8')
   const snippet = source.slice(source.indexOf('let lastHoveredMovementCell:'), source.indexOf('function onNpcAction('))
   const compiled = ts.transpileModule(snippet, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText
-  const map = ref(floor())
+  const map = ref(mapData)
   const positions = ref({ mover: point(0) })
   const props = reactive({ encounter: { destructibleStates: [], participants: [] }, digimonMap: {}, tamerMap: {} })
   const npcMoveParticipantId = ref('mover'), chargeMoveParticipantId = ref(null), throwAimContext = ref(null), throwAllyAimContext = ref(null)
   const calls = { paths: 0, invalidations: 0, throws: 0, movers: [] }
   const movement = { reachableCells: ref(new Set()), activePath: ref([]), invalidateSearch: () => calls.invalidations++, computePath: () => calls.paths++ }
   const ctx = { pos: point(0), caps: walking, occupied: new Map(), dInfo: {}, moverSize: 'medium', moverIsEnemy: false, moverGig: null }
-  const deps = { map, positions, props, movement, watch, npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: id => { calls.movers.push(id); return ctx }, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
+  const deps = { map, positions, props, movement, computed, watch, npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: id => { calls.movers.push(id); return ctx }, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
   const scope = effectScope()
   const handlers = scope.run(() => new Function(...Object.keys(deps), `${compiled}\nreturn { onCellHovered }`)(...Object.values(deps)))
   return { ...deps, ...handlers, scope, calls }
@@ -185,6 +185,60 @@ test('real synchronous map/occupancy/record watchers invalidate even when the ho
       assert.equal(h.calls.paths, before + 1)
     }
     assert.equal(h.calls.invalidations, mutations.length)
+  } finally { h.scope.stop() }
+})
+
+test('position, participant and record changes do not serialize the unchanged map again', () => {
+  let serializations = 0
+  const h = hoverHarness({ ...floor(), toJSON() { serializations++; return this } })
+  try {
+    assert.equal(serializations, 1, 'the watcher initializes the map signature once')
+    const mutations = [
+      () => { h.positions.value.mover.x = 1 },
+      () => { h.positions.value = { mover: point(2) } },
+      () => h.props.encounter.participants.push({ id: 'mover', currentStance: 'neutral', activeEffects: [] }),
+      () => { h.props.encounter.participants[0].currentStance = 'defensive' },
+      () => { h.props.digimonMap.mon = { size: 'large', movement: 6 } },
+      () => { h.props.tamerMap.tamer = { speed: 6 } },
+      () => h.props.encounter.destructibleStates.push({ structureId: 'wall', currentWounds: 0 }),
+    ]
+    for (const mutate of mutations) {
+      const before = h.calls.invalidations
+      mutate()
+      assert.equal(h.calls.invalidations, before + 1, 'non-map movement changes still invalidate synchronously')
+      assert.equal(serializations, 1, 'non-map dependencies must reuse the cached map signature')
+    }
+    h.props.encounter.participants = JSON.parse(JSON.stringify(h.props.encounter.participants))
+    assert.equal(serializations, 1, 'a polling snapshot also reuses the map signature')
+    assert.equal(h.calls.invalidations, mutations.length, 'equivalent polling input must keep its prior behavior')
+  } finally { h.scope.stop() }
+})
+
+test('voxel, wall and door edits and map replacement refresh the signature and invalidate synchronously', () => {
+  let serializations = 0
+  const h = hoverHarness({ ...floor(), doors: [{ id: 'door', wallId: 'wall', isOpen: false }], toJSON() { serializations++; return this } })
+  try {
+    const mutations = [
+      () => h.map.value.voxels.push({ ...point(1), materialId: 'steel' }),
+      () => h.map.value.walls.push({ id: 'wall', ...point(2), face: 'east' }),
+      () => { h.map.value.doors[0].isOpen = true },
+      () => { h.map.value = { ...h.map.value, name: 'replacement' } },
+    ]
+    for (const mutate of mutations) {
+      h.onCellHovered(point(2))
+      h.movement.activePath.value = [point(0), point(1), point(2)]
+      const before = { invalidations: h.calls.invalidations, paths: h.calls.paths, serializations }
+      mutate()
+      assert.equal(serializations, before.serializations + 1, 'map mutations recompute the signature immediately')
+      assert.equal(h.calls.invalidations, before.invalidations + 1, 'the search is invalidated before any tick or hover')
+      assert.deepEqual(h.movement.activePath.value, [])
+      h.onCellHovered(point(2)); h.onCellHovered(point(2))
+      assert.equal(h.calls.paths, before.paths + 1, 'the same destination gets a fresh path after the edit')
+    }
+    const before = { invalidations: h.calls.invalidations, serializations }
+    h.map.value = { ...h.map.value }
+    assert.equal(serializations, before.serializations + 1, 'an equivalent map replacement is still inspected')
+    assert.equal(h.calls.invalidations, before.invalidations, 'an identical map signature must keep its prior behavior')
   } finally { h.scope.stop() }
 })
 
