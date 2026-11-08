@@ -5,6 +5,7 @@ import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const { prepareAttackAccuracy, snapshotAttackRiders } = loadTypeScript('utils/attackAccuracy.ts')
 const { getAttackOrderModifiers } = loadTypeScript('utils/specialOrderCombat.ts')
+const { usePendingAttackFateful } = loadTypeScript('composables/usePendingAttackFateful.ts')
 const gmPage = 'pages/campaigns/[campaignId]/encounters/[id].vue'
 const playerPage = 'pages/campaigns/[campaignId]/player/[tamerId].vue'
 const finalDice = [5, 3, 4, 5, 6]
@@ -126,6 +127,71 @@ test('the real GM single-target handler submits shared accuracy and logs the Hug
     accuracyDiceResults: finalDice, accuracySuccesses: 3,
   }]])
   assert.deepEqual(fixture.events, ['accuracy', 'request', 'log'])
+})
+
+for (const area of [false, true]) {
+  test(`player radial Fateful opens the dice chooser after preparing the ${area ? 'area' : 'single-target'} review`, async () => {
+    const f = createCombatPage('player')
+    let opened = false
+    f.dependencies.fateful = { open: () => { opened = true; assert.ok(f.dependencies.accuracyReview.value) } }
+    f.dependencies.selectedAttack.value.radialOptions = { fatefulIntervention: true }
+    const handlers = f.load()
+    await (area ? handlers.confirmAreaAttack([f.target]) : handlers.confirmAttack(f.target))
+    f.assertNoErrors()
+    assert.equal(opened, true)
+    assert.equal(f.dependencies.showAccuracyReview.value, true)
+    assert.deepEqual(f.requests, [])
+    assert.deepEqual(f.attackSubmissions, [])
+  })
+
+  test(`GM radial Inspiration prepares and pauses a ${area ? 'area' : 'single-target'} attack before sending the chosen dice`, async () => {
+    const f = createCombatPage('gm')
+    const pending = usePendingAttackFateful()
+    const payer = { id: 'owning-tamer', type: 'tamer' }
+    const options = { ...initialRiders, lifesteal: false, actOfInspiration: true, fatefulIntervention: true }
+    f.dependencies.selectedAttack.value.radialOptions = options
+    f.encounter.phase = 'combat'
+    f.returnedEncounter.phase = 'combat'
+    f.encounter.participants.push(payer)
+    f.setDice(Array(10).fill(5))
+    Object.assign(f.dependencies, { getMapAttackTamer: () => payer, campaignLevel: ref('standard'),
+      INSPIRATION_ACT_COST: { standard: 4 }, pendingAttackFateful: pending, gmFatefulTamer: ref(null),
+      gmFateful: { open: () => f.events.push('fateful') }, canParticipantAct: () => true })
+    const handlers = loadPageFunctions(gmPage, ['confirmAttack', 'confirmAreaAttack', 'prepareRadialAttackAccuracy'], f.dependencies)
+    const operation = area ? handlers.confirmAreaAttack([f.target]) : handlers.confirmAttack(f.target)
+    for (let i = 0; i < 10 && !pending.target.value; i++) await Promise.resolve()
+    f.assertNoErrors()
+    assert.ok(pending.target.value)
+    assert.equal(pending.target.value.isCurrent(), true)
+    assert.equal(f.dependencies.gmFatefulTamer.value.id, payer.id)
+    assert.equal(f.requests.length, 1, 'only Act of Inspiration is paid before the chooser')
+    assert.equal(f.requests[0][1].body.participantId, payer.id)
+    assert.equal(pending.target.value.baseDicePool, 10)
+    assert.equal(f.dependencies.selectedAttack.value, null)
+    await pending.target.value.apply({ rolls: [6, 6, 6], dicePool: 3, successes: 3 })
+    await operation
+    f.assertNoErrors()
+    assert.equal(f.requests.length, 2)
+    assert.match(f.requests[1][0], /intercede-offer$/)
+    assert.deepEqual(f.requests[1][1].body.accuracyDice, [6, 6, 6])
+    assert.equal(f.requests[1][1].body.accuracySuccesses, 3)
+    assert.equal(f.requests[1][1].body.bolstered, true)
+    assert.equal(f.requests[1][1].body.hugePowerRank, 2)
+  })
+}
+
+test('cancelling GM radial Fateful abandons the outgoing attack without submitting it', async () => {
+  const f = createCombatPage('gm'), pending = usePendingAttackFateful()
+  f.dependencies.selectedAttack.value.radialOptions = { ...initialRiders, actOfInspiration: false, fatefulIntervention: true }
+  Object.assign(f.dependencies, { getMapAttackTamer: () => ({ id: 'tamer' }), pendingAttackFateful: pending,
+    gmFatefulTamer: ref(null), gmFateful: { open: () => {} } })
+  const handlers = loadPageFunctions(gmPage, ['confirmAttack', 'prepareRadialAttackAccuracy'], f.dependencies)
+  const operation = handlers.confirmAttack(f.target)
+  assert.ok(pending.target.value)
+  pending.cancel()
+  await operation
+  f.assertNoErrors()
+  assert.deepEqual(f.requests, [])
 })
 
 test('the real GM area handler sends one shared roll, forces the clash opponent and ends the clash', async () => {

@@ -38,6 +38,7 @@ import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercede
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatRecordCache'
 import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '~/utils/specialOrderCombat'
+import { attackActionCost } from '~/utils/combatAttackOptions'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
 
@@ -214,12 +215,12 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   if (body.targetIds && body.targetIds.length > 0) {
     // Deduct attacker actions once for the whole area attack
     if (!body.skipActionDeduction) {
-      const attackActionCost = body.bolstered ? 2 : 1
+      const actionCost = attackActionCost(attacker, declaredAttack ?? body.attackData, eddySoulRules, body)
       participants = participants.map((p: any) => {
         if (p.id === body.attackerId) {
           const updated: any = {
             ...p,
-            actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - attackActionCost) },
+            actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost) },
             usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
           }
@@ -769,12 +770,12 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
 
   // Deduct attacker actions and track used attack (skip if already done by attack.post.ts)
   if (!body.skipActionDeduction) {
-    const attackActionCost = body.bolstered ? 2 : 1
+    const actionCost = attackActionCost(attacker, declaredAttack ?? body.attackData, eddySoulRules, body)
     participants = participants.map((p: any) => {
       if (p.id === body.attackerId) {
         const updated: any = {
           ...p,
-          actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - attackActionCost) },
+          actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost) },
           usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
           // Consume Directed effect on attacker (bonus was applied client-side to accuracy pool)
           activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),

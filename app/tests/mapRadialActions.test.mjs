@@ -4,6 +4,7 @@ import { computed, ref, shallowRef } from 'vue'
 import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const attackOptions = loadTypeScript('utils/combatAttackOptions.ts')
+const radialAttackOptions = loadTypeScript('utils/attackRadialOptions.ts')
 
 const pages = {
   gm: 'pages/campaigns/[campaignId]/encounters/[id].vue',
@@ -21,6 +22,11 @@ function createMapActions(role) {
   const logs = []
   const dependencies = {
     ...attackOptions,
+    ...radialAttackOptions,
+    radialAttackDraft: ref(null),
+    getMapAttackContext: () => ({ round: 3, campaignLevel: 'standard', hasTamer: true, inspiration: 100, fatefulAvailable: true,
+      record: { qualities: [{ id: 'huge-power', ranks: 2 }] } }),
+    canParticipantAct: () => true,
     currentEncounter: encounter,
     activeEncounter: encounter,
     activeParticipant: computed(() => encounter.value.participants[0]),
@@ -51,12 +57,49 @@ function createMapActions(role) {
   }
   const handlers = loadPageFunctions(pages[role], [
     'getParticipantAttacks', 'canUseAttack', 'selectAttackAndShowTargets',
-    'onMapAttackSelected', 'onMapStanceSelected', role === 'gm' ? 'changeStance' : 'changePlayerStance',
+    'onMapAttackSelected', 'onMapAttackRiderSelected', 'onMapStanceSelected', role === 'gm' ? 'changeStance' : 'changePlayerStance',
   ], dependencies)
   return { ...handlers, dependencies, actor, record, attack, areaAttack, encounter, updates, logs }
 }
 
 for (const role of Object.keys(pages)) {
+  test(`${role} radial toggles combine riders, Continue keeps them and None clears them without spending`, () => {
+    const page = createMapActions(role)
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'bolster-bit-cpu')
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'huge-power-2')
+    const chosen = page.dependencies.radialAttackDraft.value.riders
+    assert.deepEqual(chosen, ['bolster-bit-cpu', 'huge-power-2'])
+    assert.equal(page.dependencies.selectedAttack.value, null)
+    page.onMapAttackSelected(page.actor.id, page.attack.id, chosen)
+    assert.equal(page.dependencies.bolsterAttackEnabled.value, true)
+    assert.equal(page.dependencies.bolsterAttackType.value, 'bit-cpu')
+    assert.equal(page.dependencies.hugePowerRank2Enabled.value, true)
+    assert.equal(page.dependencies.selectedAttack.value.radialOptions.hugePower, true)
+    assert.equal(page.dependencies.radialAttackDraft.value, null)
+    page.onMapAttackSelected(page.actor.id, page.attack.id, [])
+    assert.equal(page.dependencies.bolsterAttackEnabled.value, false)
+    assert.equal(page.dependencies.hugePowerEnabled.value, false)
+    assert.equal(page.dependencies.selectedAttack.value.radialOptions.fatefulIntervention, false)
+    assert.deepEqual(page.updates, [])
+    assert.equal(page.actor.actionsRemaining.simple, 2)
+  })
+
+  test(`${role} stale rider choices recheck actions and turn ownership before targeting`, () => {
+    const page = createMapActions(role)
+    page.actor.actionsRemaining.simple = 1
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'bolster-bit-cpu')
+    page.onMapAttackSelected(page.actor.id, page.attack.id, ['bolster-bit-cpu'])
+    assert.equal(page.dependencies.radialAttackDraft.value, null)
+    assert.equal(page.dependencies.selectedAttack.value, null)
+    page.dependencies.canParticipantAct = () => false
+    const handlers = loadPageFunctions(pages[role], ['onMapAttackSelected', 'onMapAttackRiderSelected'], {
+      ...page.dependencies, getParticipantAttacks: () => [page.attack], canUseAttack: () => true,
+      selectAttackAndShowTargets: () => { throw new Error('Off-turn attacks must not start') },
+    })
+    handlers.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'fateful-intervention')
+    handlers.onMapAttackSelected(page.actor.id, page.attack.id, [])
+    assert.equal(page.dependencies.radialAttackDraft.value, null)
+  })
   test(`${role} radial attack starts map targeting with the current attack and resets riders`, () => {
     const page = createMapActions(role)
     page.onMapAttackSelected(page.actor.id, page.attack.id)
@@ -167,4 +210,28 @@ test('GM Manage dispatches the chosen token once and rejects players or removed 
   onRadialSelect(item)
   onRadialSelect(item)
   assert.deepEqual(events, [['gm-manage', 'shared-token-choice']])
+})
+
+test('canvas rider toggles keep the wheel open and Continue/None dispatch only the current tree metadata', () => {
+  const participantId = ref('actor'), events = []
+  const option = { id: 'toggle', label: 'Huge Power', attackId: 'attack:colon', attackRider: 'huge-power' }
+  const confirm = { id: 'continue', label: 'Continue', attackId: 'attack:colon', attackRiders: ['huge-power'] }
+  const none = { id: 'none', label: 'None', attackId: 'attack:colon', attackRiders: [] }
+  const radialItems = ref([{ id: 'attack', label: 'Attack', children: [{ id: 'attack:colon', label: 'Claw', children: [option, confirm, none] }] }])
+  const handlers = loadPageFunctions('components/MapCanvas.vue', ['enabledRadialLeaf', 'onRadialSelect'], {
+    radialParticipantId: participantId, radialItems, closeRadial: () => { participantId.value = null }, emit: (...args) => events.push(args),
+  })
+  handlers.onRadialSelect({ ...option, attackId: 'forged', attackRider: 'fateful-intervention' })
+  assert.equal(participantId.value, 'actor')
+  assert.deepEqual(events.pop(), ['attack-rider-selected', 'actor', 'attack:colon', 'huge-power'])
+  handlers.onRadialSelect(confirm)
+  assert.equal(participantId.value, null)
+  assert.deepEqual(events.pop(), ['attack-selected', 'actor', 'attack:colon', ['huge-power']])
+  participantId.value = 'actor'
+  handlers.onRadialSelect(none)
+  assert.deepEqual(events.pop(), ['attack-selected', 'actor', 'attack:colon', []])
+  participantId.value = 'actor'
+  radialItems.value[0].children[0].disabled = true
+  handlers.onRadialSelect(option)
+  assert.deepEqual(events, [])
 })

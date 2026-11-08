@@ -55,7 +55,8 @@
           :show-spawn-indicators="props.editorMode || (props.encounter.phase !== 'combat' && props.encounter.phase !== 'ended')"
           :eddy-soul-rules="eddySoulRules"
           :radial-options="radialOptions"
-          @attack-selected="(id, attackId) => emit('attack-selected', id, attackId)"
+          @attack-selected="(id, attackId, riders) => emit('attack-selected', id, attackId, riders)"
+          @attack-rider-selected="(id, attackId, rider) => emit('attack-rider-selected', id, attackId, rider)"
           @stance-selected="(id, stance) => emit('stance-selected', id, stance)"
           @action-selected="(id, action, choiceId) => emit('action-selected', id, action, choiceId)"
           @unit-placed="onCanvasPlace"
@@ -221,7 +222,8 @@ const emit = defineEmits<{
   (e: 'attack-cancelled'): void
   (e: 'throw-landing-selected', controllerId: string, thrownTargetId: string, landingPos: Vec3): void
   (e: 'throw-ally-landing-selected', interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3): void
-  (e: 'attack-selected', participantId: string, attackId: string): void
+  (e: 'attack-selected', participantId: string, attackId: string, riders?: import('~/types/mapRadial').AttackRadialRider[]): void
+  (e: 'attack-rider-selected', participantId: string, attackId: string, rider: import('~/types/mapRadial').AttackRadialRider): void
   (e: 'stance-selected', participantId: string, stance: Stance): void
   (e: 'action-selected', participantId: string, action: MapRadialChoiceAction, choiceId: string): void
   // Note: 'move' is handled internally in EncounterMap

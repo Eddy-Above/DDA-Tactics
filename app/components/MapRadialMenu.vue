@@ -27,7 +27,7 @@
         :class="{ selected: branchIds[0] === sector.item.id, active: sector.item.active, disabled: sector.item.disabled }"
         role="menuitem"
         :aria-label="sector.item.label"
-        :aria-description="sector.item.description"
+        :aria-description="[sector.item.cost, sector.item.description].filter(Boolean).join(' · ')"
         :aria-disabled="!!sector.item.disabled"
         :aria-haspopup="sector.item.children ? 'menu' : undefined"
         :aria-expanded="sector.item.children ? branchIds[0] === sector.item.id : undefined"
@@ -39,17 +39,18 @@
         @focus="hover(sector.item)"
         @blur="hover(null)"
       >
-        <title>{{ sector.item.label }}{{ sector.item.description ? ` — ${sector.item.description}` : '' }}</title>
+        <title>{{ [sector.item.label, sector.item.cost, sector.item.description].filter(Boolean).join(' — ') }}</title>
         <path class="sector-shape" :d="sector.path" />
         <g :transform="`translate(${sector.position.x}, ${sector.position.y})`" class="sector-content">
-          <svg v-if="iconPaths[sector.item.icon || '']" x="-9" :y="-13 - sector.lines.length * 4" width="18" height="18" viewBox="0 0 24 24" class="sector-icon">
+          <svg v-if="iconPaths[sector.item.icon || '']" x="-9" :y="-13 - sector.lines.length * 4 - (sector.item.cost ? 5 : 0)" width="18" height="18" viewBox="0 0 24 24" class="sector-icon">
             <path :d="iconPaths[sector.item.icon!]" />
           </svg>
           <text v-else-if="sector.item.icon" class="sector-symbol" :y="-sector.lines.length * 4">{{ sector.item.icon }}</text>
-          <text class="sector-label" :y="sector.item.icon ? 11 - (sector.lines.length - 1) * 6 : 4 - (sector.lines.length - 1) * 6">
+          <text class="sector-label" :y="(sector.item.icon ? 11 : 4) - (sector.lines.length - 1) * 6 - (sector.item.cost ? 5 : 0)">
             <tspan v-for="(line, index) in sector.lines" :key="index" x="0" :dy="index ? 12 : 0">{{ line }}</tspan>
           </text>
-          <text v-if="sector.item.children" class="branch-indicator" y="31">›</text>
+          <text v-if="sector.item.cost" class="sector-cost" :y="21 + (sector.lines.length - 1) * 6">{{ sector.item.cost }}{{ sector.item.children ? ' ›' : '' }}</text>
+          <text v-else-if="sector.item.children" class="branch-indicator" y="31">›</text>
         </g>
       </g>
       <g
@@ -59,7 +60,7 @@
         :class="{ active: sector.item.active, disabled: sector.item.disabled }"
         role="menuitem"
         :aria-label="sector.item.label"
-        :aria-description="sector.item.description"
+        :aria-description="[sector.item.cost, sector.item.description].filter(Boolean).join(' · ')"
         :aria-disabled="!!sector.item.disabled"
         :aria-haspopup="sector.item.children ? 'menu' : undefined"
         :tabindex="sector.item.disabled ? -1 : 0"
@@ -70,7 +71,7 @@
         @focus="hover(sector.item)"
         @blur="hover(null)"
       >
-        <title>{{ sector.item.label }}{{ sector.item.description ? ` — ${sector.item.description}` : '' }}</title>
+        <title>{{ [sector.item.label, sector.item.cost, sector.item.description].filter(Boolean).join(' — ') }}</title>
         <path class="sector-shape" :d="sector.path" />
         <g :clip-path="sector.rows ? `url(#${sector.clipId})` : undefined">
           <g :transform="`translate(${sector.position.x}, ${sector.position.y})`" class="sector-content">
@@ -131,6 +132,7 @@ let disposed = false
 const textStyles: Record<RadialRowKind, { size: number; weight: number; spacing: number }> = {
   current: { size: 7, weight: 700, spacing: .6 },
   label: { size: 10.5, weight: 600, spacing: .05 },
+  cost: { size: 8.5, weight: 600, spacing: 0 },
   meta: { size: 8.5, weight: 600, spacing: 0 },
   effect: { size: 9, weight: 700, spacing: 0 },
   tags: { size: 8, weight: 400, spacing: 0 },
@@ -212,6 +214,7 @@ function sectors(items: MapRadialItem[], inner: number, outer: number, start: nu
 const rowClass: Record<RadialRowKind, string> = {
   current: 'choice-current',
   label: 'sector-label',
+  cost: 'sector-cost',
   meta: 'sector-meta',
   effect: 'sector-effect',
   tags: 'sector-tags',
@@ -349,6 +352,7 @@ onBeforeUnmount(() => {
 .branch-indicator { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 18px; }
 .choice-current { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 7px; font-weight: 700; letter-spacing: .6px; }
 .sector-meta { fill: theme('colors.digimon.dark.100'); text-anchor: middle; font-size: 8.5px; font-weight: 600; }
+.sector-cost { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 8.5px; font-weight: 600; }
 .sector-effect { fill: theme('colors.digimon.orange.300'); text-anchor: middle; font-size: 9px; font-weight: 700; }
 .sector-tags { fill: theme('colors.digimon.dark.200'); text-anchor: middle; font-size: 8px; }
 .radial-hub-button { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; gap: 4px; padding: 2px 9px; border: 1px solid theme('colors.digimon.orange.600'); border-radius: 999px; background: theme('colors.digimon.dark.900'); color: theme('colors.digimon.dark.100'); font-size: 9px; font-weight: 600; line-height: 17px; pointer-events: auto; cursor: pointer; }

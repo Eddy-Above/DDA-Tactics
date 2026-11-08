@@ -123,7 +123,8 @@ import {
 import { createTokenDragController } from '~/utils/tokenDrag'
 import { buildMovementGroundIndex, movementGroundBelow } from '~/utils/movementGap'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
-import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
+import type { AttackRadialRider, MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
+import { withRadialActionCosts } from '~/utils/radialActionCosts'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
 
@@ -187,7 +188,8 @@ const emit = defineEmits<{
   (e: 'wall-selected', wallId: string): void
   (e: 'map-changed'): void
   (e: 'door-toggle', doorId: string, isOpen: boolean): void
-  (e: 'attack-selected', participantId: string, attackId: string): void
+  (e: 'attack-selected', participantId: string, attackId: string, riders?: AttackRadialRider[]): void
+  (e: 'attack-rider-selected', participantId: string, attackId: string, rider: AttackRadialRider): void
   (e: 'stance-selected', participantId: string, stance: Stance): void
   (e: 'action-selected', participantId: string, action: MapRadialChoiceAction, choiceId: string): void
 }>()
@@ -387,8 +389,8 @@ function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, 
 
 const radialItems = computed<MapRadialItem[]>(() => {
   if (gmRadialId.value) return props.isDm ? [
-    { id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely' },
-    { id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' },
+    { id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely', cost: 'Free' },
+    { id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls', cost: 'Free' },
   ] : []
   const isNpc = !!npcRadialId.value
   const clashButtons = isNpc ? npcClashButtons.value : radialPlayerClashButtons.value
@@ -426,7 +428,8 @@ const radialItems = computed<MapRadialItem[]>(() => {
     items.push(radialChoiceGroup('digivolve', outOfActions))
   }
   if (props.isDm) items.push({ id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' })
-  return items
+  const participant = props.participants.find(p => p.id === radialParticipantId.value)
+  return withRadialActionCosts(items, participant, participant ? props.digimonMap?.[participant.entityId] : undefined, props.eddySoulRules)
 })
 
 function closeRadial() {
@@ -473,8 +476,14 @@ function onRadialSelect(item: MapRadialItem) {
   const participantId = radialParticipantId.value
   // Re-check the live tree: a server update may have exhausted the parent action
   // or removed a choice while its submenu was open.
-  if (!participantId || !enabledRadialLeaf(radialItems.value, item.id)) return
-  if (item.id.startsWith('attack:')) {
+  const current = enabledRadialLeaf(radialItems.value, item.id)
+  if (!participantId || !current) return
+  if (current.attackId && current.attackRider) {
+    emit('attack-rider-selected', participantId, current.attackId, current.attackRider)
+  } else if (current.attackId && current.attackRiders) {
+    closeRadial()
+    emit('attack-selected', participantId, current.attackId, current.attackRiders)
+  } else if (item.id.startsWith('attack:')) {
     closeRadial()
     emit('attack-selected', participantId, item.id.slice(7))
   } else if (item.id.startsWith('stance:')) {

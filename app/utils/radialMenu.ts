@@ -84,11 +84,12 @@ export function wrapRadialTags(tags: string[], limit = 17, maxLines = 2): string
   })
 }
 
-export type RadialRowKind = 'current' | 'label' | 'meta' | 'effect' | 'tags'
+export type RadialRowKind = 'current' | 'label' | 'cost' | 'meta' | 'effect' | 'tags'
 export interface RadialRow { kind: RadialRowKind; text: string; x?: number; y: number }
 export interface RadialSectorGeometry { inner: number; outer: number; start: number; end: number }
 export type RadialTextMeasure = (text: string, kind: RadialRowKind) => { width: number; ascent: number; descent: number }
 export interface RadialRowItem {
+  cost?: string
   label: string
   active?: boolean
   range?: string
@@ -97,8 +98,8 @@ export interface RadialRowItem {
   tags?: string[]
 }
 
-const ROW_HEIGHT: Record<RadialRowKind, number> = { current: 9, label: 12, meta: 10, effect: 11, tags: 9.5 }
-const FONT_SIZE: Record<RadialRowKind, number> = { current: 7, label: 10.5, meta: 8.5, effect: 9, tags: 8 }
+const ROW_HEIGHT: Record<RadialRowKind, number> = { current: 9, label: 12, cost: 10, meta: 10, effect: 11, tags: 9.5 }
+const FONT_SIZE: Record<RadialRowKind, number> = { current: 7, label: 10.5, cost: 8.5, meta: 8.5, effect: 9, tags: 8 }
 type DetailRow = Omit<RadialRow, 'x' | 'y'>
 
 const fallbackTextMeasure: RadialTextMeasure = (text, kind) => ({
@@ -204,7 +205,7 @@ function fitDetailRows(rows: DetailRow[], item: RadialRowItem, geometry: RadialS
       remaining.splice(first, meta.length, { kind: 'meta', text: meta.map(row => row.text).join(' · ') })
       continue
     }
-    const extra = remaining.findIndex(row => row.kind !== 'label')
+    const extra = remaining.findIndex(row => row.kind !== 'label' && row.kind !== 'cost')
     if (extra >= 0) { remaining.splice(extra, 1); continue }
     // Every menu sector (at least ~22 degrees wide) can contain one name row.
     // For an unusably small caller-provided sector, report the invalid layout
@@ -223,11 +224,12 @@ export function radialDetailRows(item: RadialRowItem, geometry?: RadialSectorGeo
   const meta = metaParts.join(' · ')
   const effect = item.effect?.trim()
   const tags = (item.tags ?? []).filter(tag => tag.trim())
-  if (!meta && !effect && !tags.length) return null
+  if (!meta && !effect && !tags.length && !item.cost) return null
   const rows: DetailRow[] = []
   if (item.active) rows.push({ kind: 'current', text: '✓ CURRENT' })
   // The name gives up its third line so the block stays inside the 80px ring.
   for (const text of wrapRadialLabel(item.label, 15, 2)) rows.push({ kind: 'label', text })
+  if (item.cost) rows.push({ kind: 'cost', text: item.cost })
   // Range and AoE type share a row unless the pair (e.g. "Ranged · Close Blast") is too wide.
   if (meta) for (const text of meta.length > 17 ? metaParts : [meta]) rows.push({ kind: 'meta', text })
   if (effect) rows.push({ kind: 'effect', text: wrapRadialLabel(effect, 15, 1)[0] })

@@ -1,6 +1,7 @@
 import type { Attack, EddySoulRules, HouseRules, Quality } from '../types'
 import type { CombatParticipant } from '../types/combat'
 import { signatureReadyRound } from './specialOrderCombat'
+import { getAreaShape } from './areaShapes'
 
 export interface CombatAttackOption {
   id: Attack['id']
@@ -48,6 +49,18 @@ export function requiredAttackActions(
   return rules?.combatMonsterAreaAttackRequiresComplex
     && (participant.combatMonsterBonus ?? 0) > 0
     && attack.tags?.some(tag => tag.startsWith('Area Attack')) ? 2 : 1
+}
+
+/** Full declared action cost, shared by the radial display and direct GM submissions. */
+export function attackActionCost(
+  participant: AttackOptionParticipant,
+  attack: Pick<CombatAttackOption, 'tags' | 'effect'>,
+  rules?: AttackOptionRules | null,
+  riders: { bolstered?: boolean; lifestealed?: boolean } = {},
+): 1 | 2 {
+  return riders.bolstered || riders.lifestealed || attack.effect === 'Haste'
+    || (getAreaShape([...(attack.tags ?? [])]) === 'pass' && !attack.tags?.includes('Charge Attack'))
+    ? 2 : requiredAttackActions(participant, attack, rules)
 }
 
 export function canUseCombatAttack(

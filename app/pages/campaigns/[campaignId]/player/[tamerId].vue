@@ -12,7 +12,7 @@ import type { Tamer, Digimon, Encounter } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { skillsByAttribute, skillLabels as defaultSkillLabels, getResolvedSkillLabels } from '~/constants/tamer-skills'
 import type { DigimonStage, EddySoulRules, Stance, Vec3 } from '~/types'
-import type { MapRadialItem } from '~/types/mapRadial'
+import type { AttackRadialRider, MapRadialItem } from '~/types/mapRadial'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { computeAreaCellsFromData } from '~/utils/areaShapes'
 import { vec3Key } from '~/utils/mapGeometry'
@@ -23,7 +23,8 @@ import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOr
 import { getEffectStatModifiers, BASIC_ATTACKS, getAllStatEffectModifier } from '~/data/attackConstants'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
-import { attackRadialItem, getAttackBadges } from '~/utils/attackBadges'
+import { getAttackBadges } from '~/utils/attackBadges'
+import { radialAttackItem, toggleAttackRider, validAttackRiders, attackRiderSelection, type RadialAttackSelection } from '~/utils/attackRadialOptions'
 import {
   groupDodgeRequests, computeDodgeDefense, isDodgeBlocked, summarizeDodgeResult, getPaidDodgeDiceBonus, type DodgeDefenseContext,
 } from '~/utils/areaDefense'
@@ -1775,6 +1776,24 @@ const playerAttackOptions = computed(() => {
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
 })
 
+const radialAttackDraft = ref<{ participantId: string; attackId: string; riders: AttackRadialRider[] } | null>(null)
+function getMapAttackContext(p: CombatParticipant) {
+  const payer = myTamerParticipant.value
+  return { record: allDigimon.value.find(d => d.id === p.entityId), round: activeEncounter.value?.round ?? 0,
+    houseRules: houseRules.value, eddySoulRules: eddySoulRules.value, campaignLevel: campaignLevel.value,
+    hasTamer: !!payer && !payer.inReserve, inspiration: payer?.currentInspiration ?? 0,
+    fatefulAvailable: specialOrders.value.some(order => order.name === 'Fateful Intervention') }
+}
+function onMapAttackRiderSelected(participantId: string, attackId: string, rider: AttackRadialRider) {
+  const p = myParticipants.value.find(p => p.id === participantId)
+  const attack = p && getParticipantAttacks(p).find(a => a.id === attackId)
+  if (!p || !attack || !canParticipantAct(p)) return
+  const draft = radialAttackDraft.value
+  const selected = draft?.participantId === participantId && draft.attackId === attackId ? draft.riders : []
+  const next = toggleAttackRider(selected, rider)
+  if (!selected.includes(rider) && !validAttackRiders(p, attack, getMapAttackContext(p), next)) return
+  radialAttackDraft.value = { participantId, attackId, riders: next }
+}
 const mapRadialOptions = computed(() => {
   const options: Record<string, {
     attacks: MapRadialItem[]
@@ -1785,7 +1804,8 @@ const mapRadialOptions = computed(() => {
   }> = {}
   for (const p of myParticipants.value) {
     options[p.id] = {
-      attacks: getParticipantAttacks(p).map(attack => attackRadialItem(attack, !canUseAttack(p, attack))),
+      attacks: getParticipantAttacks(p).map(attack => radialAttackItem(p, attack, getMapAttackContext(p),
+        radialAttackDraft.value?.participantId === p.id && radialAttackDraft.value.attackId === attack.id ? radialAttackDraft.value.riders : [])),
       stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),
@@ -1825,13 +1845,15 @@ const mapRadialOptions = computed(() => {
   return options
 })
 
-function onMapAttackSelected(participantId: string, attackId: string) {
+function onMapAttackSelected(participantId: string, attackId: string, riders?: AttackRadialRider[]) {
   const p = myParticipants.value.find(x => x.id === participantId)
   if (!p) return
   const attack = getParticipantAttacks(p).find(a => a.id === attackId)
   if (!attack || !canUseAttack(p, attack)) return
+  if (riders && (!canParticipantAct(p) || !validAttackRiders(p, attack, getMapAttackContext(p), riders))) return
   playerAttackParticipantId.value = null
-  selectAttackAndShowTargets(p, attack)
+  selectAttackAndShowTargets(p, attack, riders ? attackRiderSelection(riders) : undefined)
+  if (riders) radialAttackDraft.value = null
 }
 
 function onMapStanceSelected(participantId: string, stance: Stance) {
@@ -2283,14 +2305,22 @@ function toggleAreaTarget(targetId: string) {
   }
 }
 
-async function selectAttackAndShowTargets(participant: CombatParticipant, attack: any) {
-  selectedAttack.value = { participant, attack }
+async function selectAttackAndShowTargets(participant: CombatParticipant, attack: any, radialOptions?: RadialAttackSelection) {
+  selectedAttack.value = { participant, attack, ...(radialOptions ? { radialOptions } : {}) }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
   lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
   actOfInspirationEnabled.value = false
+  if (radialOptions) {
+    bolsterAttackEnabled.value = radialOptions.bolster
+    bolsterAttackType.value = radialOptions.bolsterType
+    lifestealComplexEnabled.value = radialOptions.lifesteal
+    hugePowerEnabled.value = radialOptions.hugePower
+    hugePowerRank2Enabled.value = radialOptions.hugePowerRank2
+    actOfInspirationEnabled.value = radialOptions.actOfInspiration
+  }
   if (showMapView.value) return
   showTargetSelector.value = true
 }
@@ -2299,7 +2329,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
   if (!target || !selectedAttack.value || !activeEncounter.value || !tamer.value) return
 
   try {
-    const { participant, attack } = selectedAttack.value
+    const { participant, attack, radialOptions } = selectedAttack.value
 
     // Clear targeting UI immediately so the player sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -2335,6 +2365,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       ...riders,
     }
     showAccuracyReview.value = true
+    if (radialOptions?.fatefulIntervention) fateful.open()
   } catch (error) {
     console.error('Error performing attack:', error)
     alert((error as any)?.data?.message || 'Failed to perform attack')
@@ -2352,7 +2383,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   }
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
   try {
-    const { participant, attack } = selectedAttack.value
+    const { participant, attack, radialOptions } = selectedAttack.value
 
     // Clear targeting UI immediately so the player sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -2391,6 +2422,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       clashAreaAttack: clashCtx,
     }
     showAccuracyReview.value = true
+    if (radialOptions?.fatefulIntervention) fateful.open()
   } catch (error) {
     console.error('Error performing area attack:', error)
     alert((error as any)?.data?.message || 'Failed to perform area attack')
@@ -4810,6 +4842,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               :eddy-soul-rules="eddySoulRules"
               @encounter-updated="() => {}"
               @attack-selected="onMapAttackSelected"
+              @attack-rider-selected="onMapAttackRiderSelected"
               @stance-selected="onMapStanceSelected"
               @action-selected="onMapActionSelected"
               @player-action="(id, action) => {

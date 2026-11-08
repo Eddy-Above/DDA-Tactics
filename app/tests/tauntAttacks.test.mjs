@@ -5,6 +5,14 @@ import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScrip
 const { combatAttackStats } = loadTypeScript('utils/combatDice.ts')
 const globals = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError']
 const originals = new Map(globals.map(name => [name, globalThis[name]]))
+for (const area of [false, true]) for (const variant of ['ordinary', 'bolster', 'lifesteal', 'haste', 'pass', 'charge-pass', 'already-paid']) {
+  test(`GM ${area ? 'area' : 'single-target'} ${variant} deduction matches the radial cost`, async () => {
+    const f = fixture('support', variant.includes('pass') ? ['Area Attack: Pass', ...(variant === 'charge-pass' ? ['Charge Attack'] : [])] : [], variant === 'haste' ? 'Haste' : 'Taunt')
+    const updated = await f.offer(area, false, { bolstered: variant === 'bolster', lifestealed: variant === 'lifesteal', skipActionDeduction: variant === 'already-paid' })
+    const spent = ['bolster', 'lifesteal', 'haste', 'pass'].includes(variant) ? 2 : variant === 'already-paid' ? 0 : 1
+    assert.equal(updated.participants.find(p => p.id === 'taunter-token').actionsRemaining.simple, 2 - spent)
+  })
+}
 afterEach(() => {
   for (const [name, value] of originals) {
     if (value === undefined) delete globalThis[name]
@@ -97,7 +105,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
     damage: overrides => damage.computeAttackDamage({
       ...params, attackerParticipant: participants[0], targetParticipant: participants[1], dodgeSuccesses: 0, ...overrides,
     }),
-    offer: async (areaAttack = false, playerAttack = false) => {
+    offer: async (areaAttack = false, playerAttack = false, bodyOverrides = {}) => {
       records.push({ ...records[1], id: 'guard-form', name: 'Guard' })
       participants.push({ ...participants[1], id: 'guard-token', entityId: 'guard-form', activeEffects: [] })
       const mapMocks = {}
@@ -128,7 +136,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
         attackId: attack.id, attackName: attack.name, accuracySuccesses: 3, accuracyDice: [6, 6, 6],
         attackData: playerAttack ? { dicePool: 3 } : { dicePool: 3, attackStats: { accuracy: 3 } },
         ...(areaAttack ? { areaShapeData: { shape: 'blast', rangeType: 'ranged', attackerPos: positions['taunter-token'],
-          dir: { x: 1, y: 0, z: 0 }, bit: 1, ram: 1, movement: 5, attackerDims: { width: 1, height: 1, depth: 1 }, blastCenter: positions['defender-token'] } } : {}) })
+          dir: { x: 1, y: 0, z: 0 }, bit: 1, ram: 1, movement: 5, attackerDims: { width: 1, height: 1, depth: 1 }, blastCenter: positions['defender-token'] } } : {}), ...bodyOverrides })
     },
     skip: async requestId => {
       const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-skip.post.ts', {

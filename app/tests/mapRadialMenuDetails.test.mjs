@@ -7,6 +7,7 @@ import { loadTypeScript, loadVueComponent } from './helpers/loadTypeScript.mjs'
 globalThis.SVGElement ??= class SVGElement {}
 const MapRadialMenu = loadVueComponent('components/MapRadialMenu.vue')
 const { attackRadialItem } = loadTypeScript('utils/attackBadges.ts')
+const { radialAttackItem } = loadTypeScript('utils/attackRadialOptions.ts')
 
 // A tiny DOM-less renderer: real handlers and reactivity, no jsdom.
 function createHost() {
@@ -75,6 +76,39 @@ async function mountAttackRing(choices = attacks) {
   await nextTick()
   return host
 }
+
+test('the actual menu opens Attack, then an attack, then riders; toggles keep the layer and expose costs', async () => {
+  const host = createHost(), selections = []
+  const actor = { type: 'digimon', actionsRemaining: { simple: 2 } }
+  const context = { record: { qualities: [] }, round: 2, campaignLevel: 'standard', hasTamer: false, inspiration: 0, fatefulAvailable: false }
+  function render(selected = []) {
+    const item = radialAttackItem(actor, attacks[0], context, selected)
+    host.render(h(MapRadialMenu, { items: [{ id: 'attack', label: 'Attack', cost: 'Varies', children: [item] }],
+      center: { x: 400, y: 300 }, bounds: { width: 800, height: 600 }, label: 'Agumon', onSelect: item => selections.push(item) }), host.root)
+  }
+  render()
+  await nextTick()
+  assert.ok(rowsOf(ring(host.root, 'root')[0]).some(([kind, text]) => kind === 'sector-cost' && text.includes('Varies')))
+  ring(host.root, 'root')[0].props.onClick()
+  await nextTick()
+  ring(host.root, 'child')[0].props.onClick()
+  await nextTick()
+  let choices = ring(host.root, 'child')
+  assert.deepEqual(choices.map(choice => choice.props['aria-label']), ['None', 'Bolster Accuracy/Damage', 'Bolster BIT/CPU', 'Continue'])
+  assert.ok(rowsOf(choices[0]).some(([kind, text]) => kind === 'sector-cost' && text === '1 Simple'))
+  choices[2].props.onClick()
+  assert.equal(selections[0].attackRider, 'bolster-bit-cpu')
+  render(['bolster-bit-cpu'])
+  await nextTick()
+  choices = ring(host.root, 'child')
+  assert.ok(rowsOf(choices[2]).some(([kind]) => kind === 'choice-current'))
+  assert.ok(rowsOf(choices[3]).some(([kind, text]) => kind === 'sector-cost' && text === '2 Simple'))
+  choices[3].props.onClick()
+  assert.deepEqual(selections[1].attackRiders, ['bolster-bit-cpu'])
+  choices[0].props.onClick()
+  assert.deepEqual(selections[2].attackRiders, [])
+  host.render(null, host.root)
+})
 
 test('attack choices draw range type, AoE type, effect and tags on the outer ring', async () => {
   const host = await mountAttackRing()

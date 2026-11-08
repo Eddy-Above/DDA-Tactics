@@ -8,6 +8,7 @@ import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const page = 'pages/campaigns/[campaignId]/encounters/[id].vue'
 const { buildCombatEvolutionOptions } = loadTypeScript('utils/combatEvolutionOptions.ts')
+const { withRadialActionCosts } = loadTypeScript('utils/radialActionCosts.ts')
 
 function initializer(path, name, deps) {
   const { descriptor } = parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'))
@@ -53,7 +54,7 @@ function fixture() {
   const radialParticipantId = ref('npc')
   const radialDeps = { props, radialParticipantId, npcRadialId: ref('npc'), gmRadialId: ref(null),
     npcClashButtons: ref(null), npcOutOfActions: computed(() => participant.actionsRemaining.simple < 1), npcDoorButtons: ref([]),
-    computed }
+    computed, withRadialActionCosts }
   Object.assign(radialDeps, loadPageFunctions('components/MapCanvas.vue', ['radialChoiceGroup'], radialDeps))
   const radialItems = initializer('components/MapCanvas.vue', 'radialItems', radialDeps)
   return { encounter, participant, calls, applied, options, radialItems, ...actions }

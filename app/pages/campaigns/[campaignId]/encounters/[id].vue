@@ -18,7 +18,8 @@ import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPa
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
 import { getModeChangeQualities, getModeChangePairs, isSwapActive, getModeChangeLabel, canUseModeChangeSwap } from '~/utils/modeChange'
-import { attackRadialItem, getAttackBadges } from '~/utils/attackBadges'
+import { getAttackBadges } from '~/utils/attackBadges'
+import { radialAttackItem, toggleAttackRider, validAttackRiders, attackRiderSelection, type RadialAttackSelection } from '~/utils/attackRadialOptions'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encounterSnapshot'
@@ -29,12 +30,13 @@ import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
 import { useSpecialOrderTargets, type SpecialOrderChoice } from '~/composables/useSpecialOrderTargets'
 import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/useFatefulIntervention'
+import { usePendingAttackFateful } from '~/composables/usePendingAttackFateful'
 import { useReactionOrders } from '~/composables/useReactionOrders'
 import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
 import { isRequestAnswered } from '~/utils/requestState'
 import type { Stance, Vec3 } from '~/types'
-import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
-import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
+import type { AttackRadialRider, MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
+import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, applyDerivedStatEffects, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
@@ -101,7 +103,7 @@ const showDuplicateModal = ref(false)
 const togglingVisibility = ref(false)
 
 // Attack execution state
-const selectedAttack = ref<{ participant: any; attack: any } | null>(null)
+const selectedAttack = ref<{ participant: any; attack: any; radialOptions?: RadialAttackSelection } | null>(null)
 const showTargetSelector = ref(false)
 const npcStanceParticipantId = ref<string | null>(null)
 const npcAttackParticipantId = ref<string | null>(null)
@@ -521,11 +523,34 @@ const npcAttackOptions = computed(() => {
   return getParticipantAttacks(p).filter(a => canUseAttack(p, a))
 })
 
+const radialAttackDraft = ref<{ participantId: string; attackId: string; riders: AttackRadialRider[] } | null>(null)
+function getMapAttackTamer(p: CombatParticipant) {
+  const partnerId = digimonMap.value.get(p.entityId)?.partnerId
+  return (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(t => t.type === 'tamer' && !t.inReserve && t.entityId === partnerId)
+}
+function getMapAttackContext(p: CombatParticipant) {
+  const payer = getMapAttackTamer(p)
+  return { record: digimonMap.value.get(p.entityId), round: currentEncounter.value?.round ?? 0,
+    houseRules: houseRules.value, eddySoulRules: eddySoulRules.value, campaignLevel: campaignLevel.value,
+    hasTamer: !!payer, inspiration: payer?.currentInspiration ?? 0,
+    fatefulAvailable: !!payer && getTamerSpecialOrders(payer).some(order => order.name === 'Fateful Intervention') }
+}
+function onMapAttackRiderSelected(participantId: string, attackId: string, rider: AttackRadialRider) {
+  const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(p => p.id === participantId)
+  const attack = p && getParticipantAttacks(p).find(a => a.id === attackId)
+  if (!p || !attack || !canParticipantAct(p)) return
+  const draft = radialAttackDraft.value
+  const selected = draft?.participantId === participantId && draft.attackId === attackId ? draft.riders : []
+  const next = toggleAttackRider(selected, rider)
+  if (!selected.includes(rider) && !validAttackRiders(p, attack, getMapAttackContext(p), next)) return
+  radialAttackDraft.value = { participantId, attackId, riders: next }
+}
 const mapRadialOptions = computed(() => {
   const options: Record<string, MapRadialOptions> = {}
   for (const p of (currentEncounter.value?.participants ?? []) as CombatParticipant[]) {
     options[p.id] = {
-      attacks: getParticipantAttacks(p).map(attack => attackRadialItem(attack, !canUseAttack(p, attack))),
+      attacks: getParticipantAttacks(p).map(attack => radialAttackItem(p, attack, getMapAttackContext(p),
+        radialAttackDraft.value?.participantId === p.id && radialAttackDraft.value.attackId === attack.id ? radialAttackDraft.value.riders : [])),
       stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),
@@ -550,13 +575,15 @@ const mapRadialOptions = computed(() => {
   return options
 })
 
-function onMapAttackSelected(participantId: string, attackId: string) {
+function onMapAttackSelected(participantId: string, attackId: string, riders?: AttackRadialRider[]) {
   const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === participantId)
   if (!p) return
   const attack = getParticipantAttacks(p).find(a => a.id === attackId)
   if (!attack || !canUseAttack(p, attack)) return
+  if (riders && (!canParticipantAct(p) || !validAttackRiders(p, attack, getMapAttackContext(p), riders))) return
   npcAttackParticipantId.value = null
-  selectAttackAndShowTargets(p, attack)
+  selectAttackAndShowTargets(p, attack, riders ? attackRiderSelection(riders) : undefined)
+  if (riders) radialAttackDraft.value = null
 }
 
 function onMapStanceSelected(participantId: string, stance: Stance) {
@@ -857,13 +884,20 @@ function toggleAreaTarget(targetId: string) {
 }
 
 // Open target selection modal
-function selectAttackAndShowTargets(participant: CombatParticipant, attack: any) {
-  selectedAttack.value = { participant, attack }
+function selectAttackAndShowTargets(participant: CombatParticipant, attack: any, radialOptions?: RadialAttackSelection) {
+  selectedAttack.value = { participant, attack, ...(radialOptions ? { radialOptions } : {}) }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
   lifestealComplexEnabled.value = false
   hugePowerEnabled.value = false
   hugePowerRank2Enabled.value = false
+  if (radialOptions) {
+    bolsterAttackEnabled.value = radialOptions.bolster
+    bolsterAttackType.value = radialOptions.bolsterType
+    lifestealComplexEnabled.value = radialOptions.lifesteal
+    hugePowerEnabled.value = radialOptions.hugePower
+    hugePowerRank2Enabled.value = radialOptions.hugePowerRank2
+  }
   if (showMapView.value) return
   showTargetSelector.value = true
 }
@@ -883,11 +917,35 @@ function canUseHugePower(participant: CombatParticipant, attack: any): { rank1: 
 }
 
 // Confirm attack and execute
+async function prepareRadialAttackAccuracy(participant: CombatParticipant, attack: any, targetIds: string[], options: RadialAttackSelection) {
+  const encounterId = currentEncounter.value!.id
+  const stats = getAttackStats(participant, attack, targetIds)
+  const modifiers = getAttackOrderModifiers(participant)
+  const payer = getMapAttackTamer(participant)
+  if (options.actOfInspiration) {
+    if (!payer) return null
+    const updated = await $fetch<any>(`/api/encounters/${encounterId}/actions/spend-inspiration`, {
+      method: 'POST', body: { participantId: payer.id, spendType: 'act-of-inspiration', amount: INSPIRATION_ACT_COST[campaignLevel.value] },
+    })
+    if (!updated) return null
+    await applyActionResult(updated, 'spend-inspiration')
+  }
+  const prepared = prepareAttackAccuracy(stats.accuracy, options, { ...modifiers, automaticSuccesses: stats.automaticSuccesses, actOfInspiration: options.actOfInspiration })
+  if (!options.fatefulIntervention) return prepared
+  if (!payer) return null
+  gmFatefulTamer.value = payer
+  const result = pendingAttackFateful.request(prepared, `${attack.name} Accuracy`, () => currentEncounter.value?.id === encounterId
+    && currentEncounter.value.phase === 'combat' && !!(currentEncounter.value.participants as CombatParticipant[]).some(p => p.id === participant.id && canParticipantAct(p))
+    && !!currentEncounter.value.participants.some(p => p.id === payer.id && !p.inReserve))
+  gmFateful.open()
+  return result
+}
+
 async function confirmAttack(target: CombatParticipant | undefined) {
   if (!target || !selectedAttack.value || !currentEncounter.value) return
 
   try {
-    const { participant, attack } = selectedAttack.value
+    const { participant, attack, radialOptions } = selectedAttack.value
 
     // Clear targeting UI immediately so the GM sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -895,6 +953,11 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     selectedAttack.value = null
     selectedTargetIds.value = []
 
+    const prepared = radialOptions ? await prepareRadialAttackAccuracy(participant, attack, [target.id], radialOptions) : prepareAttackAccuracy(getAttackStats(participant, attack, [target.id]).accuracy, {
+      bolster: bolsterAttackEnabled.value, bolsterType: bolsterAttackType.value, lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value, hugePowerRank2: hugePowerRank2Enabled.value,
+    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, [target.id]).automaticSuccesses })
+    if (!prepared) return
     const {
       dicePool: accuracyPool,
       rolls: accuracyDiceResults,
@@ -902,13 +965,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       successes: accuracySuccesses,
       hadHugePowerRerolls: hadRerolls,
       riders,
-    } = prepareAttackAccuracy(getAttackStats(participant, attack, [target.id]).accuracy, {
-      bolster: bolsterAttackEnabled.value,
-      bolsterType: bolsterAttackType.value,
-      lifesteal: lifestealComplexEnabled.value,
-      hugePower: hugePowerEnabled.value,
-      hugePowerRank2: hugePowerRank2Enabled.value,
-    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, [target.id]).automaticSuccesses })
+    } = prepared
 
     // ALL attacks route through intercede-offer
     // Server handles: intercede offers, dodge requests, or NPC auto-resolve
@@ -981,7 +1038,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   }
   if (!selectedAttack.value || !currentEncounter.value || targets.length === 0) return
   try {
-    const { participant, attack } = selectedAttack.value
+    const { participant, attack, radialOptions } = selectedAttack.value
 
     // Clear targeting UI immediately so the GM sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -989,6 +1046,11 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     selectedAttack.value = null
     selectedTargetIds.value = []
 
+    const prepared = radialOptions ? await prepareRadialAttackAccuracy(participant, attack, targets.map(t => t.id), radialOptions) : prepareAttackAccuracy(getAttackStats(participant, attack, targets.map(t => t.id)).accuracy, {
+      bolster: bolsterAttackEnabled.value, bolsterType: bolsterAttackType.value, lifesteal: lifestealComplexEnabled.value,
+      hugePower: hugePowerEnabled.value, hugePowerRank2: hugePowerRank2Enabled.value,
+    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, targets.map(t => t.id)).automaticSuccesses })
+    if (!prepared) return
     const {
       dicePool: accuracyPool,
       rolls: accuracyDiceResults,
@@ -996,13 +1058,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       successes: accuracySuccesses,
       hadHugePowerRerolls: hadRerolls,
       riders,
-    } = prepareAttackAccuracy(getAttackStats(participant, attack, targets.map(t => t.id)).accuracy, {
-      bolster: bolsterAttackEnabled.value,
-      bolsterType: bolsterAttackType.value,
-      lifesteal: lifestealComplexEnabled.value,
-      hugePower: hugePowerEnabled.value,
-      hugePowerRank2: hugePowerRank2Enabled.value,
-    }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, targets.map(t => t.id)).automaticSuccesses })
+    } = prepared
 
     const sharedBody = {
       attackerId: participant.id,
@@ -2063,18 +2119,24 @@ function getTamerSpecialOrders(participant: CombatParticipant) {
   return getUnlockedSpecialOrders(attrs, xpB, campaignLevel.value)
 }
 
+const pendingAttackFateful = usePendingAttackFateful()
 const gmFatefulTamer = ref<CombatParticipant | null>(null)
 const gmFatefulAvailableTamers = computed(() => currentEncounter.value?.phase === 'combat'
   ? (currentEncounter.value.participants as CombatParticipant[]).filter(p => p.type === 'tamer' && !p.inReserve && (p.currentInspiration ?? 0) >= INSPIRATION_FATEFUL_COST[campaignLevel.value])
   : [])
 watch(gmFatefulAvailableTamers, available => {
+  if (pendingAttackFateful.target.value) return
   gmFatefulTamer.value = available.find(p => p.id === gmFatefulTamer.value?.id) ?? available[0] ?? null
 }, { immediate: true })
 const gmFatefulWillpower = computed(() => {
   const tamer = tamers.value.find(t => t.id === gmFatefulTamer.value?.entityId)
   return (tamer?.attributes?.willpower ?? 0) + (tamer?.xpBonuses?.attributes?.willpower ?? 0)
 })
+watch(() => pendingAttackFateful.target.value?.isCurrent(), current => {
+  if (current === false) { pendingAttackFateful.cancel(); gmFateful.close() }
+})
 const gmFatefulOptions = computed<FatefulRollTarget[]>(() => {
+  if (pendingAttackFateful.target.value) return [pendingAttackFateful.target.value]
   const encounter = currentEncounter.value
   if (!encounter) return []
   const options: FatefulRollTarget[] = []
@@ -2103,6 +2165,11 @@ const gmFateful = useFatefulIntervention({
     return !!updated
   },
 })
+function cancelGmFateful() {
+  if (gmFateful.busy.value) return
+  gmFateful.close()
+  pendingAttackFateful.cancel()
+}
 
 function canUseGmSpecialOrder(participant: CombatParticipant, order: any): boolean {
   if (order.name === 'Fateful Intervention') return (participant.currentInspiration ?? 0) >= INSPIRATION_FATEFUL_COST[campaignLevel.value]
@@ -3372,14 +3439,14 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       :participant-name="getDisplayName" :busy="cleanseBusy" :error="cleanseError" @confirm="submitCleanse" />
     <Teleport to="body">
       <div v-if="gmFatefulAvailableTamers.length" class="fixed top-4 right-4 z-[65] rounded-lg border border-amber-700 bg-digimon-dark-800 p-2 flex gap-2">
-        <select v-model="gmFatefulTamer" :disabled="gmFateful.busy.value" aria-label="Tamer using Fateful Intervention" class="rounded bg-digimon-dark-700 text-white text-sm p-1">
+        <select v-model="gmFatefulTamer" :disabled="gmFateful.busy.value || !!pendingAttackFateful.target.value" aria-label="Tamer using Fateful Intervention" class="rounded bg-digimon-dark-700 text-white text-sm p-1">
           <option v-for="participant in gmFatefulAvailableTamers" :key="participant.id" :value="participant">{{ getEntityDetails(participant)?.name ?? 'Tamer' }}</option>
         </select>
         <button :disabled="!gmFatefulTamer || gmFateful.busy.value" class="rounded bg-amber-800 text-white text-sm px-2 py-1 disabled:opacity-40" @click="gmFateful.open()">Fateful Intervention</button>
       </div>
     </Teleport>
     <ReactionOrdersPanel :choices="gmReactionOrders.choices.value" :busy="gmReactionOrders.busy.value" @declare="gmReactionOrders.declare" @skip="gmReactionOrders.skip" />
-    <FatefulInterventionDialog v-if="gmFateful.visible.value" :rolls="gmFatefulOptions" :willpower="gmFatefulWillpower" :cost="INSPIRATION_FATEFUL_COST[campaignLevel]" :inspiration="gmFatefulTamer?.currentInspiration ?? 0" :busy="gmFateful.busy.value" :error="gmFateful.error.value" @confirm="gmFateful.confirm" @cancel="gmFateful.close" />
+    <FatefulInterventionDialog v-if="gmFateful.visible.value" :rolls="gmFatefulOptions" :willpower="gmFatefulWillpower" :cost="INSPIRATION_FATEFUL_COST[campaignLevel]" :inspiration="gmFatefulTamer?.currentInspiration ?? 0" :busy="gmFateful.busy.value" :error="gmFateful.error.value" @confirm="gmFateful.confirm" @cancel="cancelGmFateful" />
     <SpecialOrderTargetDialog
       v-if="specialOrderTargets.selection.value"
       :key="specialOrderTargets.selection.value.orderName"
@@ -3495,6 +3562,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           @npc-action="onNpcAction"
           @gm-manage="selectedParticipantId = $event"
           @attack-selected="onMapAttackSelected"
+          @attack-rider-selected="onMapAttackRiderSelected"
           @stance-selected="onMapStanceSelected"
           @action-selected="onMapActionSelected"
           @target-selected="onMapTargetSelected"
