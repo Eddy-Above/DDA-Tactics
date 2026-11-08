@@ -990,6 +990,7 @@ const tamerStats = computed(() => {
   if (!tamer.value) return null
   return calcTamerStats(tamer.value, eddySoulRules.value)
 })
+const totalXp = computed(() => tamer.value?.totalXp ?? null)
 
 const specialOrders = computed(() => {
   if (!tamer.value) return []
@@ -1097,7 +1098,7 @@ const currentCombatInspiration = computed(() => {
 })
 
 const maxCombatInspiration = computed(() =>
-  Math.max(1, tamer.value?.attributes?.willpower ?? 1)
+  tamerStats.value?.maxInspiration ?? 1
 )
 
 const actOfInspirationCost = computed(() => INSPIRATION_ACT_COST[campaignLevel.value ?? 'standard'])
@@ -5079,7 +5080,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
               style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
             >
-              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Digivolve / Devolve</div>
+              <div class="text-sm text-digimon-dark-400 mb-3 text-center">Digivolve / Devolve · Tamer: 1 Simple Action</div>
               <div class="flex flex-col gap-2">
                 <button
                   v-for="target in getParticipantEvolutionOptions(mapDigivolveParticipant!).evolveTargets"
@@ -5488,6 +5489,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 v-if="participant.type === 'digimon' && participant.evolutionLineId && canParticipantAct(participant) && isMyTurn"
                 class="mb-2 flex flex-wrap gap-1"
               >
+                <p class="w-full text-xs text-digimon-dark-400">Digivolve / Devolve costs 1 Simple Action from your Tamer.</p>
                 <button
                   v-for="target in getParticipantEvolutionOptions(participant).evolveTargets"
                   :key="`evo-${target.chainIndex}`"
@@ -5863,6 +5865,11 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                           <span v-for="i in currentCombatInspiration" :key="i" class="text-yellow-400">✦</span><span v-for="i in Math.max(0, maxCombatInspiration - currentCombatInspiration)" :key="'e'+i" class="text-digimon-dark-600">✦</span>
                         </span>
                       </span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm" title="Lifetime XP earned; spending does not reduce this total">
+                      <span class="text-digimon-dark-400">Total XP:</span>
+                      <span class="text-white font-semibold">{{ totalXp ?? 'Not recorded' }}</span>
+                      <span class="text-digimon-dark-400">({{ tamer.xp }} available)</span>
                     </div>
                   </div>
                 </div>

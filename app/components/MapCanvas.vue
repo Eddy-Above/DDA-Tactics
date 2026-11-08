@@ -429,7 +429,7 @@ const radialItems = computed<MapRadialItem[]>(() => {
   }
   if (props.isDm) items.push({ id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' })
   const participant = props.participants.find(p => p.id === radialParticipantId.value)
-  return withRadialActionCosts(items, participant, participant ? props.digimonMap?.[participant.entityId] : undefined, props.eddySoulRules)
+  return withRadialActionCosts(items, participant, participant ? props.digimonMap?.[participant.entityId] : undefined, props.eddySoulRules, props.participants)
 })
 
 function closeRadial() {

@@ -50,6 +50,7 @@ const passed = computed(() => !!props.rollResult && props.rollResult.total >= pr
             <span class="text-digimon-dark-400 ml-1">({{ campaignLevel }})</span>
           </p>
           <p class="text-digimon-dark-300 text-sm mt-1">3d6 + {{ modifier }} (Willpower)</p>
+          <p class="text-digimon-dark-300 text-sm mt-1">Costs 1 Simple Action from the Tamer.</p>
         </div>
 
         <div class="mb-4">

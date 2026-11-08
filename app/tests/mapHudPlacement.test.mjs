@@ -82,6 +82,21 @@ function mount(initial = {}) {
 
 const isPlaceable = (card) => classesOf(card).includes('placeable')
 
+test('the GM map roster shows each live Simple Action balance, including zero, bonuses and subsequent changes', async () => {
+  const units = participants.map((unit, index) => ({ ...unit, actionsRemaining: { simple: [0, 2, 4][index] } }))
+  const { state, cardFor, host } = mount({ isDm: true, participants: units })
+  assert.match(textOf(cardFor('Tai')), /0 Simple Actions left/)
+  assert.match(textOf(cardFor('Agumon')), /2 Simple Actions left/)
+  assert.match(textOf(cardFor('Devimon')), /4 Simple Actions left/)
+  state.participants[1].actionsRemaining.simple = 1
+  await nextTick()
+  assert.match(textOf(cardFor('Agumon')), /1 Simple Action left/)
+  state.participants = state.participants.map(p => ({ ...p, actionsRemaining: { simple: 2 } }))
+  await nextTick()
+  for (const name of ['Tai', 'Agumon', 'Devimon']) assert.match(textOf(cardFor(name)), /2 Simple Actions left/)
+  host.render(null, host.root)
+})
+
 // ── Tests ───────────────────────────────────────────────────────────────────────────────────────
 test('with placement inactive the HUD is display-only: no buttons, drag handles, badges or hint', async () => {
   const { host, cards } = mount()

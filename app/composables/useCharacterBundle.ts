@@ -61,6 +61,7 @@ export interface BundleTamer {
   inspiration: number
   grantedInspiration: number
   xp: number
+  totalXp?: number | null
   xpBonuses: Tamer['xpBonuses']
   notes: string
   spriteUrl: string | null
@@ -123,6 +124,7 @@ function toBundleTamer(tamer: Tamer): BundleTamer {
     inspiration: tamer.inspiration ?? 1,
     grantedInspiration: tamer.grantedInspiration ?? 0,
     xp: tamer.xp ?? 0,
+    totalXp: tamer.totalXp ?? null,
     xpBonuses: tamer.xpBonuses,
     notes: tamer.notes ?? '',
     spriteUrl: tamer.spriteUrl ?? null,
@@ -308,6 +310,7 @@ export function useCharacterBundle() {
         inspiration: bundle.tamer.inspiration ?? 1,
         grantedInspiration: bundle.tamer.grantedInspiration ?? 0,
         xp: bundle.tamer.xp ?? 0,
+        totalXp: bundle.tamer.totalXp ?? null,
         xpBonuses: bundle.tamer.xpBonuses,
         notes: bundle.tamer.notes ?? '',
         spriteUrl: bundle.tamer.spriteUrl ?? undefined,

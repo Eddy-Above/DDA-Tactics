@@ -95,6 +95,7 @@ export function useLibraryImportExport() {
       inspiration: t.inspiration,
       grantedInspiration: t.grantedInspiration,
       xp: t.xp,
+      totalXp: t.totalXp ?? null,
       xpBonuses: t.xpBonuses,
       notes: t.notes,
       spriteUrl: t.spriteUrl ?? null,
@@ -169,6 +170,7 @@ export function useLibraryImportExport() {
           inspiration: (entry.inspiration as number) ?? 1,
           grantedInspiration: (entry.grantedInspiration as number) ?? 0,
           xp: (entry.xp as number) ?? 0,
+          totalXp: (entry.totalXp as number | null) ?? null,
           notes: (entry.notes as string) ?? '',
           spriteUrl: (entry.spriteUrl as string | undefined) ?? undefined,
         })

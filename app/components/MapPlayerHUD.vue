@@ -71,6 +71,7 @@
                 :style="{ width: woundPct(entry.currentWounds, entry.woundBoxes) + '%' }"
               />
             </div>
+            <div class="hud-wound-label" :aria-label="`${entry.actionsRemaining.simple} Simple Actions remaining`">{{ entry.actionsRemaining.simple }} Simple Action{{ entry.actionsRemaining.simple === 1 ? '' : 's' }} left</div>
           </div>
           <span
             v-if="isPlaceable(entry.id)"

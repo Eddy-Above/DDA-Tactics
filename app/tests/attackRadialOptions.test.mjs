@@ -122,3 +122,17 @@ test('names and action costs remain visible in narrow wedges at every orientatio
     assert.deepEqual(rows.filter(row => row.kind === 'cost').map(row => row.text), ['2 Simple'])
   }
 })
+
+test('partner evolution names the Tamer as payer on the root and every form choice; NPC costs remain their own', () => {
+  const items = [{ id: 'digivolve', label: 'Digivolve', children: [
+    { id: 'digivolve:1', label: 'Digivolve → Champion' }, { id: 'digivolve:0', label: 'Devolve → Rookie' },
+  ] }]
+  const tamers = [{ type: 'tamer', entityId: 'owner' }]
+  let menu = withRadialActionCosts(items, actor(), { partnerId: 'owner' }, {}, tamers)
+  assert.equal(menu[0].cost, 'Tamer: 1 Simple')
+  assert.deepEqual(menu[0].children.map(item => item.cost), ['Tamer: 1 Simple', 'Tamer: 1 Simple'])
+  menu = withRadialActionCosts(items, actor(), {}, {}, tamers)
+  assert.equal(menu[0].cost, '1 Simple')
+  menu = withRadialActionCosts(items, actor(), { partnerId: 'absent-owner' }, {}, tamers)
+  assert.equal(menu[0].cost, '1 Simple', 'without a deployed owner, the server charges the Digimon')
+})

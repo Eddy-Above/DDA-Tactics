@@ -33,6 +33,7 @@ export interface CreateTamerData {
   aspects?: Tamer['aspects']
   torments?: Tamer['torments']
   xp?: number
+  totalXp?: number | null
   inspiration?: number
   grantedInspiration?: number
   xpBonuses?: Tamer['xpBonuses']

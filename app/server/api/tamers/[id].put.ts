@@ -1,12 +1,16 @@
 import { eq } from 'drizzle-orm'
 import { db, tamers, type Tamer } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
+import { nextTotalXp, validTotalXp } from '../../../utils/tamerExperience'
 
 type UpdateTamerBody = Partial<Omit<Tamer, 'id' | 'createdAt' | 'updatedAt'>>
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const body = await readBody<UpdateTamerBody>(event)
+  if (body.totalXp !== undefined && !validTotalXp(body.totalXp)) {
+    throw createError({ statusCode: 400, message: 'Total XP must be a nonnegative whole number or null' })
+  }
 
   if (!id) {
     throw createError({
@@ -29,6 +33,7 @@ export default defineEventHandler(async (event) => {
 
   const updateData: Partial<Tamer> = {
     ...body,
+    totalXp: nextTotalXp(existing, body),
     updatedAt: new Date(),
   }
 

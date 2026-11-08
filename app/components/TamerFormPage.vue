@@ -72,6 +72,7 @@ const {
   getTotalSkill,
   handleSpriteError,
   spendXPOnAttribute,
+  setAvailableXp,
   refundXPFromAttribute,
   spendXPOnSkill,
   refundXPFromSkill,
@@ -167,6 +168,7 @@ onMounted(async () => {
     form.notes = fetched.notes || ''
     form.spriteUrl = fetched.spriteUrl || ''
     form.xp = fetched.xp || 0
+    form.totalXp = fetched.totalXp ?? null
     form.inspiration = fetched.inspiration ?? 1
     grantedInspiration.value = fetched.grantedInspiration ?? 0
     if (hasGmFeatures) digivolutionsUsedToday.value = fetched.digivolutionsUsedToday ?? 0
@@ -280,6 +282,7 @@ async function handleSubmit() {
       aspects,
       torments: tormentData,
       xp: form.xp,
+      totalXp: form.totalXp,
       inspiration: form.inspiration,
       grantedInspiration: grantedInspiration.value,
       xpBonuses: {
@@ -858,7 +861,7 @@ async function handleSubmit() {
             </svg>
             <h2 class="font-display text-xl font-semibold text-white">Experience & Inspiration</h2>
           </div>
-          <span class="text-sm text-digimon-dark-400">{{ form.xp }} XP · {{ totalInspiration }}/{{ maxInspiration }} Insp</span>
+          <span class="text-sm text-digimon-dark-400">{{ form.xp }} Available XP · {{ form.totalXp ?? 'Not recorded' }} Total XP · {{ totalInspiration }}/{{ maxInspiration }} Insp</span>
         </div>
 
         <div v-show="xpOpen">
@@ -872,11 +875,13 @@ async function handleSubmit() {
             <div class="bg-digimon-dark-700 rounded-lg p-4 mb-4">
               <div class="text-2xl font-bold text-white">{{ form.xp }}</div>
               <div class="text-sm text-digimon-dark-400">Available XP</div>
+              <div class="text-sm text-digimon-dark-300 mt-1" title="Lifetime XP earned">{{ form.totalXp ?? 'Not recorded' }} Total XP</div>
             </div>
             <div class="flex items-center gap-4 mb-4">
               <label class="text-sm text-digimon-dark-400">{{ xpLabel }}</label>
               <input
-                v-model.number="form.xp"
+                :value="form.xp"
+                @change="setAvailableXp(($event.target as HTMLInputElement).valueAsNumber)"
                 type="number"
                 min="0"
                 class="w-24 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2
@@ -891,11 +896,13 @@ async function handleSubmit() {
               <div class="bg-digimon-dark-700 rounded-lg p-4 flex-1">
                 <div class="text-2xl font-bold text-white">{{ form.xp }}</div>
                 <div class="text-sm text-digimon-dark-400">Available XP</div>
+                <div class="text-sm text-digimon-dark-300 mt-1" title="Lifetime XP earned">{{ form.totalXp ?? 'Not recorded' }} Total XP</div>
               </div>
               <div class="flex items-center gap-2">
                 <label class="text-sm text-digimon-dark-400">{{ xpLabel }}</label>
                 <input
-                  v-model.number="form.xp"
+                  :value="form.xp"
+                  @change="setAvailableXp(($event.target as HTMLInputElement).valueAsNumber)"
                   type="number"
                   min="0"
                   class="w-24 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2
@@ -906,6 +913,15 @@ async function handleSubmit() {
           </template>
 
           <!-- Spend XP Section -->
+          <div class="mb-4">
+            <label class="text-sm text-digimon-dark-400">Total XP earned:
+              <input :value="form.totalXp ?? ''" type="number" min="0" step="1" placeholder="Not recorded"
+                class="w-28 ml-2 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2 text-white text-center"
+                @input="form.totalXp = Number.isFinite(($event.target as HTMLInputElement).valueAsNumber) ? ($event.target as HTMLInputElement).valueAsNumber : null" />
+            </label>
+            <p class="text-xs text-digimon-dark-500 mt-1">Lifetime XP earned. Adding available XP increases this total; spending and refunds leave it unchanged.</p>
+            <p v-if="form.totalXp == null" class="text-xs text-amber-400 mt-1">Enter the lifetime total once for this older character. Past consumed Inspiration was not recorded.</p>
+          </div>
           <div :class="['border-t border-digimon-dark-600 pt-4 space-y-4', !isEdit && form.xp <= 0 && 'hidden']">
             <template v-if="isEdit || form.xp > 0">
               <h3 class="text-sm font-semibold text-digimon-dark-300">Spend XP</h3>

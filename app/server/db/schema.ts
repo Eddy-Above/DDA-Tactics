@@ -69,6 +69,8 @@ export const tamers = pgTable('tamers', {
   inspiration: integer('inspiration').notNull().default(1),
   grantedInspiration: integer('granted_inspiration').notNull().default(0),
   xp: integer('xp').notNull().default(0),
+  // Null means the lifetime total predates tracking and needs one-time entry.
+  totalXp: integer('total_xp'),
 
   // XP Bonuses - stored separately from base values for reallocation
   xpBonuses: jsonb('xp_bonuses').notNull().default({

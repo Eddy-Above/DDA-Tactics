@@ -376,6 +376,11 @@ function getDisplayName(participant: CombatParticipant): string {
   return participantDisplayNames.value[participant.id] ?? getParticipantBaseName(participant)
 }
 
+function getTamerMaxInspiration(participant: CombatParticipant): number {
+  const record = tamerMap.value.get(participant.entityId)
+  return record ? calcTamerStats(record, eddySoulRules.value).maxInspiration : 1
+}
+
 // Get entity details for a participant
 function getEntityDetails(participant: CombatParticipant) {
   if (participant.type === 'digimon') {
@@ -4006,7 +4011,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                         Battery {{ (item.participant as any).battery ?? 0 }}/{{ STAGE_BATTERY_CAPACITY[digimonMap.get(item.participant.entityId)?.stage as keyof typeof STAGE_BATTERY_CAPACITY] ?? 0 }}
                       </span>
                       <span v-if="item.participant.type === 'tamer'" class="text-yellow-400 font-medium">
-                        ✦ {{ (item.participant as any).currentInspiration ?? 0 }}/{{ Math.max(1, tamerMap.get(item.participant.entityId)?.attributes?.willpower ?? 1) }} Insp
+                        ✦ {{ (item.participant as any).currentInspiration ?? 0 }}/{{ getTamerMaxInspiration(item.participant) }} Insp
                       </span>
                     </div>
 

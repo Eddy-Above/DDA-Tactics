@@ -1,6 +1,7 @@
 import { db, tamers, type NewTamer } from '../../db'
 import { generateId } from '../../utils/id'
 import { getSessionUser } from '../../utils/session'
+import { tamerExperience, validTotalXp } from '../../../utils/tamerExperience'
 
 interface CreateTamerBody {
   name: string
@@ -51,6 +52,7 @@ interface CreateTamerBody {
   notes?: string
   spriteUrl?: string
   xp?: number
+  totalXp?: number | null
   inspiration?: number
   grantedInspiration?: number
   creationRules?: import('../../../types').CreationRules | null
@@ -59,6 +61,9 @@ interface CreateTamerBody {
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<CreateTamerBody>(event)
+  if (body.totalXp !== undefined && !validTotalXp(body.totalXp)) {
+    throw createError({ statusCode: 400, message: 'Total XP must be a nonnegative whole number or null' })
+  }
 
   console.log('[POST /api/tamers] Received body:', {
     name: body.name,
@@ -114,6 +119,7 @@ export default defineEventHandler(async (event) => {
     inspiration: body.inspiration ?? 1,
     grantedInspiration: body.grantedInspiration ?? 0,
     xp: body.xp ?? 0,
+    totalXp: body.totalXp === undefined ? tamerExperience(body).total : body.totalXp,
     equipment: [],
     currentWounds: 0,
     notes: body.notes || '',

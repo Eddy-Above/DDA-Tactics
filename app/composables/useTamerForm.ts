@@ -93,6 +93,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
     aspects: initialData?.aspects || [],
     torments: initialData?.torments || [],
     xp: initialData?.xp || 0,
+    totalXp: initialData?.totalXp === undefined ? (initialData?.xp ?? 0) : initialData.totalXp,
     inspiration: initialData?.inspiration ?? 1,
     notes: initialData?.notes || '',
     spriteUrl: initialData?.spriteUrl || '',
@@ -166,6 +167,12 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
   // ========================
   // XP Spending Functions
   // ========================
+  const setAvailableXp = (value: number) => {
+    if (!Number.isInteger(value) || value < 0) return
+    if (form.totalXp != null) form.totalXp += Math.max(0, value - form.xp)
+    form.xp = value
+  }
+
   const spendXPOnAttribute = (attr: keyof typeof form.attributes) => {
     const currentTotal = getTotalAttribute(attr)
     const cost = (currentTotal + 1) * 2
@@ -571,6 +578,7 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
     getNextSkillCost,
     getNextInspirationCost,
     spendXPOnAttribute,
+    setAvailableXp,
     refundXPFromAttribute,
     spendXPOnSkill,
     refundXPFromSkill,

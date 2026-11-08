@@ -1,13 +1,14 @@
 import type { MapRadialItem } from '../types/mapRadial'
 
 /** Costs displayed by the map wheel; attack leaves supply their exact rider totals. */
-export function withRadialActionCosts(items: MapRadialItem[], participant?: any, record?: any, rules?: any): MapRadialItem[] {
+export function withRadialActionCosts(items: MapRadialItem[], participant?: any, record?: any, rules?: any, participants: readonly any[] = []): MapRadialItem[] {
   const freeClash = record?.qualities?.some((q: any) => q.choiceId === 'wrestlemania') && !participant?.usedFreeClashThisRound
   const freeSwap = rules?.modeChangeFreeSwapsPerCombat && (record?.qualities?.find((q: any) => q.id === 'mode-change-x0')?.ranks ?? 0) >= 2
     && (participant?.modeChangeFreeSwapsUsed ?? 0) < 3
+  const tamerPaysEvolution = !!record?.partnerId && participants.some(p => p.type === 'tamer' && p.entityId === record.partnerId)
   const costs: Record<string, string> = {
     move: '1 Simple', attack: 'Varies', stance: '1 Simple', direct: '1–2 Simple',
-    'special-order': 'Varies', digivolve: '1 Simple', 'mode-change': freeSwap ? 'Free' : '1 Simple',
+    'special-order': 'Varies', digivolve: tamerPaysEvolution ? 'Tamer: 1 Simple' : '1 Simple', 'mode-change': freeSwap ? 'Free' : '1 Simple',
     clash: freeClash ? 'Free' : '1 Simple', 'clash-attack': '2 Simple', 'clash-pin': '2 Simple',
     'clash-throw': '2 Simple', 'clash-move': '1 Simple', 'clash-check': 'Free', 'clash-end': 'Free',
     'gm-move': 'Free', 'gm-manage': 'Free', doors: 'Free',

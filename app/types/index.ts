@@ -448,6 +448,7 @@ export interface Tamer {
   grantedInspiration: number
   maxInspiration: number  // = Willpower (min 1)
   xp: number
+  totalXp?: number | null // Lifetime earned; null for characters predating tracking.
   xpBonuses: {
     attributes: TamerAttributes
     skills: TamerSkills
