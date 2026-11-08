@@ -117,6 +117,34 @@ test('flight, jumping, projectile throws and charge-style movement retain their 
   }
 })
 
+test('preferring level paths still takes a shorter route over an obstacle', () => {
+  const start = point(0), destination = point(3)
+  const canPass = (_, p) => p.x >= 0 && p.x <= 3 && p.z >= 0 && p.z <= 3 && p.y >= 0 && p.y <= 1
+    && !(p.y === 0 && p.x === 1 && p.z < 3)
+  for (const path of [
+    pathfinding.searchReachable(start, 8, canPass).pathTo(destination),
+    pathfinding.findPath(start, destination, canPass),
+  ]) {
+    assert.equal(path.length - 1, 3, 'avoiding elevation changes must never increase the movement cost')
+    assert.ok(path.some(p => p.y === 1), 'the shortest route still climbs over the obstacle')
+    assert.ok(path.every(p => canPass(null, p)))
+  }
+})
+
+test('paths can still descend to destinations below the base floor', () => {
+  const start = point(0), destination = point(3, 0, -2)
+  const canPass = (_, p) => p.x >= 0 && p.x <= 3 && p.z === 0 && p.y >= -2 && p.y <= 0
+  for (const path of [
+    pathfinding.searchReachable(start, 3, canPass).pathTo(destination),
+    pathfinding.findPath(start, destination, canPass),
+  ]) {
+    assert.equal(path.length - 1, 3)
+    assert.deepEqual(path[0], start)
+    assert.deepEqual(path.at(-1), destination)
+    assert.ok(path.every(p => canPass(null, p)))
+  }
+})
+
 test('clearMovement drops the search; destinations outside its budget keep the existing A* fallback', () => {
   const { movement, calls } = harness()
   const map = floor()

@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const { getFootprintDimensions } = loadTypeScript('utils/movementRules.ts')
+const { useMapMovement } = loadTypeScript('composables/useMapMovement.ts')
 const vec3Key = ({ x, y, z }) => `${x},${y},${z}`
 const point = (x, y, z) => ({ x, y, z })
 
@@ -55,6 +56,46 @@ for (const [size, dimensions, expectedCenter] of [
     assert.equal(marker.position.y, 2 + h.TILE_H + 0.03)
     assert.deepEqual(h.props.activePath, original, 'render offsets must never change committed path anchors')
   })
+}
+
+for (const capability of ['canFly', 'canDig']) {
+  for (const cached of [true, false]) {
+    test(`${capability} partner path markers remain visible above a flat floor (${cached ? 'cached search' : 'A* fallback'})`, () => {
+      const map = {
+        groundTiles: Array.from({ length: 64 }, (_, i) => point(i % 8, 0, Math.floor(i / 8))),
+        spaceTiles: [], voxels: [], walls: [], windows: [], doors: [], stairs: [], ceilings: [],
+      }
+      const caps = {
+        canFly: false, canJump: false, jumpHeight: 0, jumpRange: 0,
+        canClimb: false, canSwim: false, canDig: false, [capability]: true,
+      }
+      const start = point(3, 0, 1), destination = point(3, 0, 6)
+      const movement = useMapMovement()
+      if (cached) movement.computeReachable(start, 5, caps, map)
+      const path = movement.computePath(start, destination, caps, map)
+      assert.equal(path.length - 1, 5, 'the visible route must retain the shortest movement cost')
+      assert.deepEqual(path[0], start)
+      assert.deepEqual(path.at(-1), destination)
+
+      const h = harness('small')
+      h.props.activePath = movement.activePath.value
+      h.updatePathHighlights()
+      const floor = map.groundTiles.map(tile => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, h.TILE_H, 1), new THREE.MeshBasicMaterial())
+        mesh.position.set(tile.x + 0.5, tile.y + h.TILE_H / 2, tile.z + 0.5)
+        mesh.updateMatrixWorld(true)
+        return mesh
+      })
+      h.pathHighlightGroup.updateMatrixWorld(true)
+      const markers = h.pathHighlightGroup.children
+      assert.equal(markers.length, 6, 'every path step must have a rendered marker')
+      for (const marker of markers) {
+        const ray = new THREE.Raycaster(new THREE.Vector3(marker.position.x, 10, marker.position.z), new THREE.Vector3(0, -1, 0))
+        const hits = ray.intersectObjects([...floor, ...markers], false)
+        assert.ok(hits[0]?.object === marker, `path marker at ${marker.position.toArray()} is hidden underneath the floor; path: ${JSON.stringify(path)}`)
+      }
+    })
+  }
 }
 
 test('path alignment refreshes when the mover or its footprint changes without changing the path', () => {

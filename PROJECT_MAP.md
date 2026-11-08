@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08g | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Keep flying/digging movement paths above a flat floor when an equally short level route exists.** The screenshot symptom was a valid distance label plus yellow endpoints with intermediate markers hidden underneath ground tiles: neighbour-order ties selected unnecessary negative-Y steps. Both cached BFS predecessors and fallback A* in `utils/pathfinding.ts` now minimize vertical travel after minimizing movement steps. Required 3D routes, lower floors, budgets and reachability remain supported. Four real path/render visibility regressions reproduce the failure before the fix; all 695 tests and typecheck pass afterward. |
 | 2026-11-08f | Pages & Components, Cross-Cutting Concerns | **Cache the movement watcher's map signature independently.** `EncounterMap.vue` serializes the reactive map in a map-only `computed`; position, participant, character-record and destroyed-structure changes reuse that signature. Watch inputs, invalidation and `flush: 'sync'` remain unchanged. Counting-serialization tests verify cache reuse and synchronous voxel/wall/door/replacement invalidation. Position-only synthetic benchmarks at 85/518/1831 KB improved from 7.431/57.363/213.859 to 0.512/3.348/11.126 ms per trigger; the outer key still copies the cached string, and map edits still serialize the map. No size cap. Validation: all 689 tests and typecheck pass. |
 | 2026-11-08e | Pages & Components, Cross-Cutting Concerns | **Keep partner movement previews visible.** `EncounterMap.vue` compares movement inputs by value so equivalent encounter snapshots and health/action updates preserve the hovered path; post-charge movement uses the moving partner's participant ID. `MapCanvas.vue` centers path markers, destination ghosts and distance labels on the mover's actual footprint. Regression coverage includes polling, charge moves, size changes and non-square gigantic footprints. Validation: all 687 tests and typecheck pass. |
 | 2026-11-08d | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Canonical automatic devolution and consistent partner stage resolution.** `partnerDevolution.autoDevolveParticipant` now owns knockout eligibility, history/fallback restoration, wound totals, Combat Monster cap, history consumption, partner shared-line versus NPC local-stage tracking, and the Auto-Devolve log. Single/area/intercede/response/legacy attack, PUT and shared knockout paths delegate to it while retaining aura/turn/save ordering. `resolveCombatEvolutionIndex` resolves partner entity IDs before direction, warp, costs and history decisions in manual evolution and option building; the fallback resolver uses the same rule. Digivolve keeps an explicit Digimon-only row lookup and reuses the loaded parent sheet. No API wire-format or migration change. |
@@ -775,6 +776,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ### Shared Components
 
+**2026-11-08g partner path visibility:** `MapCanvas.vue` was receiving complete flying/digging paths whose intermediate cells unnecessarily dipped below the floor; ground geometry occluded those yellow markers while endpoints and distance remained visible. `utils/pathfinding.ts` now selects fewer elevation changes among equally short routes in both `searchReachable` and `findPath`, keeping flat-ground previews visible without changing the marker renderer or movement capabilities.
+
 **2026-11-08f movement invalidation cost:** `EncounterMap.vue`'s `mapSignature = computed(() => JSON.stringify(map.value))` depends only on the map and its nested reactive values. The existing synchronous value-key watcher reads `mapSignature.value` alongside the unchanged movement inputs; token moves and polling updates no longer traverse/serialize map proxies. In-place voxel/wall edits, door toggles and map replacement refresh the signature before key comparison. The outer key still serializes the cached string, so position-only cost is reduced rather than independent of serialized map size. The supplied `bench-map-watch.cjs` now compares old-deep, new-stringify and computed-signature variants at three synthetic sizes; these are benchmark samples, not map limits. Other deep watchers and serialization in `EncounterMap.vue`/`MapCanvas.vue` are unchanged.
 
 **2026-11-08e movement previews:** `EncounterMap.vue` preserves hovered paths across equivalent polling snapshots and health/action-only updates, while changes to movement inputs invalidate the cached search synchronously. Post-charge hover routing uses `chargeMoveParticipantId` when no ordinary mover is active. `MapCanvas.vue` renders path markers, destination ghosts and labels at the mover's footprint center without changing committed anchor coordinates; marker caching includes mover identity and dimensions.
@@ -862,6 +865,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 ---
 
 ## 6. Dependency Graph
+
+**2026-11-08g path selection:** `useMapMovement.ts` consumes `utils/pathfinding.ts`'s retained BFS tree and A* fallback. Both searches rank routes by movement steps first, then vertical travel. BFS updates equal-depth predecessors before the next depth is processed, retaining one queue visit per discovered cell and cached hover paths. No new import, package or server movement-rule dependency is introduced.
 
 > 2026-11-08d: `partnerDevolution.ts` exports `autoDevolveParticipant`, using the existing record-cache scope, `resolveCombatDevolutionState`, participant naming and caller-supplied select/update database. It is consumed by `intercede-claim`, `resolveAreaIntercedeGroup`, `responses`, `npc-attack`, `resolveNpcAttack`, encounter PUT and `enemyKnockouts`; those modules no longer own copied restoration/logging blocks. `resolveCombatEvolutionIndex` in the pure evolution utility is shared by manual evolution, partner choices and server fallback resolution.
 
@@ -1023,6 +1028,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08g:** Equal-length path selection in `utils/pathfinding.ts` affects movement previews and committed anchor paths through `useMapMovement.ts`/`EncounterMap.vue`, including ordinary moves, charges and thrown-unit aiming. Reachable-cell sets, movement cost and terrain/capability validation are unchanged; necessary upward/downward travel remains available. The map-signature cache from 2026-11-08f is untouched.
 
 > 2026-11-08d: Canonical auto-devolution changes apply across all damage/turn paths. Keep exactly one restoration per damage event, transaction-bound record/stage writes, partner shared-line versus NPC local-index isolation, optional legacy totals, history priority and existing aura/save order. The helper's failure path must leave the participant and history unchanged. Partner stage resolution must precede direction/cost/snapshot decisions and agree between UI, manual API and fallback resolver.
 
@@ -1188,6 +1195,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Hidden movement markers (2026-11-08g): four cases in `tests/movementPreview.test.mjs` run real flying/digging movement searches through the real path-marker renderer, then use Three.js raycasts against floor meshes to prove that every intermediate marker is visible. Both cached BFS and fallback A* fail these checks before the fix. `tests/movementPathCache.test.mjs` additionally verifies shorter over-obstacle routes and below-base-floor destinations. The full 695-test suite and typecheck pass; live browser interaction was not exercised.
 
 - Cached map signatures (2026-11-08f): `tests/movementPathCache.test.mjs` injects Vue `computed` into its real-source watcher harness. Counting `toJSON` tests prove position, participant, character-record, destroyed-structure and equivalent polling updates reuse the map signature, while voxel/wall pushes, door toggles and changed map replacements invalidate synchronously; equivalent replacements are inspected without invalidation. The cache-reuse regression fails before the fix and passes afterward. `node --test`: 689 pass, zero failures (the existing 687 plus two regressions); `npm.cmd run typecheck` passes.
 

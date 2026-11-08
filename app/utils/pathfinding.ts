@@ -45,18 +45,21 @@ export function findPath(
   const goalKey = key(goal)
   if (startKey === goalKey) return [start]
 
-  type Node = { pos: Vec3; g: number; f: number }
-  const open = new Map<string, Node>([[startKey, { pos: start, g: 0, f: chebyshev(start, goal) }]])
+  type Node = { pos: Vec3; g: number; f: number; verticalSteps: number }
+  const open = new Map<string, Node>([[startKey, { pos: start, g: 0, f: chebyshev(start, goal), verticalSteps: 0 }]])
   const cameFrom = new Map<string, string>()
-  const gScore = new Map<string, number>([[startKey, 0]])
+  const scores = new Map<string, { g: number; verticalSteps: number }>([[startKey, { g: 0, verticalSteps: 0 }]])
 
   let steps = 0
   while (open.size > 0 && steps++ < maxSteps) {
-    // Pick node with lowest f
+    // Keep shortest movement cost first; equal-cost routes avoid unnecessary
+    // elevation changes that can hide flying/digging previews below the floor.
     let currentKey = ''
     let currentNode: Node | null = null
     for (const [k, n] of open) {
-      if (!currentNode || n.f < currentNode.f) { currentKey = k; currentNode = n }
+      if (!currentNode || n.f < currentNode.f || (n.f === currentNode.f && n.verticalSteps < currentNode.verticalSteps)) {
+        currentKey = k; currentNode = n
+      }
     }
     if (!currentNode) break
     if (currentKey === goalKey) {
@@ -66,11 +69,13 @@ export function findPath(
     for (const nb of neighbours(currentNode.pos)) {
       if (!canPass(currentNode.pos, nb)) continue
       const nbKey = key(nb)
-      const tentativeG = (gScore.get(currentKey) ?? Infinity) + 1
-      if (tentativeG < (gScore.get(nbKey) ?? Infinity)) {
+      const tentativeG = currentNode.g + 1
+      const verticalSteps = currentNode.verticalSteps + Math.abs(nb.y - currentNode.pos.y)
+      const previous = scores.get(nbKey)
+      if (!previous || tentativeG < previous.g || (tentativeG === previous.g && verticalSteps < previous.verticalSteps)) {
         cameFrom.set(nbKey, currentKey)
-        gScore.set(nbKey, tentativeG)
-        open.set(nbKey, { pos: nb, g: tentativeG, f: tentativeG + chebyshev(nb, goal) })
+        scores.set(nbKey, { g: tentativeG, verticalSteps })
+        open.set(nbKey, { pos: nb, g: tentativeG, f: tentativeG + chebyshev(nb, goal), verticalSteps })
       }
     }
   }
@@ -88,19 +93,24 @@ export function searchReachable(
   budget: number,
   canPass: (from: Vec3, to: Vec3) => boolean,
 ): ReachableSearch {
-  const visited = new Map<string, number>([[key(origin), 0]])
+  const visited = new Map<string, { cost: number; verticalSteps: number }>([[key(origin), { cost: 0, verticalSteps: 0 }]])
   const cameFrom = new Map<string, string>()
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: origin, cost: 0 }]
   for (let head = 0; head < queue.length; head++) {
     const { pos, cost } = queue[head]
     if (cost >= budget) continue
+    const verticalSteps = visited.get(key(pos))!.verticalSteps
     for (const nb of neighbours(pos)) {
       const k = key(nb)
-      if (visited.has(k)) continue
+      const previous = visited.get(k)
+      const nextVerticalSteps = verticalSteps + Math.abs(nb.y - pos.y)
+      if (previous && (previous.cost < cost + 1 || (previous.cost === cost + 1 && previous.verticalSteps <= nextVerticalSteps))) continue
       if (!canPass(pos, nb)) continue
-      visited.set(k, cost + 1)
+      visited.set(k, { cost: cost + 1, verticalSteps: nextVerticalSteps })
       cameFrom.set(k, key(pos))
-      queue.push({ pos: nb, cost: cost + 1 })
+      // All parents at this depth run before the next depth. Improve an equal-cost
+      // predecessor before that cell is processed, without traversing it twice.
+      if (!previous) queue.push({ pos: nb, cost: cost + 1 })
     }
   }
   const cells = new Set(visited.keys())
