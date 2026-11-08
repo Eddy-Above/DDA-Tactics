@@ -12,7 +12,7 @@ const isWorkshop = props.source === 'workshop'
 const hasGmFeatures = isLibrary && isEdit
 const showGrantedInspirationControls = isLibrary
 const showGrantedInspirationNote = !isLibrary && isEdit
-const xpLabel = !isLibrary && !isEdit ? 'Starting XP:' : 'Set XP:'
+const xpLabel = !isEdit ? 'Starting Total XP:' : 'Total XP earned:'
 const xpHint = !isLibrary && !isEdit ? '(Set by GM for non-fresh characters)' : ''
 const xpDisplayAsBlock = !isLibrary && !isEdit
 const showRefundCosts = isLibrary || isEdit
@@ -72,7 +72,9 @@ const {
   getTotalSkill,
   handleSpriteError,
   spendXPOnAttribute,
-  setAvailableXp,
+  setTotalXp,
+  minimumTotalXp,
+  xpBudgetError,
   refundXPFromAttribute,
   spendXPOnSkill,
   refundXPFromSkill,
@@ -239,6 +241,7 @@ function decreaseGmMark(torment: any) {
 }
 
 async function handleSubmit() {
+  if (xpBudgetError.value) return
   const aspects: Array<{ id: string; name: string; description: string; type: 'major' | 'minor'; usesRemaining: number }> = []
   if (form.majorAspect.name) {
     const existingMajor = isEdit ? tamer.value?.aspects?.find(a => a.type === 'major') : undefined
@@ -877,18 +880,6 @@ async function handleSubmit() {
               <div class="text-sm text-digimon-dark-400">Available XP</div>
               <div class="text-sm text-digimon-dark-300 mt-1" title="Lifetime XP earned">{{ form.totalXp ?? 'Not recorded' }} Total XP</div>
             </div>
-            <div class="flex items-center gap-4 mb-4">
-              <label class="text-sm text-digimon-dark-400">{{ xpLabel }}</label>
-              <input
-                :value="form.xp"
-                @change="setAvailableXp(($event.target as HTMLInputElement).valueAsNumber)"
-                type="number"
-                min="0"
-                class="w-24 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2
-                       text-white text-center focus:border-digimon-orange-500 focus:outline-none"
-              />
-              <span v-if="xpHint" class="text-xs text-digimon-dark-500">{{ xpHint }}</span>
-            </div>
           </template>
           <template v-else>
             <!-- all other modes: inline layout -->
@@ -898,29 +889,23 @@ async function handleSubmit() {
                 <div class="text-sm text-digimon-dark-400">Available XP</div>
                 <div class="text-sm text-digimon-dark-300 mt-1" title="Lifetime XP earned">{{ form.totalXp ?? 'Not recorded' }} Total XP</div>
               </div>
-              <div class="flex items-center gap-2">
-                <label class="text-sm text-digimon-dark-400">{{ xpLabel }}</label>
-                <input
-                  :value="form.xp"
-                  @change="setAvailableXp(($event.target as HTMLInputElement).valueAsNumber)"
-                  type="number"
-                  min="0"
-                  class="w-24 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2
-                         text-white text-center focus:border-digimon-orange-500 focus:outline-none"
-                />
-              </div>
             </div>
           </template>
 
           <!-- Spend XP Section -->
-          <div class="mb-4">
-            <label class="text-sm text-digimon-dark-400">Total XP earned:
-              <input :value="form.totalXp ?? ''" type="number" min="0" step="1" placeholder="Not recorded"
+          <div class="mb-4" data-testid="xp-accounting">
+            <template v-if="isLibrary">
+              <label class="text-sm text-digimon-dark-400" for="total-xp">{{ xpLabel }}</label>
+              <input id="total-xp" :value="form.totalXp ?? ''" type="number" :min="minimumTotalXp" step="1" placeholder="Not recorded"
                 class="w-28 ml-2 bg-digimon-dark-700 border border-digimon-dark-600 rounded px-3 py-2 text-white text-center"
-                @input="form.totalXp = Number.isFinite(($event.target as HTMLInputElement).valueAsNumber) ? ($event.target as HTMLInputElement).valueAsNumber : null" />
-            </label>
-            <p class="text-xs text-digimon-dark-500 mt-1">Lifetime XP earned. Adding available XP increases this total; spending and refunds leave it unchanged.</p>
-            <p v-if="form.totalXp == null" class="text-xs text-amber-400 mt-1">Enter the lifetime total once for this older character. Past consumed Inspiration was not recorded.</p>
+                :aria-invalid="!!xpBudgetError" aria-describedby="xp-budget-help"
+                @input="setTotalXp(($event.target as HTMLInputElement).valueAsNumber)" />
+              <span v-if="xpHint" class="text-xs text-digimon-dark-500 ml-2">{{ xpHint }}</span>
+            </template>
+            <p v-if="xpBudgetError" role="alert" class="text-xs text-red-400 mt-1">{{ xpBudgetError }}</p>
+            <p v-if="form.totalXp != null" class="text-sm text-digimon-dark-300">{{ form.totalXp }} Total XP = {{ form.xp }} available + {{ form.totalXp - form.xp }} spent.</p>
+            <p id="xp-budget-help" class="text-xs text-digimon-dark-500 mt-1">The GM sets Total XP. Available XP is calculated from that budget minus spending. Purchases and refunds leave the total unchanged; spent XP includes consumed Inspiration.</p>
+            <p v-if="form.totalXp == null" class="text-xs text-amber-400 mt-1">This older character's lifetime XP was not recorded. Setting a budget uses recorded purchases only; past consumed Inspiration cannot be reconstructed.</p>
           </div>
           <div :class="['border-t border-digimon-dark-600 pt-4 space-y-4', !isEdit && form.xp <= 0 && 'hidden']">
             <template v-if="isEdit || form.xp > 0">
@@ -1273,7 +1258,7 @@ async function handleSubmit() {
       <div class="flex gap-4">
         <button
           type="submit"
-          :disabled="loading || (isEdit && !tormentValidation.isValid)"
+          :disabled="loading || !!xpBudgetError || (isEdit && !tormentValidation.isValid)"
           class="bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50
                  text-white px-6 py-2 rounded-lg font-semibold transition-colors"
         >

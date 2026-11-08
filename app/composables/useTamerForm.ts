@@ -10,6 +10,7 @@ import { skillsByAttribute, skillLabels, getResolvedSkillLabels } from '../const
 import { specialOrderThresholds, specialOrdersData } from '../data/special-orders'
 import { skillOrdersData, SKILL_ORDER_SKILL_THRESHOLD, SKILL_ATTRIBUTE_MAP } from '../data/skill-orders'
 import { validateTorments } from '../utils/torment-validation'
+import { reconcileTamerExperience, tamerExperience } from '../utils/tamerExperience'
 
 export interface TormentEntry {
   id: string
@@ -109,15 +110,16 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
 
   // XP Bonuses - tracked separately from CP-allocated values
   const xpBonuses = reactive({
-    attributes: { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0 },
+    attributes: { agility: 0, body: 0, charisma: 0, intelligence: 0, willpower: 0, ...initialData?.xpBonuses?.attributes },
     skills: {
       dodge: 0, fight: 0, stealth: 0,
       athletics: 0, endurance: 0, featsOfStrength: 0,
       manipulate: 0, perform: 0, persuasion: 0,
       computer: 0, survival: 0, knowledge: 0,
       perception: 0, decipherIntent: 0, bravery: 0,
+      ...initialData?.xpBonuses?.skills,
     },
-    inspiration: 0,
+    inspiration: initialData?.xpBonuses?.inspiration ?? 0,
   })
 
   const grantedInspiration = ref(initialData?.grantedInspiration ?? 0)
@@ -140,11 +142,15 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
       xpBoxCosts: (t as any).xpBoxCosts ?? Array.from({ length: xpCount }, (_, k) => lockFloor + k + 1),
     }
   }) || [])
+  if (initialData?.totalXp === undefined) form.totalXp = tamerExperience({ ...form, xpBonuses, torments: torments.value }).total
 
   const showAddTorment = ref(false)
   const newTormentSeverity = ref<TormentSeverity>('minor')
   const spriteError = ref(false)
   const xpSectionCollapsed = ref(true)
+  const xpBudgetError = ref<string | null>(null)
+  const minimumTotalXp = computed(() => Math.max(tamerExperience({ ...form, xpBonuses, torments: torments.value }).spent,
+    (form.totalXp ?? 0) - form.xp))
 
   // ========================
   // Helper Functions
@@ -167,10 +173,16 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
   // ========================
   // XP Spending Functions
   // ========================
-  const setAvailableXp = (value: number) => {
-    if (!Number.isInteger(value) || value < 0) return
-    if (form.totalXp != null) form.totalXp += Math.max(0, value - form.xp)
-    form.xp = value
+  const setTotalXp = (value: number) => {
+    try {
+      const next = reconcileTamerExperience({ ...form, xpBonuses, torments: torments.value }, { totalXp: value })
+      Object.assign(form, next)
+      xpBudgetError.value = null
+      return true
+    } catch (error: any) {
+      xpBudgetError.value = error.message
+      return false
+    }
   }
 
   const spendXPOnAttribute = (attr: keyof typeof form.attributes) => {
@@ -578,7 +590,9 @@ export function useTamerForm(initialData?: Partial<CreateTamerData>, campaignLev
     getNextSkillCost,
     getNextInspirationCost,
     spendXPOnAttribute,
-    setAvailableXp,
+    setTotalXp,
+    minimumTotalXp,
+    xpBudgetError,
     refundXPFromAttribute,
     spendXPOnSkill,
     refundXPFromSkill,

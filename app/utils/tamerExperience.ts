@@ -56,11 +56,18 @@ export function validTotalXp(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)
 }
 
-/** Older API callers omit totalXp. Count new awards, while wallet refunds conserve the XP budget. */
-export function nextTotalXp(existing: ExperienceRecord, patch: ExperienceRecord): number | null {
-  if (patch.totalXp !== undefined) return patch.totalXp
-  if (existing.totalXp == null) return null
-  if (patch.xp === undefined || patch.xp === null || patch.xp <= (existing.xp ?? 0)) return existing.totalXp
-  const awarded = Math.max(0, tamerExperience({ ...existing, ...patch }).total - tamerExperience(existing).total)
-  return existing.totalXp + awarded
+/** Total XP owns the budget. Saved spending includes purchases that have since been consumed. */
+export function reconcileTamerExperience(existing: ExperienceRecord, patch: ExperienceRecord): { xp: number; totalXp: number | null } {
+  const before = tamerExperience(existing)
+  const after = tamerExperience({ ...existing, ...patch })
+  const totalXp = patch.totalXp === undefined ? (existing.totalXp ?? null) : patch.totalXp
+  if (!validTotalXp(totalXp)) throw new Error('Total XP must be a nonnegative whole number or null')
+  if (existing.totalXp != null && totalXp === null) throw new Error('A recorded Total XP budget cannot be cleared')
+  const consumed = existing.totalXp == null ? 0 : Math.max(0, existing.totalXp - before.total)
+  const xp = (totalXp ?? before.total) - consumed - after.spent
+  if (!Number.isInteger(xp) || xp < 0) throw new Error(`Total XP cannot be less than the ${consumed + after.spent} XP already spent`)
+  if (patch.xp !== undefined && patch.xp !== xp) {
+    throw new Error('Available XP is calculated from Total XP and spending; adjust Total XP instead')
+  }
+  return { xp, totalXp }
 }

@@ -1,13 +1,17 @@
 import { eq } from 'drizzle-orm'
 import { db, tamers, type Tamer } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
-import { nextTotalXp, validTotalXp } from '../../../utils/tamerExperience'
+import { requireCampaignDm } from '../../utils/campaignDm'
+import { reconcileTamerExperience, validTotalXp } from '../../../utils/tamerExperience'
 
 type UpdateTamerBody = Partial<Omit<Tamer, 'id' | 'createdAt' | 'updatedAt'>>
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
   const body = await readBody<UpdateTamerBody>(event)
+  if (body.xp !== undefined && (body.xp === null || !validTotalXp(body.xp))) {
+    throw createError({ statusCode: 400, message: 'Available XP must be a nonnegative whole number' })
+  }
   if (body.totalXp !== undefined && !validTotalXp(body.totalXp)) {
     throw createError({ statusCode: 400, message: 'Total XP must be a nonnegative whole number or null' })
   }
@@ -19,33 +23,30 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Check if tamer exists
-  const [existing] = await db.select().from(tamers).where(eq(tamers.id, id))
+  // Lock the current budget through validation and saving, including against concurrent GM rewards.
+  return db.transaction(async tx => {
+    const [existing] = await tx.select().from(tamers).where(eq(tamers.id, id)).for('update')
+    if (!existing) {
+      throw createError({ statusCode: 404, message: `Tamer with ID ${id} not found` })
+    }
 
-  if (!existing) {
-    throw createError({
-      statusCode: 404,
-      message: `Tamer with ID ${id} not found`,
-    })
-  }
+    await assertCanModifySandboxCharacter(event, existing)
+    if (body.totalXp !== undefined && body.totalXp !== existing.totalXp) {
+      if (!existing.campaignId) throw createError({ statusCode: 403, message: 'Only a campaign GM can set the XP budget' })
+      await requireCampaignDm(event, existing.campaignId)
+    }
 
-  await assertCanModifySandboxCharacter(event, existing)
+    let experience: { xp: number; totalXp: number | null }
+    try { experience = reconcileTamerExperience(existing, body) }
+    catch (error: any) { throw createError({ statusCode: 400, message: error.message }) }
 
-  const updateData: Partial<Tamer> = {
-    ...body,
-    totalXp: nextTotalXp(existing, body),
-    updatedAt: new Date(),
-  }
+    const updateData: Partial<Tamer> = { ...body, ...experience, updatedAt: new Date() }
+    // Hiding is owner-only; an unowned record cannot be hidden from its anonymous editor.
+    if (!existing.ownerId) delete updateData.hidden
 
-  // Hiding is owner-only: an unowned record can't be hidden (it would
-  // vanish for everyone, its anonymous editor included).
-  if (!existing.ownerId) delete updateData.hidden
-
-  console.log('[PUT /api/tamers/:id] Updating tamer:', { id, name: body.name })
-
-  await db.update(tamers).set(updateData).where(eq(tamers.id, id))
-
-  // Return updated tamer
-  const [updated] = await db.select().from(tamers).where(eq(tamers.id, id))
-  return updated
+    console.log('[PUT /api/tamers/:id] Updating tamer:', { id, name: body.name })
+    await tx.update(tamers).set(updateData).where(eq(tamers.id, id))
+    const [updated] = await tx.select().from(tamers).where(eq(tamers.id, id))
+    return updated
+  })
 })

@@ -1,6 +1,7 @@
 import { db, tamers, type NewTamer } from '../../db'
 import { generateId } from '../../utils/id'
 import { getSessionUser } from '../../utils/session'
+import { requireCampaignDm } from '../../utils/campaignDm'
 import { tamerExperience, validTotalXp } from '../../../utils/tamerExperience'
 
 interface CreateTamerBody {
@@ -61,8 +62,18 @@ interface CreateTamerBody {
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<CreateTamerBody>(event)
+  if (body.xp !== undefined && (body.xp === null || !validTotalXp(body.xp))) {
+    throw createError({ statusCode: 400, message: 'Available XP must be a nonnegative whole number' })
+  }
   if (body.totalXp !== undefined && !validTotalXp(body.totalXp)) {
     throw createError({ statusCode: 400, message: 'Total XP must be a nonnegative whole number or null' })
+  }
+  if (body.totalXp != null && body.totalXp < tamerExperience(body).total) {
+    throw createError({ statusCode: 400, message: 'Available XP and XP purchases cannot exceed Total XP' })
+  }
+  if ((body.totalXp ?? 0) > 0 || tamerExperience(body).total > 0) {
+    if (!body.campaignId) throw createError({ statusCode: 403, message: 'Only a campaign GM can set the XP budget' })
+    await requireCampaignDm(event, body.campaignId)
   }
 
   console.log('[POST /api/tamers] Received body:', {
@@ -118,7 +129,7 @@ export default defineEventHandler(async (event) => {
     specialOrders: [],
     inspiration: body.inspiration ?? 1,
     grantedInspiration: body.grantedInspiration ?? 0,
-    xp: body.xp ?? 0,
+    xp: body.xp ?? (body.totalXp == null ? 0 : body.totalXp - tamerExperience(body).spent),
     totalXp: body.totalXp === undefined ? tamerExperience(body).total : body.totalXp,
     equipment: [],
     currentWounds: 0,
