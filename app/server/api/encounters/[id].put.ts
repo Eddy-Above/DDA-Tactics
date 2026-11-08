@@ -1,6 +1,7 @@
+import { autoDevolveParticipant } from '../../utils/partnerDevolution'
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls, combatTurnKey } from '../../../utils/specialOrderCombat'
-import { db, encounters, digimon, evolutionLines, type Encounter } from '../../db'
+import { db, encounters, digimon, type Encounter } from '../../db'
 import { getRoomSnapshot } from '../../utils/encounterRoom'
 import { applyEndOfTurnGravity } from '../../utils/endOfTurnGravity'
 import { applyRoundStartQualityTriggers } from '../../utils/roundStartQualityTriggers'
@@ -186,28 +187,13 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
 
     participants = preserveEnduringSouls(participants, existing.participants)
 
-    // Auto-devolve any partner digimon KO'd by direct wound edit
+    // Restore one form after direct wound edits or this turn change's damage. The PUT historically
+    // saves the new form without adding an Auto-Devolve log entry.
+    const autoDevolvedIds = new Set<string>()
     for (const p of participants) {
-      if (p.currentWounds >= p.maxWounds && p.evolutionLineId && p.woundsHistory?.length > 0) {
-        const previousState = p.woundsHistory.pop()
-        if (previousState) {
-          p.entityId = previousState.entityId
-          p.maxWounds = previousState.maxWounds
-          p.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
-
-          await db.update(evolutionLines).set({
-            currentStageIndex: previousState.stageIndex,
-            updatedAt: new Date(),
-          }).where(eq(evolutionLines.id, p.evolutionLineId))
-
-          const newDigimon = await readCombatRecord('digimon', previousState.entityId,
-            () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
-          const devolvedQualities = newDigimon?.qualities || []
-          const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-          p.combatMonsterBonus = devolvedHasCombatMonster
-            ? Math.min(p.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-            : 0
-        }
+      if (p.currentWounds >= p.maxWounds && p.evolutionLineId) {
+        const devolved = await autoDevolveParticipant(p, participants, { round: incomingRound, database: db })
+        if (devolved) autoDevolvedIds.add(p.id)
       }
     }
 
@@ -215,7 +201,7 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
     // incoming participant is one of them, the next one's turn starts instead. No gravity: it already
     // ran for this turn change above.
     if (existing.phase === 'combat') {
-      const knockedOut = knockedOutEnemyIds(participants).filter((pid) => !knockedOutInBody.has(pid))
+      const knockedOut = knockedOutEnemyIds(participants).filter((pid) => !knockedOutInBody.has(pid) && !autoDevolvedIds.has(pid))
       if (knockedOut.length > 0) {
         const { houseRules } = await getCampaignRules()
         const knockout = await resolveEnemyKnockouts({

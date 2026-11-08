@@ -2,7 +2,7 @@
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
-import { buildCombatEvolutionOptions } from '~/utils/combatEvolutionOptions'
+import { buildCombatEvolutionOptions, resolveCombatEvolutionIndex } from '~/utils/combatEvolutionOptions'
 
 import { combatAttackStats } from '~/utils/combatDice'
 import { computeDodgeDefense, getPaidDodgeDiceBonus } from '~/utils/areaDefense'
@@ -2011,12 +2011,17 @@ function getParticipantEvolutionOptions(participant: CombatParticipant) {
   const evoLine = evolutionLines.value.find(l => l.id === participant.evolutionLineId)
   if (!evoLine) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null, warpTargets: [] }
 
+  const digimon = participant.type === 'digimon' ? digimonMap.value.get(participant.entityId) : undefined
+  const isPartner = !!digimon?.partnerId && participant.isEnemy !== true && digimon.isEnemy !== true
+
   return buildCombatEvolutionOptions({
     chain: evoLine.chain,
-    currentIndex: participant.npcStageIndex !== undefined
+    currentIndex: !isPartner && participant.npcStageIndex !== undefined
       ? participant.npcStageIndex
       : evoLine.currentStageIndex,
+    currentEntityId: isPartner ? participant.entityId : undefined,
     hasWoundsHistory: (participant.woundsHistory?.length ?? 0) > 0,
+    allowDevolutionWithoutHistory: isPartner,
     warpEvolution: eddySoulRules.value?.warpEvolution,
     baseDC: DIGIVOLVE_WILLPOWER_DC[campaignLevel.value],
   })
@@ -2530,7 +2535,12 @@ const selectedParticipantForceEvoOptions = computed(() => {
   const evoLine = evolutionLines.value.find(l => l.id === p.evolutionLineId)
   if (!evoLine) return { evolveTargets: [], devolveTarget: null, warpTargets: [] }
   const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
-  const currentIndex = (p as any).npcStageIndex !== undefined ? (p as any).npcStageIndex : evoLine.currentStageIndex
+  const digimon = p.type === 'digimon' ? digimonMap.value.get(p.entityId) : undefined
+  const isPartner = !!digimon?.partnerId && p.isEnemy !== true && digimon.isEnemy !== true
+  const currentIndex = isPartner
+    ? resolveCombatEvolutionIndex(chain, p.entityId, evoLine.currentStageIndex)
+    : p.npcStageIndex !== undefined ? p.npcStageIndex : evoLine.currentStageIndex
+  if (currentIndex < 0) return { evolveTargets: [], devolveTarget: null, warpTargets: [] }
   const evolveTargets = chain
     .map((e: any, i: number) => ({ ...e, chainIndex: i }))
     .filter((e: any) => e.evolvesFromIndex === currentIndex && e.isUnlocked)

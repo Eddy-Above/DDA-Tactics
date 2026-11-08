@@ -44,8 +44,11 @@ const unchanged = async ({ participants }) => ({ participants, logEntries: [] })
 const identity = async participants => participants
 
 function knockoutResolver(rows = []) {
+  const store = { db: { select: unexpected, update: unexpected }, digimon: {}, encounters: {}, campaigns: {}, evolutionLines: {} }
+  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', { '../db': store })
   return loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
-    '../db': { db: { select: unexpected }, digimon: {}, encounters: {}, campaigns: {} },
+    '../db': store,
+    './partnerDevolution': devolution,
     './resolveSupportAttack': { getDigimonDerivedStats: unexpected },
     './combatSpatial': { loadParticipantDigimon: async () => new Map(rows.map(row => [row.id, row])) },
     './endOfTurnGravity': { applyEndOfTurnGravity: unexpected, computeGravityDrops: unexpected },
@@ -76,9 +79,13 @@ function legacyNpcAttack(state, rows = []) {
       stored = { ...stored, ...structuredClone(fields) }
     } }) }),
   }
+  const store = { db, ...tables }
+  const sql = { eq: (_column, value) => ({ value }) }
+  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', { '../db': store, 'drizzle-orm': sql })
   return loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', {
-    '../../../../db': { db, ...tables },
-    'drizzle-orm': { eq: (_column, value) => ({ value }) },
+    '../../../../db': store,
+    '../../../../utils/partnerDevolution': devolution,
+    'drizzle-orm': sql,
     '../../../../utils/resolveSupportAttack': { getDigimonDerivedStats: unexpected, calculateEffectPotency: unexpected },
     '../../../../utils/pushPull': { applyPushPullDisplacement: unexpected },
     '../../../../utils/endOfTurnGravity': { applyEndOfTurnGravity: async (_id, _map, participants) => ({ participants, logEntries: [] }) },

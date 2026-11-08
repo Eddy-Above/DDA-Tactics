@@ -78,6 +78,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
     ...common, './resolveSupportAttack': support,
   })
   const context = loadTypeScriptWithMocks('server/utils/combatContext.ts', common)
+  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', common)
   const room = {
     getRoomPositions: async () => copy(positions),
     getRoomSnapshot: async () => ({ participantPositions: copy(positions), destructibleStates: [] }),
@@ -107,12 +108,14 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   })
   const knockouts = loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
     ...common, './combatSpatial': spatial, './resolveSupportAttack': support,
+    './partnerDevolution': devolution,
     './endOfTurnGravity': gravity, './roundStartQualityTriggers': roundStart,
     './damageOverTime': damageOverTime, './guidingLight': guidingLight,
   })
   const put = loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
     'drizzle-orm': sql, '../../db': dbModule,
     '../../utils/combatRecordCache': cache, '../../utils/combatSpatial': spatial,
+    '../../utils/partnerDevolution': devolution,
     '../../utils/combatContext': context, '../../utils/encounterRoom': room,
     '../../utils/endOfTurnGravity': gravity, '../../utils/roundStartQualityTriggers': roundStart,
     '../../utils/encounterStartTriggers': encounterStart, '../../utils/guidingLight': guidingLight,
@@ -179,7 +182,7 @@ test('preload includes both rosters and every history form, reusing the restored
   const stored = [unit('source', { entityId: 'old', woundsHistory: history }), unit('ally'), unit('missing-unit', { entityId: 'missing' })]
   const incoming = copy(stored)
   Object.assign(incoming[0], { entityId: 'evolved', currentWounds: 30, evolutionLineId: 'line', combatMonsterBonus: 9 })
-  const f = fixture({ participants: stored, records: [record('old'), record('evolved'), record('restored', {
+  const f = fixture({ participants: stored, records: [record('old'), record('evolved', { partnerId: 'owner' }), record('restored', {
     partnerId: 'owner', qualities: [{ id: 'combat-monster' }],
   }), record('ally')] })
   const result = await f.put({ participants: incoming, currentTurnIndex: 1 })
@@ -286,4 +289,90 @@ test('enemy auto-devolution single reads reuse the bulk history records in the s
   assert.equal(result.participants[0].combatMonsterBonus, 4)
   assert.ok(result.logEntries[0].action.includes('Small enemy'))
   assert.equal(result.logEntries[0].actorName, 'Large enemy')
+})
+
+
+test('a partner entering above Rookie devolves through each available parent with saved sheet wounds', async () => {
+  const participant = unit('partner', { entityId: 'ultimate', evolutionLineId: 'line', npcStageIndex: 99 })
+  const f = fixture({ participants: [participant], map: false, records: [
+    record('ultimate', { stage: 'ultimate', partnerId: 'owner' }),
+    record('champion', { stage: 'champion', partnerId: 'owner', currentWounds: 2,
+      baseStats: { accuracy: 2, damage: 3, dodge: 4, armor: 0, health: 8 } }),
+    record('rookie', { partnerId: 'owner', currentWounds: 3 }),
+  ] })
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 2, chain: [
+    { species: 'Rookie', digimonId: 'rookie', stage: 'rookie', evolvesFromIndex: null, isUnlocked: true },
+    { species: 'Champion', digimonId: 'champion', stage: 'champion', evolvesFromIndex: 0, isUnlocked: false },
+    { species: 'Ultimate', digimonId: 'ultimate', stage: 'ultimate', evolvesFromIndex: 1, isUnlocked: true },
+  ] }
+  const first = await f.put({ participants: [{ ...participant, currentWounds: participant.maxWounds }] })
+  assert.equal(first.participants[0].id, 'partner')
+  assert.equal(first.participants[0].entityId, 'champion')
+  assert.equal(first.participants[0].currentWounds, 2)
+  assert.equal(first.participants[0].totalHealth, 8)
+  assert.equal(first.participants[0].npcStageIndex, undefined)
+  assert.equal(f.rows.evolutionLines.line.currentStageIndex, 1)
+  const second = await f.put({ participants: first.participants.map(p => ({ ...p, currentWounds: p.maxWounds })) })
+  assert.equal(second.participants[0].entityId, 'rookie')
+  assert.equal(second.participants[0].currentWounds, 3)
+  assert.equal(second.participants[0].maxWounds, 7)
+  assert.equal(second.participants[0].totalHealth, 5)
+  assert.equal(f.rows.evolutionLines.line.currentStageIndex, 0)
+  const root = await f.put({ participants: second.participants.map(p => ({ ...p, currentWounds: p.maxWounds })) })
+  assert.equal(root.participants[0].entityId, 'rookie')
+  assert.equal(root.participants[0].currentWounds, 7)
+  assert.deepEqual(root.turnOrder, ['partner'])
+})
+
+test('a no-history partner knocked out by turn-end Poison restores its linked parent in that save', async () => {
+  const participant = unit('partner', { entityId: 'champion', maxWounds: 1,
+    evolutionLineId: 'line', activeEffects: [effect('Poison')] })
+  const f = fixture({ participants: [participant, unit('ally')], map: false,
+    rules: { eddySoulRules: { poisonTicksAtTurnEnd: true } }, records: [
+      record('champion', { stage: 'champion', partnerId: 'owner' }),
+      record('rookie', { partnerId: 'owner', currentWounds: 1 }), record('ally'),
+    ] })
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 1, chain: [
+    { species: 'Rookie', digimonId: 'rookie', stage: 'rookie', evolvesFromIndex: null, isUnlocked: true },
+    { species: 'Champion', digimonId: 'champion', stage: 'champion', evolvesFromIndex: 0, isUnlocked: true },
+  ] }
+  const result = await f.put({ participants: [participant, unit('ally')], currentTurnIndex: 1 })
+  assert.equal(result.participants[0].entityId, 'rookie')
+  assert.equal(result.participants[0].currentWounds, 1)
+  assert.equal(f.rows.evolutionLines.line.currentStageIndex, 0)
+  assert.ok(result.battleLog.some(entry => entry.effects.includes('Poison')))
+})
+
+test('a turn-end NPC devolution changes only its local stage and restores one form even if that form is already knocked out', async () => {
+  const history = [
+    { entityId: 'rookie', stageIndex: 0, maxWounds: 7, wounds: 1, totalHealth: 5 },
+    { entityId: 'champion', stageIndex: 1, maxWounds: 8, wounds: 8 },
+  ]
+  const npc = unit('npc', {
+    entityId: 'ultimate', isEnemy: true, evolutionLineId: 'shared-line', npcStageIndex: 2,
+    currentWounds: 0, maxWounds: 1, totalHealth: 15, combatMonsterBonus: 10,
+    woundsHistory: history, activeEffects: [effect('Poison')],
+  })
+  const f = fixture({ participants: [npc, unit('ally')], map: false,
+    rules: { eddySoulRules: { poisonTicksAtTurnEnd: true } }, records: [
+      record('ultimate', { isEnemy: true }),
+      record('champion', { isEnemy: true, qualities: [{ id: 'combat-monster' }] }),
+      record('rookie', { isEnemy: true }), record('ally'),
+    ] })
+  f.rows.evolutionLines['shared-line'] = { id: 'shared-line', currentStageIndex: 2 }
+  const result = await f.put({ participants: [npc, unit('ally')], currentTurnIndex: 1 })
+  const restored = result.participants.find(p => p.id === 'npc')
+  assert.equal(restored.entityId, 'champion')
+  assert.equal(restored.currentWounds, 8)
+  assert.equal(restored.maxWounds, 8)
+  assert.equal(restored.totalHealth, 15, 'legacy history without a health snapshot preserves the prior value')
+  assert.equal(restored.combatMonsterBonus, 8)
+  assert.equal(restored.npcStageIndex, 1)
+  assert.deepEqual(restored.woundsHistory, [history[0]])
+  assert.equal(f.rows.evolutionLines['shared-line'].currentStageIndex, 2)
+  assert.deepEqual(f.writes.filter(write => write.table === 'evolutionLines'), [])
+  assert.deepEqual(result.turnOrder, ['npc', 'ally'])
+  assert.equal(result.currentTurnIndex, 1)
+  assert.ok(result.battleLog.some(entry => entry.effects.includes('Poison')))
+  assert.ok(!result.battleLog.some(entry => entry.effects.includes('Auto-Devolve')), 'PUT retains its existing silent form restoration')
 })

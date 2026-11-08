@@ -168,9 +168,9 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
   const dbExports = { db, ...tables }
   const knockoutMocks = {
     knockedOutEnemyIds: () => [],
-    resolveEnemyKnockouts: async (state, _ids, context) => {
+    resolveEnemyKnockouts: async (state, ids, context) => {
       assert.notEqual(context?.gravity, 'room', 'knockout gravity must not broadcast before commit')
-      return control.knockout?.(state, context) ?? { ...state, changed: false, logEntries: [] }
+      return control.knockout?.(state, context, ids) ?? { ...state, changed: false, logEntries: [] }
     },
   }
   const guidingLight = {
@@ -180,6 +180,10 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
       effects.push({ type: 'aura', encounterId })
     },
   }
+  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+    '../db': dbExports,
+    'drizzle-orm': { eq: (_column, value) => ({ value }) },
+  })
   const areaModule = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
     '../db': dbExports,
     'drizzle-orm': { eq: (_column, value) => ({ value }) },
@@ -190,12 +194,14 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
       resolveNegativeSupportNpc: unexpected, getPositiveSupportResolutionType: () => null,
     },
     './guidingLight': guidingLight,
+    './partnerDevolution': partnerDevolution,
   })
   const queue = bypassQueue
     ? { serializeIntercedeClaim: (_id, callback) => callback() }
     : loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
   const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
     '../../../../db': dbExports,
+    '../../../../utils/partnerDevolution': partnerDevolution,
     'drizzle-orm': {
       eq: (_column, value) => ({ value }), inArray: (_column, values) => ({ values }),
     },
@@ -411,6 +417,7 @@ test('a rolled-back area auto-devolution preserves the evolution stage, offer, a
   guard.maxWounds = 1
   guard.evolutionLineId = 'evolution'
   guard.woundsHistory = [{ entityId: 'previous-form', maxWounds: 10, wounds: 0, stageIndex: 1 }]
+  subject.rows.digimon.get('guard-a').partnerId = 'owner'
   subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3 })
   const originalState = copy(subject.state())
   const originalRoom = copy(subject.rooms.get('encounter'))
@@ -428,6 +435,30 @@ test('a rolled-back area auto-devolution preserves the evolution stage, offer, a
   assert.equal(subject.rows.evolutionLines.get('evolution').currentStageIndex, 1)
   await assert.rejects(subject.claim('guard-a'), error => error.statusCode === 409)
   assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 1)
+})
+
+test('the full area claim excludes a form restored by its nested resolver from the outer knockout pass', async () => {
+  const subject = fixture({ area: true, map: true, targets: ['target'] })
+  const guard = participant(subject, 'guard-a')
+  guard.maxWounds = 1
+  guard.evolutionLineId = 'evolution'
+  guard.woundsHistory = [
+    { entityId: 'oldest', maxWounds: 4, wounds: 0, stageIndex: 0 },
+    { entityId: 'previous-form', maxWounds: 10, wounds: 10, stageIndex: 1 },
+  ]
+  subject.rows.digimon.get('guard-a').partnerId = 'owner'
+  subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3 })
+  const candidates = []
+  subject.control.knockout = (state, _context, ids) => {
+    candidates.push(...ids)
+    return { ...state, changed: false, logEntries: [] }
+  }
+  await subject.claim('guard-a')
+  assert.ok(!candidates.includes('guard-a'), 'neither the group nor outer claim may restore the same participant twice')
+  assert.equal(participant(subject, 'guard-a').entityId, 'previous-form')
+  assert.equal(participant(subject, 'guard-a').currentWounds, 10)
+  assert.equal(participant(subject, 'guard-a').woundsHistory.length, 1)
+  assert.equal(subject.state().battleLog.filter(entry => entry.effects.includes('Auto-Devolve')).length, 1)
 })
 
 test('knockout gravity patches survive a successful retry and never reach the room when persistence rolls back', async () => {

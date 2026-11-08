@@ -39,6 +39,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   const writes = []
   const reads = []
   const auraCalls = []
+  const knockoutCalls = []
   const room = { participantPositions: { source: { x: 2, y: 0, z: 0 } }, destructibleStates: [] }
   const db = {
     select: () => ({ from: table => ({ where: async filter => {
@@ -69,11 +70,15 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
+  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+    'drizzle-orm': sql, '../db': dbModule,
+  })
   const mocks = {
     'drizzle-orm': sql,
     '../../db': dbModule,
     '../../utils/combatContext': combatContext,
     '../../utils/combatSpatial': spatial,
+    '../../utils/partnerDevolution': partnerDevolution,
     '../../utils/encounterRoom': { getRoomSnapshot: async () => structuredClone(room) },
     '../../utils/endOfTurnGravity': {
       applyEndOfTurnGravity: async (_id, _map, current) => ({ participants: current, logEntries: [] }),
@@ -93,11 +98,15 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
     },
     '../../utils/enemyKnockouts': {
       knockedOutEnemyIds: current => current.filter(p => p.isEnemy && p.currentWounds >= p.maxWounds).map(p => p.id),
-      resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }),
+      resolveEnemyKnockouts: async (state, ids) => {
+        knockoutCalls.push([...ids])
+        return { ...state, changed: false, logEntries: [] }
+      },
       ...overrides.knockouts,
     },
     '../../../../db': dbModule,
     '../../../../utils/combatContext': combatContext,
+    '../../../../utils/partnerDevolution': partnerDevolution,
     '../../../../utils/digizoidArmor': { getDigizoidArmorBonus: () => ({ health: 0, armor: 0, dodge: 0 }) },
     '../../../../utils/encounterRoom': { getRoomPositions: async () => structuredClone(room.participantPositions) },
     '../../../../utils/guidingLight': { applyGuidingLightAuras },
@@ -108,6 +117,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   }
   Object.assign(mocks, {
     '../../../db': dbModule,
+    '../../../utils/partnerDevolution': partnerDevolution,
     '../../../utils/guidingLight': { refreshGuidingLightForParticipants },
     '../../../utils/pushPull': { applyPushPullDisplacement: async ({ participants: current }) => ({ participants: current }) },
     '../../../utils/resolveSupportAttack': { getDigimonDerivedStats: async () => ({ bit: 1, cpu: 1 }), calculateEffectPotency: () => ({ potency: 1 }) },
@@ -125,7 +135,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   })
   mocks['../../../../utils/guidingLight'].refreshGuidingLightForParticipants = refreshGuidingLightForParticipants
   return {
-    rows, room, writes, reads, auraCalls,
+    rows, room, writes, reads, auraCalls, knockoutCalls,
     put: body => loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', mocks).default({ id: 'encounter', body }),
     digivolve: body => loadTypeScriptWithMocks('server/api/encounters/[id]/actions/digivolve.post.ts', mocks)
       .default({ id: 'encounter', body }),
@@ -326,6 +336,81 @@ const npcAttackBody = {
   dodgeDicePool: 1, dodgeSuccesses: 0, dodgeDiceResults: [1],
 }
 
+function partnerFallbackAttackFixture(history) {
+  const f = damagingAttackFixture({ evolved: true })
+  const target = f.rows.encounters.encounter.participants.find(p => p.id === 'source')
+  target.woundsHistory = history ?? []
+  target.combatMonsterBonus = 14
+  f.rows.digimon.champion = {
+    ...f.rows.digimon.champion, partnerId: 'owner', isEnemy: false, stage: 'champion',
+  }
+  f.rows.digimon.rookie = {
+    ...f.rows.digimon.rookie, partnerId: 'owner', isEnemy: false, stage: 'rookie',
+    baseStats: { health: 5, armor: 0 }, bonusStats: { health: 2 }, currentWounds: 3,
+    qualities: [{ id: 'digizoid-armor', choiceId: 'red' }, { id: 'combat-monster' }],
+  }
+  f.rows.evolutionLines.line = {
+    id: 'line', currentStageIndex: 1,
+    chain: [
+      { digimonId: 'rookie', species: 'Agumon', stage: 'rookie', evolvesFromIndex: null, isUnlocked: false },
+      { digimonId: 'champion', species: 'Greymon', stage: 'champion', evolvesFromIndex: 0, isUnlocked: true },
+    ],
+  }
+  return f
+}
+
+for (const mode of ['dodge response', 'legacy NPC attack']) {
+  test(`${mode} auto-devolves a history-free partner to its saved parent sheet before the aura and encounter write`, async () => {
+    const f = partnerFallbackAttackFixture()
+    f.rows.encounters.encounter.participants.find(p => p.id === 'source').npcStageIndex = 8
+    if (mode === 'dodge response') await f.respond(dodgeResponse)
+    else await f.npcAttack(npcAttackBody)
+
+    const stored = f.rows.encounters.encounter
+    const target = stored.participants.find(p => p.id === 'source')
+    assert.deepEqual([target.entityId, target.currentWounds, target.maxWounds, target.totalHealth], ['rookie', 3, 11, 9])
+    assert.deepEqual(target.woundsHistory, [])
+    assert.equal(target.combatMonsterBonus, 9)
+    assert.equal(target.npcStageIndex, undefined, 'partner devolution clears stale local NPC state')
+    assert.equal(f.rows.evolutionLines.line.currentStageIndex, 0)
+    assert.equal(f.rows.digimon.rookie.currentWounds, 3, 'combat damage must not change the saved parent sheet')
+    assertOneAuraWrite(f)
+    const refreshed = f.auraCalls[0].participants.find(p => p.id === 'source')
+    assert.deepEqual([refreshed.entityId, refreshed.currentWounds, refreshed.totalHealth], ['rookie', 3, 9])
+    const lineWrite = f.writes.findIndex(write => write.table === 'evolutionLines')
+    const encounterWrite = f.writes.findIndex(write => write.table === 'encounters')
+    assert.ok(lineWrite >= 0 && lineWrite < encounterWrite)
+    assert.ok(stored.battleLog.some(entry => entry.effects.includes('Auto-Devolve')))
+    assert.ok(f.writes.every(write => write.table !== 'digimon'))
+  })
+
+  test(`${mode} keeps saved combat history ahead of a different parent sheet wound count`, async () => {
+    const f = partnerFallbackAttackFixture([{ entityId: 'rookie', stageIndex: 0, maxWounds: 7, totalHealth: 5, wounds: 1 }])
+    if (mode === 'dodge response') await f.respond(dodgeResponse)
+    else await f.npcAttack(npcAttackBody)
+
+    const target = f.rows.encounters.encounter.participants.find(p => p.id === 'source')
+    assert.deepEqual([target.entityId, target.currentWounds, target.maxWounds, target.totalHealth], ['rookie', 1, 7, 5])
+    assert.deepEqual(target.woundsHistory, [])
+    assert.equal(target.combatMonsterBonus, 5)
+    assert.equal(f.rows.evolutionLines.line.currentStageIndex, 0)
+    assertOneAuraWrite(f)
+  })
+
+  test(`${mode} keeps NPC stage changes local instead of changing the shared evolution line`, async () => {
+    const f = damagingAttackFixture({ evolved: true })
+    f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 3 }
+    if (mode === 'dodge response') await f.respond(dodgeResponse)
+    else await f.npcAttack(npcAttackBody)
+    const target = f.rows.encounters.encounter.participants.find(p => p.id === 'source')
+    assert.equal(target.entityId, 'rookie')
+    assert.equal(target.npcStageIndex, 0)
+    assert.equal(f.rows.evolutionLines.line.currentStageIndex, 3)
+    assert.equal(f.writes.filter(write => write.table === 'evolutionLines').length, 0)
+    assert.equal(f.rows.encounters.encounter.battleLog.filter(entry => entry.effects.includes('Auto-Devolve')).length, 1)
+  })
+}
+
 test('a dodge response recomputes after damage auto-devolves its target, before the same save', async () => {
   const f = damagingAttackFixture({ evolved: true })
   await f.respond(dodgeResponse)
@@ -348,6 +433,21 @@ test('legacy NPC attacks refresh after an in-place auto-devolution', async () =>
   await f.npcAttack(npcAttackBody)
   assertOneAuraWrite(f)
   assert.equal(f.auraCalls[0].participants.find(p => p.id === 'source').entityId, 'rookie')
+})
+
+test('a legacy NPC hit does not send an already-restored enemy back through knockout handling', async () => {
+  const f = damagingAttackFixture({ evolved: true })
+  const target = f.rows.encounters.encounter.participants.find(p => p.id === 'source')
+  target.isEnemy = true
+  target.woundsHistory = [{ entityId: 'rookie', stageIndex: 0, maxWounds: 5, wounds: 5 }]
+  f.rows.digimon.champion.isEnemy = true
+  await f.npcAttack(npcAttackBody)
+  const restored = f.rows.encounters.encounter.participants.find(p => p.id === 'source')
+  assert.equal(restored.entityId, 'rookie')
+  assert.equal(restored.npcStageIndex, 0)
+  assert.equal(restored.currentWounds, 5)
+  assert.ok(f.knockoutCalls.every(ids => !ids.includes('source')))
+  assert.equal(f.rows.encounters.encounter.battleLog.filter(entry => entry.effects.includes('Auto-Devolve')).length, 1)
 })
 
 test('legacy NPC primary-target removal refreshes the remaining roster before the same save', async () => {

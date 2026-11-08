@@ -26,6 +26,13 @@ function database(rows = []) {
   }
 }
 
+function devolution(store) {
+  return loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+    '../db': store,
+    'drizzle-orm': { eq: (column, value) => ({ column, value }) },
+  })
+}
+
 function auraRefresh(calls) {
   return async (encounterId, participants, positions) => {
     calls.push({ encounterId, participants: structuredClone(participants), positions })
@@ -39,6 +46,7 @@ function knockouts(rows) {
   const { resolveEnemyKnockouts } = loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
     'drizzle-orm': { eq: (column, value) => ({ column, value }) },
     '../db': store,
+    './partnerDevolution': devolution(store),
     './resolveSupportAttack': { getDigimonDerivedStats: unexpected },
     './endOfTurnGravity': { applyEndOfTurnGravity: unexpected, computeGravityDrops: unexpected },
     './combatSpatial': { loadParticipantDigimon: async () => new Map(rows.map(row => [row.id, row])) },
@@ -108,6 +116,7 @@ test('NPC attack auto-devolution returns refreshed effects even without a knocko
   const refreshes = []
   const { resolveNpcAttack } = loadTypeScriptWithMocks('server/utils/resolveNpcAttack.ts', {
     '../db': store,
+    './partnerDevolution': devolution(store),
     'drizzle-orm': { eq: (column, value) => ({ column, value }) },
     './computeAttackDamage': { computeAttackDamage: async () => ({
       attackDef: { type: 'damage' }, hit: true, damageDealt: 2, netSuccesses: 1,
@@ -160,6 +169,7 @@ for (const damageDealt of [0, 2]) {
     const resolutions = []
     const { resolveAreaIntercedeGroup } = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
       '../db': store,
+      './partnerDevolution': devolution(store),
       'drizzle-orm': { eq: (column, value) => ({ column, value }) },
       './resolveNpcAttack': { resolveNpcAttack: async params => {
         resolutions.push(structuredClone(params))
