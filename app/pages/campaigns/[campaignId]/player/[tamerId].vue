@@ -2126,10 +2126,17 @@ function getParticipantEvolutionOptions(participant: CombatParticipant) {
   const evoLine = evolutionLines.value.find(l => l.id === participant.evolutionLineId)
   if (!evoLine) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null, warpTargets: [] }
 
+  const digimon = participant.type === 'digimon'
+    ? partnerDigimon.value.find(d => d.id === participant.entityId) || allDigimon.value.find(d => d.id === participant.entityId)
+    : undefined
+  const isPartner = !!digimon?.partnerId && participant.isEnemy !== true && digimon.isEnemy !== true
+
   return buildCombatEvolutionOptions({
     chain: evoLine.chain,
     currentIndex: evoLine.currentStageIndex,
+    currentEntityId: isPartner ? participant.entityId : undefined,
     hasWoundsHistory: (participant.woundsHistory?.length ?? 0) > 0,
+    allowDevolutionWithoutHistory: isPartner,
     warpEvolution: eddySoulRules.value?.warpEvolution,
     baseDC: DIGIVOLVE_WILLPOWER_DC[campaignLevel.value],
   })

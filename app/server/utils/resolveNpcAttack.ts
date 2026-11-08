@@ -1,3 +1,4 @@
+import { autoDevolveParticipant } from './partnerDevolution'
 import { serverDodgeDefense } from './combatDodge'
 import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 import { eq, inArray } from 'drizzle-orm'
@@ -324,46 +325,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     pushPullLogNote = disp.logNote
   }
 
-  // --- Auto-devolve check ---
-  let autoDevolveLog: any = null
+  // Resolve the target once; later knockout processing excludes an already-devolved target.
   const damagedTarget = participants.find((p: any) => p.id === params.targetParticipantId)
-  if (damagedTarget && hit &&
-      damagedTarget.currentWounds >= damagedTarget.maxWounds &&
-      damagedTarget.evolutionLineId &&
-      damagedTarget.woundsHistory?.length > 0) {
-    const previousState = damagedTarget.woundsHistory.pop()
-    if (previousState) {
-      const oldEntityId = damagedTarget.entityId
-      damagedTarget.entityId = previousState.entityId
-      damagedTarget.maxWounds = previousState.maxWounds
-      damagedTarget.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0;
-
-      // Update npcStageIndex on the participant (NPCs track stage locally)
-      (damagedTarget as any).npcStageIndex = previousState.stageIndex
-
-      const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => db.select().from(digimon).where(eq(digimon.id, oldEntityId)))
-      const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
-
-      const devolvedQualities = newDigimon?.qualities || []
-      const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-      damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
-        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-        : 0
-
-      autoDevolveLog = {
-        id: `log-${Date.now()}-autodevolve`,
-        timestamp: new Date().toISOString(),
-        round: params.round,
-        actorId: damagedTarget.id,
-        actorName: resolveParticipantName(damagedTarget, params.participants, oldDigimon?.name || 'Digimon', damagedTarget?.isEnemy || false),
-        action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-        target: null,
-        result: `Wounds restored to ${previousState.wounds !== undefined ? previousState.wounds : 0}`,
-        damage: null,
-        effects: ['Auto-Devolve'],
-      }
-    }
-  }
+  const autoDevolveLog = damagedTarget && hit
+    ? await autoDevolveParticipant(damagedTarget, participants, { round: params.round, database: db })
+    : null
 
   // --- Boss quality: Time Control — intercept first KO, restore wounds + stat bonus ---
   if (damagedTarget && hit &&
@@ -386,7 +352,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   const knockout = await resolveEnemyKnockouts(
     { participants, turnOrder: params.turnOrder ?? [], currentTurnIndex, round: params.round },
     [params.targetParticipantId, params.attackerParticipantId].filter((id) =>
-      (id === params.targetParticipantId && hit) || !knockedOutBefore.has(id)),
+      !(autoDevolveLog && id === params.targetParticipantId)
+      && ((id === params.targetParticipantId && hit) || !knockedOutBefore.has(id))),
     {
       encounterId: params.encounterId,
       houseRules: params.houseRules,

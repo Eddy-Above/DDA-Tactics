@@ -1,6 +1,7 @@
+import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
-import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
@@ -461,52 +462,10 @@ export default defineEventHandler(async (event) => {
     npcPushLogNote = disp.logNote
   }
 
-  // Auto-devolve check: if target is KO'd but has evolution history, devolve instead
-  let autoDevolveLog: any = null
   const damagedTarget = finalParticipants.find((p: any) => p.id === body.targetId)
-  if (damagedTarget && hit &&
-      damagedTarget.currentWounds >= damagedTarget.maxWounds &&
-      damagedTarget.evolutionLineId &&
-      damagedTarget.woundsHistory?.length > 0) {
-    const previousState = damagedTarget.woundsHistory.pop()
-    if (previousState) {
-      const oldEntityId = damagedTarget.entityId
-      damagedTarget.entityId = previousState.entityId
-      damagedTarget.maxWounds = previousState.maxWounds
-      damagedTarget.currentWounds = previousState.wounds
-
-      // Update evolution line to previous stage
-      await db.update(evolutionLines).set({
-        currentStageIndex: previousState.stageIndex,
-        updatedAt: new Date(),
-      }).where(eq(evolutionLines.id, damagedTarget.evolutionLineId))
-
-      // Get old and new names for log
-      const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
-      const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
-
-      const devolvedQualities = newDigimon?.qualities || []
-      const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-      damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
-        ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-        : 0
-
-      const baseOldDigimonName = oldDigimon?.name || 'Digimon'
-      const oldDigimonName = resolveParticipantName(damagedTarget, participants, baseOldDigimonName, oldDigimon?.isEnemy || false)
-      autoDevolveLog = {
-        id: `log-${Date.now()}-autodevolve`,
-        timestamp: new Date().toISOString(),
-        round: encounter.round,
-        actorId: damagedTarget.id,
-        actorName: oldDigimonName,
-        action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-        target: null,
-        result: `Wounds restored to ${previousState.wounds}`,
-        damage: null,
-        effects: ['Auto-Devolve'],
-      }
-    }
-  }
+  const autoDevolveLog = damagedTarget && hit
+    ? await autoDevolveParticipant(damagedTarget, finalParticipants, { round: encounter.round, database: db })
+    : null
 
   // Remove defeated NPC from encounter
   let npcDefeatedLog: any = null
@@ -714,7 +673,7 @@ export default defineEventHandler(async (event) => {
     turnOrder: updatedTurnOrder,
     currentTurnIndex: npcDefeatNextTurnIndex ?? (encounter.currentTurnIndex ?? 0),
     round: npcDefeatNextRound ?? (encounter.round ?? 0),
-  }, knockedOutEnemyIds(finalParticipantsAfterDefeat).filter((pid) => !knockedOutBefore.has(pid)),
+  }, knockedOutEnemyIds(finalParticipantsAfterDefeat).filter((pid) => !knockedOutBefore.has(pid) && !(autoDevolveLog && pid === body.targetId)),
   { encounterId, houseRules, campaignLevel, mapId: (encounter as any).mapId, gravity: 'room' })
   const turnStateChanged = !!npcDefeatedLog || knockout.changed
 

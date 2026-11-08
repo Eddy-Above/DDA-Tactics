@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, digimon, encounters, campaigns } from '../db'
+import { db, encounters, campaigns } from '../db'
 import type { GameMap, Vec3 } from '../../types'
 import { applyDeferredIntercedeCost, recordTurnStart } from '../../utils/intercedeActions'
 import { applyEffectToParticipant } from './applyEffect'
@@ -10,7 +10,7 @@ import { loadParticipantDigimon } from './combatSpatial'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
 import { refreshGuidingLightForParticipants } from './guidingLight'
-import { readCombatRecord } from './combatRecordCache'
+import { autoDevolveParticipant } from './partnerDevolution'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -22,8 +22,9 @@ import { readCombatRecord } from './combatRecordCache'
 // wraps into a new round (round-end Poison/Burn, the round reset, round-start triggers). An enemy
 // knocked out by that round end, or by the fall at the turn change, is resolved the same way.
 //
-// Callers pass only the enemies their request knocked out: one already at 0 when the request
-// arrived (say, a downed enemy the GM chose to leave on the board) is left alone.
+// Partners also devolve when these damage paths knock them out, including partners that entered
+// combat already evolved. Their token and turn stay in place. Callers pass only candidates affected
+// by their request: unrelated participants already at 0 when it arrived are left alone.
 
 type HouseRulesArg = { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
 type CampaignLevel = 'standard' | 'enhanced' | 'extreme'
@@ -65,6 +66,15 @@ export interface KnockoutResult extends TurnState {
 
 function isKnockedOutEnemy(p: any): boolean {
   return !!p && !!p.isEnemy && !p.inReserve && p.maxWounds > 0 && (p.currentWounds ?? 0) >= p.maxWounds
+}
+
+function isKnockedOutDigimon(p: any): boolean {
+  return p?.type === 'digimon' && !p.inReserve && p.maxWounds > 0 && (p.currentWounds ?? 0) >= p.maxWounds
+}
+
+/** Internal turn-boundary damage checks also include partners. */
+function knockedOutDigimonIds(participants: any[]): string[] {
+  return participants.filter(isKnockedOutDigimon).map((p: any) => p.id)
 }
 
 /** Enemies (not in reserve) whose Wound Boxes are all filled. */
@@ -127,51 +137,24 @@ export async function triggerTimeControl(
   }
 }
 
-// resolveNpcAttack's auto-devolve, for an enemy that digivolved during combat: it drops back to its
-// previous form instead of being defeated. Null when it has no earlier form.
-async function devolveEnemy(
+// The canonical helper mutates its participant. Keep the caller's original combat state intact.
+async function devolveCandidate(
   participants: any[],
   id: string,
   round: number,
 ): Promise<{ participants: any[]; logEntry: any } | null> {
   const p = participants.find((x: any) => x.id === id)
-  if (!p?.evolutionLineId || !(p.woundsHistory?.length > 0)) return null
-  const woundsHistory = [...p.woundsHistory]
-  const previousState = woundsHistory.pop()
-  if (!previousState) return null
-
-  const oldDigimon = await readCombatRecord('digimon', p.entityId,
-    () => db.select().from(digimon).where(eq(digimon.id, p.entityId)))
-  const newDigimon = await readCombatRecord('digimon', previousState.entityId,
-    () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
-  const devolvedHasCombatMonster = ((newDigimon?.qualities || []) as any[]).some((q: any) => q.id === 'combat-monster')
-  const wounds = previousState.wounds !== undefined ? previousState.wounds : 0
+  if (!p) return null
   const devolved = {
     ...p,
-    woundsHistory,
-    entityId: previousState.entityId,
-    maxWounds: previousState.maxWounds,
-    currentWounds: wounds,
-    npcStageIndex: previousState.stageIndex,
-    combatMonsterBonus: devolvedHasCombatMonster
-      ? Math.min(p.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-      : 0,
+    ...(Array.isArray(p.woundsHistory) ? { woundsHistory: [...p.woundsHistory] } : {}),
   }
+  const logEntry = await autoDevolveParticipant(devolved, participants, { round, database: db })
+  if (!logEntry) return null
 
   return {
     participants: participants.map((x: any) => (x.id === id ? devolved : x)),
-    logEntry: {
-      id: `log-${Date.now()}-autodevolve-${id}`,
-      timestamp: new Date().toISOString(),
-      round,
-      actorId: id,
-      actorName: resolveParticipantName(p, participants, oldDigimon?.name || 'Digimon', true),
-      action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-      target: null,
-      result: `Wounds restored to ${wounds}`,
-      damage: null,
-      effects: ['Auto-Devolve'],
-    },
+    logEntry,
   }
 }
 
@@ -235,9 +218,9 @@ async function startTurn(participants: any[], participantId: string | undefined,
 }
 
 /**
- * Resolves the knocked-out enemies among `candidateIds` (see the top of this file) and, when the
- * active participant was removed, starts the next participant's turn. Ids that aren't knocked-out
- * enemies are ignored. Returns the new turn state; `participants` is a new array.
+ * Resolves knocked-out enemy and partner candidates (see the top of this file) and, when an enemy
+ * was removed from the active slot, starts the next participant's turn. Other ids are ignored.
+ * Returns the new turn state; `participants` is a new array.
  */
 export async function resolveEnemyKnockouts(
   state: TurnState,
@@ -257,23 +240,31 @@ export async function resolveEnemyKnockouts(
   let pending = false
 
   const resolve = async (ids: string[], logRound: number) => {
-    const knockedOut = [...new Set(ids)].filter((id) => isKnockedOutEnemy(participants.find((p: any) => p.id === id)))
+    const knockedOut = [...new Set(ids)].filter((id) => {
+      const p = participants.find((p: any) => p.id === id)
+      return isKnockedOutEnemy(p) || isKnockedOutDigimon(p)
+    })
     if (knockedOut.length === 0) return
     const digimonById = await loadParticipantDigimon(participants)
 
     for (const id of knockedOut) {
       const p = participants.find((x: any) => x.id === id)
-      if (!isKnockedOutEnemy(p)) continue
+      if (!isKnockedOutEnemy(p) && !isKnockedOutDigimon(p)) continue
       const record = digimonById.get(p.entityId)
-      const name = ctx.names?.[id] ?? resolveParticipantName(p, participants, record?.name, true)
+      const name = ctx.names?.[id] ?? resolveParticipantName(p, participants, record?.name, isKnockedOutEnemy(p))
 
-      const devolved = await devolveEnemy(participants, id, logRound)
+      const isEnemy = isKnockedOutEnemy(p)
+      if (!isEnemy && (record?.isEnemy || typeof record?.partnerId !== 'string' || !record.partnerId.trim())) continue
+
+      const devolved = await devolveCandidate(participants, id, logRound)
       if (devolved) {
         participants = devolved.participants
+        if (!isEnemy) devolved.logEntry.actorName = name
         logEntries.push(devolved.logEntry)
         changed = true
         continue
       }
+      if (!isEnemy) continue
 
       if (hasUnusedTimeControl(p, record?.qualities)) {
         const timeControl = await triggerTimeControl(participants, id, { round: logRound, houseRules: ctx.houseRules, name })
@@ -358,7 +349,7 @@ export async function resolveEnemyKnockouts(
     if (currentTurnIndex >= turnOrder.length) {
       // Past the last slot: the round ends (Poison/Burn), then the reset and round-start triggers
       const endingRound = round
-      const before = new Set(knockedOutEnemyIds(participants))
+      const before = new Set(knockedOutDigimonIds(participants))
       const dot = await loadRoundEndContext(
         ctx.encounterId,
         participants,
@@ -367,7 +358,7 @@ export async function resolveEnemyKnockouts(
       const roundEnd = await applyRoundEndEffects({ participants, endingRound, rules: dot.rules, positions: dot.positions })
       participants = roundEnd.participants
       logEntries.push(...roundEnd.logEntries)
-      await resolve(knockedOutEnemyIds(participants).filter((id) => !before.has(id)), endingRound)
+      await resolve(knockedOutDigimonIds(participants).filter((id) => !before.has(id)), endingRound)
       if (turnOrder.length === 0) break
 
       currentTurnIndex = 0
@@ -378,9 +369,9 @@ export async function resolveEnemyKnockouts(
 
     await startTurn(participants, turnOrder[currentTurnIndex], round)
 
-    const before = new Set(knockedOutEnemyIds(participants))
+    const before = new Set(knockedOutDigimonIds(participants))
     await applyGravity()
-    await resolve(knockedOutEnemyIds(participants).filter((id) => !before.has(id)), round)
+    await resolve(knockedOutDigimonIds(participants).filter((id) => !before.has(id)), round)
   }
 
   if (turnOrder.length === 0) currentTurnIndex = 0

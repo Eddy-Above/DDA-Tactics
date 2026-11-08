@@ -1,5 +1,6 @@
+import { autoDevolveParticipant } from './partnerDevolution'
 import { eq } from 'drizzle-orm'
-import { db, digimon, tamers, evolutionLines } from '../db'
+import { db, digimon, tamers } from '../db'
 import { resolveNpcAttack } from './resolveNpcAttack'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { resolveParticipantName } from './participantName'
@@ -155,50 +156,18 @@ export async function resolveAreaIntercedeGroup({
 
   updatedParticipants = preserveEnduringSouls(updatedParticipants, participants)
 
-  // Auto-devolve check for each interceptor that was KO'd
   let claimFormChanged = false
+  const autoDevolvedIds = new Set<string>()
   for (const claim of claims) {
-    if (claim.isSupportAttack || claim.damageDealt <= 0) continue
+    if (claim.isSupportAttack || claim.damageDealt <= 0 || autoDevolvedIds.has(claim.interceptorParticipantId)) continue
     const interceptor = updatedParticipants.find((p: any) => p.id === claim.interceptorParticipantId)
-    if (interceptor &&
-        interceptor.currentWounds >= interceptor.maxWounds &&
-        interceptor.evolutionLineId &&
-        interceptor.woundsHistory?.length > 0) {
-      const previousState = interceptor.woundsHistory.pop()
-      if (previousState) {
-        const oldEntityId = interceptor.entityId
-        interceptor.entityId = previousState.entityId
-        claimFormChanged = true
-        interceptor.maxWounds = previousState.maxWounds
-        interceptor.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
-
-        await database.update(evolutionLines).set({
-          currentStageIndex: previousState.stageIndex,
-          updatedAt: new Date(),
-        }).where(eq(evolutionLines.id, interceptor.evolutionLineId))
-
-        const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => database.select().from(digimon).where(eq(digimon.id, oldEntityId)))
-        const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => database.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
-
-        const devolvedQualities = newDigimon?.qualities || []
-        const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-        interceptor.combatMonsterBonus = devolvedHasCombatMonster
-          ? Math.min(interceptor.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-          : 0
-
-        updatedBattleLog.push({
-          id: `log-${Date.now()}-autodevolve-${claim.interceptorParticipantId}`,
-          timestamp: new Date().toISOString(),
-          round,
-          actorId: interceptor.id,
-          actorName: oldDigimon?.name || 'Digimon',
-          action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-          target: null,
-          result: `Wounds restored to ${previousState.wounds !== undefined ? previousState.wounds : 0}`,
-          damage: null,
-          effects: ['Auto-Devolve'],
-        })
-      }
+    const autoDevolveLog = interceptor
+      ? await autoDevolveParticipant(interceptor, updatedParticipants, { round, database })
+      : null
+    if (autoDevolveLog) {
+      autoDevolvedIds.add(interceptor!.id)
+      claimFormChanged = true
+      updatedBattleLog.push(autoDevolveLog)
     }
   }
 
@@ -259,7 +228,7 @@ export async function resolveAreaIntercedeGroup({
   const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
   const knockout = await resolveEnemyKnockouts(
     { participants: updatedParticipants, turnOrder: updatedTurnOrder, currentTurnIndex, round },
-    claims.map(c => c.interceptorParticipantId).filter(id => !knockedOutBefore.has(id)),
+    claims.map(c => c.interceptorParticipantId).filter(id => !knockedOutBefore.has(id) && !autoDevolvedIds.has(id)),
     { encounterId, houseRules },
   )
   if (knockout.changed) {

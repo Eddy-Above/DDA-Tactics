@@ -1,11 +1,13 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, evolutionLines, tamers } from '../../../../db'
+import { db, encounters, digimon, evolutionLines, tamers, type Digimon, type EvolutionLine } from '../../../../db'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage } from '../../../../../types'
 import { getDigizoidArmorBonus } from '../../../../utils/digizoidArmor'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
 import { applyGuidingLightAuras } from '../../../../utils/guidingLight'
 import { loadCampaignCombatContext } from '../../../../utils/combatContext'
+import { buildCombatDevolutionState } from '../../../../utils/partnerDevolution'
+import { resolveCombatEvolutionIndex } from '../../../../../utils/combatEvolutionOptions'
 
 interface DigivolveBody {
   participantId: string
@@ -58,11 +60,13 @@ export default defineEventHandler(async (event) => {
   let canAct = participant.id === currentTurnParticipantId
   let tamerParticipant: any = null
 
+  let digimonEntity: Digimon | undefined
   if (participant.type === 'digimon') {
-    const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, participant.entityId))
-    if (digimonEntity?.partnerId) {
+    const [record] = await db.select().from(digimon).where(eq(digimon.id, participant.entityId))
+    digimonEntity = record
+    if (record?.partnerId) {
       tamerParticipant = participants.find(
-        (p: any) => p.type === 'tamer' && p.entityId === digimonEntity.partnerId
+        (p: any) => p.type === 'tamer' && p.entityId === record.partnerId
       )
       if (tamerParticipant && tamerParticipant.id === currentTurnParticipantId) {
         canAct = true
@@ -74,14 +78,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Participant cannot act right now' })
   }
 
-  // Determine who pays the action cost: tamer for partner digimon, digimon itself for NPCs
+  // The linked Tamer pays when present; otherwise retain the Digimon's own action cost.
   const actingParticipant = tamerParticipant ?? participant
-  const isNpc = !tamerParticipant
-
-  // Check action cost (1 simple action from tamer or digimon)
-  if (!force && (actingParticipant.actionsRemaining?.simple || 0) < 1) {
-    throw createError({ statusCode: 400, message: 'Not enough actions to digivolve' })
-  }
+  const isPartner = !!digimonEntity?.partnerId?.trim() && !digimonEntity.isEnemy && !participant.isEnemy
+  const isNpc = !tamerParticipant && !isPartner
 
   const { campaignLevel, eddySoulRules, houseRules } = await loadCampaignCombatContext(encounter.campaignId)
 
@@ -91,19 +91,37 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, message: 'Evolution line not found' })
   }
 
-  const chain = evoLine.chain
-  const currentStageIndex = (isNpc && (participant as any).npcStageIndex !== undefined)
-    ? (participant as any).npcStageIndex
-    : evoLine.currentStageIndex
+  const storedChain = evoLine.chain as EvolutionLine['chain'] | string
+  let chain: EvolutionLine['chain']
+  try {
+    chain = typeof storedChain === 'string' ? JSON.parse(storedChain) : storedChain
+    if (!Array.isArray(chain)) throw new Error('Invalid chain')
+  } catch {
+    throw createError({ statusCode: 500, message: 'Evolution line has an invalid chain' })
+  }
+  const currentStageIndex = isPartner
+    ? resolveCombatEvolutionIndex(chain, participant.entityId, evoLine.currentStageIndex)
+    : (isNpc && participant.npcStageIndex !== undefined)
+      ? participant.npcStageIndex
+      : evoLine.currentStageIndex
 
   // Validate target chain index
   if (body.targetChainIndex < 0 || body.targetChainIndex >= chain.length) {
     throw createError({ statusCode: 400, message: 'Target chain index out of range' })
   }
 
+  if (isPartner && currentStageIndex < 0) {
+    throw createError({ statusCode: 400, message: 'Current partner form is not linked to the evolution line' })
+  }
+
   // Validate current stage index (guard against stale/corrupted DB value)
   if (currentStageIndex < 0 || currentStageIndex >= chain.length) {
     throw createError({ statusCode: 500, message: `Evolution line has invalid currentStageIndex: ${currentStageIndex} (chain length: ${chain.length})` })
+  }
+
+  // Check action cost after resolving the current form (1 simple action from tamer or digimon).
+  if (!force && (actingParticipant.actionsRemaining?.simple || 0) < 1) {
+    throw createError({ statusCode: 400, message: 'Not enough actions to digivolve' })
   }
 
   const targetEntry = chain[body.targetChainIndex]
@@ -195,6 +213,12 @@ export default defineEventHandler(async (event) => {
   const newTotalHealth = (baseStats?.health || 0) + (bonusStats?.health || 0) + newDigizoidHealthBonus
   const newHasCombatMonster = (newQualities as any[]).some((q: any) => q.id === 'combat-monster')
 
+  // A partner may enter combat already evolved, with no combat wound snapshot. In that case
+  // its linked parent supplies the saved character-sheet wounds; NPC fallback stays unchanged.
+  const fallbackDevolution = isDevolve && isPartner && !participant.woundsHistory?.length
+    ? buildCombatDevolutionState(newDigimon, body.targetChainIndex, targetEntry.stage)
+    : null
+
   // Update participant
   const oldName = currentEntry.species
   const newName = targetEntry.species
@@ -238,7 +262,7 @@ export default defineEventHandler(async (event) => {
       } else {
         // Devolve: restore wounds from history
         const woundsHistory = [...(p.woundsHistory || [])]
-        const previousState = woundsHistory.pop()
+        const previousState = woundsHistory.pop() ?? fallbackDevolution
         const devolvedMaxWounds = previousState?.maxWounds || newMaxWounds
         const devolvedTotalHealth = previousState?.totalHealth ?? newTotalHealth
         evoChanges = {
@@ -253,7 +277,9 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    return { ...p, ...actionChanges, ...evoChanges }
+    const updated = { ...p, ...actionChanges, ...evoChanges }
+    if (isDigivolving && isPartner) delete updated.npcStageIndex
+    return updated
   })
 
   // Update evolution line currentStageIndex (skip for NPCs, they track stage on participant)

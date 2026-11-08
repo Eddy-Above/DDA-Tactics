@@ -1,6 +1,7 @@
+import { autoDevolveParticipant } from '../../../utils/partnerDevolution'
 import { serverDodgeDefense, recountSubmittedDodge } from '../../../utils/combatDodge'
 import { eq, inArray } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, evolutionLines, campaigns, maps } from '../../../db'
+import { db, encounters, digimon, tamers, campaigns, maps } from '../../../db'
 import { applyPushPullDisplacement } from '../../../utils/pushPull'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
@@ -902,49 +903,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         pushPullLogNote = disp.logNote
       }
 
-      // Auto-devolve check: if target is KO'd but has evolution history, devolve instead
-      let autoDevolveLog: any = null
       const damagedTarget = participants.find((p: any) => p.id === request.targetParticipantId)
-      if (damagedTarget && hit &&
-          damagedTarget.currentWounds !== undefined && damagedTarget.maxWounds !== undefined &&
-          damagedTarget.currentWounds >= damagedTarget.maxWounds &&
-          damagedTarget.evolutionLineId &&
-          damagedTarget.woundsHistory && damagedTarget.woundsHistory.length > 0) {
-        const previousState = damagedTarget.woundsHistory.pop()
-        if (previousState) {
-          const oldEntityId = damagedTarget.entityId
-          damagedTarget.entityId = previousState.entityId
-          damagedTarget.maxWounds = previousState.maxWounds
-          damagedTarget.currentWounds = previousState.wounds
-
-          await db.update(evolutionLines).set({
-            currentStageIndex: previousState.stageIndex,
-            updatedAt: new Date(),
-          }).where(eq(evolutionLines.id, damagedTarget.evolutionLineId))
-
-          const oldDigimon = await readCombatRecord('digimon', oldEntityId, () => db.select().from(digimon).where(eq(digimon.id, oldEntityId)))
-          const newDigimon = await readCombatRecord('digimon', previousState.entityId, () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
-
-          const devolvedQualities = newDigimon?.qualities || []
-          const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-          damagedTarget.combatMonsterBonus = devolvedHasCombatMonster
-            ? Math.min((damagedTarget as any).combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-            : 0
-
-          autoDevolveLog = {
-            id: `log-${Date.now()}-autodevolve`,
-            timestamp: new Date().toISOString(),
-            round: encounter.round,
-            actorId: damagedTarget.id,
-            actorName: oldDigimon?.name || 'Digimon',
-            action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-            target: null,
-            result: `Wounds restored to ${previousState.wounds}`,
-            damage: null,
-            effects: ['Auto-Devolve'],
-          }
-        }
-      }
+      const autoDevolveLog = damagedTarget && hit
+        ? await autoDevolveParticipant(damagedTarget, participants, { round: encounter.round, database: db })
+        : null
 
       // Add dodge battle log entry with damage breakdown
       const dodgeLogEntry = {

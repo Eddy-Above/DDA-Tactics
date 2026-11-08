@@ -1,6 +1,7 @@
+import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
 import { eq, inArray } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
-import { db, encounters, digimon, tamers, campaigns, evolutionLines, maps } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup, isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
@@ -236,10 +237,16 @@ async function resolveIntercedeClaim(
   // interceptor (the hit, its fall, Burn on the way in), the target it moved (Burn, a throw's fall)
   // and the attacker (Digizoid Armor reflect).
   const knockedOutBefore = new Set(knockedOutEnemyIds(encounter.participants || []))
+  const initialBattleLogLength = battleLog.length
+  const autoDevolvedIds = new Set<string>()
   const resolveClaimKnockouts = async (ids: string[], turnIndex: number, round: number) => {
+    // Nested area/NPC resolution may already have restored a form during this claim.
+    for (const entry of battleLog.slice(initialBattleLogLength)) {
+      if (entry.effects?.includes('Auto-Devolve')) autoDevolvedIds.add(entry.actorId)
+    }
     const result = await resolveEnemyKnockouts(
       { participants, turnOrder, currentTurnIndex: turnIndex, round },
-      ids.filter((pid) => !knockedOutBefore.has(pid)),
+      ids.filter((pid) => !knockedOutBefore.has(pid) && !autoDevolvedIds.has(pid)),
       {
         encounterId, houseRules,
         gravity: claimMapRecord ? { map: claimMapRecord, positions: updatedParticipantPositions ?? participantPositions } : undefined,
@@ -835,49 +842,11 @@ async function resolveIntercedeClaim(
     // Remove all intercede-offer requests for this group
     pendingRequests = pendingRequests.filter((r: any) => r.data?.intercedeGroupId !== intercedeGroupId)
 
-    // Auto-devolve check: if interceptor is KO'd and has evolution history, devolve instead
-    let autoDevolveLog: any = null
     const damagedInterceptor = participants.find((p: any) => p.id === body.interceptorParticipantId)
-    if (damagedInterceptor &&
-        damagedInterceptor.currentWounds !== undefined && damagedInterceptor.maxWounds !== undefined &&
-        damagedInterceptor.currentWounds >= damagedInterceptor.maxWounds &&
-        damagedInterceptor.evolutionLineId &&
-        damagedInterceptor.woundsHistory && damagedInterceptor.woundsHistory.length > 0) {
-      const previousState = damagedInterceptor.woundsHistory.pop()
-      if (previousState) {
-        const oldEntityId = damagedInterceptor.entityId
-        damagedInterceptor.entityId = previousState.entityId
-        damagedInterceptor.maxWounds = previousState.maxWounds
-        damagedInterceptor.currentWounds = previousState.wounds !== undefined ? previousState.wounds : 0
-
-        await db.update(evolutionLines).set({
-          currentStageIndex: previousState.stageIndex,
-          updatedAt: new Date(),
-        }).where(eq(evolutionLines.id, damagedInterceptor.evolutionLineId))
-
-        const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, oldEntityId))
-        const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
-
-        const devolvedQualities = newDigimon?.qualities || []
-        const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
-        damagedInterceptor.combatMonsterBonus = devolvedHasCombatMonster
-          ? Math.min(damagedInterceptor.combatMonsterBonus ?? 0, previousState.totalHealth ?? previousState.maxWounds)
-          : 0
-
-        autoDevolveLog = {
-          id: `log-${Date.now()}-autodevolve`,
-          timestamp: new Date().toISOString(),
-          round: encounter.round || 0,
-          actorId: damagedInterceptor.id,
-          actorName: oldDigimon?.name || 'Digimon',
-          action: `was knocked out and devolved to ${newDigimon?.name || 'previous form'}!`,
-          target: null,
-          result: `Wounds restored to ${previousState.wounds !== undefined ? previousState.wounds : 0}`,
-          damage: null,
-          effects: ['Auto-Devolve'],
-        }
-      }
-    }
+    const autoDevolveLog = damagedInterceptor
+      ? await autoDevolveParticipant(damagedInterceptor, participants, { round: encounter.round || 0, database: db })
+      : null
+    if (autoDevolveLog) autoDevolvedIds.add(damagedInterceptor!.id)
 
     // Devolution changes the aura even if the interceptor stayed on its original cell.
     if (autoDevolveLog) {
