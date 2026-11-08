@@ -285,14 +285,35 @@ export function canLandOn(
   return false
 }
 
-// Return whether the size difference between two units means the mover ignores the blocker as an obstacle
-// Units 2+ sizes different: mover can pass through but can't end there
-export function sizeInteraction(moverSize: DigimonSize, blockerSize: DigimonSize): 'blocked' | 'passable-only' {
-  const order: DigimonSize[] = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
-  const moverIdx = order.indexOf(moverSize)
-  const blockerIdx = order.indexOf(blockerSize)
-  if (Math.abs(moverIdx - blockerIdx) >= 2) return 'passable-only'
+// Occupied-square exceptions work in both directions and do not depend on faction.
+// Tamers use 'medium': Tiny can share with anyone; Small can pass but not share.
+export function sizeInteraction(moverSize: DigimonSize, blockerSize: DigimonSize): 'blocked' | 'passable-only' | 'shared' {
+  if (moverSize === 'tiny' || blockerSize === 'tiny') return 'shared'
+  if (moverSize === 'small' || blockerSize === 'small') return 'passable-only'
   return 'blocked'
+}
+
+export interface OccupyingUnit {
+  pos: Vec3
+  size: DigimonSize
+  giganticDimensions?: FootprintDims | null
+}
+
+// Separate passage and landing restrictions over every cell of each unit's body.
+export function getMovementOccupancy(moverSize: DigimonSize, units: Iterable<OccupyingUnit>) {
+  const blockedPositions = new Set<string>()
+  const landingBlockedPositions = new Set<string>()
+  for (const unit of units) {
+    const interaction = sizeInteraction(moverSize, unit.size)
+    if (interaction === 'shared') continue
+    const dims = getFootprintDimensions(unit.size, unit.giganticDimensions)
+    for (const cell of getFootprintCells(unit.pos, dims)) {
+      const k = key(cell)
+      landingBlockedPositions.add(k)
+      if (interaction === 'blocked') blockedPositions.add(k)
+    }
+  }
+  return { blockedPositions, landingBlockedPositions }
 }
 
 // ---------------------------------------------------------------------------

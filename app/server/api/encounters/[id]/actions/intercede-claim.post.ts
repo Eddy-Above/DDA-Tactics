@@ -12,6 +12,7 @@ import {
   getFootprintDimensions,
   isValidLandingPosition,
   getFootprintCells,
+  getReachableCells,
   isFootprintValid,
   isPositionInAir,
   findClosestValidDisplacementPosition,
@@ -364,8 +365,9 @@ async function resolveIntercedeClaim(
     const { caps, budget, bodyStat } = getMovementProfile(interceptor, digimonById, tamerById)
 
     // Step 1: reposition the interceptor into the AoE, adjacent to the target
-    const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]))
-    const interceptePos = findAreaIntercedePosition(targetPos, targetDims, interceptorPos, budget, caps, interceptorDims, claimMapRecord, repositionOccupied, areaCells)
+    const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]), interceptor)
+    const repositionBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]), interceptor, 'traversal')
+    const interceptePos = findAreaIntercedePosition(targetPos, targetDims, interceptorPos, budget, caps, interceptorDims, claimMapRecord, repositionOccupied, areaCells, new Set(), repositionBlocked)
     if (!interceptePos) {
       throw createError({ statusCode: 409, message: 'No valid intercede position available — board state changed' })
     }
@@ -374,8 +376,9 @@ async function resolveIntercedeClaim(
     updatedParticipantPositions = { ...participantPositions, [body.interceptorParticipantId]: interceptePos }
 
     // Step 2: throw the target out of the AoE to the chosen landing cell
-    const throwOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([effectiveTargetId]))
-    const landingCell = findThrowLandingCell(targetPos, body.throwAllyLandingPos, bodyStat, targetDims, claimMapRecord, throwOccupied, areaCells)
+    const throwOccupied = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([effectiveTargetId]), targetParticipantForPos)
+    const throwBlocked = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([effectiveTargetId]), targetParticipantForPos, 'traversal')
+    const landingCell = findThrowLandingCell(targetPos, body.throwAllyLandingPos, bodyStat, targetDims, claimMapRecord, throwOccupied, areaCells, new Set(), throwBlocked)
     if (!landingCell) {
       throw createError({ statusCode: 409, message: 'Invalid throw landing position — board state changed' })
     }
@@ -400,6 +403,11 @@ async function resolveIntercedeClaim(
       request.data.attackData?.range === 'ranged'
     const targetPos = participantPositions[effectiveTargetId]
     const attackerPos = participantPositions[attackerId]
+    const interceptorDims = getFootprintDimsForParticipant(interceptor, digimonById)
+    const { caps, budget } = getMovementProfile(interceptor, digimonById, tamerById)
+    const excluded = new Set(isRangedIntercede ? [interceptor.id] : [interceptor.id, effectiveTargetId])
+    const occupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, excluded, interceptor)
+    const blocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, excluded, interceptor, 'traversal')
     // For ranged intercede the destination is the pre-computed line-of-fire cell stored in the
     // offer; targetPos is only the fallback for melee (where it is always the intercede tile).
     let intercDePos: { x: number; y: number; z: number } | undefined =
@@ -407,12 +415,17 @@ async function resolveIntercedeClaim(
 
     // GM ranged intercede: no specific interceptor was chosen at offer time, so no position was
     // pre-computed. Compute the best reachable line-of-fire cell now using the chosen interceptor.
-    if (isRangedIntercede && !request.data.interceptePos && interceptorPos && targetPos && attackerPos && interceptorDigRec && interceptor.type === 'digimon') {
-      const { caps, budget } = getMovementProfile(interceptor, digimonById, tamerById)
-      const interceptorDims = getFootprintDimensions(interceptorDigRec.size as any, (interceptorDigRec as any).giganticDimensions)
-      const occupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId]))
-      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, budget, caps, interceptorDims, claimMapRecord, occupied)
+    if (isRangedIntercede && !request.data.interceptePos && interceptorPos && targetPos && attackerPos) {
+      const computed = findRangedIntercedPosition(attackerPos, targetPos, interceptorPos, budget, caps, interceptorDims, claimMapRecord, occupied, new Set(), blocked)
       intercDePos = computed ?? undefined
+    }
+
+    // An offer can outlive a token move. Recheck passage and landing for the chosen
+    // interceptor, including stored player positions, before spending the claim.
+    if (!interceptorPos || !intercDePos ||
+      !getReachableCells(interceptorPos, budget, caps, claimMapRecord, new Set(), blocked, interceptorDims).has(`${intercDePos.x},${intercDePos.y},${intercDePos.z}`) ||
+      !isFootprintValid(intercDePos, interceptorDims, claimMapRecord, occupied, caps)) {
+      throw createError({ statusCode: 409, message: 'No valid intercede path available — board state changed' })
     }
 
     if (interceptorPos && intercDePos) {
@@ -452,16 +465,15 @@ async function resolveIntercedeClaim(
           return detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
         })() : defaultCaps
 
-        // Occupied set: exclude interceptor (at target's tile) and target (leaving),
-        // then add the interceptor's full footprint so target can't land in their space
-        const claimOccupied = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]))
-        getFootprintCells(intercDePos, interceptorDims).forEach((cell: { x: number; y: number; z: number }) => {
-          claimOccupied.add(`${cell.x},${cell.y},${cell.z}`)
-        })
+        // The interceptor is already at the new position. A Tiny pairing may keep
+        // sharing that square; otherwise the protected target must move clear.
+        const claimOccupied = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([effectiveTargetId]), targetParticipantForPos)
+        const claimBlocked = buildFootprintOccupiedSet(updatedParticipantPositions, participants, digimonById, new Set([effectiveTargetId]), targetParticipantForPos, 'traversal')
 
         // Preferred displacement: interceptor's footprint width/height/depth in the direction away from attacker
-        let displacedPos: { x: number; y: number; z: number } | null = null
-        if (attackerPos) {
+        let displacedPos: { x: number; y: number; z: number } | null =
+          isFootprintValid(targetPos, targetDims, claimMapRecord, claimOccupied, targetCaps) ? targetPos : null
+        if (!displacedPos && attackerPos) {
           const dir = {
             x: Math.sign(targetPos.x - attackerPos.x),
             y: Math.sign(targetPos.y - attackerPos.y),
@@ -473,7 +485,9 @@ async function resolveIntercedeClaim(
               y: targetPos.y + dir.y * interceptorDims.height,
               z: targetPos.z + dir.z * interceptorDims.depth,
             }
-            if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied, targetCaps)) {
+            const distance = Math.max(Math.abs(preferred.x - targetPos.x), Math.abs(preferred.y - targetPos.y), Math.abs(preferred.z - targetPos.z))
+            if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied, targetCaps) &&
+              getReachableCells(targetPos, distance, targetCaps, claimMapRecord, new Set(), claimBlocked, targetDims).has(`${preferred.x},${preferred.y},${preferred.z}`)) {
               displacedPos = preferred
             }
           }
@@ -482,14 +496,16 @@ async function resolveIntercedeClaim(
         // BFS fallback if preferred direction is blocked
         if (!displacedPos) {
           displacedPos = findClosestValidDisplacementPosition(
-            targetPos, claimMapRecord, targetCaps, claimOccupied, targetDims,
+            targetPos, claimMapRecord, targetCaps, claimOccupied, targetDims, 6, new Set(), claimBlocked,
           )
         }
 
         if (displacedPos) {
           updatedParticipantPositions[effectiveTargetId] = displacedPos
         }
-        // else: target cannot be displaced (edge case — offer.post should have blocked this)
+        else {
+          throw createError({ statusCode: 409, message: 'No valid displacement position available — board state changed' })
+        }
       }
       // Ranged intercede: target stays in place, only interceptor moves
     }

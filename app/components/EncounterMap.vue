@@ -537,7 +537,7 @@ function postMove(participantId: string, distance: number, noActionCost: boolean
 }
 
 // GM free-move: enter reposition mode for a participant (cancels any other move mode). The GM then
-// clicks any valid tile → onGmMove. No reachable highlight — placement is free (any valid surface).
+// aims at any height with a ghost and scroll wheel → onGmMove. No movement budget or capability check.
 function onGmMoveStart(participantId: string) {
   gmMoveParticipantId.value = participantId
   npcMoveParticipantId.value = null
@@ -615,7 +615,7 @@ function npcMoveCaps(participantId: string) {
   if (!p) return null
   const pos = positions.value[participantId]
   if (!pos) return null
-  const dInfo = digimonMapForCanvas.value[p.entityId] as any
+  const dInfo = p.type === 'digimon' ? digimonMapForCanvas.value[p.entityId] as any : undefined
   let budget: number
   let qualities: any[]
   if (p.type === 'tamer') {
@@ -635,9 +635,10 @@ function npcMoveCaps(participantId: string) {
     if (part.id === participantId) continue
     const partPos = positions.value[part.id]
     if (!partPos) continue
-    const partSize = (digimonMapForCanvas.value[part.entityId] as any)?.size ?? 'medium'
+    const partInfo = part.type === 'digimon' ? digimonMapForCanvas.value[part.entityId] : undefined
+    const partSize = partInfo?.size ?? 'medium'
     const partIsEnemy: boolean = part.type === 'digimon' && ((part as any).isEnemy === true)
-    const partGig = (digimonMapForCanvas.value[part.entityId] as any)?.giganticDimensions ?? null
+    const partGig = partInfo?.giganticDimensions ?? null
     occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy, giganticDimensions: partGig })
   }
   const moverGig = dInfo?.giganticDimensions ?? null
@@ -661,7 +662,7 @@ function throwCaps(thrownParticipantId: string, controllerId: string) {
     budget = cInfo ? applyDerivedStatEffects(calculateDigimonDerivedStats(cInfo.baseStats, cInfo.stage, cInfo.size), controller.activeEffects ?? []).body : 0
   }
 
-  const thrownInfo = digimonMapForCanvas.value[thrown.entityId] as any
+  const thrownInfo = thrown.type === 'digimon' ? digimonMapForCanvas.value[thrown.entityId] as any : undefined
   const moverSize = thrownInfo?.size ?? 'medium'
   const moverGig = thrownInfo?.giganticDimensions ?? null
   const moverIsEnemy = thrown.type === 'digimon' && ((thrown as any).isEnemy === true)
@@ -671,9 +672,10 @@ function throwCaps(thrownParticipantId: string, controllerId: string) {
     if (part.id === thrownParticipantId) continue
     const partPos = positions.value[part.id]
     if (!partPos) continue
-    const partSize = (digimonMapForCanvas.value[part.entityId] as any)?.size ?? 'medium'
+    const partInfo = part.type === 'digimon' ? digimonMapForCanvas.value[part.entityId] : undefined
+    const partSize = partInfo?.size ?? 'medium'
     const partIsEnemy = part.type === 'digimon' && ((part as any).isEnemy === true)
-    const partGig = (digimonMapForCanvas.value[part.entityId] as any)?.giganticDimensions ?? null
+    const partGig = partInfo?.giganticDimensions ?? null
     occupied.set(part.id, { pos: partPos as Vec3, size: partSize, isEnemy: partIsEnemy, giganticDimensions: partGig })
   }
 

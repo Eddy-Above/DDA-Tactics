@@ -1,8 +1,9 @@
-import type { Vec3, GameMap } from '../../types'
+import type { Vec3, GameMap, DigimonSize } from '../../types'
 import type { FootprintDims, MovementCapabilities } from '../../utils/movementRules'
 import {
   getFootprintDimensions,
   getFootprintCells,
+  getMovementOccupancy,
   isWithinMapFootprint,
   canPassThrough,
   hasSolidVoxelSupport,
@@ -49,6 +50,8 @@ export function getReachableCells(
   caps: MovementCapabilities,
   map: GameMap,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = new Set(),
+  moverDims: FootprintDims = { width: 1, height: 1, depth: 1 },
 ): Set<string> {
   const visited = new Map<string, number>([[key(origin), 0]])
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: origin, cost: 0 }]
@@ -58,6 +61,7 @@ export function getReachableCells(
     for (const nb of neighbours(pos)) {
       const k = key(nb)
       if (visited.has(k)) continue
+      if (blockedPositions.size && getFootprintCells(nb, moverDims).some(cell => blockedPositions.has(key(cell)))) continue
       if (!canPassThrough(pos, nb, caps, map, destroyed)) continue
       visited.set(k, cost + 1)
       queue.push({ pos: nb, cost: cost + 1 })
@@ -102,6 +106,7 @@ export function findClosestValidDisplacementPosition(
   targetDims: FootprintDims = { width: 1, height: 1, depth: 1 },
   maxRadius: number = 6,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
   const visited = new Map<string, number>([[key(fromPos), 0]])
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: fromPos, cost: 0 }]
@@ -112,6 +117,7 @@ export function findClosestValidDisplacementPosition(
     for (const nb of neighbours(pos)) {
       const k = key(nb)
       if (visited.has(k)) continue
+      if (blockedPositions.size && getFootprintCells(nb, targetDims).some(cell => blockedPositions.has(key(cell)))) continue
       if (!canPassThrough(pos, nb, caps, map, destroyed)) continue
       visited.set(k, cost + 1)
       queue.push({ pos: nb, cost: cost + 1 })
@@ -152,11 +158,12 @@ export function findRangedIntercedPosition(
   map: GameMap,
   occupiedSet: Set<string>,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
   const lineCells = getCellsOnLine(attackerPos, targetPos)
   if (lineCells.length === 0) return null
   const sorted = [...lineCells].reverse() // closest to target first
-  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed)
+  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
   for (const cell of sorted) {
     if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps)) return cell
   }
@@ -175,8 +182,9 @@ export function findThrowLandingCell(
   occupiedSet: Set<string>,
   excludeCells?: Set<string>,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
-  const reachable = getReachableCells(originPos, maxDistance, PROJECTILE_CAPS, map, destroyed)
+  const reachable = getReachableCells(originPos, maxDistance, PROJECTILE_CAPS, map, destroyed, blockedPositions, targetDims)
   if (!reachable.has(key(landingPos))) return null
   if (!isFootprintValid(landingPos, targetDims, map, occupiedSet, PROJECTILE_CAPS)) return null
   if (excludeCells) {
@@ -227,6 +235,7 @@ export function findPushPullLandingCell(
   map: GameMap,
   occupiedSet: Set<string>,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
   const tc = footprintCenter(targetPos, targetDims)
   const ac = footprintCenter(attackerPos, attackerDims)
@@ -243,8 +252,9 @@ export function findPushPullLandingCell(
     if (delta.x === 0 && delta.y === 0 && delta.z === 0) break
     const next: Vec3 = { x: cur.x + delta.x, y: cur.y + delta.y, z: cur.z + delta.z }
     if (!footprintCanStep(cur, delta, targetDims, map, destroyed)) break                // walls/voxels/ceilings, full body
-    if (!isFootprintValid(next, targetDims, map, occupiedSet, PROJECTILE_CAPS)) break    // support + full-footprint occupancy
-    best = next
+    if (getFootprintCells(next, targetDims).some(cell => blockedPositions.has(key(cell)))) break
+    // Small pairings permit passage, but the final position must still be landable.
+    if (isFootprintValid(next, targetDims, map, occupiedSet, PROJECTILE_CAPS)) best = next
     cur = next
   }
   return best
@@ -284,23 +294,27 @@ export function getFootprintDimsForParticipant(
   return getFootprintDimensions(rec.size as any, rec.giganticDimensions)
 }
 
-// Builds a set of occupied cell keys covering every participant's FULL footprint
-// (not just their anchor cell), excluding the given participant ids.
+// Occupied cells for this mover and purpose, applying reciprocal Tiny/Small exceptions.
+// Tamers and unknown records use medium. Every unit's full 3D footprint is checked.
 export function buildFootprintOccupiedSet(
   participantPositions: Record<string, Vec3>,
   participants: Array<{ id: string; type: 'tamer' | 'digimon'; entityId: string }>,
   digimonById: Map<string, { size: string; giganticDimensions?: any }>,
   excludeIds: Set<string>,
+  mover?: { type: 'tamer' | 'digimon'; entityId: string },
+  purpose: 'landing' | 'traversal' = 'landing',
 ): Set<string> {
-  const occupied = new Set<string>()
+  const moverSize = mover?.type === 'digimon' ? (digimonById.get(mover.entityId)?.size ?? 'medium') as DigimonSize : 'medium'
+  const units = []
   for (const p of participants) {
     if (excludeIds.has(p.id)) continue
     const pos = participantPositions[p.id]
     if (!pos) continue
-    const dims = getFootprintDimsForParticipant(p, digimonById)
-    for (const cell of getFootprintCells(pos, dims)) occupied.add(key(cell))
+    const record = p.type === 'digimon' ? digimonById.get(p.entityId) : undefined
+    units.push({ pos, size: (record?.size ?? 'medium') as DigimonSize, giganticDimensions: record?.giganticDimensions })
   }
-  return occupied
+  const occupancy = getMovementOccupancy(moverSize, units)
+  return purpose === 'traversal' ? occupancy.blockedPositions : occupancy.landingBlockedPositions
 }
 
 // For area-attack intercede: finds a cell adjacent to the target's footprint that is
@@ -318,6 +332,7 @@ export function findAreaIntercedePosition(
   occupied: Set<string>,
   areaCells: Set<string>,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupied,
 ): Vec3 | null {
   const footprintCells = getFootprintCells(targetPos, targetDims)
   const footprintKeys = new Set(footprintCells.map(key))
@@ -329,7 +344,7 @@ export function findAreaIntercedePosition(
     minZ = Math.min(minZ, c.z); maxZ = Math.max(maxZ, c.z)
   }
 
-  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed)
+  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
 
   let best: Vec3 | null = null
   let bestDist = Infinity
@@ -367,8 +382,9 @@ export function hasValidThrowOutOfAreaCell(
   occupied: Set<string>,
   areaCells: Set<string>,
   destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = occupied,
 ): boolean {
-  const reachable = getReachableCells(targetPos, maxDistance, PROJECTILE_CAPS, map, destroyed)
+  const reachable = getReachableCells(targetPos, maxDistance, PROJECTILE_CAPS, map, destroyed, blockedPositions, targetDims)
   for (const k of reachable) {
     const [x, y, z] = k.split(',').map(Number)
     const cell = { x, y, z }

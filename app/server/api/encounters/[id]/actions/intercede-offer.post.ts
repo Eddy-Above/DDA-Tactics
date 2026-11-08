@@ -18,6 +18,7 @@ import {
   hasValidThrowOutOfAreaCell,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
+import { sizeInteraction } from '~/utils/movementRules'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
@@ -143,20 +144,6 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   const mapRecord: any = ((encounter as any).mapId && Object.keys(participantPositions).length > 0)
     ? await loadEncounterMap((encounter as any).mapId)
     : null
-
-  // Returns true if the interceptor (digimon participant) can reach targetPos on the map
-  function canReachTarget(interceptorParticipantId: string, targetPos: { x: number; y: number; z: number }): boolean {
-    if (!mapRecord) return true  // no map = always eligible
-    if (!participantPositions[interceptorParticipantId]) return false  // unplaced on map = ineligible
-    const interceptorPos = participantPositions[interceptorParticipantId]
-    const interceptorP = participants.find((p: any) => p.id === interceptorParticipantId)
-    if (!interceptorP || interceptorP.type !== 'digimon') return true
-    const digRecord = digimonById.get(interceptorP.entityId)
-    if (!digRecord) return true
-    const { caps, budget } = getMovementProfile(interceptorP, digimonById, tamerById)
-    const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
-    return reachable.has(`${targetPos.x},${targetPos.y},${targetPos.z}`)
-  }
 
   // Helper: check if a participant has eligible intercede actions
   const hasEligibleInterceptor = (participant: any): boolean => {
@@ -365,12 +352,14 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           const targetDims = getFootprintDimsForParticipant(targetParticipant, digimonById)
 
           // Rule 2: can the candidate reach an in-AoE cell adjacent to the target?
-          const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, tid]))
-          if (!findAreaIntercedePosition(targetPos, targetDims, pPos, budget, caps, pDims, mapRecord, repositionOccupied, areaCells)) continue
+          const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, tid]), p)
+          const repositionBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, tid]), p, 'traversal')
+          if (!findAreaIntercedePosition(targetPos, targetDims, pPos, budget, caps, pDims, mapRecord, repositionOccupied, areaCells, new Set(), repositionBlocked)) continue
 
           // Rule 3: from the target's current position, is there a valid throw-out cell within range?
-          const throwOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([tid]))
-          if (!hasValidThrowOutOfAreaCell(targetPos, bodyStat, targetDims, mapRecord, throwOccupied, areaCells)) continue
+          const throwOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([tid]), targetParticipant)
+          const throwBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([tid]), targetParticipant, 'traversal')
+          if (!hasValidThrowOutOfAreaCell(targetPos, bodyStat, targetDims, mapRecord, throwOccupied, areaCells, new Set(), throwBlocked)) continue
 
           eligibleTargets.push(tid)
         }
@@ -396,36 +385,12 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       const digimonParticipant = partnerParticipantId ? participants.find((pp: any) => pp.id === partnerParticipantId) : null
       const partnerIsAttacker = partnerParticipantId === body.attackerId
       const tamerIsAttacker = p.id === body.attackerId
-      // Spatial check: can the digimon reach at least one target? (skip if digimon is the attacker)
-      let digimonSpatiallyEligible = true
-      if (digimonParticipant && partnerParticipantId && !partnerIsAttacker && mapRecord) {
-        const targetPositions = allTargetIds.map(tid => participantPositions[tid]).filter(Boolean)
-        if (targetPositions.length > 0) {
-          digimonSpatiallyEligible = targetPositions.some(tp => canReachTarget(partnerParticipantId!, tp))
-        }
-      }
+      // Rules 1-3 above already found valid adjacent landing cells using the same
+      // size-aware paths as claims. Reuse that result instead of searching again
+      // for the protected target's occupied anchor.
+      const digimonSpatiallyEligible = !mapRecord || (areaIntercedeEligibility.get(partnerParticipantId!)?.length ?? 0) > 0
       const digimonEligible = !!(digimonParticipant && !allTargetIdSet.has(partnerParticipantId!) && !partnerIsAttacker && hasEligibleInterceptor(digimonParticipant) && digimonSpatiallyEligible)
-      // Spatial check for tamer: if map active, verify tamer can reach at least one target from their own location
-      let tamerSpatiallyEligible = true
-      if (mapRecord && !allTargetIdSet.has(p.id) && !tamerIsAttacker) {
-        const tamerPos = participantPositions[p.id]
-        if (!tamerPos) {
-          tamerSpatiallyEligible = false
-        } else {
-          const tamerRecord = tamerById.get(p.entityId)
-          if (tamerRecord) {
-            const attrs = tamerRecord.attributes || {}
-            const skills = tamerRecord.skills || {}
-            const tamerMovement = (attrs.agility || 0) + (skills.survival || 0)
-            const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
-            const targetPositions = allTargetIds.map((tid: string) => participantPositions[tid]).filter(Boolean)
-            if (targetPositions.length > 0) {
-              const tamerReachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
-              tamerSpatiallyEligible = targetPositions.some((tp: any) => tamerReachable.has(`${tp.x},${tp.y},${tp.z}`))
-            }
-          }
-        }
-      }
+      const tamerSpatiallyEligible = !mapRecord || (areaIntercedeEligibility.get(p.id)?.length ?? 0) > 0
       const tamerEligible = !allTargetIdSet.has(p.id) && !tamerIsAttacker && hasEligibleInterceptor(p) && tamerSpatiallyEligible
       if (!tamerEligible && !digimonEligible) continue
 
@@ -986,8 +951,10 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       targetCapsForOffer = detectCapabilitiesFromQualities(tq, td.movement, td.ram, td.cpu)
       targetDimsForOffer = getFootprintDimensions(targetDigRec.size as any, (targetDigRec as any).giganticDimensions)
       // Occupied set excludes target (interceptor will take their tile)
-      const preOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.targetId!]))
-      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, preOccupied, targetDimsForOffer) !== null
+      const targetParticipant = participants.find((p: any) => p.id === body.targetId)
+      const preOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.targetId!]), targetParticipant)
+      const preBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.targetId!]), targetParticipant, 'traversal')
+      targetCanBeDisplaced = findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, preOccupied, targetDimsForOffer, 6, new Set(), preBlocked) !== null
     }
   }
 
@@ -1065,23 +1032,26 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
 
           if (isRangedOnMap) {
             // Ranged: find line-of-fire cell between attacker and target
-            const rangedOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id]))
+            const rangedOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id]), partnerParticipant)
+            const rangedBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id]), partnerParticipant, 'traversal')
             foundPos = findRangedIntercedPosition(
-              attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDims, mapRecord, rangedOccupied,
+              attackerPos_map, targetPos_map, interceptorPos, budget, caps, interceptorDims, mapRecord, rangedOccupied, new Set(), rangedBlocked,
             )
             isRangedIntercede = true
           } else if (meleeInterceptCell) {
             // Melee: interceptor must reach the footprint cell of the target closest to the attacker
-            const meleeOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id, body.targetId!]))
-            const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord)
+            const meleeOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id, body.targetId!]), partnerParticipant)
+            const meleeBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id, body.targetId!]), partnerParticipant, 'traversal')
+            const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord, new Set(), meleeBlocked, interceptorDims)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
               isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
-              const occupiedWithInterceptor = new Set(meleeOccupied)
-              for (const c of getFootprintCells(meleeInterceptCell, interceptorDims)) occupiedWithInterceptor.add(`${c.x},${c.y},${c.z}`)
-              if (findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, occupiedWithInterceptor, targetDimsForOffer) !== null) {
+              const targetParticipant = participants.find((p: any) => p.id === body.targetId)
+              const occupiedWithInterceptor = buildFootprintOccupiedSet({ ...participantPositions, [partnerParticipant.id]: meleeInterceptCell }, participants, digimonById, new Set([body.targetId!]), targetParticipant)
+              const blockedWithInterceptor = buildFootprintOccupiedSet({ ...participantPositions, [partnerParticipant.id]: meleeInterceptCell }, participants, digimonById, new Set([body.targetId!]), targetParticipant, 'traversal')
+              if (isFootprintValid(targetPos_map, targetDimsForOffer, mapRecord, occupiedWithInterceptor, targetCapsForOffer) || findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, occupiedWithInterceptor, targetDimsForOffer, 6, new Set(), blockedWithInterceptor) !== null) {
                 foundPos = meleeInterceptCell
               }
             }
@@ -1128,21 +1098,24 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           const tamerCaps = detectCapabilitiesFromQualities([], 0, 0, 0)
           let tamerFoundPos: { x: number; y: number; z: number } | null = null
           if (isRangedOnMap) {
-            const rangedOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id]))
+            const rangedOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id]), p)
+            const rangedBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id]), p, 'traversal')
             tamerFoundPos = findRangedIntercedPosition(
-              attackerPos_map, targetPos_map, tamerPos, tamerMovement, tamerCaps, { width: 1, height: 1, depth: 1 }, mapRecord, rangedOccupied,
+              attackerPos_map, targetPos_map, tamerPos, tamerMovement, tamerCaps, { width: 1, height: 1, depth: 1 }, mapRecord, rangedOccupied, new Set(), rangedBlocked,
             )
           } else if (meleeInterceptCell) {
-            const meleeOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, body.targetId!]))
-            const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord)
+            const meleeOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, body.targetId!]), p)
+            const meleeBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, body.targetId!]), p, 'traversal')
+            const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord, new Set(), meleeBlocked)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
               isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied, tamerCaps)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
-              const occupiedWithInterceptor = new Set(meleeOccupied)
-              for (const c of getFootprintCells(meleeInterceptCell, { width: 1, height: 1, depth: 1 })) occupiedWithInterceptor.add(`${c.x},${c.y},${c.z}`)
-              if (findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, occupiedWithInterceptor, targetDimsForOffer) !== null) {
+              const targetParticipant = participants.find((pp: any) => pp.id === body.targetId)
+              const occupiedWithInterceptor = buildFootprintOccupiedSet({ ...participantPositions, [p.id]: meleeInterceptCell }, participants, digimonById, new Set([body.targetId!]), targetParticipant)
+              const blockedWithInterceptor = buildFootprintOccupiedSet({ ...participantPositions, [p.id]: meleeInterceptCell }, participants, digimonById, new Set([body.targetId!]), targetParticipant, 'traversal')
+              if (isFootprintValid(targetPos_map, targetDimsForOffer, mapRecord, occupiedWithInterceptor, targetCapsForOffer) || findClosestValidDisplacementPosition(targetPos_map, mapRecord, targetCapsForOffer, occupiedWithInterceptor, targetDimsForOffer, 6, new Set(), blockedWithInterceptor) !== null) {
                 tamerFoundPos = meleeInterceptCell
               }
             }
@@ -1226,10 +1199,15 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     }
   }
 
-  // Melee only: if the target has no valid displacement position, suppress all offers.
+  // Player candidates have already checked their own displacement/sharing result.
+  // A Tiny pairing can still intercede when no separate target square is available.
   if (!isRangedOnMap && !targetCanBeDisplaced) {
-    eligibleTamerIds.splice(0)
-    gmEligible = false
+    const targetSize = target.type === 'digimon' ? (digimonById.get(target.entityId)?.size ?? 'medium') : 'medium'
+    const gmOptedOut = getGmCharacterOptOuts(encounter)[body.targetId!] || []
+    gmEligible = gmEligible && participants.some((p: any) =>
+      p.id !== body.attackerId && p.id !== body.targetId && hasEligibleInterceptor(p) && !gmOptedOut.includes(p.id) &&
+      sizeInteraction(p.type === 'digimon' ? (digimonById.get(p.entityId)?.size ?? 'medium') : 'medium', targetSize) === 'shared',
+    )
   }
 
   // Clash Attack: the controller and opponent are locked together in a grapple — no third party

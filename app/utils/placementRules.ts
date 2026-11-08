@@ -1,7 +1,8 @@
 // Pure rules for putting characters onto the map, shared by EncounterMap (who may be placed or
 // dragged, and where a drop is routed) and MapCanvas (surface/footprint validation and the drag
 // gesture). Free of Three.js, Vue and server imports so it can be unit-tested directly.
-import type { Vec3 } from '~/types'
+import type { Vec3, DigimonSize } from '~/types'
+import { sizeInteraction } from '~/utils/movementRules'
 
 export type EncounterPhase = 'setup' | 'initiative' | 'combat' | 'ended'
 
@@ -125,6 +126,7 @@ export function makeSpawnCellChecker(
 
 export interface PlacementOccupant {
   id: string
+  size?: DigimonSize
   /** Where it stands; undefined when it is not on the map. */
   position: Vec3 | undefined
   footprint: PlacementFootprint
@@ -135,6 +137,8 @@ export interface PlacementCheck {
   isDm: boolean
   /** The unit being placed (it never blocks itself, so a unit can be nudged onto its own old cells). */
   participantId: string
+  /** Tamers and callers without a Digimon record use medium. */
+  size?: DigimonSize
   footprint: PlacementFootprint
   /** True when a solid voxel stops anything standing on this cell. Asked for every cell of the footprint. */
   isBlocked(cell: Vec3): boolean
@@ -157,7 +161,7 @@ export interface PlacementEvaluation {
  *
  * The spawn-area boundary applies to players only, and to the WHOLE footprint: a unit larger than
  * one cell may not hang over a non-spawn cell just because its anchor sits on a spawn one. Solid
- * voxels and other units block everyone, so the GM can't stack tokens or bury one in a wall either.
+ * voxels block everyone. Overlapping units are allowed only when either unit is Tiny.
  */
 export function evaluatePlacement(check: PlacementCheck): PlacementEvaluation {
   const cell = placementCellFromHit(check.hit)
@@ -174,6 +178,7 @@ export function evaluatePlacement(check: PlacementCheck): PlacementEvaluation {
   }
   const occupied = check.occupants.some(o =>
     o.id !== check.participantId &&
+    sizeInteraction(check.size ?? 'medium', o.size ?? 'medium') !== 'shared' &&
     !!o.position && o.position.y === cell.y &&
     footprintsOverlapXZ(cell, footprint, o.position, o.footprint),
   )

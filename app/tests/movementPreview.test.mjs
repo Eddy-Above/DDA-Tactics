@@ -35,7 +35,7 @@ function harness(size = 'large', giganticDimensions = null) {
     emit: (...args) => events.push(args),
   }
   const handlers = loadPageFunctions('components/MapCanvas.vue', [
-    'getParticipantFootprintDims', 'movementPreviewCenter', 'updatePathHighlights', 'onMouseMove',
+    'getParticipantFootprintDims', 'movementPreviewCenter', 'updatePathHighlights', 'getMoveAim', 'moveCellAt', 'onMouseMove',
   ], dependencies)
   return { ...dependencies, ...handlers, labels, events }
 }

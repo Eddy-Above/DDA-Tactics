@@ -10,11 +10,12 @@ import {
   getFootprintCells,
   isPositionInAir,
   findThrowLandingCell,
+  buildFootprintOccupiedSet,
   computeFallDamage,
 } from '~/server/utils/mapMovement'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter } from '~/server/utils/guidingLight'
-import { loadEncounterMap, getFallerProfile } from '~/server/utils/combatSpatial'
+import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from '~/server/utils/combatSpatial'
 import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '~/server/utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
 import { chebyshev } from '~/server/utils/gridDistance'
@@ -274,13 +275,10 @@ export default defineEventHandler(async (event) => {
             ? getFootprintDimensions(targetDigimonEntity.size as any, (targetDigimonEntity as any).giganticDimensions)
             : { width: 1, height: 1, depth: 1 }
 
-          const occupiedSet = new Set(
-            Object.entries(participantPositions)
-              .filter(([pid]) => pid !== target.id)
-              .map(([, pos]: any) => `${pos.x},${pos.y},${pos.z}`)
-          )
-
-          const landingCell = findThrowLandingCell(targetPos, body.landingPos, actorBodyStat, targetDims, throwMapRecord, occupiedSet)
+          const landingDigimon = await loadParticipantDigimon(participants)
+          const occupiedSet = buildFootprintOccupiedSet(participantPositions, participants, landingDigimon, new Set([target.id]), target)
+          const blockedPositions = buildFootprintOccupiedSet(participantPositions, participants, landingDigimon, new Set([target.id]), target, 'traversal')
+          const landingCell = findThrowLandingCell(targetPos, body.landingPos, actorBodyStat, targetDims, throwMapRecord, occupiedSet, undefined, new Set(), blockedPositions)
 
           if (landingCell) {
             // Settle the thrown target to the ground (flyers hover); fall damage adds to the throw damage.

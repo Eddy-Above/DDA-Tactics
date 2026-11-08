@@ -40,7 +40,8 @@ export async function computePushPull(args: {
   const attackerPart = participants.find((p: any) => p.id === attackerParticipantId)
   const targetDims = getFootprintDimsForParticipant(targetPart, digimonById)
   const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById)
-  const occupiedSet = buildFootprintOccupiedSet(positions, participants, digimonById, new Set([targetParticipantId]))
+  const occupiedSet = buildFootprintOccupiedSet(positions, participants, digimonById, new Set([targetParticipantId]), targetPart)
+  const blockedPositions = buildFootprintOccupiedSet(positions, participants, digimonById, new Set([targetParticipantId]), targetPart, 'traversal')
 
   const landingCell = findPushPullLandingCell(
     targetPos,
@@ -51,6 +52,8 @@ export async function computePushPull(args: {
     attackerDims,
     map,
     occupiedSet,
+    new Set(),
+    blockedPositions,
   )
   if (!landingCell) return { participants, patch: null, logNote: null }
 

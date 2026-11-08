@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import type { GameMap, Vec3, DigimonSize } from '~/types'
 import type { MovementCapabilities } from '~/utils/movementRules'
-import { canPassThrough, canLandOn, sizeInteraction, getFootprintDimensions, getFootprintCells, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
+import { canPassThrough, canLandOn, getMovementOccupancy, getFootprintDimensions, getFootprintCells, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
 import { searchReachable, findPath, type ReachableSearch } from '~/utils/pathfinding'
 import { vec3Key } from '~/utils/mapGeometry'
 
@@ -27,7 +27,7 @@ export { detectCapabilities, PROJECTILE_CAPS }
 export function useMapMovement() {
   const reachableCells = ref<Set<string>>(new Set())
   const activePath = ref<Vec3[]>([])
-  let cachedSearch: { map: GameMap; contextKey: string; search: ReachableSearch } | null = null
+  let cachedSearch: { map: GameMap; contextKey: string; search: ReachableSearch; landable: Set<string> } | null = null
 
   // The map owner calls this for in-place geometry edits. Origin, capabilities,
   // destroyed structures and occupied footprints are also compared on every use.
@@ -46,57 +46,31 @@ export function useMapMovement() {
     moverIsEnemy: boolean = false,
     moverGiganticDimensions: GiganticDims = null,
   ) {
-    // Build set of positions blocked by same-or-close-size units.
-    // Same-faction units are always passable-only (allies pass through freely).
-    // Cross-faction units use size-based blocking (< 2 size categories = blocked).
-    // Each unit's full 3D box (all width x height x depth cells) counts as occupied.
-    const blockedPositions = new Set<string>()
-    for (const [, { pos, size, isEnemy: partIsEnemy, giganticDimensions }] of unitPositions) {
-      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
-      const interaction = sameFaction ? 'passable-only' : sizeInteraction(moverSize, size)
-      if (interaction === 'blocked') {
-        const dims = getFootprintDimensions(size, giganticDimensions)
-        for (const cell of getFootprintCells(pos, dims)) blockedPositions.add(vec3Key(cell))
-      }
-    }
-    // Passable-only positions (can traverse but not land)
-    const passableOnlyPositions = new Set<string>()
-    for (const [, { pos, size, isEnemy: partIsEnemy, giganticDimensions }] of unitPositions) {
-      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
-      const interaction = sameFaction ? 'passable-only' : sizeInteraction(moverSize, size)
-      if (interaction === 'passable-only') {
-        const dims = getFootprintDimensions(size, giganticDimensions)
-        for (const cell of getFootprintCells(pos, dims)) passableOnlyPositions.add(vec3Key(cell))
-      }
-    }
+    const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
+    const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
 
     const search = searchReachable(origin, budget, (from, to) => {
-      if (blockedPositions.has(vec3Key(to))) return false
+      if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
       return canPassThrough(from, to, caps, map, destroyedStructures)
     })
-    cachedSearch = {
-      map,
-      contextKey: searchContextKey(origin, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions),
-      search,
-    }
 
-    // Filter to only cells where the unit can actually land — the mover's own full
-    // 3D box at that anchor must not overlap any other unit's box (blocked or passable-only).
-    const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    // Small allows passage only; Tiny allows sharing. Check the complete mover footprint.
     const landable = new Set<string>()
     for (const k of search.cells) {
       if (k === vec3Key(origin)) continue
       const [x, y, z] = k.split(',').map(Number)
       const pos = { x, y, z }
-      if (!canLandOn(pos, caps, map, blockedPositions, origin)) continue
-      const overlaps = getFootprintCells(pos, moverDims).some(cell => {
-        const ck = vec3Key(cell)
-        return blockedPositions.has(ck) || passableOnlyPositions.has(ck)
-      })
+      if (!canLandOn(pos, caps, map, landingBlockedPositions, origin)) continue
+      const overlaps = getFootprintCells(pos, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
       if (overlaps) continue
       landable.add(k)
     }
 
+    cachedSearch = {
+      map,
+      contextKey: searchContextKey(origin, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions),
+      search, landable,
+    }
     reachableCells.value = landable
     return landable
   }
@@ -117,20 +91,24 @@ export function useMapMovement() {
     )) {
       const path = cachedSearch.search.pathTo(to)
       if (path) {
+        if (path.length > 1 && !cachedSearch.landable.has(vec3Key(to))) {
+          activePath.value = []
+          return null
+        }
         activePath.value = path
         return path
       }
     }
-    const blockedPositions = new Set<string>()
-    for (const [, { pos, size, isEnemy: partIsEnemy, giganticDimensions }] of unitPositions) {
-      const sameFaction = moverIsEnemy === (partIsEnemy ?? false)
-      if (!sameFaction && sizeInteraction(moverSize, size) === 'blocked') {
-        const dims = getFootprintDimensions(size, giganticDimensions)
-        for (const cell of getFootprintCells(pos, dims)) blockedPositions.add(vec3Key(cell))
-      }
+    const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
+    const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    if (vec3Key(from) !== vec3Key(to) && (
+      getFootprintCells(to, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
+    )) {
+      activePath.value = []
+      return null
     }
     const path = findPath(from, to, (f, t) => {
-      if (blockedPositions.has(vec3Key(t))) return false
+      if (blockedPositions.size && getFootprintCells(t, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
       return canPassThrough(f, t, caps, map, destroyedStructures)
     })
     activePath.value = path ?? []

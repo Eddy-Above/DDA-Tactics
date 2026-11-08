@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+
+const realMovement = loadTypeScript('server/utils/mapMovement.ts')
+const walking = { canFly: false, canJump: false, jumpHeight: 0, jumpRange: 0, canClimb: false, canSwim: false, canDig: false }
 
 const globalNames = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError']
 const originalGlobals = new Map(globalNames.map(name => [name, globalThis[name]]))
@@ -27,7 +30,7 @@ function unit(id, overrides = {}) {
   }
 }
 
-function fixture({ area = false, support = false, map = false, bypassQueue = false, encounterIds = ['encounter'], targets = ['target', 'other-target'] } = {}) {
+function fixture({ area = false, support = false, map = false, spatial = false, bypassQueue = false, encounterIds = ['encounter'], targets = ['target', 'other-target'] } = {}) {
   globalThis.defineEventHandler = handler => handler
   globalThis.getRouterParam = event => event.encounterId
   globalThis.readBody = async event => event.body
@@ -70,7 +73,7 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
     rows.encounters.set(encounterId, {
       id: encounterId, participants, pendingRequests, battleLog: [],
       turnOrder: participants.map(p => p.id), currentTurnIndex: 0, phase: 'combat', round: 1,
-      mapId: map ? 'map' : null,
+      mapId: map || spatial ? 'map' : null,
     })
     rooms.set(encounterId, {
       participantPositions: Object.fromEntries(participants.map((p, index) => [p.id, point(index)])),
@@ -87,7 +90,11 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
   const effects = []
   const positionReads = []
   const areaResolutions = []
-  const control = { failEncounterWrites: 0, compute: async () => {}, broadcast: async () => {}, knockout: undefined }
+  const control = { failEncounterWrites: 0, compute: async () => {}, broadcast: async () => {}, knockout: undefined, movementBudget: 10, throwRange: 10 }
+  const spatialMap = {
+    id: 'map', groundTiles: Array.from({ length: 16 }, (_, x) => point(x)),
+    voxels: [], spaceTiles: [], walls: [], windows: [], doors: [], stairs: [], ceilings: [],
+  }
   let nextTransaction = 0
 
   function select(table, filter, transaction) {
@@ -241,11 +248,11 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
     },
     '~/server/utils/guidingLight': guidingLight,
     '~/server/utils/combatSpatial': {
-      loadEncounterMap: async () => ({ id: 'map' }),
-      getMovementProfile: () => ({ caps: {}, budget: 10, bodyStat: 10 }),
+      loadEncounterMap: async () => spatial ? spatialMap : ({ id: 'map' }),
+      getMovementProfile: () => ({ caps: spatial ? walking : {}, budget: control.movementBudget, bodyStat: control.throwRange }),
       getFallerProfile: async () => ({}),
     },
-    '~/server/utils/mapMovement': {
+    '~/server/utils/mapMovement': spatial ? realMovement : {
       getFootprintDimsForParticipant: () => ({ width: 1, height: 1, depth: 1 }),
       getFootprintDimensions: () => ({ width: 1, height: 1, depth: 1 }),
       buildFootprintOccupiedSet: () => new Set(),
@@ -279,6 +286,119 @@ function fixture({ area = false, support = false, map = false, bypassQueue = fal
 function participant(fixture, id) {
   return fixture.state().participants.find(p => p.id === id)
 }
+
+function spatialClaim({ mover = 'medium', blocker = 'medium', target = 'small', landing, budget = 7, melee = false } = {}) {
+  const subject = fixture({ spatial: true })
+  subject.rooms.get('encounter').participantPositions = {
+    'guard-a': point(0), 'other-target': point(3), target: point(5), attacker: point(8),
+    ...(landing ? { 'guard-b': point(6) } : {}),
+  }
+  subject.rows.digimon.get('guard-a').size = mover
+  subject.rows.digimon.get('other-target').size = blocker
+  subject.rows.digimon.get('target').size = target
+  if (landing) subject.rows.digimon.get('guard-b').size = landing
+  subject.control.movementBudget = budget
+  if (melee) {
+    subject.rows.digimon.get('attacker').attacks[0].range = 'melee'
+    subject.state().pendingRequests.forEach(request => { request.data.isRangedIntercede = false })
+  }
+  return subject
+}
+
+test('a Medium interceder cannot pass another Medium unit, including a previously offered path', async () => {
+  const subject = spatialClaim()
+  subject.state().pendingRequests[0].data.interceptePos = point(6)
+  const original = copy(subject.state())
+  await assert.rejects(subject.claim(), error => error.statusCode === 409 && /intercede path/.test(error.message))
+  assert.deepEqual(subject.state(), original, 'a blocked claim must not spend an action or consume its offer')
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(0))
+
+  subject.rows.digimon.get('other-target').size = 'small'
+  await subject.claim()
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(6))
+  assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 1)
+})
+
+test('a Small interceder may pass through larger units but finishes on a free square', async () => {
+  const subject = spatialClaim({ mover: 'small' })
+  await subject.claim()
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(6))
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['other-target'], point(3))
+  assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 1)
+})
+
+test('a Small interceder cannot finish on an occupied Medium interception square', async () => {
+  const subject = spatialClaim({ mover: 'small', landing: 'medium', budget: 6 })
+  await assert.rejects(subject.claim(), error => error.statusCode === 409)
+  assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 2)
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(0))
+})
+
+for (const [mover, blocker, landing] of [['tiny', 'medium', 'medium'], ['medium', 'small', 'tiny']]) {
+  test(`${mover} interceder passes ${blocker} and shares an interception square with ${landing}`, async () => {
+    const subject = spatialClaim({ mover, blocker, landing, budget: 6 })
+    await subject.claim()
+    assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(6))
+    assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-b'], point(6))
+    assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 1)
+  })
+}
+
+for (const [mover, target] of [['tiny', 'medium'], ['medium', 'tiny']]) {
+  test(`${mover} melee interceder shares the protected ${target} unit's square without displacing it`, async () => {
+    const subject = spatialClaim({ mover, target, blocker: 'small', melee: true })
+    await subject.claim()
+    assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(5))
+    assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(5))
+  })
+}
+
+test('a Small melee interceder still displaces the protected Medium unit rather than sharing', async () => {
+  const subject = spatialClaim({ mover: 'small', target: 'medium', melee: true })
+  await subject.claim()
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(5))
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(4))
+})
+
+for (const [mover, landing, allowed] of [
+  ['medium', undefined, false], ['small', undefined, true],
+  ['small', 'medium', false], ['tiny', 'medium', true],
+]) {
+  test(`${mover} area interceder ${allowed ? 'can' : 'cannot'} pass a Medium blocker and land ${landing ? `with ${landing}` : 'on a free square'}`, async () => {
+    const subject = fixture({ area: true, spatial: true, targets: ['target'] })
+    subject.rooms.get('encounter').participantPositions = {
+      'guard-a': point(4), target: point(1), attacker: point(7), 'other-target': point(2),
+      ...(landing ? { 'guard-b': point(0) } : {}),
+    }
+    subject.rows.digimon.get('guard-a').size = mover
+    if (landing) subject.rows.digimon.get('guard-b').size = landing
+    subject.control.movementBudget = 4
+    subject.control.throwRange = 3
+    const claim = () => subject.claim('guard-a', { throwAllyLandingPos: point(4) })
+    if (allowed) {
+      await claim()
+      assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(0))
+      assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(4), 'the thrown ally may use the interceptor\'s vacated square')
+    } else {
+      await assert.rejects(claim(), error => error.statusCode === 409)
+      assert.equal(participant(subject, 'guard-a').actionsRemaining.simple, 2)
+    }
+  })
+}
+
+test('an area intercede may throw a Tiny protected ally onto a Medium occupied square', async () => {
+  const subject = fixture({ area: true, spatial: true, targets: ['target'] })
+  subject.rooms.get('encounter').participantPositions = {
+    'guard-a': point(4), target: point(1), attacker: point(7), 'other-target': point(2),
+  }
+  subject.rows.digimon.get('guard-a').size = 'small'
+  subject.rows.digimon.get('target').size = 'tiny'
+  subject.control.movementBudget = 4
+  subject.control.throwRange = 3
+  await subject.claim('guard-a', { throwAllyLandingPos: point(2) })
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(2))
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['other-target'], point(2))
+})
 
 for (const area of [false, true]) {
   for (const support of [false, true]) {

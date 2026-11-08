@@ -82,17 +82,17 @@ test('destroyed-wall, changed origin and changed occupied-footprint contexts nev
   assert.equal(calls.astar, 3)
 })
 
-test('allies remain traversable but their complete footprints and the mover footprint cannot be landing sites', () => {
+test('Small Digimon pass through allied footprints but cannot land in them', () => {
   const { movement, calls } = harness()
   const map = floor(8, 1)
   const units = new Map([['ally', { pos: point(2), size: 'large', isEnemy: false }]])
-  const cells = movement.computeReachable(point(0), 6, walking, map, new Set(), units, 'large')
-  assert.ok(!cells.has(key(point(1)))) // mover would overlap the ally at x=2
+  const cells = movement.computeReachable(point(0), 6, walking, map, new Set(), units, 'small')
+  assert.ok(cells.has(key(point(1))))
   assert.ok(!cells.has(key(point(2))))
   assert.ok(!cells.has(key(point(3)))) // ally extends through x=3
   assert.ok(cells.has(key(point(4))))
   const before = calls.pass
-  const path = movement.computePath(point(0), point(4), walking, map, new Set(), units, 'large')
+  const path = movement.computePath(point(0), point(4), walking, map, new Set(), units, 'small')
   assert.ok(path.some(p => p.x === 2))
   assert.equal(calls.pass, before)
   assert.equal(calls.astar, 0)

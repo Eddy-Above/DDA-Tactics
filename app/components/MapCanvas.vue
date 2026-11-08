@@ -15,6 +15,9 @@
         <input type="number" v-model.number="clipY" min="-5" max="20" step="1" class="clip-input" />
       </div>
       <button :class="{ active: ghostWalls }" @click="ghostWalls = !ghostWalls">Ghost Walls</button>
+      <div v-if="aimedMoveParticipantId" class="map-view-row" title="Scroll to change movement height">
+        <span>Move Y</span><span>{{ aimedMoveY }}</span>
+      </div>
     </div>
     <!-- Click-to-show health bar (client-local) -->
     <div
@@ -56,12 +59,24 @@
     </div>
     <!-- Movement distance label -->
     <div
-      v-if="hoveredMoveScreen && movingParticipantId"
+      v-if="hoveredMoveScreen && aimedMoveParticipantId"
       class="move-distance-label"
       :style="{ left: hoveredMoveScreen.x + 'px', top: hoveredMoveScreen.y + 'px' }"
     >{{ hoveredMoveDistance }} m</div>
     <MapRadialMenu
-      v-if="radialParticipantId && radialScreen"
+      v-if="participantChoice && participantChoiceScreen && participantChoiceItems.length"
+      key="participant-choice"
+      :items="participantChoiceItems"
+      :center="participantChoiceScreen"
+      :bounds="radialBounds"
+      label="Choose character"
+      :token-radius="24"
+      @select="onParticipantChoice"
+      @hover="onParticipantChoiceHover"
+      @close="closeRadial"
+    />
+    <MapRadialMenu
+      v-else-if="radialParticipantId && radialScreen"
       :key="radialParticipantId"
       :items="radialItems"
       :center="radialScreen"
@@ -90,7 +105,7 @@ import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePas
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
-import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, canLandOn, sizeInteraction } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
@@ -189,6 +204,8 @@ const pendingMovePos = ref<Vec3 | null>(null)
 const movePendingScreen = ref<{ x: number; y: number } | null>(null)
 const pendingMovePath = ref<Vec3[]>([])
 const movingParticipantId = ref<string | null>(null)
+const participantChoice = ref<{ anchor: Vec3; dims: FootprintDims; point: Vec3 } | null>(null)
+const participantChoiceScreen = ref<{ x: number; y: number } | null>(null)
 const npcRadialId = ref<string | null>(null)
 const npcRadialScreen = ref<{ x: number; y: number } | null>(null)
 const npcRadialParticipant = computed(() =>
@@ -319,6 +336,30 @@ const radialTokenRadius = computed(() => {
   return overlay ? overlay.w / 2 : 24
 })
 
+function participantCandidatesAt(anchor: Vec3, dims: FootprintDims): CombatParticipant[] {
+  const cells = new Set(getFootprintCells(anchor, dims).map(vec3Key))
+  return props.participants.filter(p => {
+    const pos = props.participantPositions[p.id]
+    return !p.inReserve && pos && footprintIntersectsArea(pos, getParticipantFootprintDims(p.id), cells)
+  })
+}
+
+function participantChoiceOptions(): MapRadialItem[] {
+  const choice = participantChoice.value
+  if (!choice) return []
+  return participantCandidatesAt(choice.anchor, choice.dims).map(p => {
+    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+    const allegiance = props.myParticipantIds.includes(p.id) ? 'Your character' : p.isEnemy ? 'Enemy' : 'Ally'
+    return {
+      id: `participant:${p.id}`,
+      label: participantDisplayNames.value[p.id] ?? info?.name ?? p.id,
+      icon: p.type === 'tamer' ? 'T' : 'D',
+      description: `${p.type === 'tamer' ? 'Tamer' : 'Digimon'} · ${allegiance}`,
+    }
+  })
+}
+const participantChoiceItems = computed(participantChoiceOptions)
+
 function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, disabled: boolean): MapRadialItem {
   const options = radialParticipantId.value ? props.radialOptions?.[radialParticipantId.value] : undefined
   const choices = options?.[action === 'attack' ? 'attacks' : action === 'stance' ? 'stances' : action]
@@ -374,12 +415,28 @@ const radialItems = computed<MapRadialItem[]>(() => {
 
 function closeRadial() {
   highlightDoor(null)
+  if (participantChoice.value) setHoveredTarget(null)
+  participantChoice.value = null
+  participantChoiceScreen.value = null
   npcRadialId.value = null
   npcRadialScreen.value = null
   playerRadialId.value = null
   playerRadialScreen.value = null
   gmRadialId.value = null
   gmRadialScreen.value = null
+}
+
+function onParticipantChoiceHover(item: MapRadialItem | null) {
+  const id = item?.id.startsWith('participant:') ? item.id.slice(12) : null
+  setHoveredTarget(id && participantChoiceItems.value.some(choice => choice.id === item?.id) ? id : null)
+}
+
+function onParticipantChoice(item: MapRadialItem) {
+  const choice = participantChoice.value
+  if (!choice || !participantChoiceOptions().some(option => option.id === item.id)) return
+  const point = new THREE.Vector3(choice.point.x, choice.point.y, choice.point.z)
+  closeRadial()
+  selectMapParticipant(item.id.slice(12), point)
 }
 
 function onRadialHover(item: MapRadialItem | null) {
@@ -426,6 +483,40 @@ const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
 const npcMoveY = ref<number>(0)
+const gmMoveY = ref<number>(0)
+const aimedMoveParticipantId = computed(() => movingParticipantId.value ?? props.gmMoveParticipantId)
+const aimedMoveY = computed(() => movingParticipantId.value ? npcMoveY.value : gmMoveY.value)
+
+function getMoveAim() {
+  const participantId = movingParticipantId.value ?? props.gmMoveParticipantId
+  if (!participantId) return null
+  const isGm = !movingParticipantId.value && !!props.gmMoveParticipantId
+  return { participantId, isGm, y: isGm ? gmMoveY.value : npcMoveY.value }
+}
+
+function moveCellAt(event: MouseEvent, y: number): Vec3 | null {
+  setMouseFromEvent(event)
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(y * TILE_SIZE + TILE_H))
+  const target = new THREE.Vector3()
+  return raycaster.ray.intersectPlane(plane, target) ? { x: Math.floor(target.x), y, z: Math.floor(target.z) } : null
+}
+
+function validGmMoveCell(cell: Vec3, participantId: string): boolean {
+  const dims = getParticipantFootprintDims(participantId)
+  if (footprintOccupied(cell, dims, participantId)) return false
+  const map = props.map
+  if (!map) return true
+  return getFootprintCells(cell, dims).every(c => !mapVoxelBlocksMovement(map, c) &&
+    !map.stairs.some(s => s.x === c.x && s.y === c.y && s.z === c.z))
+}
+
+function cancelMoveAim() {
+  if (movingParticipantId.value) movingParticipantId.value = null
+  else if (props.gmMoveParticipantId) emit('movement-cancelled')
+  hoverGhostGroup.clear()
+  hoveredMoveScreen.value = null
+  emit('cell-hovered', null)
+}
 const areaHighlightCells = ref<Array<{ x: number; y: number; z: number }>>([])
 let lastAoeKey = ''
 
@@ -513,6 +604,11 @@ function getSizeParams(size: DigimonSize, gig?: { width: number; height: number;
   }
 }
 
+function getParticipantSize(participantId: string): DigimonSize {
+  const p = props.participants.find(p => p.id === participantId)
+  return p?.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
+}
+
 // Full 3D footprint dimensions for a participant; tamers and unknowns are 1×1×1.
 function getParticipantFootprintDims(participantId: string | null | undefined): FootprintDims {
   if (!participantId) return { width: 1, height: 1, depth: 1 }
@@ -545,8 +641,10 @@ function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDims: Fo
 // True if a footprint of `dims` anchored at `anchor` would overlap any other participant's
 // footprint (excluding `excludeId`, the unit being moved).
 function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string): boolean {
+  const moverSize = getParticipantSize(excludeId)
   return props.participants.some(p => {
     if (p.id === excludeId) return false
+    if (sizeInteraction(moverSize, getParticipantSize(p.id)) === 'shared') return false
     const oPos = props.participantPositions[p.id]
     if (!oPos) return false
     const oCellSet = new Set(getFootprintCells(oPos, getParticipantFootprintDims(p.id)).map(c => `${c.x},${c.y},${c.z}`))
@@ -555,7 +653,7 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
 }
 
 // A [Pass] landing is valid if the attacker's footprint at `anchor` doesn't overlap any
-// other participant, and the anchor cell itself is supported terrain/voxel/stairs (or
+// other participant except a Tiny pairing, and the anchor cell itself is supported terrain/voxel/stairs (or
 // open air the attacker can fly in, or jump into from `attackerPos`).
 function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities, attackerPos: Vec3): boolean {
   if (footprintOccupied(anchor, dims, attackerId)) return false
@@ -612,10 +710,10 @@ onMounted(() => {
   canvasRef.value!.addEventListener('contextmenu', e => e.preventDefault())
   // Intercept wheel on canvas directly so OrbitControls never zooms during movement or blast-aim mode
   canvasRef.value!.addEventListener('wheel', (e) => {
-    if (movingParticipantId.value) {
+    if (getMoveAim()) {
       e.preventDefault()
       e.stopPropagation()
-      npcMoveY.value = npcMoveY.value + (e.deltaY > 0 ? -1 : 1)
+      onWheel(e)
       return
     }
     if (usesVerticalAim.value) {
@@ -1253,6 +1351,8 @@ function updateCharacterOverlays() {
 
 // Share the portrait's projected center, including large-token footprints and camera zoom.
 function updateRadialScreen() {
+  const choice = participantChoice.value
+  participantChoiceScreen.value = choice ? worldToScreen2D(new THREE.Vector3(choice.point.x, choice.point.y, choice.point.z)) : null
   const id = radialParticipantId.value
   const overlay = id ? characterOverlays.value[id] : null
   const screen = overlay ? { x: overlay.x, y: overlay.y + overlay.h / 2 } : null
@@ -1317,7 +1417,8 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
   if (e.key === 'Escape') {
     if (tokenDrag.abort()) return   // Esc ends a token drag in progress
-    if (radialParticipantId.value) { closeRadial(); return }
+    if (radialParticipantId.value || participantChoice.value) { closeRadial(); return }
+    if (getMoveAim()) { cancelMoveAim(); return }
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) { clearAoeState(); emit('attack-cancelled'); return }
   }
   if (e.key === 'q' || e.key === 'Q') { stepAzimuth(-AZIMUTH_STEP); return }
@@ -2030,21 +2131,19 @@ function onMouseMove(event: MouseEvent) {
   updateTargetHover(event)
 
   // Movement mode — ghost + distance label + path preview
-  // Use plane intersection at npcMoveY so scroll wheel controls the target floor,
+  // Intersect the chosen movement height so the wheel controls the target floor,
   // preventing upper-floor geometry from blocking clicks on lower-floor tiles.
-  if (movingParticipantId.value) {
+  const moveAim = getMoveAim()
+  if (moveAim) {
     hoverGhostGroup.clear()
     hoveredMoveScreen.value = null
-    setMouseFromEvent(event)
-    const mvPlaneY = npcMoveY.value * TILE_SIZE + TILE_H
-    const mvPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -mvPlaneY)
-    const mvTarget = new THREE.Vector3()
-    if (raycaster.ray.intersectPlane(mvPlane, mvTarget)) {
-      const cell: Vec3 = { x: Math.floor(mvTarget.x), y: npcMoveY.value, z: Math.floor(mvTarget.z) }
-      if (props.reachableCells.has(vec3Key(cell))) {
-        const dims = getParticipantFootprintDims(movingParticipantId.value)
+    const cell = moveCellAt(event, moveAim.y)
+    if (cell) {
+      const valid = moveAim.isGm ? validGmMoveCell(cell, moveAim.participantId) : props.reachableCells.has(vec3Key(cell))
+      if (valid || moveAim.isGm) {
+        const dims = getParticipantFootprintDims(moveAim.participantId)
         const ghostGeo = new THREE.CircleGeometry(TILE_SIZE * 0.42, 24)
-        const ghostMat = new THREE.MeshBasicMaterial({ color: 0x2255ff, transparent: true, opacity: 0.55, depthWrite: false })
+        const ghostMat = new THREE.MeshBasicMaterial({ color: valid ? 0x2255ff : 0xff3333, transparent: true, opacity: 0.55, depthWrite: false })
         const ghostMesh = new THREE.Mesh(ghostGeo, ghostMat)
         ghostMesh.scale.set(dims.width, dims.depth, 1)
         ghostMesh.rotation.x = -Math.PI / 2
@@ -2052,11 +2151,14 @@ function onMouseMove(event: MouseEvent) {
         hoverGhostGroup.add(ghostMesh)
         const labelV = movementPreviewCenter(cell, dims, 0.6)
         hoveredMoveScreen.value = worldToScreen2D(labelV) ?? null
-        emit('cell-hovered', cell)
-      } else {
+        if (moveAim.isGm) {
+          const origin = props.participantPositions[moveAim.participantId]
+          hoveredMoveDistance.value = origin ? Math.max(Math.abs(cell.x - origin.x), Math.abs(cell.y - origin.y), Math.abs(cell.z - origin.z)) : 0
+        } else emit('cell-hovered', cell)
+      } else if (!moveAim.isGm) {
         emit('cell-hovered', null)
       }
-    } else {
+    } else if (!moveAim.isGm) {
       emit('cell-hovered', null)
     }
     return
@@ -2076,13 +2178,11 @@ function onMouseMove(event: MouseEvent) {
 function onMouseDown(event: MouseEvent) {
   if (event.button === 2) {
     // Right click cancels movement mode or AOE targeting
-    if (movingParticipantId.value) {
-      movingParticipantId.value = null
-      hoverGhostGroup.clear()
-      hoveredMoveScreen.value = null
-      emit('cell-hovered', null)
+    if (getMoveAim()) {
+      cancelMoveAim()
       return
     }
+    if (participantChoice.value) { closeRadial(); return }
     if (areaHighlightCells.value.length > 0 || props.selectedAttack) {
       clearAoeState()
       emit('attack-cancelled')
@@ -2211,7 +2311,8 @@ function tryReticuleTarget(participantId: string): boolean {
 // ── Placement validation + drag-to-place ────────────────────────────────────
 // One rule set for every way of putting a character on the map: clicking a tile while armed, GM
 // free-move, dragging a token already on the map, and dropping a HUD card onto the map. Players
-// may only land on spawn areas, the GM anywhere; walls/solid voxels and other units block both.
+// may only land on spawn areas, the GM anywhere; solid voxels block both and Tiny
+// pairings are the only exception to occupied landing squares.
 // The decision itself is utils/placementRules.ts `evaluatePlacement`; this just gathers its inputs.
 const isPlacementSurface = (h: THREE.Intersection) =>
   h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel'
@@ -2240,12 +2341,13 @@ function evaluatePlacementAt(surfaceHit: THREE.Intersection, participantId: stri
     },
     isDm: props.isDm,
     participantId,
+    size: getParticipantSize(participantId),
     footprint: placementFootprint(participantId),
     isBlocked: cell => !!props.map && mapVoxelBlocksMovement(props.map, cell),
     isSpawnCell: cell => isSpawnCell.value(cell),
     occupants: props.participants.map(p => {
       const position = props.participantPositions[p.id]
-      return { id: p.id, position, footprint: position ? placementFootprint(p.id) : { width: 0, depth: 0 } }
+      return { id: p.id, position, size: getParticipantSize(p.id), footprint: position ? placementFootprint(p.id) : { width: 0, depth: 0 } }
     }),
   })
 }
@@ -2289,15 +2391,17 @@ const tokenDrag = createTokenDragController<PointerEvent>({
   // A drag must not collide with any other mode that already owns the left button.
   allowed: () => {
     if (props.isDm && props.activeTool !== 'select') return false              // map editing
-    if (movingParticipantId.value || props.chargeMode) return false            // move / charge aiming
+    if (getMoveAim() || props.chargeMode) return false                        // move / charge aiming
     if (props.selectedAttack || isAreaTargeting.value) return false            // attack aiming
     if (props.placingParticipantId || props.gmMoveParticipantId) return false  // click placement / GM free-move
     if (reticuleParticipantIds.value.length > 0) return false                  // picking a target
     return true
   },
   tokenAt: (event) => {
-    const spriteHit = getIntersection(event).find(h => h.object.userData.type === 'sprite')
-    return (spriteHit?.object.userData.participantId as string | undefined) ?? null
+    const region = participantRegionFromHits(getIntersection(event))
+    if (!region) return null
+    const candidates = participantCandidatesAt(region.anchor, region.dims)
+    return candidates.length === 1 ? candidates[0]!.id : null
   },
   preview: (event, participantId) => showDropGhost(dropTargetAt(event, participantId)),
   resolveDrop: (event, participantId) => {
@@ -2354,21 +2458,81 @@ function onExternalDrop(event: DragEvent) {
   if (placement?.valid) emit('unit-dragged', participantId, placement.cell)
 }
 
+function participantRegionFromHits(hits: THREE.Intersection[]): { anchor: Vec3; dims: FootprintDims; point: Vec3 } | null {
+  const sprite = hits.find(hit => hit.object.userData.type === 'sprite' && props.participantPositions[hit.object.userData.participantId])
+  if (sprite) {
+    const id = sprite.object.userData.participantId as string
+    return { anchor: { ...props.participantPositions[id] }, dims: getParticipantFootprintDims(id), point: { x: sprite.point.x, y: sprite.point.y, z: sprite.point.z } }
+  }
+  const surface = hits.find(isPlacementSurface)
+  if (!surface) return null
+  const { tile, voxel, type } = surface.object.userData
+  const anchor = type === 'voxel' && voxel
+    ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
+    : { x: Math.floor(surface.point.x), y: tile?.y ?? 0, z: Math.floor(surface.point.z) }
+  return { anchor, dims: { width: 1, height: 1, depth: 1 }, point: { x: surface.point.x, y: surface.point.y, z: surface.point.z } }
+}
+
+// Both direct clicks and the overlap chooser continue through the same selection
+// rules: valid targets, GM actions, owned actions, or a character's health.
+function selectMapParticipant(participantId: string, point: THREE.Vector3) {
+  const p = props.participants.find(p => p.id === participantId)
+  if (!p || p.inReserve || !props.participantPositions[participantId]) return
+  if (tryReticuleTarget(participantId)) return
+  clickedHealthBar.value = null
+
+  if (props.isDm) {
+    const npcTurn = p.isEnemy && p.id === props.activeParticipantId
+    const current = npcTurn ? npcRadialId : gmRadialId
+    const wasOpen = current.value === participantId
+    closeRadial()
+    if (!wasOpen) current.value = participantId
+    updateRadialScreen()
+    return
+  }
+
+  if (props.myParticipantIds.includes(participantId) && props.activeParticipantId !== null &&
+    props.myParticipantIds.includes(props.activeParticipantId)) {
+    const wasOpen = playerRadialId.value === participantId
+    closeRadial()
+    if (!wasOpen) playerRadialId.value = participantId
+    updateRadialScreen()
+    return
+  }
+
+  const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
+  if (!info) return
+  closeRadial()
+  const screen = worldToScreen2D(point)
+  const currentWounds = p.currentWounds ?? info.currentWounds
+  const maxWounds = p.maxWounds ?? info.woundBoxes
+  clickedHealthBar.value = {
+    name: participantDisplayNames.value[p.id] ?? info.name,
+    pct: maxWounds > 0 ? Math.max(0, 1 - currentWounds / maxWounds) : 1,
+    current: currentWounds, max: maxWounds,
+    screenX: screen?.x ?? 0, screenY: (screen?.y ?? 0) - 80,
+  }
+}
+
 function onCanvasClick(event: MouseEvent) {
   if (suppressNextClick) { suppressNextClick = false; return }
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
 
-  // Movement mode click — use plane intersection at npcMoveY (consistent with hover).
+  // Movement mode click — use the same aim plane as the hover preview.
   // Must run before the hits.length early-return so clicking empty space still works.
-  if (movingParticipantId.value) {
-    const mvPlaneY = npcMoveY.value * TILE_SIZE + TILE_H
-    const mvPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -mvPlaneY)
-    const mvTarget = new THREE.Vector3()
-    if (raycaster.ray.intersectPlane(mvPlane, mvTarget)) {
-      const cell: Vec3 = { x: Math.floor(mvTarget.x), y: npcMoveY.value, z: Math.floor(mvTarget.z) }
-      if (props.reachableCells.has(vec3Key(cell))) {
-        const pid = movingParticipantId.value
+  const moveAim = getMoveAim()
+  if (moveAim) {
+    const cell = moveCellAt(event, moveAim.y)
+    if (cell) {
+      if (moveAim.isGm) {
+        if (validGmMoveCell(cell, moveAim.participantId)) {
+          hoverGhostGroup.clear()
+          hoveredMoveScreen.value = null
+          emit('gm-moved', moveAim.participantId, cell)
+        }
+      } else if (props.reachableCells.has(vec3Key(cell))) {
+        const pid = moveAim.participantId
         const isChargeAfter = pid === props.chargeMoveParticipantId
         if (!isChargeAfter || !footprintOccupied(cell, getParticipantFootprintDims(pid), pid)) {
           movingParticipantId.value = null
@@ -2448,8 +2612,8 @@ function onCanvasClick(event: MouseEvent) {
 
   const placementSurfaceHit = hits.find(isPlacementSurface)
 
-  // Placement (Setup) / GM free-move — a character is chosen; clicking a tile/voxel places (teleports)
-  // them onto any valid surface. Same footprint/occupancy validation for both.
+  // Setup placement uses a valid tile/voxel surface. GM Move was handled above
+  // on its unrestricted aim plane, which also permits open-air destinations.
   const placeId = props.placingParticipantId ?? props.gmMoveParticipantId
   if (placeId && placementSurfaceHit) {
     const placement = evaluatePlacementAt(placementSurfaceHit, placeId)
@@ -2459,67 +2623,27 @@ function onCanvasClick(event: MouseEvent) {
     return
   }
 
-  // Single-target attack or intercede target selection (the same lookup drives the green hover outline)
-  const reticuleTargetId = reticuleTargetFromHits(hits)
-  if (reticuleTargetId && tryReticuleTarget(reticuleTargetId)) return
-
-  // Check sprite click
-  const spriteHit = hits.find(h => h.object.userData.type === 'sprite')
-  if (spriteHit) {
-    const participantId: string = spriteHit.object.userData.participantId
-    const p = props.participants.find(p => p.id === participantId)
-    if (!p) return
-
-    // GM clicking an NPC — only show combat radial when it's that NPC's active turn
-    if (props.isDm && (p as any).isEnemy) {
-      if (p.id === props.activeParticipantId) {
-        const wasOpen = npcRadialId.value === p.id
-        closeRadial()
-        if (!wasOpen) npcRadialId.value = p.id
-        updateRadialScreen()
-        return
-      }
-      // Non-active-turn enemy: fall through to the GM radial below.
-    }
-
-    // GM: clicking any token that didn't open the combat radial (off-turn NPCs and player-owned
-    // tokens, on anyone's turn) opens the GM free-reposition radial.
-    if (props.isDm) {
-      const wasOpen = gmRadialId.value === participantId
+  // Shared squares must be disambiguated before targeting, actions or health can
+  // select whichever sprite happened to be first in the raycast.
+  const region = participantRegionFromHits(hits)
+  if (region) {
+    const candidates = participantCandidatesAt(region.anchor, region.dims)
+    if (candidates.length > 1) {
       closeRadial()
-      if (!wasOpen) gmRadialId.value = participantId
+      clickedHealthBar.value = null
+      participantChoice.value = region
       updateRadialScreen()
       return
     }
-
-    const info = p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId]
-    if (info && !props.myParticipantIds.includes(participantId)) {
-      closeRadial()
-      const screen = worldToScreen2D(spriteHit.point)
-      const anyP = p as any
-      const currentWounds = anyP.currentWounds ?? info.currentWounds
-      const maxWounds = anyP.maxWounds ?? info.woundBoxes
-      clickedHealthBar.value = {
-        name: participantDisplayNames.value[p.id] ?? info.name,
-        pct: maxWounds > 0 ? Math.max(0, 1 - currentWounds / maxWounds) : 1,
-        current: currentWounds,
-        max: maxWounds,
-        screenX: screen?.x ?? event.clientX,
-        screenY: (screen?.y ?? event.clientY) - 80,
-      }
+    if (candidates.length === 1) {
+      selectMapParticipant(candidates[0]!.id, new THREE.Vector3(region.point.x, region.point.y, region.point.z))
+      return
     }
-
-    // Show radial for any owned participant when it's the player's turn
-    if (props.myParticipantIds.includes(participantId) &&
-        props.activeParticipantId !== null &&
-        props.myParticipantIds.includes(props.activeParticipantId)) {
-      const wasOpen = playerRadialId.value === participantId
-      closeRadial()
-      if (!wasOpen) playerRadialId.value = participantId
-      updateRadialScreen()
-    }
-    return
   }
+
+  // Single-target attack or intercede target selection (the same lookup drives the green hover outline)
+  const reticuleTargetId = reticuleTargetFromHits(hits)
+  if (reticuleTargetId && tryReticuleTarget(reticuleTargetId)) return
 
   // Click empty space — close health bar, NPC radial, player radial, GM radial, exit move mode
   clickedHealthBar.value = null
@@ -2528,8 +2652,20 @@ function onCanvasClick(event: MouseEvent) {
 }
 
 function onWheel(event: WheelEvent) {
-  if (movingParticipantId.value) {
-    npcMoveY.value = npcMoveY.value + (event.deltaY > 0 ? -1 : 1)
+  const aim = getMoveAim()
+  if (aim) {
+    if (aim.isGm) {
+      const delta = event.deltaY > 0 ? -1 : 1
+      gmMoveY.value += delta
+      // Follow the free-move plane so raising it above the camera does not put
+      // it behind the pointer ray and make the ghost disappear.
+      if (camera && controls) {
+        camera.position.y += delta
+        controls.target.y += delta
+        controls.update()
+      }
+    } else npcMoveY.value += event.deltaY > 0 ? -1 : 1
+    onMouseMove(event)
     return
   }
   if (usesVerticalAim.value) {
@@ -2610,7 +2746,10 @@ function watchParticipantSprites() {
 
 watchParticipantSprites()
 
-watch(radialParticipantId, id => { if (id) keysHeld.clear() })
+watch([radialParticipantId, participantChoice], ([id, choice]) => { if (id || choice) keysHeld.clear() })
+watch(() => participantChoiceItems.value.map(item => item.id).join(','), () => {
+  if (participantChoice.value && participantChoiceItems.value.length < 2) closeRadial()
+})
 watch(() => props.participants.map(p => p.id).join(','), () => {
   if (radialParticipantId.value && !props.participants.some(p => p.id === radialParticipantId.value)) closeRadial()
 })
@@ -2638,7 +2777,7 @@ watch(() => props.npcMoveParticipantId, id => {
   if (id) {
     movingParticipantId.value = id
     npcMoveY.value = props.participantPositions[id]?.y ?? 0
-  }
+  } else if (!props.chargeMoveParticipantId) movingParticipantId.value = null
 })
 
 // Enter movement mode for the post-charge "Move After Attack" relocation step
@@ -2646,16 +2785,26 @@ watch(() => props.chargeMoveParticipantId, id => {
   if (id) {
     movingParticipantId.value = id
     npcMoveY.value = props.participantPositions[id]?.y ?? 0
-  }
+  } else if (!props.npcMoveParticipantId) movingParticipantId.value = null
 })
+
+// GM repositioning uses its own aim plane, independent of movement capabilities
+// and reachable cells. A stable participant id keeps the chosen Y across polls.
+watch(() => props.gmMoveParticipantId, id => {
+  if (!id) return
+  movingParticipantId.value = null
+  gmMoveY.value = props.participantPositions[id]?.y ?? 0
+  closeRadial()
+}, { immediate: true })
 
 // Use actual A* path length (steps = meters) for the distance label
 watch(() => props.activePath, (path) => {
-  hoveredMoveDistance.value = path.length > 1 ? path.length - 1 : 0
+  if (!getMoveAim()?.isGm) hoveredMoveDistance.value = path.length > 1 ? path.length - 1 : 0
 })
 
 // Track move start position; toggle zoom; clear ghost when movement mode ends
-watch(movingParticipantId, id => {
+watch([movingParticipantId, () => props.gmMoveParticipantId], ([normalId, gmId], [previousNormalId]) => {
+  const id = normalId ?? gmId
   if (id) {
     moveStartPos.value = props.participantPositions[id] ?? null
     if (controls) controls.enableZoom = false
@@ -2666,7 +2815,7 @@ watch(movingParticipantId, id => {
     if (hoverGhostGroup) hoverGhostGroup.clear()
     if (controls) controls.enableZoom = true
     emit('cell-hovered', null)
-    emit('movement-cancelled')
+    if (previousNormalId) emit('movement-cancelled')
   }
 })
 
