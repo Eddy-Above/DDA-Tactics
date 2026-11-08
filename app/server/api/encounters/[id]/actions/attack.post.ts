@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, campaigns, type Encounter } from '../../../../db'
+import { db, encounters, digimon, tamers, campaigns, type Encounter, type Digimon } from '../../../../db'
+import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { triggerCounterattack } from '../../../../utils/triggerCounterattack'
 import { chebyshev } from '../../../../utils/gridDistance'
@@ -103,8 +104,9 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
   if (orderModifiers.suppressPower && body.hugePowerUsed) {
     throw createError({ statusCode: 400, message: 'Huge Power and Overkill cannot trigger with this Special Order' })
   }
+  let actorRecord: Digimon | undefined
   if (actor.type === 'digimon') {
-    const [actorRecord] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+    [actorRecord] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
     const attack = actorRecord?.attacks?.find((a: any) => a.id === body.attackId)
     if (orderModifiers.successThreshold === 4) body.accuracySuccesses = body.accuracyDiceResults.filter(d => d >= 4).length
       + combatAttackStats(actorRecord, actor, attack).automaticSuccesses
@@ -114,27 +116,10 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
   }
 
   // Check if participant can act (direct turn or partner digimon on tamer's turn)
-  const currentIndex = encounter.currentTurnIndex || 0
-  const currentTurnParticipantId = turnOrder[currentIndex]
-
-  let canAct = actor.id === currentTurnParticipantId
-
-  // If actor is a digimon and it's not directly their turn,
-  // check if it's their partner tamer's turn
-  if (!canAct && actor.type === 'digimon') {
-    // Find current turn participant
-    const currentTurnParticipant = participants.find((p: any) => p.id === currentTurnParticipantId)
-
-    // Check if current participant is a tamer
-    if (currentTurnParticipant?.type === 'tamer') {
-      // Look up digimon to get partnerId
-      const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-
-      if (digimonEntity?.partnerId === currentTurnParticipant.entityId) {
-        canAct = true
-      }
-    }
-  }
+  const canAct = await canActOnEncounterTurn(actor, {
+    participants, turnOrder, currentTurnIndex: encounter.currentTurnIndex,
+    actorDigimon: actorRecord ?? null,
+  }, id => db.select().from(digimon).where(eq(digimon.id, id)))
 
   if (!canAct) {
     throw createError({

@@ -167,6 +167,7 @@ import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules, Stance,
 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
+import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import { getAreaShape, computePassLanding } from '~/utils/areaShapes'
 import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
@@ -199,7 +200,7 @@ const props = defineProps<{
     isEnemy?: boolean
     partnerId?: string | null
   }>
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
+  selectedAttack: MapAttackDescriptor | null
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean

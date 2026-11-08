@@ -88,6 +88,7 @@ import { getMapVoxels, getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefini
 import { buildVoxelSurface } from '~/utils/voxelSurface'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
+import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells, canLandOn } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
@@ -118,7 +119,7 @@ const props = defineProps<{
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
   secondaryActiveParticipantId: string | null  // partner of the active participant, also highlighted
-  selectedAttack: { tags: string[]; range: 'melee' | 'ranged'; type?: string; bit: number; movement?: number; ram?: number; sizeAboveLarge?: number; effectiveLimit?: number; meleeRange?: number; attackerParticipantId?: string | null } | null
+  selectedAttack: MapAttackDescriptor | null
   attackerRange: number
   attackerEffectiveLimit: number
   attackerMeleeRange: number  // 1 + reach*2
