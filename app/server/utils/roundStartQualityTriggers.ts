@@ -1,7 +1,6 @@
-import { eq } from 'drizzle-orm'
-import { db, digimon } from '../db'
 import { rollBlackArmorBonus } from './digizoidArmor'
 import { expireRoundSpecialOrders } from '../../utils/specialOrderCombat'
+import { loadParticipantDigimon } from './combatSpatial'
 
 /**
  * Applied at every point a new combat round starts, regardless of which code path advanced it
@@ -9,6 +8,7 @@ import { expireRoundSpecialOrders } from '../../utils/specialOrderCombat'
  * advancement happens via several independent call sites, so this must be called from each one.
  */
 export async function applyRoundStartQualityTriggers(participants: any[]): Promise<any[]> {
+  const digimonRows = await loadParticipantDigimon(participants)
   const juggernautStatMap: Record<number, 'accuracy' | 'damage' | 'dodge' | 'armor'> = {
     1: 'armor',    // 1: Health → nearest analog is armor for automation
     2: 'accuracy',
@@ -26,7 +26,7 @@ export async function applyRoundStartQualityTriggers(participants: any[]): Promi
       continue
     }
 
-    const [digi] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
+    const digi = digimonRows.get(p.entityId)
     if (!digi) {
       updated.push(p)
       continue

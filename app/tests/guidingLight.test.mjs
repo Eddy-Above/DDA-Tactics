@@ -23,11 +23,15 @@ function createAura() {
   const room = { positions, reads: 0 }
   const reads = []
   const unexpected = () => { throw new Error('core aura must not use encounter persistence or broadcasting') }
-  const sql = { eq: (column, id) => ({ column, id }) }
+  const sql = { eq: (column, id) => ({ column, id }), inArray: (column, id) => ({ column, id }) }
   const dbModule = {
     digimon, tamers, encounters, campaigns,
     db: { select: () => ({ from: (table) => ({ where: async ({ id }) => {
       reads.push({ table, id })
+      if (Array.isArray(id)) return id.flatMap(key => {
+        const row = (table === digimon ? digimonRows : tamerRows).get(key)
+        return row ? [row] : []
+      })
       const row = table === encounters ? metadata.encounter && { id, ...metadata.encounter }
         : table === campaigns ? metadata.campaign
         : (table === digimon ? digimonRows : tamerRows).get(id)
@@ -37,10 +41,14 @@ function createAura() {
   const context = loadTypeScriptWithMocks('server/utils/combatContext.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
+  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+    'drizzle-orm': sql, '../db': dbModule,
+  })
   const { applyGuidingLightAuras, refreshGuidingLightForParticipants } = loadTypeScriptWithMocks('server/utils/guidingLight.ts', {
     'drizzle-orm': sql,
     '../db': dbModule,
     './combatContext': context,
+    './combatSpatial': spatial,
     './resolveSupportAttack': { getDigimonDerivedStats: async (id) => {
       const row = digimonRows.get(id)
       return row ? { bit: row.bit } : null
@@ -220,7 +228,7 @@ test('different participant instances sharing one Digimon entity retain independ
   assert.equal(stats(result, 'instance-b').accuracy, 2)
   assert.equal(stats(result, 'instance-outside').accuracy, 0)
   assert.equal(stats(result, 'source').dodge, 2)
-  assert.equal(fixture.reads.filter((read) => read.id === 'shared-entity').length, 1)
+  assert.equal(fixture.reads.filter((read) => read.id.includes('shared-entity')).length, 1)
 })
 
 test('participants without activeEffects stay unchanged when no source is active', async () => {

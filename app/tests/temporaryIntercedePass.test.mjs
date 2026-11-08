@@ -788,9 +788,14 @@ test('new offer creation waits for an automatic pass and preserves the defense i
 
 function loadPut(server) {
   const unchanged = async ({ participants }) => ({ participants, logEntries: [] })
+  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+    'drizzle-orm': { eq, inArray: (column, values) => ({ column, values }) },
+    '../db': server.dbModule,
+  })
   return loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
     'drizzle-orm': { eq },
     '../../db': server.dbModule,
+    '../../utils/combatSpatial': spatial,
     '../../utils/encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: {}, destructibleStates: [] }) },
     '../../utils/endOfTurnGravity': { applyEndOfTurnGravity: async (_id, _map, participants) => ({ participants, logEntries: [] }) },
     '../../utils/roundStartQualityTriggers': { applyRoundStartQualityTriggers: identity },

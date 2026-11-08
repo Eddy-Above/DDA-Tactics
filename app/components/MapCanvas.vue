@@ -2579,29 +2579,34 @@ watch(() => props.map, () => {
   buildMap()
 }, { deep: true })
 
-watch(
-  () => JSON.stringify(props.participantPositions),
-  () => {
-    lastAttackKey = ''  // a target moving changes range and line of sight
+// Snapshots recreate the entity maps even when only actions or the active turn changed.
+// Compare the inputs used by buildSprites, leaving portrait/health/stance updates to the overlays.
+function spriteGeometrySignature(): string {
+  const layout = props.participants.flatMap(p => {
+    const position = props.participantPositions[p.id]
+    if (!position) return []
+    const digimon = p.type === 'digimon' ? props.digimonMap[p.entityId] : undefined
+    const { tileCount } = getSizeParams(digimon?.size ?? 'medium', digimon?.giganticDimensions)
+    return [{
+      id: p.id, type: p.type, entityId: p.entityId,
+      x: position.x, y: position.y, z: position.z, tileCount,
+    }]
+  })
+  return JSON.stringify(layout.sort((a, b) => a.id.localeCompare(b.id)))
+}
+
+function watchParticipantSprites() {
+  watch(spriteGeometrySignature, () => {
+    lastAttackKey = ''  // changed target positions, forms or footprints affect targeting
     if (scene) buildSprites()
-  }
-)
+  })
+  watch([() => props.activeParticipantId, () => props.secondaryActiveParticipantId], () => {
+    closeRadial()
+    if (scene) refreshBorderColors()
+  })
+}
 
-watch(() => props.digimonMap, () => { if (scene) buildSprites() }, { deep: true })
-watch(() => props.tamerMap, () => { if (scene) buildSprites() }, { deep: true })
-
-// Rebuild sprites when a participant's underlying entity changes (e.g.
-// digivolve swaps entityId to a different Digimon record's sprite/stage),
-// or when participants are added/removed.
-watch(
-  () => props.participants.map(p => `${p.id}:${p.entityId}`).join(','),
-  () => { if (scene) buildSprites() }
-)
-
-watch(() => [props.activeParticipantId, props.secondaryActiveParticipantId], () => {
-  closeRadial()
-  if (scene) buildSprites()
-})
+watchParticipantSprites()
 
 watch(radialParticipantId, id => { if (id) keysHeld.clear() })
 watch(() => props.participants.map(p => p.id).join(','), () => {

@@ -10,6 +10,7 @@ import { loadParticipantDigimon } from './combatSpatial'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
 import { refreshGuidingLightForParticipants } from './guidingLight'
+import { readCombatRecord } from './combatRecordCache'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -139,8 +140,10 @@ async function devolveEnemy(
   const previousState = woundsHistory.pop()
   if (!previousState) return null
 
-  const [oldDigimon] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
-  const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+  const oldDigimon = await readCombatRecord('digimon', p.entityId,
+    () => db.select().from(digimon).where(eq(digimon.id, p.entityId)))
+  const newDigimon = await readCombatRecord('digimon', previousState.entityId,
+    () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
   const devolvedHasCombatMonster = ((newDigimon?.qualities || []) as any[]).some((q: any) => q.id === 'combat-monster')
   const wounds = previousState.wounds !== undefined ? previousState.wounds : 0
   const devolved = {

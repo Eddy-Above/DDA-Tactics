@@ -1,8 +1,7 @@
-import { eq } from 'drizzle-orm'
-import { db, digimon, tamers, type Digimon, type Tamer } from '../db'
 import { applyEffectToParticipant } from './applyEffect'
 import { getUnlockedSpecialOrders } from '../../utils/specialOrders'
 import { STAGE_ORDER } from '../../data/qualities'
+import { loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 
 /**
  * Applied the moment an encounter's phase transitions into 'combat' — i.e. "the beginning
@@ -20,12 +19,7 @@ export async function applyEncounterStartTriggers(
   const digimonParticipants = participants.filter((p) => p.type === 'digimon')
   if (digimonParticipants.length === 0) return participants
 
-  const digimonRows = new Map<string, Digimon>()
-  for (const p of digimonParticipants) {
-    if (digimonRows.has(p.entityId)) continue
-    const [d] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
-    if (d) digimonRows.set(p.entityId, d)
-  }
+  const digimonRows = await loadParticipantDigimon(digimonParticipants)
 
   // Main enemy = highest-stage enemy digimon present at the start of the encounter.
   // Enemies still in reserve aren't actually on the board yet, so they don't count.
@@ -38,7 +32,12 @@ export async function applyEncounterStartTriggers(
     if (idx > mainEnemyStageIdx) mainEnemyStageIdx = idx
   }
 
-  const tamerRows = new Map<string, Tamer>()
+  const partnerIds = digimonParticipants.flatMap(p => {
+    if (p.isEnemy || (onlyParticipantIds && !onlyParticipantIds.has(p.id))) return []
+    const partnerId = digimonRows.get(p.entityId)?.partnerId
+    return partnerId ? [partnerId] : []
+  })
+  const tamerRows = await loadTamersByIds(partnerIds)
 
   const updated: any[] = []
   for (const p of participants) {
@@ -58,14 +57,7 @@ export async function applyEncounterStartTriggers(
       continue
     }
 
-    let tamer = tamerRows.get(d.partnerId)
-    if (!tamer) {
-      const [t] = await db.select().from(tamers).where(eq(tamers.id, d.partnerId))
-      if (t) {
-        tamerRows.set(d.partnerId, t)
-        tamer = t
-      }
-    }
+    const tamer = tamerRows.get(d.partnerId)
     if (!tamer) {
       updated.push(p)
       continue
