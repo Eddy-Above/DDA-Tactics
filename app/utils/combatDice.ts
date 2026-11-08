@@ -88,7 +88,13 @@ export function combatAttackStats(record: any, participant: any, attack: any, op
   if (directed) { add('Directed', directed); notes.push(`Directed +${directed}`) }
   const taunt = participant?.activeEffects?.find((e: any) => e.name === 'Taunt')
   const targetIds = options.targetIds ?? (options.targetId ? [options.targetId] : [])
-  if (taunt && targetIds.length > 0 && !targetIds.includes(taunt.source)) add('Taunt', -(taunt.potency ?? 0))
+  if (taunt && targetIds.length > 0) {
+    const potency = taunt.potency ?? 0 // Stored as the source's CPU x2.
+    const targetsSource = targetIds.includes(taunt.source)
+    const isAreaAttack = tags.some(tag => tag.startsWith('Area Attack'))
+    const penalty = targetsSource ? (isAreaAttack ? Math.max(0, potency / 2 - 2) : 0) : potency
+    add('Taunt', -penalty)
+  }
   if (has('positive-reinforcement')) {
     const mood = participant?.moodValue ?? 3
     add('Mood', mood <= 2 ? mood - 3 : 0, mood >= 5 ? mood - 4 : 0)

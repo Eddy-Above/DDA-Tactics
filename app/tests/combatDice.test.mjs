@@ -159,11 +159,20 @@ test('Finishing Touch counts fours and power suppression prevents Huge Power fro
   assert.equal(result.automaticSuccesses, 1)
 })
 
-test('a Taunt only penalizes an attack that excludes its source, including multi-target casts', () => {
-  const actor = { ...target, activeEffects: [{ name: 'Taunt', source: 'taunter', potency: 4 }] }
+test('Taunt uses CPU x2 against others and CPU -2 for an area attack that includes its source', () => {
+  const actor = { ...target, activeEffects: [{ name: 'Taunt', source: 'taunter', potency: 6 }] }
   const attack = { range: 'ranged', tags: [] }
-  assert.equal(combatAttackStats(record, actor, attack, { targetIds: ['other'] }).accuracy, 4)
-  assert.equal(combatAttackStats(record, actor, attack, { targetIds: ['other', 'taunter'] }).accuracy, 8)
+  const area = { ...attack, tags: ['Area Attack: Burst'] }
+  assert.equal(combatAttackStats(record, actor, attack, { targetIds: ['other'] }).accuracy, 2)
+  assert.equal(combatAttackStats(record, actor, attack, { targetIds: ['taunter'] }).accuracy, 8)
+  assert.equal(combatAttackStats(record, actor, area, { targetIds: ['other'] }).accuracy, 2)
+  assert.equal(combatAttackStats(record, actor, area, { targetIds: ['other', 'taunter'] }).accuracy, 7)
+  assert.equal(combatAttackStats(record, actor, area, { targetIds: ['taunter'] }).accuracy, 7)
+  assert.equal(combatAttackStats(record, actor, area).accuracy, 8, 'no target-dependent penalty before aiming')
+  for (const cpu of [0, 1, 2]) {
+    const lowCpu = { ...actor, activeEffects: [{ name: 'Taunt', source: 'taunter', potency: cpu * 2 }] }
+    assert.equal(combatAttackStats(record, lowCpu, area, { targetIds: ['taunter'] }).accuracy, 8, 'a small CPU never grants bonus accuracy')
+  }
 })
 
 test('next-attack order snapshots survive consumption, while round expiry only removes Quick Reaction', () => {

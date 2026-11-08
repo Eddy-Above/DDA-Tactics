@@ -132,6 +132,7 @@ test('Swagger Taunts one enemy for three rounds at CPU times two', async () => {
   const f = fixture('Swagger', { targetId: 'enemy' })
   await f.run()
   const taunt = f.encounter.participants[2].activeEffects[0]
+  assert.equal(taunt.type, 'debuff')
   assert.deepEqual([taunt.name, taunt.duration, taunt.potency, taunt.source], ['Taunt', 3, 6, 'partner'])
   assert.deepEqual(f.partner.activeEffects, [])
 })

@@ -194,6 +194,10 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  const tauntPotency = npcAttackDef?.effect === 'Taunt'
+    ? calculateEffectPotency('Taunt', await getDigimonDerivedStats(actor.entityId, actor), null)
+    : null
+
   // Support attack: skip damage, apply effect only, return early
   if (npcAttackDef?.type === 'support') {
     let appliedEffectName: string | null = null
@@ -227,8 +231,9 @@ export default defineEventHandler(async (event) => {
           name: npcAttackDef.effect,
           type: effectType,
           duration: effectDuration,
-          source: 'Attack',
+          source: npcAttackDef.effect === 'Taunt' ? actor.id : 'Attack',
           description: '',
+          ...(tauntPotency ?? {}),
         }
         appliedEffectName = npcAttackDef.effect
         const stunImmediate = npcAttackDef.effect === 'Stun' && !targetHasGone
@@ -421,8 +426,9 @@ export default defineEventHandler(async (event) => {
             name: npcAttackDef.effect,
             type: effectType,
             duration: effectDuration,
-            source: 'Attack',
+            source: npcAttackDef.effect === 'Taunt' ? actor.id : 'Attack',
             description: '',
+            ...(tauntPotency ?? {}),
           }
           updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules)
           appliedEffectName = npcAttackDef.effect

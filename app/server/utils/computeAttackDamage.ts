@@ -332,7 +332,7 @@ export async function computeAttackDamage(
         name: attackDef.effect,
         type: effectType as 'buff' | 'debuff' | 'status',
         duration: Math.max(1, netSuccesses),
-        source: attackerName,
+        source: attackDef.effect === 'Taunt' ? attackerParticipant.id : attackerName,
         description: '',
         potency: potencyFinal,
         potencyStat,

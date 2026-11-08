@@ -25,6 +25,7 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Confuse': 'N',
   'Stun': 'N',
   'Fear': 'N',
+  'Taunt': 'N',
   'Immobilize': 'N',
   'Weaken': 'N',
   'Distract': 'N',
@@ -48,7 +49,6 @@ export const EFFECT_ALIGNMENT: Record<string, 'P' | 'N' | 'NA'> = {
   'Lifesteal': 'NA',
   'Knockback': 'NA',
   'Pull': 'NA',
-  'Taunt': 'NA',
 }
 
 /**
@@ -222,7 +222,6 @@ export function getEffectResolutionType(
   }
 
   if (alignment === 'N' || alignment === 'NA') {
-    // Taunt is NA but targets enemies like an N effect
     return attackType === 'support' ? 'negative' : 'damage-negative'
   }
 

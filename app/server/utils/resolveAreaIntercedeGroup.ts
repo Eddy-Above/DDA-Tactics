@@ -250,7 +250,14 @@ export async function resolveAreaIntercedeGroup({
 
   // Uncovered player targets → resolve positive support via Health roll, otherwise dodge-roll
   const isSupportAttack = !!groupData.isSupportAttack
-  const attackDef = groupData.attackData || null
+  let attackDef = groupData.attackData || null
+  if (isSupportAttack && !attackDef?.effect) {
+    const attacker = participants.find((p: any) => p.id === groupData.attackerId && p.type === 'digimon')
+    const record = attacker ? await readCombatRecord('digimon', attacker.entityId,
+      () => database.select().from(digimon).where(eq(digimon.id, attacker.entityId))) : null
+    const storedAttack = record?.attacks?.find((a: any) => a.id === groupData.attackId)
+    if (storedAttack) attackDef = { ...attackDef, ...storedAttack, effect: storedAttack.effect }
+  }
 
   for (const targetId of uncoveredIds) {
     if (npcTargetIds.includes(targetId)) continue

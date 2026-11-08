@@ -180,6 +180,9 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   body.suppressPower = !!orderModifiers.suppressPower
   body.attackData = { ...body.attackData, orderModifiers }
   const declaredAttack: any = digimonById.get(attacker.entityId)?.attacks?.find((a: any) => a.id === body.attackId)
+  // Clients may send only roll stats. Deferred support resolution also needs the
+  // attack's type, effect and tags after the last intercede decision is answered.
+  if (declaredAttack) body.attackData = { ...body.attackData, ...declaredAttack, effect: declaredAttack.effect }
   if (body.finishingTouch) body.accuracySuccesses = body.accuracyDice.filter(d => d >= 4).length
     + combatAttackStats(digimonById.get(attacker.entityId), attacker, declaredAttack ?? body.attackData).automaticSuccesses
   if (declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(attacker)) {

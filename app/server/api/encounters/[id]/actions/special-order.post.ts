@@ -213,7 +213,7 @@ export default defineEventHandler(async (event) => {
       const cpu = derived?.cpu ?? 0
       participants = participants.map((p: any) => p.id === target.id ? {
         ...p, activeEffects: applyEffectToParticipant((p.activeEffects || []).filter((e: any) => e.name !== 'Taunt'), {
-          name: 'Taunt', type: 'status', duration: 3, potency: cpu * 2, source: partnerParticipant.id,
+          name: 'Taunt', type: 'debuff', duration: 3, potency: cpu * 2, source: partnerParticipant.id,
           description: `Swagger: -${cpu * 2} Accuracy when not attacking the taunting partner`,
         }),
       } : p)

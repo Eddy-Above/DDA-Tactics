@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08j | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Taunt and deferred support effects.** Intercede offers now snapshot the stored attack definition alongside roll data; single/area decisions recover missing definitions in older pending offers. This fixes support effects silently disappearing after Skip for player and GM attacks. Taunt is Negative, records the source participant ID and CPU x2 potency, and applies CPU -2 (minimum zero) for an area attack including its source. Swagger uses the same debuff classification. Regression coverage includes real offer/Skip flows, player defenses, NPC attacks, old pending data, other support effects and Selective Targeting. All 773 tests pass. |
 | 2026-11-08i | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **AoE previews use translucent voxel volumes.** `MapCanvas.vue` renders full-height cells with 30% fill opacity and only the combined volume's exposed faces and outer crease edges. Shared faces and flat grid seams are removed, including between hit and blocked regions; their exposed faces retain orange/red colors. Preview replacement, cancellation and unmount dispose geometry/materials. All six AoE shapes keep their existing gameplay cells. Validation: all 748 tests and typecheck pass. |
 | 2026-11-08h | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Reciprocal size occupancy, selectable shared tokens and unrestricted GM aiming.** Tiny pairings may share squares; Small pairings may pass but not finish together; other pairings block, including allies and Tamers. Shared policy covers full-footprint client paths, placement, charge/Pass landings and server intercede/displacement/throw checks. Single-target claims revalidate routes before saving; area claims validate throws against the interceptor's new position. Clicking shared tokens first opens a character chooser for health, owned actions or targeting. GM Move uses an unlimited aim plane, height scrolling, destination ghost and camera height following, with no action cost or movement-capability checks. Validation: all 734 tests and typecheck pass. |
 | 2026-11-08g | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Keep flying/digging movement paths above a flat floor when an equally short level route exists.** The screenshot symptom was a valid distance label plus yellow endpoints with intermediate markers hidden underneath ground tiles: neighbour-order ties selected unnecessary negative-Y steps. Both cached BFS predecessors and fallback A* in `utils/pathfinding.ts` now minimize vertical travel after minimizing movement steps. Required 3D routes, lower floors, budgets and reachability remain supported. Four real path/render visibility regressions reproduce the failure before the fix; all 695 tests and typecheck pass afterward. |
@@ -232,6 +233,8 @@ No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` 
 
 ## 3. API Schema
 
+**2026-11-08j:** `actions/intercede-offer` enriches queued `attackData` with the attack record's definition before constructing single-target offers, area offers, group state or Dodge requests. Dice pools, calculated stats and order modifiers remain in the payload. `intercedeDecision` and `resolveAreaIntercedeGroup` can recover a missing support definition from the attacker record for already-pending exchanges. No endpoint or request-body contract changes. Taunt source/potency fixes cover shared damage/intercede calculation, negative support NPC resolution, submitted player defenses and the legacy GM NPC endpoint.
+
 **2026-11-08h spatial intercede validation:** `intercede-offer.post.ts` uses the shared reciprocal Tiny/Small occupancy rules for traversal and landing, and reuses its area-position eligibility results. `intercede-claim.post.ts` checks the chosen interceptor's current path and landing, including stored offer positions, and rejects invalid routes/displacements with 409 before committing actions, offers or positions. Tiny melee pairings may remain in the protected unit's square; others require a valid displacement. Area throw checks use positions after interceptor relocation. Clash Throw and push/pull also use mover-aware full-footprint occupancy. Existing request/response fields and WebSocket movement payloads are unchanged; ordinary map moves and setup placement retain their existing client-validation trust model.
 
 > 2026-11-07g: `POST .../actions/attack` runs its fresh read, validation and own writes inside `serializeIntercedeClaim`; it releases the queue before calling the separately queued intercede-offer route. `POST .../responses` validates faces, caps halved Dodge pools to the canonical pool plus accepted request-bound extra dice, and persists the actual counted dice/pool/successes. Brown Armor successes are added separately. Ordinary Dodge Inspiration spends accept `requestId`: accepted Act/+1 spends add 5/1 to `request.data.paidDodgeDiceBonus`, Act sets `dodgeActPaid`, and rerolls add no dice. Foreign, answered, blocked or fixed-Fateful requests and repeated Acts are rejected before spending. Fateful validates its base against the same pool plus paid credit. These fields use existing request JSONB. The legacy `POST .../actions/npc-attack` damage path applies Enduring Soul to the roster that is saved before displacement, automatic devolution and enemy-removal checks.
@@ -401,6 +404,8 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 ---
 
 ## 4. Data Models & Storage
+
+**2026-11-08j:** Taunt's existing `ActiveEffect.source` stores the source participant ID, and its existing `potency` stores that user's CPU x2. It is a `debuff` (`[N]`), including Swagger, so negative-effect stacking, filtering and removal apply. There is no schema migration. Previously queued support attacks missing their effect definition are recovered during decision resolution.
 
 > 2026-11-08c: `CombatParticipant.woundsHistory` remains optional and keeps its existing JSON shape. It stores actual prior combat forms and takes precedence during devolution. No synthetic ancestor snapshots are added at combat entry: when history is empty, partner fallback resolves the direct parent from the evolution line and reads its persisted sheet wounds. Restored entity ID, wound totals and shared line stage follow the chosen form. No schema migration is needed.
 
@@ -644,6 +649,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ## 5. Pages & Components
 
+**2026-11-08j:** Shared `combatDice` applies the full Taunt penalty when a cast excludes its source, no penalty for a single-target attack against the source, and `max(0, CPU - 2)` for an Area Attack including the source (even when it is the only target). GM/player callers and counterattacks share this policy. The Taunt quality text now describes the penalty rather than forced targeting.
+
 > 2026-11-08d: Partner evolution choices supply `currentEntityId` to `buildCombatEvolutionOptions`, which resolves the same actual form index used by manual digivolve and fallback devolution. A matching stored index disambiguates repeated entity entries; otherwise the entity lookup repairs stale indices. Missing current entries yield no partner choices. The GM Manage modal uses the same entity resolver for forced form choices. NPC callers continue to use their explicit stage override.
 
 > 2026-11-08c: Both combat pages pass `allowDevolutionWithoutHistory` to the shared evolution-choice builder only for resolved non-enemy partners, independently of whether their Tamer is deployed. `getCombatEvolutionParent` validates the actual branch parent and linked record ID; root/broken/self/out-of-range parents stay unavailable. GM NPC stage overrides are used only for NPCs, so a stale local override cannot hide partner choices after a devolution/evolution cycle.
@@ -876,6 +883,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**2026-11-08j:** `intercedeDecision.ts` adds `readCombatRecord` from the existing request-local cache for legacy pending-definition recovery; area resolution already imports it. Deferred support routing consumes server attack metadata rather than relying on a client's roll-only payload. No packages are added.
+
 **2026-11-08i:** `MapCanvas.vue` reuses its existing `utils/voxelSurface.ts` dependency for AoE previews as well as transparent map voxels. Shape generation and line-of-sight classification still feed the renderer unchanged; no package or API dependency is added.
 
 **2026-11-08h occupancy policy:** `utils/movementRules.ts` owns reciprocal `sizeInteraction` and `getMovementOccupancy` (separate traversal-blocked and landing-blocked cell sets). `useMapMovement.ts`, `utils/placementRules.ts`, `MapCanvas.vue` and `server/utils/mapMovement.ts` consume this policy; the server helper accepts a mover and a landing/traversal purpose. Intercede offers/claims, Clash Throw and push/pull supply these size-aware sets. The chooser reuses `MapRadialMenu.vue`; no package or storage dependency is added.
@@ -1042,6 +1051,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08j:** The queue metadata fix applies to all attack definitions, with real single/area regressions for Taunt, Stun, Poison, Shield and Fury. Taunt's `[N]` classification also affects effect badges, Selective Targeting, generic debuff stacking and removal. This addresses queued-definition loss; it does not establish complete mechanical support for every effect. Cleanse has a separate missing resolver and is being handled independently.
 
 **2026-11-08i:** The AoE rendering change covers Blast, Burst, Close Blast, Cone, Line and Pass previews through `updateAoeHighlight`. It changes fill geometry, opacity, outlines and preview-resource cleanup. Gameplay coverage and blocked-cell targeting semantics are preserved, and transparent map-voxel material boundaries retain their existing rendering policy.
 
@@ -1213,6 +1224,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Deferred effects/Taunt (2026-11-08j): `tauntAttacks.test.mjs` covers real intercede-offer/Skip flows with GM/player roll-only payloads, single/area NPC targets, old incomplete pending definitions, canonical intercede calculations, player defense responses, legacy GM attacks, CPU potency/source identity, other support resolution families and Selective Targeting. `combatDice.test.mjs` checks the supplied CPU x2 / area CPU -2 rule and the zero-penalty floor; Swagger's debuff type is checked in `specialOrderCombat.test.mjs`. All 773 tests pass. Live browser interaction was not exercised.
 
 - AoE voxel previews (2026-11-08i): `tests/aoeVoxelPreview.test.mjs` executes the actual renderer with Three.js geometry. Fourteen checks cover full-height bounds, 30% fill opacity, removal of horizontal/vertical shared faces and seams, concave outlines, hit/blocked color boundaries, deduplication, cached equivalent previews, geometry/material disposal and unchanged cell coverage for all six AoE shapes. All 748 tests and typecheck pass; live browser interaction was not exercised.
 

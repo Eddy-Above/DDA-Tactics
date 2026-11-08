@@ -9,6 +9,7 @@ import { allAreaTargetsDecided, resolveAreaIntercedeGroup } from '~/server/utils
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
 import { getEffectResolutionType } from '~/data/attackConstants'
 import { GM_OPT_OUT_OWNER, isOfferPassed } from '~/utils/intercedeOptOuts'
+import { readCombatRecord } from './combatRecordCache'
 
 // What happens once an intercede-offer is answered without anyone stepping in — a Skip, or an
 // opt-out clearing it. Shared by intercede-skip and intercede-optouts so an opt-out can clear
@@ -146,7 +147,16 @@ export async function resolveIntercedeGroupIfDecided(
   }
 
   const isSupportAttack = data.isSupportAttack || false
-  const attackDef = data.attackData || null
+  let attackDef = data.attackData || null
+  // Older pending offers may predate the full attack snapshot. Recover their
+  // definition instead of silently discarding a support effect after Skip.
+  if (isSupportAttack && !attackDef?.effect) {
+    const attacker = participants.find((p: any) => p.id === data.attackerId && p.type === 'digimon')
+    const record = attacker ? await readCombatRecord('digimon', attacker.entityId,
+      () => db.select().from(digimon).where(eq(digimon.id, attacker.entityId))) : null
+    const storedAttack = record?.attacks?.find((a: any) => a.id === data.attackId)
+    if (storedAttack) attackDef = { ...attackDef, ...storedAttack, effect: storedAttack.effect }
+  }
   const supportParams = {
     halfDodge: !!data.attackData?.orderModifiers?.halfDodge,
     participants,

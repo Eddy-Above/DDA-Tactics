@@ -165,9 +165,11 @@ export function calculateEffectPotency(
   // stage bonus) PLUS the stage bonus again (e.g. a rookie with CPU 1 knocks back 1 + 1 = 2 tiles).
   const potency = effectName === 'Frenzy'
     ? Math.floor(rawPotency / 2)
-    : (effectName === 'Knockback' || effectName === 'Pull')
-      ? rawPotency + (attackerDerived?.stageBonus ?? 0)
-      : rawPotency
+    : effectName === 'Taunt'
+      ? rawPotency * 2
+      : (effectName === 'Knockback' || effectName === 'Pull')
+        ? rawPotency + (attackerDerived?.stageBonus ?? 0)
+        : rawPotency
   return { potency, potencyStat }
 }
 
@@ -499,7 +501,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
           const effectData = buildEffectData(
             params.attackDef.effect,
             Math.max(1, netSuccesses),
-            params.attackerName,
+            params.attackDef.effect === 'Taunt' ? attacker.id : params.attackerName,
             attackerDerived,
             targetDerived,
             params.isSignatureMove ? (params.batteryCount ?? 0) : 0

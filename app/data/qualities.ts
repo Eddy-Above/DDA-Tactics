@@ -1341,8 +1341,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Forces target to attack you.',
-    effect: `Apply [Taunt] tag to an attack. Target must focus attacks on you. Duration = leftover Accuracy successes.`,
+    description: '[N] Penalizes attacks that do not focus on you.',
+    effect: `Apply [Taunt] tag to an attack. Target takes an Accuracy penalty of your CPU x2 when attacking anyone else. Area Attacks that include you instead take a CPU -2 Accuracy penalty (minimum 0). Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-fear',
