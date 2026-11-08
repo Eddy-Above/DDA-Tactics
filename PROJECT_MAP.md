@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08n | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Expose NPC evolution in the GM map radial.** NPC Digimon with an assigned evolution line now get Digivolve/Devolve choices from the same unlocked-form/local-stage policy as card view. The GM action-selected handler uses the normal action endpoint, without force or a fabricated Tamer roll. Live guards reject off-turn, exhausted, locked, removed and already-attempted choices; devolution retains its existing eligibility. Four new real computed/handler regressions plus existing evolution/radial coverage pass (48 targeted tests); typecheck passes. |
 | 2026-11-08m | API Schema, Pages & Components, Blast Radius, Cross-Cutting Concerns | **Correct Cleanse request labels and legacy NPC Immunity.** The GM Pending Player Requests list labels Cleanse as waiting for defenses or choosing effects; unrelated request types no longer fall back to Roll Initiative. `npc-attack.post.ts` loads target qualities before support/damage resolution, blocks immune effects and their Stun/displacement side effects, skips immune Cleanse prompts, and passes qualities to the shared application helper. Ordinary hit/damage behavior and existing effects are preserved. Fifteen new real-endpoint regressions cover positive, negative and instant effects plus deferred Stun. All 819 tests and typecheck pass. |
 | 2026-11-08l | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Cleanse selection and combat map controls.** Cleanse now gathers per-target defense outcomes and offers one GM/player effect-selection dialog per cast. The shared cap is the highest leftover Accuracy, and each chosen individual effect loses the caster's BIT turns; Selective Targeting offers mutually exclusive Dispel/Purify filters. Normal support/damage, NPC/player defenses, intercede claims and the legacy GM endpoint participate. GM Manage can unlock individual used attacks without refunding actions or other costs. Placed-token dragging is limited to setup/initiative, while radial GM Move remains available. Movement previews show the actual token at 20% opacity and a measured gap to the nearest floor/voxel beneath its centre. All 804 tests and typecheck pass. |
 | 2026-11-08k | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **GM map Manage and source-aware Taunt/Fear controls.** GM radial menus expose the existing participant Manage modal on any turn, including clashes. EffectManager requires a participant source for Taunt/Fear in Quick Apply and custom entry, auto-fills the source's CPU/BIT, stores Taunt potency doubled, and lets GMs repair an existing effect's source. Automatic Fear effects now also use participant IDs and BIT potency, and shared attack Accuracy applies Fear only against its source. |
@@ -660,6 +661,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ## 5. Pages & Components
 
+**2026-11-08n:** GM `mapRadialOptions` now supplies Digivolve/Devolve entries for Digimon with assigned lines, using `getParticipantEvolutionOptions` and current action/attempt/turn availability. `MapCanvas` displays those entries for the active NPC, using its own action availability instead of the player-only Tamer/range gate. The encounter page handles `action-selected` for Digivolve, rechecks the live option and dispatches `handleDigivolve`; NPCs use the existing ordinary server flow. Card-view evolution remains available through its existing buttons.
+
 **2026-11-08m:** The GM encounter page's Pending Player Requests list explicitly labels `cleanse-select` as `Cleanse — Waiting for defenses` or `Cleanse — Choose effects`. Only `initiative-roll` receives the Roll Initiative fallback; other unmatched types display Pending request.
 
 **2026-11-08l:** New shared `CleanseDialog.vue` and `useCleanseSelection` serve both encounter pages in card/map views. They offer one shared effect budget across all recipients, preview duration reductions, prevent mixed Dispel/Purify selections, wait for all defenses, suppress duplicate submissions and retain the prompt after a failed save. Cleanse quality text now matches the supplied BIT/leftover-Accuracy rule. The GM Manage modal lists used attacks with individual Unlock buttons; it clears only that attack's used ID. `getDraggableParticipantIds` permits both GM/player dragging only in setup/initiative; the live drop guard rejects a drag whose eligibility expired when combat began. Radial GM Move is unchanged.
@@ -902,6 +905,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**2026-11-08n:** The GM map adds the already-shared `MapRadialOptions`/`MapRadialChoiceAction` types and connects the existing `MapCanvas -> EncounterMap -> action-selected` event to its evolution handler. No server, package, schema or evolution-rule changes.
+
 **2026-11-08l:** Pure `utils/cleanse.ts` owns selection limits, candidate filtering and immutable duration reduction. `server/utils/cleanse.ts` initializes casts, records target/interceptor outcomes and prunes empty requests. Intercede creation/decisions/claims, NPC attack resolution, submitted defenses and the legacy endpoint share those helpers. Both pages use `useCleanseSelection -> actions/cleanse` and `CleanseDialog`. `MapCanvas` imports pure `utils/movementGap.ts`, caching sorted floor/voxel heights by column in a map-only computed; each hover uses a binary search rather than scanning or serializing the map. No packages or map-size limits are added.
 
 **2026-11-08k:** GM management adds the `MapCanvas -> EncounterMap -> encounter page` `gm-manage` event and passes source options from the page into `EffectManager`. The page reuses `applyDerivedStatEffects` for source SPEC values. Shared `combatDice` adds the target-dependent Fear penalty. No packages or storage fields are added.
@@ -1074,6 +1079,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08n:** NPC map evolution must preserve assigned-line gating, unlocked branches, per-NPC `npcStageIndex`, history-based devolution, own-turn/action limits and the once-per-turn evolution attempt. GM force evolution remains a separate Manage control.
 
 **2026-11-08m:** Immunity changes are limited to the legacy GM NPC attack endpoint, including effect-triggered side effects and Cleanse prompts. The early target read replaces the previous support/damage target reads rather than adding another query. Request-label changes are display-only.
 
@@ -1253,6 +1260,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- NPC map evolution (2026-11-08n): `npcMapEvolution.test.mjs` compiles real GM/Canvas computeds and handlers. It verifies unlocked NPC menu choices, ordinary endpoint submission without Tamer/force, stale/off-turn/exhausted/attempted rejection, absent-line hiding and local-stage devolution. All 48 targeted evolution/radial tests and typecheck pass.
 
 - Legacy Immunity (2026-11-08m): fifteen additional endpoint regressions in `tauntAttacks.test.mjs` cover support/damage Taunt, Fear, Stun, Shield, Burn, Knockback and Cleanse, plus deferred support Stun. They preserve existing effects, ordinary damage and target actions, reject false applied-effect logs, and ensure immune displacement/Cleanse never runs. All 819 tests and typecheck pass.
 

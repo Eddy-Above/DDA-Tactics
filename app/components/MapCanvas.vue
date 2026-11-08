@@ -422,6 +422,9 @@ const radialItems = computed<MapRadialItem[]>(() => {
   if (!isNpc && playerRadialParticipantType.value === 'digimon') {
     items.push(radialChoiceGroup('digivolve', digivolveDisabled.value))
   }
+  if (isNpc && props.isDm && props.radialOptions?.[npcRadialId.value!]?.digivolve?.length) {
+    items.push(radialChoiceGroup('digivolve', outOfActions))
+  }
   if (props.isDm) items.push({ id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' })
   return items
 })

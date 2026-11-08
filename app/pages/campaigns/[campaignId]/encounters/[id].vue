@@ -33,7 +33,7 @@ import { useReactionOrders } from '~/composables/useReactionOrders'
 import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
 import { isRequestAnswered } from '~/utils/requestState'
 import type { Stance, Vec3 } from '~/types'
-import type { MapRadialItem } from '~/types/mapRadial'
+import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, applyDerivedStatEffects, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
@@ -522,7 +522,7 @@ const npcAttackOptions = computed(() => {
 })
 
 const mapRadialOptions = computed(() => {
-  const options: Record<string, { attacks: MapRadialItem[]; stances: MapRadialItem[] }> = {}
+  const options: Record<string, MapRadialOptions> = {}
   for (const p of (currentEncounter.value?.participants ?? []) as CombatParticipant[]) {
     options[p.id] = {
       attacks: getParticipantAttacks(p).map(attack => attackRadialItem(attack, !canUseAttack(p, attack))),
@@ -533,6 +533,18 @@ const mapRadialOptions = computed(() => {
         active: p.currentStance === stance,
         disabled: p.currentStance === stance || !!p.clash || (p.actionsRemaining?.simple || 0) < 1,
       })),
+    }
+    if (p.type === 'digimon' && p.evolutionLineId) {
+      const evolution = getParticipantEvolutionOptions(p)
+      const canAct = currentEncounter.value?.phase === 'combat' && canParticipantAct(p) && (p.actionsRemaining?.simple ?? 0) >= 1
+      options[p.id].digivolve = evolution.evolveTargets.map(target => ({
+        id: String(target.chainIndex), label: `Digivolve → ${target.species}`, description: '1 Simple Action',
+        disabled: !canAct || !!p.hasAttemptedDigivolve,
+      }))
+      if (evolution.canDevolve && evolution.devolveTarget) options[p.id].digivolve!.push({
+        id: String(evolution.devolveTarget.chainIndex), label: `Devolve → ${evolution.devolveTarget.species}`,
+        description: '1 Simple Action', disabled: !canAct,
+      })
     }
   }
   return options
@@ -552,6 +564,18 @@ function onMapStanceSelected(participantId: string, stance: Stance) {
   if (!p || p.currentStance === stance) return
   npcStanceParticipantId.value = null
   return changeStance(stance, participantId)
+}
+
+function onMapActionSelected(participantId: string, action: MapRadialChoiceAction, choiceId: string) {
+  if (action !== 'digivolve' || currentEncounter.value?.phase !== 'combat') return
+  const participant = (currentEncounter.value.participants as CombatParticipant[]).find(participant => participant.id === participantId)
+  const choice = mapRadialOptions.value[participantId]?.digivolve?.find(choice => choice.id === choiceId)
+  if (!participant || participant.type !== 'digimon' || !canParticipantAct(participant) || !choice || choice.disabled) return
+  const evolution = getParticipantEvolutionOptions(participant)
+  const target = evolution.evolveTargets.find(target => String(target.chainIndex) === choiceId)
+    ?? (evolution.canDevolve && String(evolution.devolveTarget?.chainIndex) === choiceId ? evolution.devolveTarget : null)
+  if (!target) return
+  return handleDigivolve(participant, target.chainIndex)
 }
 
 const {
@@ -3472,6 +3496,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           @gm-manage="selectedParticipantId = $event"
           @attack-selected="onMapAttackSelected"
           @stance-selected="onMapStanceSelected"
+          @action-selected="onMapActionSelected"
           @target-selected="onMapTargetSelected"
           @area-attack-confirmed="onMapAreaAttackConfirmed"
           @attack-cancelled="onMapAttackCancelled"
