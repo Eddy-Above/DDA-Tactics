@@ -240,6 +240,7 @@ const iconPaths: Record<string, string> = {
   stance: 'M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3ZM12 7v10M8 11h8',
   clash: 'm3 3 7 7m-7 0 7-7m11 0-7 7m0-7 7 7M7 14l3 3-5 5-3-3 5-5Zm10 0 5 5-3 3-5-5 3-3Z',
   'gm-move': 'M4 7h16v13H4V7Zm3 0V4h10v3M8 13h8M12 9v8',
+  manage: 'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6',
   direct: 'M4 4h16v12H9l-5 4V4Zm4 5h8M8 12h5',
   orders: 'M8 4h12v16H8M3 7h2M3 12h2M3 17h2M11 8h6M11 12h6M11 16h4',
   digivolve: 'm12 2 4 7 6 3-6 3-4 7-4-7-6-3 6-3 4-7ZM12 8v8M8 12h8',

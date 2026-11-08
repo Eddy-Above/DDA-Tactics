@@ -146,3 +146,25 @@ test('canvas radial choices recheck the live branch and preserve colon-containin
   assert.deepEqual(events, [['action-selected', 'actor', 'mode-change', 'form-a:form-b']])
   assert.equal(closeCount, 1)
 })
+
+test('GM Manage dispatches the chosen token once and rejects players or removed tokens', () => {
+  const participantId = ref('shared-token-choice')
+  const props = { isDm: true, participants: [{ id: participantId.value }] }
+  const events = []
+  const { onRadialSelect } = loadPageFunctions('components/MapCanvas.vue', ['enabledRadialLeaf', 'onRadialSelect'], {
+    props, radialParticipantId: participantId,
+    radialItems: ref([{ id: 'gm-manage', label: 'Manage' }]),
+    closeRadial: () => { participantId.value = null }, emit: (...args) => events.push(args),
+  })
+  const item = { id: 'gm-manage', label: 'Manage' }
+  props.isDm = false
+  onRadialSelect(item)
+  props.isDm = true
+  props.participants = []
+  onRadialSelect(item)
+  assert.deepEqual(events, [])
+  props.participants = [{ id: participantId.value }]
+  onRadialSelect(item)
+  onRadialSelect(item)
+  assert.deepEqual(events, [['gm-manage', 'shared-token-choice']])
+})

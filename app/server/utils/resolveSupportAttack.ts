@@ -501,7 +501,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
           const effectData = buildEffectData(
             params.attackDef.effect,
             Math.max(1, netSuccesses),
-            params.attackDef.effect === 'Taunt' ? attacker.id : params.attackerName,
+            ['Taunt', 'Fear'].includes(params.attackDef.effect) ? attacker.id : params.attackerName,
             attackerDerived,
             targetDerived,
             params.isSignatureMove ? (params.batteryCount ?? 0) : 0

@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08k | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **GM map Manage and source-aware Taunt/Fear controls.** GM radial menus expose the existing participant Manage modal on any turn, including clashes. EffectManager requires a participant source for Taunt/Fear in Quick Apply and custom entry, auto-fills the source's CPU/BIT, stores Taunt potency doubled, and lets GMs repair an existing effect's source. Automatic Fear effects now also use participant IDs and BIT potency, and shared attack Accuracy applies Fear only against its source. |
 | 2026-11-08j | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Taunt and deferred support effects.** Intercede offers now snapshot the stored attack definition alongside roll data; single/area decisions recover missing definitions in older pending offers. This fixes support effects silently disappearing after Skip for player and GM attacks. Taunt is Negative, records the source participant ID and CPU x2 potency, and applies CPU -2 (minimum zero) for an area attack including its source. Swagger uses the same debuff classification. Regression coverage includes real offer/Skip flows, player defenses, NPC attacks, old pending data, other support effects and Selective Targeting. All 773 tests pass. |
 | 2026-11-08i | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **AoE previews use translucent voxel volumes.** `MapCanvas.vue` renders full-height cells with 30% fill opacity and only the combined volume's exposed faces and outer crease edges. Shared faces and flat grid seams are removed, including between hit and blocked regions; their exposed faces retain orange/red colors. Preview replacement, cancellation and unmount dispose geometry/materials. All six AoE shapes keep their existing gameplay cells. Validation: all 748 tests and typecheck pass. |
 | 2026-11-08h | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Reciprocal size occupancy, selectable shared tokens and unrestricted GM aiming.** Tiny pairings may share squares; Small pairings may pass but not finish together; other pairings block, including allies and Tamers. Shared policy covers full-footprint client paths, placement, charge/Pass landings and server intercede/displacement/throw checks. Single-target claims revalidate routes before saving; area claims validate throws against the interceptor's new position. Clicking shared tokens first opens a character chooser for health, owned actions or targeting. GM Move uses an unlimited aim plane, height scrolling, destination ghost and camera height following, with no action cost or movement-capability checks. Validation: all 734 tests and typecheck pass. |
@@ -232,6 +233,8 @@ No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` 
 ---
 
 ## 3. API Schema
+
+**2026-11-08k:** Fear now follows Taunt's participant-ID source convention in shared damage/intercede calculation, negative support resolution, submitted player defenses and legacy GM NPC attacks. The legacy endpoint also records Fear's BIT potency. No API shape changes.
 
 **2026-11-08j:** `actions/intercede-offer` enriches queued `attackData` with the attack record's definition before constructing single-target offers, area offers, group state or Dodge requests. Dice pools, calculated stats and order modifiers remain in the payload. `intercedeDecision` and `resolveAreaIntercedeGroup` can recover a missing support definition from the attacker record for already-pending exchanges. No endpoint or request-body contract changes. Taunt source/potency fixes cover shared damage/intercede calculation, negative support NPC resolution, submitted player defenses and the legacy GM NPC endpoint.
 
@@ -649,6 +652,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ## 5. Pages & Components
 
+**2026-11-08k:** `MapCanvas` offers GM-only Manage in its generic GM radial and alongside NPC/clash actions; its guarded `gm-manage` event passes through `EncounterMap` to the encounter page's existing `selectedParticipantId` modal. It costs no actions and identifies the exact token chosen from an overlap. `EffectManager` accepts named source options with CPU/BIT, requires a valid source for Taunt/Fear Quick Apply and custom entry, and allows existing source repairs through its `update` event. The GM page computes source options from current participants and effect-adjusted Digimon stats, then persists updates through the existing encounter PUT. Taunt's entered CPU is doubled once; Fear stores entered BIT.
+
 **2026-11-08j:** Shared `combatDice` applies the full Taunt penalty when a cast excludes its source, no penalty for a single-target attack against the source, and `max(0, CPU - 2)` for an Area Attack including the source (even when it is the only target). GM/player callers and counterattacks share this policy. The Taunt quality text now describes the penalty rather than forced targeting.
 
 > 2026-11-08d: Partner evolution choices supply `currentEntityId` to `buildCombatEvolutionOptions`, which resolves the same actual form index used by manual digivolve and fallback devolution. A matching stored index disambiguates repeated entity entries; otherwise the entity lookup repairs stale indices. Missing current entries yield no partner choices. The GM Manage modal uses the same entity resolver for forced form choices. NPC callers continue to use their explicit stage override.
@@ -883,6 +888,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**2026-11-08k:** GM management adds the `MapCanvas -> EncounterMap -> encounter page` `gm-manage` event and passes source options from the page into `EffectManager`. The page reuses `applyDerivedStatEffects` for source SPEC values. Shared `combatDice` adds the target-dependent Fear penalty. No packages or storage fields are added.
+
 **2026-11-08j:** `intercedeDecision.ts` adds `readCombatRecord` from the existing request-local cache for legacy pending-definition recovery; area resolution already imports it. Deferred support routing consumes server attack metadata rather than relying on a client's roll-only payload. No packages are added.
 
 **2026-11-08i:** `MapCanvas.vue` reuses its existing `utils/voxelSurface.ts` dependency for AoE previews as well as transparent map voxels. Shape generation and line-of-sight classification still feed the renderer unchanged; no package or API dependency is added.
@@ -1051,6 +1058,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08k:** Manage remains GM-only, available without action/turn/clash restrictions. Source identity affects Taunt/Fear targeting in GM/player ordinary attacks and shared counterattack/clash adapters. Source labels distinguish same-name tokens by participant identity. Source repair updates potency when derived stats are available; other effects keep their existing source-free Quick Apply behavior.
 
 **2026-11-08j:** The queue metadata fix applies to all attack definitions, with real single/area regressions for Taunt, Stun, Poison, Shield and Fury. Taunt's `[N]` classification also affects effect badges, Selective Targeting, generic debuff stacking and removal. This addresses queued-definition loss; it does not establish complete mechanical support for every effect. Cleanse has a separate missing resolver and is being handled independently.
 
@@ -1224,6 +1233,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- GM source management (2026-11-08k): `effectManagement.test.mjs` executes real Quick Apply/custom/source-edit handlers, covering required sources, same-name tokens, raw CPU versus stored Taunt potency, Fear BIT, immutable updates and ordinary effects. `mapRadialActions.test.mjs` verifies GM dispatch, repeat selection and player/removed-token rejection. `combatDice.test.mjs` checks directional Fear penalties; attack-route tests verify automatic Fear identity/potency. All 784 tests and typecheck pass.
 
 - Deferred effects/Taunt (2026-11-08j): `tauntAttacks.test.mjs` covers real intercede-offer/Skip flows with GM/player roll-only payloads, single/area NPC targets, old incomplete pending definitions, canonical intercede calculations, player defense responses, legacy GM attacks, CPU potency/source identity, other support resolution families and Selective Targeting. `combatDice.test.mjs` checks the supplied CPU x2 / area CPU -2 rule and the zero-penalty floor; Swagger's debuff type is checked in `specialOrderCombat.test.mjs`. All 773 tests pass. Live browser interaction was not exercised.
 

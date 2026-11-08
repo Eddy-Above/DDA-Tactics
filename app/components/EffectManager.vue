@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { reactive, ref } from 'vue'
 import { EFFECT_ALIGNMENT, EFFECT_ATTACK_TYPE_RESTRICTIONS, EFFECT_POTENCY_STAT, PERMANENT_EFFECTS } from '../data/attackConstants'
 
 interface Effect {
@@ -16,6 +17,7 @@ interface Props {
   effects: Effect[]
   participantName: string
   stunMaxDuration1?: boolean
+  sources?: Array<{ id: string; name: string; cpu?: number; bit?: number }>
 }
 
 const props = defineProps<Props>()
@@ -26,13 +28,53 @@ const emit = defineEmits<{
 }>()
 
 const showAddForm = ref(false)
-const pendingQuickEffect = ref<{ effect: typeof commonEffects[0], duration: number, potency: number } | null>(null)
+const pendingQuickEffect = ref<{ effect: typeof commonEffects[0], duration: number, potency: number, source: string } | null>(null)
 const newEffect = reactive({
   name: '',
   type: 'buff' as 'buff' | 'debuff' | 'status',
   duration: 3,
   description: '',
+  source: '',
+  potency: 0,
 })
+
+function sourceEffectName(name: string): string | null {
+  return ['Taunt', 'Fear'].find(effect => effect.toLowerCase() === name.trim().toLowerCase()) ?? null
+}
+
+function hasValidSource(name: string, source: string): boolean {
+  return !sourceEffectName(name) || !!props.sources?.some(candidate => candidate.id === source)
+}
+
+function sourceSpec(name: string, source: string): number | undefined {
+  const candidate = props.sources?.find(candidate => candidate.id === source)
+  return sourceEffectName(name) === 'Taunt' ? candidate?.cpu : candidate?.bit
+}
+
+function selectQuickSource() {
+  const pending = pendingQuickEffect.value
+  if (!pending) return
+  pending.potency = sourceSpec(pending.effect.name, pending.source) ?? pending.potency
+}
+
+function selectCustomSource() {
+  newEffect.potency = sourceSpec(newEffect.name, newEffect.source) ?? newEffect.potency
+}
+
+function storedSourcePotency(name: string, spec: number): number {
+  const value = Math.max(0, Math.floor(Number(spec) || 0))
+  return sourceEffectName(name) === 'Taunt' ? value * 2 : value
+}
+
+function updateEffectSource(effectId: string, source: string) {
+  const effect = props.effects.find(effect => effect.id === effectId)
+  if (!effect || !hasValidSource(effect.name, source)) return
+  const spec = sourceSpec(effect.name, source)
+  emit('update', props.effects.map(existing => existing.id === effectId ? {
+    ...existing, source, type: getEffectType(effect.name),
+    ...(spec !== undefined ? { potency: storedSourcePotency(effect.name, spec) } : {}),
+  } : existing))
+}
 
 // Build effects list from game system constants
 function getEffectType(name: string): 'buff' | 'debuff' | 'status' {
@@ -63,15 +105,17 @@ const commonEffects = (() => {
 })()
 
 function addEffect() {
-  if (!newEffect.name.trim()) return
+  if (!newEffect.name.trim() || !hasValidSource(newEffect.name, newEffect.source)) return
+  const sourceName = sourceEffectName(newEffect.name)
 
   const effect: Effect = {
     id: `effect-${Date.now()}`,
-    name: newEffect.name,
-    type: newEffect.type,
+    name: sourceName ?? newEffect.name,
+    type: sourceName ? getEffectType(sourceName) : newEffect.type,
     duration: (props.stunMaxDuration1 && newEffect.name === 'Stun') ? 1 : newEffect.duration,
-    source: 'Manual',
+    source: sourceName ? newEffect.source : 'Manual',
     description: newEffect.description,
+    ...(sourceName ? { potency: storedSourcePotency(sourceName, newEffect.potency), potencyStat: EFFECT_POTENCY_STAT[sourceName] } : {}),
   }
 
   emit('add', effect)
@@ -80,15 +124,18 @@ function addEffect() {
   newEffect.type = 'buff'
   newEffect.duration = 3
   newEffect.description = ''
+  newEffect.source = ''
+  newEffect.potency = 0
 }
 
 function applyQuickEffect(effect: typeof commonEffects[0]) {
-  pendingQuickEffect.value = { effect, duration: PERMANENT_EFFECTS.has(effect.name) ? 0 : 1, potency: 0 }
+  pendingQuickEffect.value = { effect, duration: PERMANENT_EFFECTS.has(effect.name) ? 0 : 1, potency: 0, source: '' }
 }
 
 function confirmQuickEffect() {
   if (!pendingQuickEffect.value) return
-  const { effect, duration: rawDuration, potency } = pendingQuickEffect.value
+  const { effect, duration: rawDuration, potency, source } = pendingQuickEffect.value
+  if (!hasValidSource(effect.name, source)) return
   const duration = (props.stunMaxDuration1 && effect.name === 'Stun') ? 1 : rawDuration
   const hasPotency = !!EFFECT_POTENCY_STAT[effect.name]
   emit('add', {
@@ -96,9 +143,9 @@ function confirmQuickEffect() {
     name: effect.name,
     type: effect.type,
     duration,
-    source: 'Quick Apply',
+    source: sourceEffectName(effect.name) ? source : 'Quick Apply',
     description: effect.description,
-    ...(hasPotency && potency ? { potency } : {}),
+    ...(hasPotency ? { potency: storedSourcePotency(effect.name, potency), potencyStat: EFFECT_POTENCY_STAT[effect.name] } : {}),
   })
   pendingQuickEffect.value = null
 }
@@ -143,6 +190,14 @@ function getEffectColor(type: string) {
           <p v-if="effect.description" class="text-xs opacity-75 mt-1">
             {{ effect.description }}
           </p>
+          <label v-if="sourceEffectName(effect.name)" class="block text-xs mt-1">
+            Source
+            <select :value="effect.source" class="ml-1 bg-digimon-dark-700 text-white rounded px-1 py-0.5"
+              @change="updateEffectSource(effect.id, ($event.target as HTMLSelectElement).value)">
+              <option v-if="!sources?.some(source => source.id === effect.source)" :value="effect.source" disabled>Select source</option>
+              <option v-for="source in sources ?? []" :key="source.id" :value="source.id">{{ source.name }}</option>
+            </select>
+          </label>
         </div>
         <button
           class="text-xs opacity-75 hover:opacity-100"
@@ -180,6 +235,13 @@ function getEffectColor(type: string) {
     <div v-if="pendingQuickEffect" class="mt-2 p-2 bg-digimon-dark-700 rounded border border-digimon-dark-600 text-sm">
       <div class="font-medium text-white mb-2">Configure: {{ pendingQuickEffect.effect.name }}</div>
       <div class="flex flex-wrap gap-2 items-center">
+        <label v-if="sourceEffectName(pendingQuickEffect.effect.name)" class="text-digimon-dark-400">
+          Source
+          <select v-model="pendingQuickEffect.source" class="ml-1 bg-digimon-dark-600 text-white rounded px-2 py-1" @change="selectQuickSource">
+            <option value="" disabled>Select source</option>
+            <option v-for="source in sources ?? []" :key="source.id" :value="source.id">{{ source.name }}</option>
+          </select>
+        </label>
         <template v-if="!PERMANENT_EFFECTS.has(pendingQuickEffect.effect.name)">
           <template v-if="!(stunMaxDuration1 && pendingQuickEffect.effect.name === 'Stun')">
             <label class="text-digimon-dark-400">Duration</label>
@@ -195,7 +257,7 @@ function getEffectColor(type: string) {
         </template>
         <span v-else class="text-digimon-dark-400 text-xs">Permanent</span>
         <template v-if="EFFECT_POTENCY_STAT[pendingQuickEffect.effect.name]">
-          <label class="text-digimon-dark-400 ml-1">Spec Value</label>
+          <label class="text-digimon-dark-400 ml-1">{{ sourceEffectName(pendingQuickEffect.effect.name) === 'Taunt' ? 'CPU (penalty ×2)' : sourceEffectName(pendingQuickEffect.effect.name) === 'Fear' ? 'BIT' : 'Spec Value' }}</label>
           <input
             v-model.number="pendingQuickEffect.potency"
             type="number"
@@ -204,6 +266,7 @@ function getEffectColor(type: string) {
           />
         </template>
         <button
+          :disabled="!hasValidSource(pendingQuickEffect.effect.name, pendingQuickEffect.source)"
           class="ml-auto bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-3 py-1 rounded text-xs"
           @click="confirmQuickEffect"
         >Apply</button>
@@ -249,6 +312,17 @@ function getEffectColor(type: string) {
           </template>
           <span v-else class="text-digimon-dark-400 text-xs self-center">1 round (house rule)</span>
         </div>
+        <div v-if="sourceEffectName(newEffect.name)" class="flex gap-2 items-center text-sm text-digimon-dark-300">
+          <label>Source
+            <select v-model="newEffect.source" class="bg-digimon-dark-700 text-white rounded p-1" @change="selectCustomSource">
+              <option value="" disabled>Select source</option>
+              <option v-for="source in sources ?? []" :key="source.id" :value="source.id">{{ source.name }}</option>
+            </select>
+          </label>
+          <label>{{ sourceEffectName(newEffect.name) === 'Taunt' ? 'CPU (penalty ×2)' : 'BIT' }}
+            <input v-model.number="newEffect.potency" type="number" min="0" step="1" class="w-16 bg-digimon-dark-700 text-white rounded p-1" />
+          </label>
+        </div>
         <textarea
           v-model="newEffect.description"
           rows="2"
@@ -257,6 +331,7 @@ function getEffectColor(type: string) {
                  text-white text-sm focus:border-digimon-orange-500 focus:outline-none resize-none"
         />
         <button
+          :disabled="!hasValidSource(newEffect.name, newEffect.source)"
           class="w-full bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-3 py-1 rounded text-sm"
           @click="addEffect"
         >

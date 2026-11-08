@@ -268,3 +268,16 @@ test('Selective Targeting shields allies from the negative Taunt effect in an ar
   f.participants[1].isEnemy = true
   await assertTaunt(f, (await f.damage({ totalTargetCount: 2 })).effectData)
 })
+
+for (const type of ['support', 'damage']) {
+  test(`Fear from a ${type} attack stores the actual source and BIT potency across defense routes`, async () => {
+    for (const route of ['damage', 'respond', 'legacy']) {
+      const f = fixture(type, [], 'Fear')
+      const result = await f[route]()
+      const effect = route === 'damage' ? result.effectData : result.participants[1].activeEffects.find(effect => effect.name === 'Fear')
+      const derived = await f.support.getDigimonDerivedStats(f.records[0].id)
+      assert.equal(effect.source, 'taunter-token')
+      assert.equal(effect.potency, derived.bit)
+    }
+  })
+}

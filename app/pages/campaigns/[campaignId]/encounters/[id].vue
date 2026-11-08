@@ -34,7 +34,7 @@ import { isRequestAnswered } from '~/utils/requestState'
 import type { Stance, Vec3 } from '~/types'
 import type { MapRadialItem } from '~/types/mapRadial'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
+import { EFFECT_ALIGNMENT, getEffectStatModifiers, applyDerivedStatEffects, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 
@@ -2695,6 +2695,21 @@ async function handleGmDodgeRoll(request: any) {
 
 // Selected participant for detailed view
 const selectedParticipantId = ref<string | null>(null)
+const effectSources = computed(() => (currentEncounter.value?.participants ?? []).map(participant => {
+  const record = participant.type === 'digimon' ? digimonMap.value.get(participant.entityId) : undefined
+  const derived = record ? applyDerivedStatEffects(calcDigimonStats(record), participant.activeEffects) : undefined
+  return { id: participant.id, name: getDisplayName(participant as CombatParticipant), cpu: derived?.cpu, bit: derived?.bit }
+}))
+
+async function updateParticipantEffects(participantId: string, effects: CombatParticipant['activeEffects']) {
+  if (!currentEncounter.value) return
+  const participants = currentEncounter.value.participants as CombatParticipant[]
+  const participant = participants.find(participant => participant.id === participantId)
+  if (!participant) return
+  participant.activeEffects = effects
+  await updateEncounter(currentEncounter.value.id, { participants })
+}
+
 const selectedParticipant = computed(() => {
   if (!selectedParticipantId.value || !currentEncounter.value) return null
   const participants = currentEncounter.value.participants as CombatParticipant[]
@@ -3423,6 +3438,7 @@ function onMapAttackCancelled() {
           :eddy-soul-rules="eddySoulRules"
           @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
           @npc-action="onNpcAction"
+          @gm-manage="selectedParticipantId = $event"
           @attack-selected="onMapAttackSelected"
           @stance-selected="onMapStanceSelected"
           @target-selected="onMapTargetSelected"
@@ -5246,8 +5262,10 @@ function onMapAttackCancelled() {
               :effects="selectedParticipant.activeEffects"
               :participant-name="getEntityDetails(selectedParticipant)?.name || 'Unknown'"
               :stun-max-duration1="houseRules?.stunMaxDuration1 ?? false"
+              :sources="effectSources"
               @add="(effect) => addEffect(selectedParticipant!.id, effect)"
               @remove="(effectId) => removeEffect(selectedParticipant!.id, effectId)"
+              @update="(effects) => updateParticipantEffects(selectedParticipant!.id, effects)"
             />
 
             <!-- Stance -->

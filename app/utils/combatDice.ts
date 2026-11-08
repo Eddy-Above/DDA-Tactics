@@ -95,6 +95,8 @@ export function combatAttackStats(record: any, participant: any, attack: any, op
     const penalty = targetsSource ? (isAreaAttack ? Math.max(0, potency / 2 - 2) : 0) : potency
     add('Taunt', -penalty)
   }
+  const fear = participant?.activeEffects?.find((e: any) => e.name === 'Fear')
+  if (fear && targetIds.includes(fear.source)) add('Fear', -Math.max(0, fear.potency ?? 0))
   if (has('positive-reinforcement')) {
     const mood = participant?.moodValue ?? 3
     add('Mood', mood <= 2 ? mood - 3 : 0, mood >= 5 ? mood - 4 : 0)

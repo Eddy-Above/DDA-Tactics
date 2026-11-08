@@ -74,6 +74,7 @@
           @npc-action="onNpcAction"
           @player-action="(id, action) => { if (action === 'move') onNpcMove(id); else if (action === 'clash-move') onClashMove(id); else emit('player-action', id, action) }"
           @gm-move="onGmMoveStart"
+          @gm-manage="(id) => emit('gm-manage', id)"
           @gm-moved="onGmMove"
           @cell-hovered="onCellHovered"
           @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; gmMoveParticipantId = null; movement.clearMovement() }"
@@ -214,6 +215,7 @@ const emit = defineEmits<{
   (e: 'target-selected', participantId: string): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack' | 'clash' | ClashRadialAction): void
+  (e: 'gm-manage', participantId: string): void
   (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction): void
   (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
   (e: 'attack-cancelled'): void

@@ -172,6 +172,7 @@ const emit = defineEmits<{
   (e: 'npc-action', participantId: string, action: 'move' | 'stance' | 'attack' | 'clash' | ClashRadialAction): void
   (e: 'player-action', participantId: string, action: 'move' | 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction): void
   (e: 'gm-move', participantId: string): void
+  (e: 'gm-manage', participantId: string): void
   (e: 'gm-moved', participantId: string, position: Vec3): void
   (e: 'cell-hovered', cell: Vec3 | null): void
   (e: 'movement-cancelled'): void
@@ -215,7 +216,7 @@ const npcOutOfActions = computed(() => {
   const p = npcRadialParticipant.value
   return !p || (p.actionsRemaining?.simple || 0) < 1
 })
-// GM-only radial (any token, any turn) — currently just the "GM Move" free-reposition action.
+// GM-only radial controls for any token, on any turn.
 const gmRadialId = ref<string | null>(null)
 const gmRadialScreen = ref<{ x: number; y: number } | null>(null)
 
@@ -377,7 +378,10 @@ function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, 
 }
 
 const radialItems = computed<MapRadialItem[]>(() => {
-  if (gmRadialId.value) return [{ id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely' }]
+  if (gmRadialId.value) return props.isDm ? [
+    { id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely' },
+    { id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' },
+  ] : []
   const isNpc = !!npcRadialId.value
   const clashButtons = isNpc ? npcClashButtons.value : radialPlayerClashButtons.value
   const outOfActions = isNpc ? npcOutOfActions.value : radialPlayerOutOfActions.value
@@ -410,6 +414,7 @@ const radialItems = computed<MapRadialItem[]>(() => {
   if (!isNpc && playerRadialParticipantType.value === 'digimon') {
     items.push(radialChoiceGroup('digivolve', digivolveDisabled.value))
   }
+  if (props.isDm) items.push({ id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' })
   return items
 })
 
@@ -473,6 +478,11 @@ function onRadialSelect(item: MapRadialItem) {
     if (door) radialToggleDoor(door.id, !door.isOpen)
   } else if (item.id === 'gm-move') {
     gmMove(participantId)
+  } else if (item.id === 'gm-manage') {
+    if (props.isDm && props.participants.some(p => p.id === participantId)) {
+      closeRadial()
+      emit('gm-manage', participantId)
+    }
   } else if (npcRadialId.value) {
     npcAction(item.id as Parameters<typeof npcAction>[0])
   } else if (playerRadialId.value) {

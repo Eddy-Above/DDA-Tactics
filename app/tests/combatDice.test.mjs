@@ -175,6 +175,14 @@ test('Taunt uses CPU x2 against others and CPU -2 for an area attack that includ
   }
 })
 
+test('Fear reduces Accuracy only when the source is among the attack targets', () => {
+  const actor = { ...target, activeEffects: [{ name: 'Fear', source: 'feared-token', potency: 3 }] }
+  const attack = { range: 'ranged', tags: [] }
+  assert.equal(combatAttackStats(record, actor, attack, { targetId: 'other-token' }).accuracy, 8)
+  assert.equal(combatAttackStats(record, actor, attack, { targetId: 'feared-token' }).accuracy, 5)
+  assert.equal(combatAttackStats(record, actor, { ...attack, tags: ['Area Attack: Burst'] }, { targetIds: ['other-token', 'feared-token'] }).accuracy, 5)
+})
+
 test('next-attack order snapshots survive consumption, while round expiry only removes Quick Reaction', () => {
   const participant = { strikeFastReady: true, finishingTouchReady: true, decimationReady: true, quickReactionDiceBonus: 5 }
   const snapshot = getAttackOrderModifiers(participant)
