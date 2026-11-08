@@ -864,31 +864,38 @@ function cancelThrowAllyAim() {
 
 let lastHoveredMovementCell: string | null = null
 
-// A cached path belongs to one geometry/occupancy snapshot. Deep, synchronous
-// invalidation also covers edits that keep the same map or position object.
-watch([
-  map, positions,
-  () => props.encounter.destructibleStates,
-  () => props.encounter.participants,
-  () => props.digimonMap,
-  () => props.tamerMap,
-], () => {
+// Polling recreates participant and character records. Compare movement inputs by
+// value so an unchanged snapshot (or a health/action update) keeps the hovered path.
+// Reading the nested values also tracks in-place geometry and occupancy edits.
+watch(() => JSON.stringify([
+  map.value, positions.value,
+  (props.encounter.destructibleStates ?? [])
+    .filter(s => s.currentWounds <= 0).map(s => s.structureId).sort(),
+  props.encounter.participants.map(p => [
+    p.id, p.type, p.entityId, p.currentStance, p.activeEffects, p.isEnemy,
+  ]).sort(([a], [b]) => String(a).localeCompare(String(b))),
+  Object.entries(props.digimonMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, d]) => [
+    id, d.size, d.giganticDimensions, d.stage, d.baseStats, d.movement, d.qualities, d.isEnemy,
+  ]),
+  Object.entries(props.tamerMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, t]) => [id, t.speed, t.body]),
+]), () => {
   lastHoveredMovementCell = null
   movement.invalidateSearch()
   movement.activePath.value = []
-}, { deep: true, flush: 'sync' })
+}, { flush: 'sync' })
 
-watch([npcMoveParticipantId, throwAimContext, throwAllyAimContext, movement.reachableCells], () => {
+watch([npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, movement.reachableCells], () => {
   lastHoveredMovementCell = null
 }, { deep: true, flush: 'sync' })
 
 function onCellHovered(cell: Vec3 | null) {
-  if (!cell || !npcMoveParticipantId.value || !map.value) {
+  const participantId = npcMoveParticipantId.value ?? chargeMoveParticipantId.value
+  if (!cell || !participantId || !map.value) {
     lastHoveredMovementCell = null
     movement.activePath.value = []
     return
   }
-  const hoverKey = `${npcMoveParticipantId.value}:${cell.x},${cell.y},${cell.z}`
+  const hoverKey = `${participantId}:${cell.x},${cell.y},${cell.z}`
   if (hoverKey === lastHoveredMovementCell) return
   lastHoveredMovementCell = hoverKey
   if (throwAimContext.value) {
@@ -903,7 +910,7 @@ function onCellHovered(cell: Vec3 | null) {
     movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.moverSize, ctx.moverIsEnemy, ctx.moverGig)
     return
   }
-  const ctx = npcMoveCaps(npcMoveParticipantId.value)
+  const ctx = npcMoveCaps(participantId)
   if (!ctx) return
   movement.computePath(ctx.pos, cell, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
 }

@@ -1387,8 +1387,14 @@ function updateMovementHighlights() {
 }
 
 let lastPathKey = ''
+// Paths store the footprint's minimum corner; previews follow the mover's center.
+function movementPreviewCenter(anchor: Vec3, dims: FootprintDims, elevation: number): THREE.Vector3 {
+  return new THREE.Vector3(anchor.x + dims.width / 2, anchor.y * TILE_SIZE + TILE_H + elevation, anchor.z + dims.depth / 2)
+}
+
 function updatePathHighlights() {
-  const key = props.activePath.map(v => vec3Key(v)).join('|')
+  const dims = getParticipantFootprintDims(movingParticipantId.value)
+  const key = `${movingParticipantId.value}:${dims.width},${dims.height},${dims.depth}|` + props.activePath.map(v => vec3Key(v)).join('|')
   if (key === lastPathKey) return
   lastPathKey = key
 
@@ -1397,7 +1403,7 @@ function updatePathHighlights() {
     const geo = new THREE.BoxGeometry(TILE_SIZE * 0.6, 0.06, TILE_SIZE * 0.6)
     const mat = new THREE.MeshBasicMaterial({ color: 0xffdd00, transparent: true, opacity: 0.7 })
     const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(v.x + 0.5, v.y * TILE_SIZE + TILE_H + 0.03, v.z + 0.5)
+    mesh.position.copy(movementPreviewCenter(v, dims, 0.03))
     pathHighlightGroup.add(mesh)
   }
 }
@@ -2036,19 +2042,15 @@ function onMouseMove(event: MouseEvent) {
     if (raycaster.ray.intersectPlane(mvPlane, mvTarget)) {
       const cell: Vec3 = { x: Math.floor(mvTarget.x), y: npcMoveY.value, z: Math.floor(mvTarget.z) }
       if (props.reachableCells.has(vec3Key(cell))) {
-        const p = props.participants.find(x => x.id === movingParticipantId.value)
-        const size: DigimonSize = p?.type === 'digimon' ? (props.digimonMap[p.entityId]?.size ?? 'medium') : 'medium'
-        const gig = p?.type === 'digimon' ? props.digimonMap[p.entityId]?.giganticDimensions : null
-        const { tileCount } = getSizeParams(size, gig)
-        const footprint = tileCount * TILE_SIZE
-        const co = (tileCount - 1) * 0.5
-        const ghostGeo = new THREE.CircleGeometry(footprint * 0.42, 24)
+        const dims = getParticipantFootprintDims(movingParticipantId.value)
+        const ghostGeo = new THREE.CircleGeometry(TILE_SIZE * 0.42, 24)
         const ghostMat = new THREE.MeshBasicMaterial({ color: 0x2255ff, transparent: true, opacity: 0.55, depthWrite: false })
         const ghostMesh = new THREE.Mesh(ghostGeo, ghostMat)
+        ghostMesh.scale.set(dims.width, dims.depth, 1)
         ghostMesh.rotation.x = -Math.PI / 2
-        ghostMesh.position.set(cell.x + 0.5 + co, cell.y * TILE_SIZE + TILE_H + 0.01, cell.z + 0.5 + co)
+        ghostMesh.position.copy(movementPreviewCenter(cell, dims, 0.01))
         hoverGhostGroup.add(ghostMesh)
-        const labelV = new THREE.Vector3(cell.x + 0.5, cell.y * TILE_SIZE + TILE_H + 0.6, cell.z + 0.5)
+        const labelV = movementPreviewCenter(cell, dims, 0.6)
         hoveredMoveScreen.value = worldToScreen2D(labelV) ?? null
         emit('cell-hovered', cell)
       } else {

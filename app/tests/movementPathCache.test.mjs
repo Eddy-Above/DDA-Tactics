@@ -137,11 +137,11 @@ function hoverHarness() {
   const map = ref(floor())
   const positions = ref({ mover: point(0) })
   const props = reactive({ encounter: { destructibleStates: [], participants: [] }, digimonMap: {}, tamerMap: {} })
-  const npcMoveParticipantId = ref('mover'), throwAimContext = ref(null), throwAllyAimContext = ref(null)
-  const calls = { paths: 0, invalidations: 0, throws: 0 }
+  const npcMoveParticipantId = ref('mover'), chargeMoveParticipantId = ref(null), throwAimContext = ref(null), throwAllyAimContext = ref(null)
+  const calls = { paths: 0, invalidations: 0, throws: 0, movers: [] }
   const movement = { reachableCells: ref(new Set()), activePath: ref([]), invalidateSearch: () => calls.invalidations++, computePath: () => calls.paths++ }
   const ctx = { pos: point(0), caps: walking, occupied: new Map(), dInfo: {}, moverSize: 'medium', moverIsEnemy: false, moverGig: null }
-  const deps = { map, positions, props, movement, watch, npcMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: () => ctx, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
+  const deps = { map, positions, props, movement, watch, npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: id => { calls.movers.push(id); return ctx }, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
   const scope = effectScope()
   const handlers = scope.run(() => new Function(...Object.keys(deps), `${compiled}\nreturn { onCellHovered }`)(...Object.values(deps)))
   return { ...deps, ...handlers, scope, calls }
@@ -185,5 +185,55 @@ test('real synchronous map/occupancy/record watchers invalidate even when the ho
       assert.equal(h.calls.paths, before + 1)
     }
     assert.equal(h.calls.invalidations, mutations.length)
+  } finally { h.scope.stop() }
+})
+
+test('partner path stays visible across polling snapshots and health or action updates', () => {
+  const h = hoverHarness()
+  try {
+    h.props.encounter.participants = [{ id: 'partner', type: 'digimon', entityId: 'mon', currentStance: 'neutral', activeEffects: [], currentWounds: 8, actionsRemaining: { simple: 2 } }]
+    h.props.digimonMap = { mon: { size: 'large', movement: 6, stage: 'champion', qualities: [], currentWounds: 8 } }
+    h.props.tamerMap = { tamer: { speed: 4, currentWounds: 6 } }
+    h.npcMoveParticipantId.value = 'partner'
+    h.onCellHovered(point(2))
+    h.movement.activePath.value = [point(0), point(1), point(2)]
+    const shownPath = h.movement.activePath.value
+    const before = { paths: h.calls.paths, invalidations: h.calls.invalidations }
+
+    h.map.value = JSON.parse(JSON.stringify(h.map.value))
+    h.positions.value = JSON.parse(JSON.stringify(h.positions.value))
+    h.props.encounter.participants = JSON.parse(JSON.stringify(h.props.encounter.participants))
+    h.props.encounter.destructibleStates = []
+    h.props.digimonMap = JSON.parse(JSON.stringify(h.props.digimonMap))
+    h.props.tamerMap = JSON.parse(JSON.stringify(h.props.tamerMap))
+    h.props.encounter.participants[0].currentWounds = 7
+    h.props.encounter.participants[0].actionsRemaining.simple = 1
+    h.props.digimonMap.mon.currentWounds = 7
+    h.props.tamerMap.tamer.currentWounds = 5
+
+    assert.equal(h.movement.activePath.value, shownPath, 'the highlighted destination must keep its path without another mouse move')
+    assert.equal(h.calls.invalidations, before.invalidations)
+    h.onCellHovered(point(2))
+    assert.equal(h.calls.paths, before.paths, 'equivalent movement inputs keep the cached hover')
+
+    h.props.digimonMap.mon.movement = 8
+    assert.deepEqual(h.movement.activePath.value, [], 'a changed movement profile still invalidates the preview')
+    h.onCellHovered(point(2))
+    assert.equal(h.calls.paths, before.paths + 1)
+  } finally { h.scope.stop() }
+})
+
+test('post-charge partner movement draws a path from the moving Digimon', () => {
+  const h = hoverHarness()
+  try {
+    h.npcMoveParticipantId.value = null
+    h.chargeMoveParticipantId.value = 'partner'
+    h.onCellHovered(point(2)); h.onCellHovered(point(2))
+    assert.equal(h.calls.paths, 1)
+    assert.equal(h.calls.movers.at(-1), 'partner')
+    h.chargeMoveParticipantId.value = 'other'
+    h.onCellHovered(point(2))
+    assert.equal(h.calls.paths, 2)
+    assert.equal(h.calls.movers.at(-1), 'other')
   } finally { h.scope.stop() }
 })
