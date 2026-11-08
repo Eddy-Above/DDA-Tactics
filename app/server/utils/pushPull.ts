@@ -37,6 +37,9 @@ export async function computePushPull(args: {
   if (!targetPos || !attackerPos || distance <= 0) return { participants, patch: null, logNote: null }
 
   const targetPart = participants.find((p: any) => p.id === targetParticipantId)
+  if (targetPart?.type === 'digimon' && digimonById.get(targetPart.entityId)?.qualities?.some((quality: any) => quality.id === 'immunity')) {
+    return { participants, patch: null, logNote: `${effect}: no effect (Immunity)` }
+  }
   const attackerPart = participants.find((p: any) => p.id === attackerParticipantId)
   const targetDims = getFootprintDimsForParticipant(targetPart, digimonById)
   const attackerDims = getFootprintDimsForParticipant(attackerPart, digimonById)
@@ -152,6 +155,10 @@ export async function resolveInstantSupportEffect(params: {
   currentTurnIndex?: number
   campaignLevel?: 'standard' | 'enhanced' | 'extreme'
   houseRules?: { stunMaxDuration1?: boolean }
+  distance?: number
+  /** Resolve against a caller's current, possibly uncommitted board without broadcasting. */
+  spatial?: { map: GameMap; positions: Record<string, Vec3>; digimonById: Map<string, any> }
+  deferPositionBroadcast?: boolean
 }): Promise<{
   participants: any[]
   battleLog: any[]
@@ -160,6 +167,7 @@ export async function resolveInstantSupportEffect(params: {
   /** Set when a knocked-out target's removal moved the turn index / wrapped the round */
   nextTurnIndex?: number
   nextRound?: number
+  positionPatch?: Record<string, Vec3>
   resolved: boolean
 }> {
   const effect = params.attackDef?.effect
@@ -168,23 +176,40 @@ export async function resolveInstantSupportEffect(params: {
   }
 
   const attackerPart = params.participants.find((p: any) => p.id === params.attackerParticipantId)
-  const atkDerived = attackerPart?.type === 'digimon' ? await getDigimonDerivedStats(attackerPart.entityId) : null
-  const { potency } = calculateEffectPotency(effect, atkDerived, null)
+  const atkDerived = params.distance === undefined && attackerPart?.type === 'digimon' ? await getDigimonDerivedStats(attackerPart.entityId) : null
+  const potency = params.distance ?? calculateEffectPotency(effect, atkDerived, null).potency
 
-  const { participants, logNote } = await applyPushPullDisplacement({
-    encounterId: params.encounterId,
-    mapId: params.mapId,
-    participants: params.participants,
-    attackerParticipantId: params.attackerParticipantId,
-    targetParticipantId: params.targetParticipantId,
-    effect,
-    distance: potency,
-    campaignLevel: params.campaignLevel,
-    houseRules: params.houseRules,
-  })
+  let participants = params.participants
+  let logNote: string | null = null
+  let positionPatch: Record<string, Vec3> | undefined
+  if (params.deferPositionBroadcast) {
+    if (params.spatial) {
+      const { rules } = await loadEncounterRules(params.encounterId)
+      const moved = await computePushPull({ ...params.spatial, participants,
+        attackerParticipantId: params.attackerParticipantId, targetParticipantId: params.targetParticipantId,
+        effect, distance: potency, burn: { round: params.round, rules } })
+      participants = moved.participants
+      logNote = moved.logNote
+      positionPatch = moved.patch ?? undefined
+    }
+  } else {
+    const moved = await applyPushPullDisplacement({
+      encounterId: params.encounterId,
+      mapId: params.mapId,
+      participants: params.participants,
+      attackerParticipantId: params.attackerParticipantId,
+      targetParticipantId: params.targetParticipantId,
+      effect,
+      distance: potency,
+      campaignLevel: params.campaignLevel,
+      houseRules: params.houseRules,
+    })
+    participants = moved.participants
+    logNote = moved.logNote
+  }
 
   const battleLog = [...params.battleLog, {
-    id: `log-${Date.now()}-${effect.toLowerCase()}`,
+    id: `log-${Date.now()}-${effect.toLowerCase()}-${params.targetParticipantId}`,
     timestamp: new Date().toISOString(),
     round: params.round,
     actorId: params.attackerParticipantId,
@@ -203,10 +228,12 @@ export async function resolveInstantSupportEffect(params: {
     : await resolveEnemyKnockouts(
         { participants, turnOrder: params.turnOrder ?? [], currentTurnIndex, round: params.round },
         [params.targetParticipantId],
-        { encounterId: params.encounterId, houseRules: params.houseRules, mapId: params.mapId, campaignLevel: params.campaignLevel, gravity: 'room' },
+        { encounterId: params.encounterId, houseRules: params.houseRules, mapId: params.mapId, campaignLevel: params.campaignLevel,
+          gravity: params.deferPositionBroadcast ? (params.spatial ? { map: params.spatial.map, positions: { ...params.spatial.positions, ...positionPatch } } : undefined) : 'room' },
       )
+  if (knockout?.positionPatch) positionPatch = { ...positionPatch, ...knockout.positionPatch }
   if (!knockout?.changed) {
-    return { participants, battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, resolved: true }
+    return { participants, battleLog, pendingRequests: params.pendingRequests, turnOrder: params.turnOrder, positionPatch, resolved: true }
   }
 
   return {
@@ -216,6 +243,7 @@ export async function resolveInstantSupportEffect(params: {
     turnOrder: params.turnOrder ? knockout.turnOrder : undefined,
     ...(knockout.turnAdvanced || knockout.currentTurnIndex !== currentTurnIndex ? { nextTurnIndex: knockout.currentTurnIndex } : {}),
     ...(knockout.round !== params.round ? { nextRound: knockout.round } : {}),
+    positionPatch,
     resolved: true,
   }
 }

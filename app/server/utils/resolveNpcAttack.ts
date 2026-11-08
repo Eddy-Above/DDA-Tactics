@@ -11,7 +11,7 @@ import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { computeAttackDamage } from './computeAttackDamage'
 import { loadParticipantDigimon } from './combatSpatial'
-import { computePushPull } from './pushPull'
+import { computePushPull, resolveInstantSupportEffect } from './pushPull'
 import { loadDamageOverTimeRules } from './damageOverTime'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 import { hasUnusedTimeControl, knockedOutEnemyIds, resolveEnemyKnockouts, triggerTimeControl } from './enemyKnockouts'
@@ -199,6 +199,26 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       return p
     })
 
+    let forcedMovement: Awaited<ReturnType<typeof resolveInstantSupportEffect>> | null = null
+    if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull')) {
+      forcedMovement = await resolveInstantSupportEffect({
+        participants, battleLog, pendingRequests: params.pendingRequests ?? [],
+        attackerParticipantId: attacker.id, targetParticipantId: target.id, attackDef,
+        round: params.round, attackerName: params.attackerName, targetName: params.targetName,
+        encounterId: params.encounterId ?? '', mapId: params.mapRecord?.id,
+        turnOrder: params.turnOrder, currentTurnIndex: params.currentTurnIndex, houseRules: params.houseRules,
+        distance: damageCalc.effectData?.potency ?? 0, deferPositionBroadcast: true,
+        spatial: params.mapRecord && params.participantPositions ? {
+          map: params.mapRecord, positions: params.participantPositions, digimonById: await loadParticipantDigimon(participants),
+        } : undefined,
+      })
+      participants = forcedMovement.participants
+      battleLog = forcedMovement.battleLog
+      if (forcedMovement.positionPatch && params.encounterId) participants = await refreshGuidingLightForParticipants(
+        params.encounterId, participants, { ...params.participantPositions, ...forcedMovement.positionPatch },
+      )
+    }
+
     const supportDodgeLog = {
       id: `log-${Date.now()}-dodge`,
       timestamp: new Date().toISOString(),
@@ -217,7 +237,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     }
 
     battleLog = [...battleLog, supportDodgeLog]
-    return { participants, battleLog, turnOrder: params.turnOrder, hit }
+    return { participants, battleLog, turnOrder: forcedMovement?.turnOrder ?? params.turnOrder, hit,
+      positionPatch: forcedMovement?.positionPatch, nextTurnIndex: forcedMovement?.nextTurnIndex, nextRound: forcedMovement?.nextRound }
   }
 
   // All damage/effect values computed by computeAttackDamage above.

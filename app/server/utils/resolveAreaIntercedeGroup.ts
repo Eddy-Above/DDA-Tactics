@@ -9,7 +9,9 @@ import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, 
 import { getEffectResolutionType } from '~/data/attackConstants'
 import { getSelectiveTargetingFilter } from '~/server/utils/selectiveTargeting'
 import { refreshGuidingLightForParticipants } from './guidingLight'
-import type { Vec3 } from '../../types'
+import type { Vec3, GameMap } from '../../types'
+import { loadParticipantDigimon } from './combatSpatial'
+import { resolveInstantSupportEffect } from './pushPull'
 import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 
@@ -83,6 +85,9 @@ interface ResolveGroupParams {
   houseRules?: any
   encounterId: string
   positions?: Record<string, Vec3>
+  mapRecord?: GameMap | null
+  mapId?: string | null
+  campaignLevel?: 'standard' | 'enhanced' | 'extreme'
   database?: Pick<typeof db, 'select' | 'update'>
 }
 
@@ -102,6 +107,9 @@ export async function resolveAreaIntercedeGroup({
   houseRules,
   encounterId,
   positions,
+  mapRecord,
+  mapId,
+  campaignLevel,
   database = db,
 }: ResolveGroupParams): Promise<{
   participants: any[]
@@ -110,6 +118,7 @@ export async function resolveAreaIntercedeGroup({
   turnOrder: any[]
   nextTurnIndex?: number
   nextRound?: number
+  positionPatch?: Record<string, Vec3>
 }> {
   return withCombatRecords(async () => {
   const groupData = groupState.data
@@ -124,6 +133,11 @@ export async function resolveAreaIntercedeGroup({
   let updatedTurnOrder = [...turnOrder]
   let groupNextTurnIndex: number | undefined
   let groupNextRound: number | undefined
+  const currentPositions = { ...positions }
+  const positionPatch: Record<string, Vec3> = {}
+  const rememberPositions = (patch?: Record<string, Vec3>) => {
+    if (patch) { Object.assign(currentPositions, patch); Object.assign(positionPatch, patch) }
+  }
 
   const claimedTargetIds = new Set(claims.map(c => c.targetId))
   const now = Date.now()
@@ -158,6 +172,29 @@ export async function resolveAreaIntercedeGroup({
 
   let claimFormChanged = false
   const autoDevolvedIds = new Set<string>()
+  for (const claim of claims) {
+    if (!claim.effectData || (claim.appliedEffectName !== 'Knockback' && claim.appliedEffectName !== 'Pull')) continue
+    const before = updatedParticipants.find((participant: any) => participant.id === claim.interceptorParticipantId)
+    const forced = await resolveInstantSupportEffect({ participants: updatedParticipants, battleLog: updatedBattleLog,
+      pendingRequests: updatedPendingRequests, attackerParticipantId: groupData.attackerId,
+      targetParticipantId: claim.interceptorParticipantId, attackDef: { effect: claim.appliedEffectName },
+      distance: claim.effectData.potency, round, attackerName: groupData.attackerName, targetName: claim.interceptorName,
+      encounterId, mapId, turnOrder: updatedTurnOrder, currentTurnIndex: groupNextTurnIndex ?? currentTurnIndex,
+      campaignLevel, houseRules, deferPositionBroadcast: true,
+      spatial: mapRecord ? { map: mapRecord, positions: currentPositions, digimonById: await loadParticipantDigimon(updatedParticipants) } : undefined,
+    })
+    updatedParticipants = forced.participants
+    updatedBattleLog = forced.battleLog
+    if (forced.turnOrder) updatedTurnOrder = forced.turnOrder
+    if (forced.nextTurnIndex !== undefined) groupNextTurnIndex = forced.nextTurnIndex
+    if (forced.nextRound !== undefined) groupNextRound = forced.nextRound
+    rememberPositions(forced.positionPatch)
+    const after = updatedParticipants.find((participant: any) => participant.id === claim.interceptorParticipantId)
+    if (before && after && before.entityId !== after.entityId) {
+      autoDevolvedIds.add(after.id)
+      claimFormChanged = true
+    }
+  }
   for (const claim of claims) {
     if (claim.isSupportAttack || claim.damageDealt <= 0 || autoDevolvedIds.has(claim.interceptorParticipantId)) continue
     const interceptor = updatedParticipants.find((p: any) => p.id === claim.interceptorParticipantId)
@@ -227,11 +264,12 @@ export async function resolveAreaIntercedeGroup({
   // participant (the attacker is), so at most the turn index shifts.
   const knockedOutBefore = new Set(knockedOutEnemyIds(participants))
   const knockout = await resolveEnemyKnockouts(
-    { participants: updatedParticipants, turnOrder: updatedTurnOrder, currentTurnIndex, round },
+    { participants: updatedParticipants, turnOrder: updatedTurnOrder, currentTurnIndex: groupNextTurnIndex ?? currentTurnIndex, round: groupNextRound ?? round },
     claims.map(c => c.interceptorParticipantId).filter(id => !knockedOutBefore.has(id) && !autoDevolvedIds.has(id)),
-    { encounterId, houseRules },
+    { encounterId, houseRules, campaignLevel, mapId, gravity: mapRecord ? { map: mapRecord, positions: currentPositions } : undefined },
   )
   if (knockout.changed) {
+    rememberPositions(knockout.positionPatch)
     updatedParticipants = knockout.participants
     updatedTurnOrder = knockout.turnOrder
     updatedBattleLog.push(...knockout.logEntries)
@@ -242,7 +280,7 @@ export async function resolveAreaIntercedeGroup({
   // A shrinking or removed interceptor can change another target's Dodge bonus. Refresh
   // before uncovered targets roll, including the current claim's unbroadcast positions.
   if (claimFormChanged || knockout.changed) {
-    updatedParticipants = await refreshGuidingLightForParticipants(encounterId, updatedParticipants, positions)
+    updatedParticipants = await refreshGuidingLightForParticipants(encounterId, updatedParticipants, currentPositions)
   }
 
   // Targets that were not claimed by any interceptor
@@ -359,7 +397,7 @@ export async function resolveAreaIntercedeGroup({
       !!groupData.attackerIsEnemy, !!target?.isEnemy,
     )
 
-    if (isSupportAttack && attackDef) {
+    if (isSupportAttack && attackDef && getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support') !== 'instant') {
       const resolutionType = getEffectResolutionType(attackDef.effect, attackDef.tags || [], 'support')
       const supportParams = {
         participants: updatedParticipants,
@@ -411,18 +449,23 @@ export async function resolveAreaIntercedeGroup({
         strikeFast: !!groupData.attackData?.orderModifiers?.halfDodge,
         totalTargetCount: originalTargetIds.length,
         encounterId,
-        participantPositions: positions,
+        mapRecord: mapRecord ?? undefined,
+        participantPositions: currentPositions,
       })
       updatedParticipants = result.participants
       updatedBattleLog = result.battleLog
       if (result.turnOrder) updatedTurnOrder = result.turnOrder
       if (result.nextTurnIndex !== undefined) groupNextTurnIndex = result.nextTurnIndex
       if (result.nextRound !== undefined) groupNextRound = result.nextRound
+      rememberPositions(result.positionPatch)
     }
   }
 
   // Remove the intercede-group-state tracking request
   updatedPendingRequests = updatedPendingRequests.filter((r: any) => r.id !== groupState.id)
+  if (Object.keys(positionPatch).length > 0) {
+    updatedParticipants = await refreshGuidingLightForParticipants(encounterId, updatedParticipants, currentPositions)
+  }
 
   return {
     participants: updatedParticipants,
@@ -431,6 +474,7 @@ export async function resolveAreaIntercedeGroup({
     turnOrder: updatedTurnOrder,
     nextTurnIndex: groupNextTurnIndex,
     nextRound: groupNextRound,
+    ...(Object.keys(positionPatch).length > 0 ? { positionPatch } : {}),
   }
   })
 }

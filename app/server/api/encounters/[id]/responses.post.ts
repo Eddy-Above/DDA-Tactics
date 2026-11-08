@@ -3,7 +3,7 @@ import { recordCleanseOutcome, pruneEmptyCleanseRequests } from '../../../utils/
 import { serverDodgeDefense, recountSubmittedDodge } from '../../../utils/combatDodge'
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../db'
-import { applyPushPullDisplacement } from '../../../utils/pushPull'
+import { applyPushPullDisplacement, resolveInstantSupportEffect } from '../../../utils/pushPull'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
@@ -439,6 +439,19 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         }
         return p
       })
+
+      if (hit && (appliedEffectName === 'Knockback' || appliedEffectName === 'Pull') && encounter.mapId) {
+        const forced = await resolveInstantSupportEffect({ participants, battleLog, pendingRequests,
+          attackerParticipantId: request.data.attackerParticipantId, targetParticipantId: request.targetParticipantId,
+          attackDef, distance: potency, round: encounter.round, attackerName: request.data.attackerName,
+          targetName: request.data.targetName, encounterId, mapId: encounter.mapId, turnOrder,
+          currentTurnIndex, campaignLevel, houseRules })
+        participants = forced.participants
+        battleLog = forced.battleLog
+        if (forced.turnOrder) updateData.turnOrder = forced.turnOrder
+        if (forced.nextTurnIndex !== undefined) updateData.currentTurnIndex = forced.nextTurnIndex
+        if (forced.nextRound !== undefined) updateData.round = forced.nextRound
+      }
 
       // Clash-ending effect: if Fear/Stun/Paralysis was applied, end the target's clash
       if (hit && appliedEffectName && CLASH_ENDING_EFFECTS.has(appliedEffectName)) {

@@ -549,7 +549,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       // Auto-resolve NPC targets immediately (no intercede window)
       for (const tid of npcTargetIds) {
         const npcTargetName = npcTargetInfo[tid]?.name || 'Digimon'
-        if (isSupportAttack && areaAttackDef) {
+        if (isSupportAttack && areaAttackDef && getEffectResolutionType(areaAttackDef.effect, areaAttackDef.tags || [], 'support') !== 'instant') {
           const resolutionType = getEffectResolutionType(areaAttackDef.effect, areaAttackDef.tags || [], 'support')
           const npcTargetIsEnemy = !!participants.find((p: any) => p.id === tid)?.isEnemy
           const supportParams = {
@@ -613,6 +613,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           if (result.nextTurnIndex !== undefined) areaAutoAdvanceTurnIndex = result.nextTurnIndex
           if (result.nextRound !== undefined) areaAutoAdvanceRound = result.nextRound
           if (result.positionPatch) {
+            Object.assign(participantPositions, result.positionPatch)
             await broadcastPositionPatch(encounterId, result.positionPatch)
             // [Guiding Light]: fold the recompute into the in-memory `participants` this handler
             // still has to persist below (a standalone recompute here would race the later write).

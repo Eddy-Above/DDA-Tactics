@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08o | API Schema, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **AoE Knockback/Pull now displaces recipients after intercede decisions.** Area resolution receives the live map and current positions, accumulates returned movement patches, and applies each target against earlier displacements. Hit interceptors receive the effect instead of protected targets. Instant support attacks use the NPC defense/displacement path; submitted player support defenses also resolve forced movement. Claim-side movement remains deferred until transaction commit, while Skip publishes the completed patch. Core displacement respects Immunity. Thirty-one new regressions cover all six shapes, support/damage, player defenses, interceptors, sequential occupancy and deferred broadcasts. All 854 tests and typecheck pass. |
 | 2026-11-08n | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Expose NPC evolution in the GM map radial.** NPC Digimon with an assigned evolution line now get Digivolve/Devolve choices from the same unlocked-form/local-stage policy as card view. The GM action-selected handler uses the normal action endpoint, without force or a fabricated Tamer roll. Live guards reject off-turn, exhausted, locked, removed and already-attempted choices; devolution retains its existing eligibility. Four new real computed/handler regressions plus existing evolution/radial coverage pass (48 targeted tests); typecheck passes. |
 | 2026-11-08m | API Schema, Pages & Components, Blast Radius, Cross-Cutting Concerns | **Correct Cleanse request labels and legacy NPC Immunity.** The GM Pending Player Requests list labels Cleanse as waiting for defenses or choosing effects; unrelated request types no longer fall back to Roll Initiative. `npc-attack.post.ts` loads target qualities before support/damage resolution, blocks immune effects and their Stun/displacement side effects, skips immune Cleanse prompts, and passes qualities to the shared application helper. Ordinary hit/damage behavior and existing effects are preserved. Fifteen new real-endpoint regressions cover positive, negative and instant effects plus deferred Stun. All 819 tests and typecheck pass. |
 | 2026-11-08l | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Cleanse selection and combat map controls.** Cleanse now gathers per-target defense outcomes and offers one GM/player effect-selection dialog per cast. The shared cap is the highest leftover Accuracy, and each chosen individual effect loses the caster's BIT turns; Selective Targeting offers mutually exclusive Dispel/Purify filters. Normal support/damage, NPC/player defenses, intercede claims and the legacy GM endpoint participate. GM Manage can unlock individual used attacks without refunding actions or other costs. Placed-token dragging is limited to setup/initiative, while radial GM Move remains available. Movement previews show the actual token at 20% opacity and a measured gap to the nearest floor/voxel beneath its centre. All 804 tests and typecheck pass. |
@@ -236,6 +237,8 @@ No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` 
 ---
 
 ## 3. API Schema
+
+**2026-11-08o:** Intercede Skip/opt-out/pass decisions pass map/position context through area resolution and broadcast its returned `positionPatch`. Intercede claims pass their uncommitted throw/reposition board, merge the returned area patch, and preserve post-commit-only room broadcasting. `responses.post.ts` now resolves Knockback/Pull for hit support defenses as well as damage defenses. No request contract changes. Non-interceded area instant support attacks use the same NPC dodge/forced-movement resolution as the delayed area path.
 
 **2026-11-08m:** The legacy `actions/npc-attack` endpoint reuses one target record for support turn timing, effect immunity and damage armor. Boss Immunity blocks incoming support/damage effects, Stun action/intercede penalties, instant displacement and Cleanse selection. Existing effect-specific immunity (Naturewalk: Fire versus Burn) applies to both branches. Calls to `applyEffectToParticipant` now receive target qualities. Hits, ordinary damage and Dodge penalties retain their existing rules; no API shape changes.
 
@@ -905,6 +908,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**2026-11-08o:** `resolveAreaIntercedeGroup` receives optional map/position/campaign context and returns an optional aggregate position patch. It uses `resolveInstantSupportEffect` for hit interceptors and the canonical NPC resolver for uncovered instant-support recipients. `resolveNpcAttack` and support response handling share that instant resolver. `pushPull.ts` adds an explicit deferred spatial mode, accepting the caller's map/positions/records and returning displacement plus knockout-gravity patches without room writes. The original room wrapper remains available to ordinary response paths. No packages or schema changes.
+
 **2026-11-08n:** The GM map adds the already-shared `MapRadialOptions`/`MapRadialChoiceAction` types and connects the existing `MapCanvas -> EncounterMap -> action-selected` event to its evolution handler. No server, package, schema or evolution-rule changes.
 
 **2026-11-08l:** Pure `utils/cleanse.ts` owns selection limits, candidate filtering and immutable duration reduction. `server/utils/cleanse.ts` initializes casts, records target/interceptor outcomes and prunes empty requests. Intercede creation/decisions/claims, NPC attack resolution, submitted defenses and the legacy endpoint share those helpers. Both pages use `useCleanseSelection -> actions/cleanse` and `CleanseDialog`. `MapCanvas` imports pure `utils/movementGap.ts`, caching sorted floor/voxel heights by column in a map-only computed; each hover uses a binary search rather than scanning or serializing the map. No packages or map-size limits are added.
@@ -1079,6 +1084,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08o:** Blast, Burst, Close Blast, Cone, Line and Pass share the area forced-movement fix. Preserve per-target hit/damage eligibility, intercepted-recipient identity, sequential updated occupancy, Immunity, fall/Burn/knockout processing and aura refresh. Claim transactions must never broadcast their tentative movement. Pure group resolution returns a patch; its decision/claim caller owns publication. This is forced-movement coverage, not a complete audit of every AoE effect's bespoke mechanics.
 
 **2026-11-08n:** NPC map evolution must preserve assigned-line gating, unlocked branches, per-NPC `npcStageIndex`, history-based devolution, own-turn/action limits and the once-per-turn evolution attempt. GM force evolution remains a separate Manage control.
 
@@ -1260,6 +1267,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Area forced movement (2026-11-08o): `areaPushPull.test.mjs` executes real group/NPC/damage/push-pull functions with isolated storage and room adapters. Its 31 cases cover Knockback/Pull across six shape tags and support/damage attacks, a last-Skip broadcast, sequential Pull occupancy, hit interceptors, player defenses and Immunity. Group resolution returns unbroadcast patches and leaves its supplied board snapshot intact. Existing claim rollback/post-commit tests still pass. All 854 tests and typecheck pass.
 
 - NPC map evolution (2026-11-08n): `npcMapEvolution.test.mjs` compiles real GM/Canvas computeds and handlers. It verifies unlocked NPC menu choices, ordinary endpoint submission without Tamer/force, stale/off-turn/exhausted/attempted rejection, absent-line hiding and local-stage devolution. All 48 targeted evolution/radial tests and typecheck pass.
 

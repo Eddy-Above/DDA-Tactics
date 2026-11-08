@@ -120,7 +120,9 @@ export async function resolveIntercedeGroupIfDecided(
       currentTurnIndex,
       houseRules,
       encounterId,
+      positions: participantPositions, mapRecord, mapId: ctx.mapId, campaignLevel,
     })
+    if (resolved.positionPatch) await broadcastPositionPatch(encounterId, resolved.positionPatch)
     return {
       participants: resolved.participants,
       battleLog: resolved.battleLog,

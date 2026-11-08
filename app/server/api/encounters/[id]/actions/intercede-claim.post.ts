@@ -144,12 +144,14 @@ async function resolveIntercedeClaim(
   // Fetch campaign house rules (+ EddySoul rules, for Burn)
   let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
   let eddySoulRules: EddySoulRules | undefined
+  let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
     const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId))
     if (campaign) {
       const rulesSettings = campaign.rulesSettings || {}
       houseRules = rulesSettings.houseRules
       eddySoulRules = rulesSettings.eddySoulRules
+      campaignLevel = campaign.level ?? 'standard'
     }
   }
 
@@ -664,11 +666,13 @@ async function resolveIntercedeClaim(
           houseRules,
           encounterId: encounterId!,
           positions: updatedParticipantPositions ?? participantPositions,
+          mapRecord: claimMapRecord, mapId: (encounter as any).mapId, campaignLevel,
           database: db,
         })
         participants = resolved.participants
         battleLog = resolved.battleLog
         pendingRequests = resolved.pendingRequests
+        if (resolved.positionPatch) updatedParticipantPositions = { ...(updatedParticipantPositions ?? participantPositions), ...resolved.positionPatch }
         turnOrder = resolved.turnOrder
         if (resolved.nextTurnIndex !== undefined) claimNextTurnIndex = resolved.nextTurnIndex
         if (resolved.nextRound !== undefined) claimNextRound = resolved.nextRound
@@ -851,11 +855,13 @@ async function resolveIntercedeClaim(
         houseRules,
         encounterId: encounterId!,
         positions: updatedParticipantPositions ?? participantPositions,
+        mapRecord: claimMapRecord, mapId: (encounter as any).mapId, campaignLevel,
         database: db,
       })
       participants = resolved.participants
       battleLog = resolved.battleLog
       pendingRequests = resolved.pendingRequests
+      if (resolved.positionPatch) updatedParticipantPositions = { ...(updatedParticipantPositions ?? participantPositions), ...resolved.positionPatch }
       turnOrder = resolved.turnOrder
       if (resolved.nextTurnIndex !== undefined) claimNextTurnIndex = resolved.nextTurnIndex
       if (resolved.nextRound !== undefined) claimNextRound = resolved.nextRound
