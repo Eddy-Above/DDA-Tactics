@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
+import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
+import { buildCombatEvolutionOptions } from '~/utils/combatEvolutionOptions'
 
 import { combatAttackStats } from '~/utils/combatDice'
 import { computeDodgeDefense, getPaidDodgeDiceBonus } from '~/utils/areaDefense'
@@ -32,7 +34,7 @@ import { isRequestAnswered } from '~/utils/requestState'
 import type { Stance, Vec3 } from '~/types'
 import type { MapRadialItem } from '~/types/mapRadial'
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_FATEFUL_COST } from '~/types'
-import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS, applyDerivedStatEffects } from '~/data/attackConstants'
+import { EFFECT_ALIGNMENT, getEffectStatModifiers, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 
@@ -2005,46 +2007,19 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
 
 // Get evolution options for a participant
 function getParticipantEvolutionOptions(participant: CombatParticipant) {
-  if (!participant.evolutionLineId) return { canEvolve: false, canDevolve: false, evolveTargets: [] as any[], devolveTarget: null as any }
+  if (!participant.evolutionLineId) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null, warpTargets: [] }
   const evoLine = evolutionLines.value.find(l => l.id === participant.evolutionLineId)
-  if (!evoLine) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null }
+  if (!evoLine) return { canEvolve: false, canDevolve: false, evolveTargets: [], devolveTarget: null, warpTargets: [] }
 
-  const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
-  const currentIndex = (participant as any).npcStageIndex !== undefined
-    ? (participant as any).npcStageIndex
-    : evoLine.currentStageIndex
-
-  // Find unlocked children (evolution targets)
-  const evolveTargets = chain
-    .map((entry: any, index: number) => ({ ...entry, chainIndex: index }))
-    .filter((entry: any) => entry.evolvesFromIndex === currentIndex && entry.isUnlocked)
-
-  // Find parent (devolve target) - only if we have wounds history
-  const currentEntry = chain[currentIndex]
-  const canDevolve = (participant.woundsHistory?.length || 0) > 0 && currentEntry?.evolvesFromIndex !== null
-  const devolveTarget = canDevolve ? { ...chain[currentEntry.evolvesFromIndex], chainIndex: currentEntry.evolvesFromIndex } : null
-
-  // Warp evolution targets (grandchild stages, 2+ steps forward), only when rule is active
-  const warpTargets: any[] = []
-  if (eddySoulRules.value?.warpEvolution) {
-    const baseDC = DIGIVOLVE_WILLPOWER_DC[campaignLevel.value]
-    for (const directChild of evolveTargets) {
-      const grandchildren = chain
-        .map((entry: any, index: number) => ({ ...entry, chainIndex: index }))
-        .filter((entry: any) => entry.evolvesFromIndex === directChild.chainIndex && entry.isUnlocked)
-      for (const gc of grandchildren) {
-        warpTargets.push({ ...gc, stagesSkipped: 1, warpDC: baseDC + 5 })
-      }
-    }
-  }
-
-  return {
-    canEvolve: evolveTargets.length > 0,
-    canDevolve,
-    evolveTargets,
-    devolveTarget,
-    warpTargets,
-  }
+  return buildCombatEvolutionOptions({
+    chain: evoLine.chain,
+    currentIndex: participant.npcStageIndex !== undefined
+      ? participant.npcStageIndex
+      : evoLine.currentStageIndex,
+    hasWoundsHistory: (participant.woundsHistory?.length ?? 0) > 0,
+    warpEvolution: eddySoulRules.value?.warpEvolution,
+    baseDC: DIGIVOLVE_WILLPOWER_DC[campaignLevel.value],
+  })
 }
 
 // Special Orders
@@ -3284,36 +3259,10 @@ const digimonMapForMap = computed(() => {
 })
 
 const mapSelectedAttackProp = computed(() => {
-  if (!selectedAttack.value || !showMapView.value) return null
-  const p = selectedAttack.value.participant
-  const digimon = digimonMap.value.get(p.entityId)
-  if (!digimon) {
-    return {
-      tags: selectedAttack.value.attack.tags ?? [],
-      range: selectedAttack.value.attack.range ?? 'melee',
-      type: selectedAttack.value.attack.type,
-      bit: 0,
-      effectiveLimit: 0,
-      meleeRange: 1,
-      attackerParticipantId: p.id,
-    }
-  }
-  const stats = applyDerivedStatEffects(calcDigimonStats(digimon), p.activeEffects ?? [])
-  const sizeOrder = ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']
-  const sizeAboveLarge = Math.max(0, sizeOrder.indexOf(digimon.size?.toLowerCase() ?? 'medium') - 3)
-  const reachRanks = (digimon.qualities as any[]).find((q: any) => q.id === 'reach')?.ranks ?? 0
-  return {
-    tags: selectedAttack.value.attack.tags ?? [],
-    range: selectedAttack.value.attack.range ?? 'melee',
-    type: selectedAttack.value.attack.type,
-    bit: stats.bit,
-    movement: stats.movement,
-    ram: stats.ram,
-    sizeAboveLarge,
-    effectiveLimit: stats.effectiveLimit,
-    meleeRange: reachRanks > 0 ? reachRanks * 2 : 1,
-    attackerParticipantId: p.id,
-  }
+  const selection = selectedAttack.value
+  if (!selection || !showMapView.value) return null
+  const digimon = digimonMap.value.get(selection.participant.entityId)
+  return buildMapAttackDescriptor(selection, digimon ? { digimon, stats: calcDigimonStats(digimon) } : undefined)
 })
 
 function onMapTargetSelected(targetId: string) {
@@ -3964,7 +3913,7 @@ function onMapAttackCancelled() {
                             ? 'bg-amber-700 hover:bg-amber-600 text-white cursor-pointer'
                             : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
                         ]"
-                        @click="handleDigivolve(item.participant, getParticipantEvolutionOptions(item.participant).devolveTarget.chainIndex)"
+                        @click="handleDigivolve(item.participant, getParticipantEvolutionOptions(item.participant).devolveTarget!.chainIndex)"
                       >
                         Devolve → {{ getParticipantEvolutionOptions(item.participant).devolveTarget?.species }}
                       </button>
@@ -4264,7 +4213,7 @@ function onMapAttackCancelled() {
                         ? 'bg-amber-700 hover:bg-amber-600 text-white cursor-pointer'
                         : 'bg-digimon-dark-600 text-digimon-dark-400 cursor-not-allowed'
                     ]"
-                    @click="handleDigivolve(item.partnerDigimon, getParticipantEvolutionOptions(item.partnerDigimon).devolveTarget.chainIndex)"
+                    @click="handleDigivolve(item.partnerDigimon, getParticipantEvolutionOptions(item.partnerDigimon).devolveTarget!.chainIndex)"
                   >
                     Devolve → {{ getParticipantEvolutionOptions(item.partnerDigimon).devolveTarget?.species }}
                   </button>

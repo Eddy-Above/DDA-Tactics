@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, maps } from '../../../../db'
+import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import {
@@ -67,17 +68,10 @@ export default defineEventHandler(async (event) => {
   }
 
   // Check it's actor's turn (or partner tamer's turn)
-  const currentIndex = encounter.currentTurnIndex || 0
   const turnOrder = encounter.turnOrder
-  const currentTurnParticipantId = turnOrder[currentIndex]
-  let canAct = actor.id === currentTurnParticipantId
-  if (!canAct && actor.type === 'digimon') {
-    const currentTurnParticipant = participants.find((p: any) => p.id === currentTurnParticipantId)
-    if (currentTurnParticipant?.type === 'tamer') {
-      const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-      if (digimonEntity?.partnerId === currentTurnParticipant.entityId) canAct = true
-    }
-  }
+  const canAct = await canActOnEncounterTurn(actor, {
+    participants, turnOrder, currentTurnIndex: encounter.currentTurnIndex,
+  }, id => db.select().from(digimon).where(eq(digimon.id, id)))
   if (!canAct) throw createError({ statusCode: 403, message: "It is not this participant's turn" })
 
   const target = participants.find((p: any) => p.id === actorClash.opponentParticipantId)

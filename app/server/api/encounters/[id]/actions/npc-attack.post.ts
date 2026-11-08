@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, evolutionLines, campaigns } from '../../../../db'
+import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage, EddySoulRules } from '../../../../../types'
@@ -88,26 +89,9 @@ export default defineEventHandler(async (event) => {
 
   // Validate attacker can act (direct turn or partner digimon on tamer's turn)
   const currentIndex = encounter.currentTurnIndex || 0
-  const currentTurnParticipantId = turnOrder[currentIndex]
-
-  let canAct = actor.id === currentTurnParticipantId
-
-  // If actor is a digimon and it's not directly their turn,
-  // check if it's their partner tamer's turn
-  if (!canAct && actor.type === 'digimon') {
-    // Find current turn participant
-    const currentTurnParticipant = participants.find((p: any) => p.id === currentTurnParticipantId)
-
-    // Check if current participant is a tamer
-    if (currentTurnParticipant?.type === 'tamer') {
-      // Look up digimon to get partnerId
-      const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-
-      if (digimonEntity?.partnerId === currentTurnParticipant.entityId) {
-        canAct = true
-      }
-    }
-  }
+  const canAct = await canActOnEncounterTurn(actor, {
+    participants, turnOrder, currentTurnIndex: currentIndex,
+  }, id => db.select().from(digimon).where(eq(digimon.id, id)))
 
   if (!canAct) {
     throw createError({

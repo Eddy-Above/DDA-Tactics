@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
+import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { determineClashController, getClashSizeBonus } from '../../../../../data/attackConstants'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -40,17 +41,10 @@ export default defineEventHandler(async (event) => {
   }
 
   // Check it's breaker's turn (or partner tamer's turn)
-  const currentIndex = encounter.currentTurnIndex || 0
   const turnOrder = encounter.turnOrder
-  const currentTurnParticipantId = turnOrder[currentIndex]
-  let canAct = breaker.id === currentTurnParticipantId
-  if (!canAct && breaker.type === 'digimon') {
-    const currentTurnParticipant = participants.find((p: any) => p.id === currentTurnParticipantId)
-    if (currentTurnParticipant?.type === 'tamer') {
-      const [digimonEntity] = await db.select().from(digimon).where(eq(digimon.id, breaker.entityId))
-      if (digimonEntity?.partnerId === currentTurnParticipant.entityId) canAct = true
-    }
-  }
+  const canAct = await canActOnEncounterTurn(breaker, {
+    participants, turnOrder, currentTurnIndex: encounter.currentTurnIndex,
+  }, id => db.select().from(digimon).where(eq(digimon.id, id)))
   if (!canAct) throw createError({ statusCode: 403, message: "It is not this participant's turn" })
 
   // Find both clash participants
