@@ -726,6 +726,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   cancelAnimationFrame(rafId)
+  clearAoeHighlights()
   clearTransparentVoxelOutline()
   renderer?.dispose()
   window.removeEventListener('resize', onResize)
@@ -1610,9 +1611,65 @@ function clearAoeState() {
   areaHighlightCells.value = []
   lastAoeKey = ''
   lastAreaShapeData.value = null
-  if (aoeGroup) aoeGroup.clear()
+  clearAoeHighlights()
   lastAttackKey = ''  // force reticule rebuild next frame
   resetPassState()
+}
+
+function clearAoeHighlights() {
+  if (!aoeGroup) return
+  for (const child of aoeGroup.children) {
+    const object = child as THREE.Mesh | THREE.LineSegments
+    object.geometry?.dispose()
+    const materials = Array.isArray(object.material) ? object.material : [object.material]
+    for (const material of materials) material?.dispose()
+  }
+  aoeGroup.clear()
+}
+
+// Treat the complete area as one voxel volume: even the hit/blocked boundary has
+// no internal faces or grid edges. Keep the existing colors on its exposed faces.
+function renderAoeVolume(hitCells: Vec3[], blockedCells: Vec3[]) {
+  const cells = new Map<string, { cell: Vec3; hit: boolean }>()
+  for (const cell of blockedCells) cells.set(vec3Key(cell), { cell, hit: false })
+  for (const cell of hitCells) cells.set(vec3Key(cell), { cell, hit: true })
+  if (!cells.size) return
+
+  const surface = buildVoxelSurface([...cells.values()].map(({ cell }) => cell))
+  const cube = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+  const vertices = cube.getAttribute('position')
+  const indices = cube.getIndex()!
+  const hitPositions: number[] = [], blockedPositions: number[] = []
+  const baseY = TILE_H + 0.01
+  for (const [key, { cell, hit }] of cells) {
+    const positions = hit ? hitPositions : blockedPositions
+    for (const face of surface.exposedFaces.get(key) ?? []) {
+      for (let i = 0; i < 6; i++) {
+        const vertex = indices.getX(face * 6 + i)
+        positions.push(
+          cell.x * TILE_SIZE + TILE_SIZE / 2 + vertices.getX(vertex),
+          cell.y * TILE_SIZE + baseY + TILE_SIZE / 2 + vertices.getY(vertex),
+          cell.z * TILE_SIZE + TILE_SIZE / 2 + vertices.getZ(vertex),
+        )
+      }
+    }
+  }
+  cube.dispose()
+
+  for (const [positions, color] of [[hitPositions, 0xffaa00], [blockedPositions, 0xff3300]] as const) {
+    if (!positions.length) continue
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, depthWrite: false })
+    aoeGroup.add(new THREE.Mesh(geometry, material))
+  }
+
+  const outlinePositions = surface.outlinePositions.map((value, i) => value * TILE_SIZE + (i % 3 === 1 ? baseY : 0))
+  const outline = new THREE.BufferGeometry()
+  outline.setAttribute('position', new THREE.Float32BufferAttribute(outlinePositions, 3))
+  aoeGroup.add(new THREE.LineSegments(outline, new THREE.LineBasicMaterial({
+    color: 0xffcc55, transparent: true, opacity: 0.7, depthWrite: false,
+  })))
 }
 
 function updateAoeHighlight(
@@ -1626,23 +1683,8 @@ function updateAoeHighlight(
   if (key === lastAoeKey) return
   lastAoeKey = key
   areaHighlightCells.value = hitCells
-  aoeGroup.clear()
-
-  for (const c of hitCells) {
-    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.7 })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
-    aoeGroup.add(mesh)
-  }
-
-  for (const c of blockedCells) {
-    const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xff3300, transparent: true, opacity: 0.35 })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(c.x + 0.5, c.y * TILE_SIZE + TILE_H + 0.03, c.z + 0.5)
-    aoeGroup.add(mesh)
-  }
+  clearAoeHighlights()
+  renderAoeVolume(hitCells, blockedCells)
 
   lastAttackKey = ''  // force reticule rebuild
 }
