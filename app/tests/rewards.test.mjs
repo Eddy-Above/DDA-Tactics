@@ -18,19 +18,19 @@ function fixture() {
       { id: 'other', campaignId: 'other-campaign', name: 'Other', xp: 0, totalXp: 0 },
     ],
     digimon: [
-      { id: 'agu', campaignId: 'campaign', partnerId: 'tai', name: 'Agumon', stage: 'rookie', bonusDP: 1, isEnemy: false, spriteUrl: null },
-      { id: 'greymon', campaignId: 'campaign', partnerId: 'tai', name: 'Greymon', stage: 'champion', bonusDP: 1, isEnemy: false, spriteUrl: null },
+      { id: 'agu', campaignId: 'campaign', partnerId: 'tai', name: 'Agumon', stage: 'rookie', bonusDP: 1, isEnemy: false, spriteUrl: null, evolutionPathIds: ['greymon'] },
+      { id: 'greymon', campaignId: 'campaign', partnerId: 'tai', name: 'Greymon', stage: 'champion', bonusDP: 1, isEnemy: false, spriteUrl: null, evolvesFromId: 'agu' },
       { id: 'gabu', campaignId: 'campaign', partnerId: 'matt', name: 'Gabumon', stage: 'rookie', bonusDP: 4, isEnemy: false, spriteUrl: null },
       { id: 'enemy', campaignId: 'campaign', partnerId: 'tai', name: 'Enemy', bonusDP: 0, isEnemy: true },
       { id: 'foreign', campaignId: 'other-campaign', partnerId: 'other', name: 'Foreign', bonusDP: 0, isEnemy: false },
     ],
-    encounters: [{ id: 'fight', campaignId: 'campaign', phase: 'combat', participants: [
+    evolutionLines: [], encounters: [{ id: 'fight', campaignId: 'campaign', phase: 'combat', participants: [
       { id: 'tai-token', type: 'tamer', entityId: 'tai', currentInspiration: 0, actionsRemaining: { simple: 1 } },
       { id: 'matt-token', type: 'tamer', entityId: 'matt', actionsRemaining: { simple: 2 } },
     ] }], rewardGrants: [],
   }
   const tables = Object.fromEntries(Object.keys(state).map(name => [name, Object.fromEntries([
-    ['name', name], ...['id', 'campaignId', 'phase', 'xp', 'totalXp', 'grantedInspiration', 'bonusDP', 'participants'].map(key => [key, { name: key }]),
+    ['name', name], ...['id', 'campaignId', 'partnerId', 'phase', 'xp', 'totalXp', 'grantedInspiration', 'bonusDP', 'participants'].map(key => [key, { name: key }]),
   ])]))
   const eq = (column, value) => ({ type: 'eq', column: column.name, value })
   const inArray = (column, value) => ({ type: 'in', column: column.name, value })
@@ -111,7 +111,9 @@ test('the real rewards endpoint grants a group once, preserves unknown lifetime 
   assert.equal(f.state.encounters[0].participants[0].actionsRemaining.simple, 1)
   assert.equal(f.state.digimon.find(d => d.id === 'agu').bonusDP, 4)
   assert.equal(f.state.digimon.find(d => d.id === 'gabu').bonusDP, 7)
-  assert.equal(f.state.digimon.find(d => d.id === 'greymon').bonusDP, 1, 'unselected forms do not receive DP implicitly')
+  assert.equal(f.state.digimon.find(d => d.id === 'greymon').bonusDP, 4, 'all stages share the selected partner’s reward')
+  assert.deepEqual(result.affectedDigimonIds, ['agu', 'gabu', 'greymon'])
+  assert.deepEqual(f.broadcasts[0][1].digimonIds, ['agu', 'gabu', 'greymon'], 'refresh every updated stage')
   assert.equal(f.state.tamers[2].xp, 0)
   assert.equal(f.state.rewardGrants.length, 1)
   assert.deepEqual(f.broadcasts.map(([room]) => room), ['campaign:campaign', 'fight'])
@@ -124,6 +126,48 @@ test('single-player XP-only awards leave other players, DP and Inspiration uncha
   assert.equal(f.state.tamers[1].xp, 5)
   assert.equal(f.state.encounters[0].participants[0].currentInspiration, 0)
   assert.equal(f.state.digimon[0].bonusDP, 1)
+})
+
+test('choosing a second partner updates all its stages without rewarding the Tamer’s other partner', async () => {
+  const f = fixture()
+  f.state.digimon.push(
+    { id: 'pata', campaignId: 'campaign', partnerId: 'tai', name: 'Patamon', stage: 'rookie', bonusDP: 7, evolutionPathIds: ['ange'] },
+    { id: 'ange', campaignId: 'campaign', partnerId: 'tai', name: 'Angemon', stage: 'champion', bonusDP: 7, evolvesFromId: 'pata' },
+  )
+  const roster = await f.get()
+  assert.deepEqual(roster.digimon.filter(p => p.partnerId === 'tai').map(p => p.id).sort(), ['agu', 'pata'])
+  const result = await f.post(request({ tamerIds: ['tai'], digimonIds: ['pata'], tamerXp: 0, tamerInspiration: 0 }))
+  assert.equal(result.digimonCount, 1)
+  assert.equal(f.state.digimon.find(d => d.id === 'pata').bonusDP, 10)
+  assert.equal(f.state.digimon.find(d => d.id === 'ange').bonusDP, 10)
+  assert.equal(f.state.digimon.find(d => d.id === 'agu').bonusDP, 1)
+  assert.equal(f.state.digimon.find(d => d.id === 'greymon').bonusDP, 1)
+})
+
+test('line-only stages share one pool and duplicate stage selections cannot multiply a partner reward', async () => {
+  const f = fixture()
+  f.state.digimon[0].evolutionPathIds = []
+  f.state.digimon[1].evolvesFromId = null
+  f.state.digimon[1].bonusDP = 6
+  f.state.evolutionLines.push({ id: 'agu-line', campaignId: 'campaign', partnerId: 'tai', name: 'Agu partner', chain: [
+    { digimonId: 'agu', evolvesFromIndex: null }, { digimonId: 'greymon', evolvesFromIndex: 0 },
+  ] })
+  const roster = await f.get()
+  assert.equal(roster.digimon.find(d => d.id === 'agu').name, 'Agu partner')
+  assert.equal(roster.digimon.find(d => d.id === 'agu').bonusDP, 6)
+  const body = request({ tamerIds: ['tai'], digimonIds: ['agu', 'greymon'], tamerXp: 0, tamerInspiration: 0 })
+  const result = await f.post(body)
+  assert.equal(result.digimonCount, 1)
+  assert.equal(f.state.digimon[0].bonusDP, 9)
+  assert.equal(f.state.digimon[1].bonusDP, 9)
+  assert.deepEqual(f.state.rewardGrants[0].payload.partnerDigimonIds, ['agu'])
+  f.state.digimon = []
+  f.state.evolutionLines = []
+  const replay = await f.post(body)
+  assert.equal(replay.replayed, true)
+  assert.equal(replay.digimonCount, 1, 'the receipt preserves the original partner count after records change')
+  assert.deepEqual(replay.affectedDigimonIds, ['agu', 'greymon'])
+  assert.equal(f.broadcasts.length, 2)
 })
 
 test('retries, duplicate IDs and concurrent identical requests cannot award twice; changed reuse is rejected', async () => {
@@ -188,24 +232,28 @@ test('a combat that ends while rewards wait is not rewritten, while the characte
   assert.equal(f.state.tamers[0].grantedInspiration, 2)
 })
 
-test('the roster includes campaign players and their non-enemy forms, and unauthorised callers cannot read or write it', async () => {
+test('the roster includes one recipient per campaign partner, and unauthorised callers cannot read or write it', async () => {
   const f = fixture()
   await assert.rejects(f.get({ denied: true }), error => error.statusCode === 403)
   await assert.rejects(f.post(request(), { denied: true }), error => error.statusCode === 403)
   assert.equal(f.reads, 0)
   const roster = await f.get()
   assert.deepEqual(roster.tamers.map(t => t.id).sort(), ['matt', 'tai'])
-  assert.deepEqual(roster.digimon.map(d => d.id).sort(), ['agu', 'gabu', 'greymon'])
+  assert.deepEqual(roster.digimon.map(d => d.id).sort(), ['agu', 'gabu'])
   assert.equal(roster.tamers.find(t => t.id === 'tai').inspiration, 1)
 })
 
-test('the real reward form selects individuals or the group and lets the GM choose exact partner forms', async () => {
+test('the real reward form selects individuals or the group and lets the GM choose between a Tamer’s partners', async () => {
   const f = fixture(), payloads = []
+  f.state.digimon.push(
+    { id: 'pata', campaignId: 'campaign', partnerId: 'tai', name: 'Patamon', stage: 'rookie', bonusDP: 2, evolutionPathIds: ['ange'] },
+    { id: 'ange', campaignId: 'campaign', partnerId: 'tai', name: 'Angemon', stage: 'champion', bonusDP: 2, evolvesFromId: 'pata' },
+  )
   const form = useRewardGrant({ load: () => f.get(), send: async body => { payloads.push(body); return f.post(body) }, newId: () => 'form-grant' })
   await form.load()
   form.toggleTamer('tai')
-  assert.deepEqual(form.selectedDigimonIds.value.sort(), ['agu', 'greymon'])
-  form.toggleDigimon('greymon')
+  assert.deepEqual(form.selectedDigimonIds.value.sort(), ['agu', 'pata'])
+  form.toggleDigimon('pata')
   assert.deepEqual(form.selectedDigimonIds.value, ['agu'])
   form.toggleTamer('matt')
   assert.deepEqual(form.selectedDigimonIds.value.sort(), ['agu', 'gabu'])

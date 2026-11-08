@@ -1,10 +1,11 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { db, tamers, digimon, encounters, rewardGrants } from '../../../db'
+import { db, tamers, digimon, evolutionLines, encounters, rewardGrants } from '../../../db'
 import { requireCampaignDm } from '../../../utils/campaignDm'
 import { serializeIntercedeClaim } from '../../../utils/intercedeClaims'
 import { broadcast } from '../../../utils/encounterRoom'
 import { normalizeRewardRequest, sameRewardRequest } from '../../../../utils/rewards'
 import type { RewardRequest, RewardResult } from '../../../../types/rewards'
+import { rewardPartners, type RewardPartner } from '../../../../utils/rewardPartners'
 
 export default defineEventHandler(async event => {
   const routeCampaignId = getRouterParam(event, 'id')
@@ -28,7 +29,8 @@ export default defineEventHandler(async event => {
         if (!prior || prior.campaignId !== campaignId || !sameRewardRequest(prior.payload, request)) {
           throw createError({ statusCode: 409, message: 'That reward request ID has already been used for different rewards' })
         }
-        return result(true, [])
+        return result(true, [], prior.payload.partnerDigimonIds ?? prior.payload.digimonIds,
+          prior.payload.affectedDigimonIds ?? prior.payload.digimonIds)
       }
       const liveEncounters = active.length ? await tx.select({ id: encounters.id, participants: encounters.participants }).from(encounters)
         .where(and(eq(encounters.campaignId, campaignId), inArray(encounters.id, active.map(row => row.id)),
@@ -36,21 +38,30 @@ export default defineEventHandler(async event => {
       const people = await tx.select().from(tamers)
         .where(and(eq(tamers.campaignId, campaignId), inArray(tamers.id, request.tamerIds))).orderBy(tamers.id).for('update')
       if (people.length !== request.tamerIds.length) throw createError({ statusCode: 400, message: 'A selected Tamer is no longer in this campaign' })
+      let partners: RewardPartner[] = []
       if (request.digimonIds.length) {
         const forms = await tx.select().from(digimon)
-          .where(and(eq(digimon.campaignId, campaignId), inArray(digimon.id, request.digimonIds))).orderBy(digimon.id).for('update')
-        if (forms.length !== request.digimonIds.length || forms.some(d => d.isEnemy || !d.partnerId || !request.tamerIds.includes(d.partnerId))) {
-          throw createError({ statusCode: 400, message: 'Bonus DP recipients must be partner forms belonging to the selected Tamers in this campaign' })
+          .where(and(eq(digimon.campaignId, campaignId), inArray(digimon.partnerId, request.tamerIds))).orderBy(digimon.id).for('update')
+        const lines = await tx.select().from(evolutionLines)
+          .where(and(eq(evolutionLines.campaignId, campaignId), inArray(evolutionLines.partnerId, request.tamerIds))).orderBy(evolutionLines.id).for('update')
+        const groups = rewardPartners(forms, lines, campaignId, request.tamerIds)
+        const byForm = new Map(groups.flatMap(partner => partner.formIds.map(id => [id, partner] as const)))
+        if (request.digimonIds.some(id => !byForm.has(id))) {
+          throw createError({ statusCode: 400, message: 'Bonus DP recipients must be partners belonging to the selected Tamers in this campaign' })
         }
+        partners = [...new Map(request.digimonIds.map(id => { const partner = byForm.get(id)!; return [partner.id, partner] as const })).values()]
       }
+      const partnerIds = partners.map(partner => partner.id).sort()
+      const affectedDigimonIds = [...new Set(partners.flatMap(partner => partner.formIds))].sort()
+      await tx.update(rewardGrants).set({ payload: { ...request, partnerDigimonIds: partnerIds, affectedDigimonIds } }).where(eq(rewardGrants.id, request.requestId))
       const now = new Date()
       if (request.tamerXp || request.tamerInspiration) await tx.update(tamers).set({
         xp: sql`${tamers.xp} + ${request.tamerXp}`,
         totalXp: sql`CASE WHEN ${tamers.totalXp} IS NULL THEN NULL ELSE ${tamers.totalXp} + ${request.tamerXp} END`,
         grantedInspiration: sql`${tamers.grantedInspiration} + ${request.tamerInspiration}`, updatedAt: now,
       }).where(and(eq(tamers.campaignId, campaignId), inArray(tamers.id, request.tamerIds)))
-      if (request.digimonBonusDP) await tx.update(digimon).set({ bonusDP: sql`${digimon.bonusDP} + ${request.digimonBonusDP}`, updatedAt: now })
-        .where(and(eq(digimon.campaignId, campaignId), inArray(digimon.id, request.digimonIds)))
+      for (const partner of partners) await tx.update(digimon).set({ bonusDP: partner.bonusDP + request.digimonBonusDP, updatedAt: now })
+        .where(and(eq(digimon.campaignId, campaignId), inArray(digimon.id, partner.formIds)))
       if (request.tamerInspiration) {
         const recipients = new Map(people.map(person => [person.id, person]))
         for (const encounter of liveEncounters) {
@@ -65,16 +76,16 @@ export default defineEventHandler(async event => {
           if (changed) await tx.update(encounters).set({ participants, updatedAt: now }).where(eq(encounters.id, encounter.id))
         }
       }
-      return result(false, request.tamerXp ? people.filter(p => p.totalXp == null).map(p => p.id) : [])
+      return result(false, request.tamerXp ? people.filter(p => p.totalXp == null).map(p => p.id) : [], partnerIds, affectedDigimonIds)
     })
   }
-  function result(replayed: boolean, untrackedTamerIds: string[]): RewardResult {
+  function result(replayed: boolean, untrackedTamerIds: string[], partnerIds: string[], affectedDigimonIds: string[]): RewardResult {
     return { requestId: request.requestId, tamerXp: request.tamerXp, tamerInspiration: request.tamerInspiration,
-      digimonBonusDP: request.digimonBonusDP, tamerCount: request.tamerIds.length, digimonCount: request.digimonIds.length, untrackedTamerIds, replayed }
+      digimonBonusDP: request.digimonBonusDP, tamerCount: request.tamerIds.length, digimonCount: partnerIds.length, untrackedTamerIds, replayed, affectedDigimonIds }
   }
   const granted = await queued(0)
   if (!granted.replayed) {
-    const message = { type: 'rewards-granted', requestId: request.requestId, campaignId, tamerIds: request.tamerIds, digimonIds: request.digimonIds }
+    const message = { type: 'rewards-granted', requestId: request.requestId, campaignId, tamerIds: request.tamerIds, digimonIds: granted.affectedDigimonIds }
     broadcast(`campaign:${campaignId}`, message)
     for (const encounter of active) broadcast(encounter.id, message)
   }

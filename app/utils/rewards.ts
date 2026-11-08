@@ -14,7 +14,7 @@ export function normalizeRewardRequest(value: any): RewardRequest {
   const tamerIds = ids(value.tamerIds, 'Tamers')
   const digimonIds = ids(value.digimonIds, 'Digimon')
   if (!tamerIds.length) throw new Error('Select at least one Tamer')
-  if (value.digimonBonusDP && !digimonIds.length) throw new Error('Select at least one Digimon form for Bonus DP')
+  if (value.digimonBonusDP && !digimonIds.length) throw new Error('Select at least one partner Digimon for Bonus DP')
   return { requestId: value.requestId, tamerIds, digimonIds: value.digimonBonusDP ? digimonIds : [],
     tamerXp: value.tamerXp, tamerInspiration: value.tamerInspiration, digimonBonusDP: value.digimonBonusDP }
 }

@@ -10,7 +10,7 @@ export function useRewardGrant(options: {
   const roster = ref<RewardRoster>({ tamers: [], digimon: [] })
   const selectedTamerIds = ref<string[]>([]), selectedDigimonIds = ref<string[]>([])
   const amounts = reactive({ tamerXp: 0, tamerInspiration: 0, digimonBonusDP: 0 })
-  const loading = ref(false), busy = ref(false), needsVerification = ref(false)
+  const loading = ref(false), busy = ref(false), needsVerification = ref(false), rosterReady = ref(false)
   const error = ref<string | null>(null), success = ref<RewardResult | null>(null)
   let pending: RewardRequest | null = null
   const draft = () => ({ requestId: 'preview', tamerIds: selectedTamerIds.value, digimonIds: selectedDigimonIds.value, ...amounts })
@@ -18,15 +18,17 @@ export function useRewardGrant(options: {
     try { normalizeRewardRequest(draft()); return null }
     catch (e: any) { return e.message as string }
   })
-  const selectedForms = computed(() => roster.value.digimon.filter(d => selectedDigimonIds.value.includes(d.id)))
+  const selectedPartners = computed(() => roster.value.digimon.filter(d => selectedDigimonIds.value.includes(d.id)))
   async function load() {
     loading.value = true
+    rosterReady.value = false
     error.value = null
     try {
       roster.value = await options.load()
       selectedTamerIds.value = selectedTamerIds.value.filter(id => roster.value.tamers.some(p => p.id === id))
       selectedDigimonIds.value = selectedDigimonIds.value.filter(id => roster.value.digimon.some(d => d.id === id && selectedTamerIds.value.includes(d.partnerId)))
       needsVerification.value = false
+      rosterReady.value = true
       return true
     } catch (e: any) {
       needsVerification.value = (e.statusCode ?? e.status ?? e.data?.statusCode) === 403
@@ -55,7 +57,7 @@ export function useRewardGrant(options: {
   }
   function clearSelection() { if (!busy.value) { selectedTamerIds.value = []; selectedDigimonIds.value = [] } }
   async function grant() {
-    if (busy.value || loading.value) return false
+    if (busy.value || loading.value || !rosterReady.value) return false
     error.value = null
     success.value = null
     try {
@@ -74,6 +76,6 @@ export function useRewardGrant(options: {
       return false
     } finally { busy.value = false }
   }
-  return { roster, selectedTamerIds, selectedDigimonIds, selectedForms, amounts, loading, busy, error, success, needsVerification,
+  return { roster, selectedTamerIds, selectedDigimonIds, selectedPartners, amounts, loading, busy, error, success, needsVerification, rosterReady,
     validationMessage, load, toggleTamer, toggleDigimon, selectAll, clearSelection, grant }
 }

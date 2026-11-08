@@ -46,13 +46,14 @@ test('the DM Library renders Encounters and Grant Rewards links in the campaign 
   assert.deepEqual(page.metadata[0].middleware, ['campaign-access', 'dm-access'])
 })
 
-test('the real reward page renders selected players, exact forms, per-person amounts and group totals', async () => {
+test('the real reward page renders partner choices, shared Bonus DP and per-partner totals', async () => {
   const form = useRewardGrant({ load: async () => roster, send: async body => ({ ...body, tamerCount: 2, digimonCount: 2, untrackedTamerIds: ['matt'], replayed: false }), newId: () => 'grant' })
   await form.load(); form.selectAll()
   Object.assign(form.amounts, { tamerXp: 10, tamerInspiration: 2, digimonBonusDP: 3 })
   let page = component('pages/campaigns/[campaignId]/library/rewards.vue', form)
   let html = await renderToString(page.app)
-  for (const value of ['Tai', 'Matt', 'Agumon', 'Gabumon', 'Select entire group', 'Tamer XP each', 'Tamer Inspiration each', 'Bonus DP per selected Digimon form', '20 XP total', '6 DP total']) assert.ok(html.includes(value), value)
+  for (const value of ['Tai', 'Matt', 'Agumon', 'Gabumon', 'Select entire group', 'Tamer XP each', 'Tamer Inspiration each', 'Partner Digimon Bonus DP each', 'shared across all evolution stages', '20 XP total', '2 partners', '6 DP total']) assert.ok(html.includes(value), value)
+  assert.equal(html.includes('Digimon forms receiving'), false)
   assert.equal((html.match(/type="checkbox" checked/g) ?? []).length, 4)
   assert.deepEqual(page.metadata[0].middleware, ['campaign-access', 'dm-access'])
   await form.grant()
@@ -70,4 +71,48 @@ test('a GM-password session can verify access on the reward page instead of expo
   assert.match(html, /type="password"/)
   assert.ok(html.includes('Verify GM access'))
   assert.equal(html.includes('Tamer XP each'), false)
+})
+
+test('a failed roster load offers a retry without claiming the campaign has no Tamers or allowing grants', async () => {
+  let attempts = 0, sent = 0
+  const form = useRewardGrant({ load: async () => {
+    if (++attempts === 1) throw new Error('Server Error')
+    return roster
+  }, send: async () => { sent++; throw new Error('must not submit') } })
+  assert.equal(await form.load(), false)
+  let html = await renderToString(component('pages/campaigns/[campaignId]/library/rewards.vue', form).app)
+  assert.ok(html.includes('Server Error'))
+  assert.ok(html.includes('Retry loading players'))
+  assert.equal(html.includes('No Tamers in this campaign'), false)
+  assert.equal(html.includes('Tamer XP each'), false)
+  assert.equal(await form.grant(), false)
+  assert.equal(sent, 0)
+  assert.equal(await form.load(), true)
+  html = await renderToString(component('pages/campaigns/[campaignId]/library/rewards.vue', form).app)
+  assert.ok(html.includes('Tai'))
+  assert.ok(html.includes('Tamer XP each'))
+  assert.equal(html.includes('Retry loading players'), false)
+})
+
+test('a successful grant remains visible if refreshing recipients fails, and retrying the load does not resubmit rewards', async () => {
+  let attempts = 0, sent = 0
+  const form = useRewardGrant({ load: async () => {
+    if (++attempts === 2) throw new Error('Refresh failed')
+    return roster
+  }, send: async body => {
+    sent++
+    return { ...body, tamerCount: 2, digimonCount: 0, affectedDigimonIds: [], untrackedTamerIds: [], replayed: false }
+  }, newId: () => 'successful-grant' })
+  await form.load(); form.selectAll(); form.amounts.tamerXp = 10
+  assert.equal(await form.grant(), true)
+  let html = await renderToString(component('pages/campaigns/[campaignId]/library/rewards.vue', form).app)
+  assert.ok(html.includes('Rewards granted.'))
+  assert.ok(html.includes('Retry loading players'))
+  assert.equal(await form.grant(), false)
+  assert.equal(form.amounts.tamerXp, 0)
+  await form.load()
+  html = await renderToString(component('pages/campaigns/[campaignId]/library/rewards.vue', form).app)
+  assert.ok(html.includes('Rewards granted.'))
+  assert.equal(html.includes('Refresh failed'), false)
+  assert.equal(sent, 1)
 })
