@@ -4716,8 +4716,11 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   <span v-else-if="request.type === 'divine-protection-offer'" class="text-yellow-400 text-sm ml-2">
                     Divine Protection — {{ request.data?.attackerName || 'Unknown' }} → {{ request.data?.targetName || 'Unknown' }}
                   </span>
+                  <span v-else-if="request.type === 'cleanse-select'" class="text-cyan-400 text-sm ml-2">
+                    Cleanse — {{ request.data?.ready ? 'Choose effects' : 'Waiting for defenses' }}
+                  </span>
                   <span v-else class="text-digimon-dark-400 text-sm ml-2">
-                    {{ request.type === 'digimon-selection' ? 'Select Digimon' : 'Roll Initiative' }}
+                    {{ request.type === 'digimon-selection' ? 'Select Digimon' : request.type === 'initiative-roll' ? 'Roll Initiative' : 'Pending request' }}
                   </span>
                 </div>
                 <div class="flex gap-2">

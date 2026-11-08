@@ -68,6 +68,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
     '../../../../utils/partnerDevolution': { autoDevolveParticipant: async () => null },
     '../../../../utils/enemyKnockouts': knockouts,
     '../../../../utils/guidingLight': refresh,
+    '../../../../utils/pushPull': { applyPushPullDisplacement: unexpected },
   }
   globalThis.defineEventHandler = handler => handler
   globalThis.getRouterParam = () => 'encounter'
@@ -322,3 +323,36 @@ for (const type of ['support', 'damage']) {
     assert.equal(defended.pendingRequests.find(request => request.type === 'cleanse-select').data.ready, true)
   })
 }
+
+for (const type of ['support', 'damage']) {
+  for (const effect of ['Taunt', 'Fear', 'Stun', 'Shield', 'Burn', 'Knockback', 'Cleanse']) {
+    test(`legacy ${type} ${effect} respects Immunity without changing the ordinary hit`, async () => {
+      const f = fixture(type, [], effect)
+      f.records[1].qualities = [{ id: 'immunity' }]
+      f.participants[1].activeEffects = [{ id: 'existing', name: 'Poison', type: 'debuff', duration: 5, potency: 2, source: 'old-source' }]
+      const before = structuredClone(f.participants[1].activeEffects)
+      if (effect === 'Knockback') f.encounter.mapId = 'map'
+      const result = await f.legacy()
+      const defender = result.participants.find(participant => participant.id === 'defender-token')
+      assert.deepEqual(defender.activeEffects, before)
+      assert.equal(defender.actionsRemaining.simple, 2)
+      assert.equal(defender.interceptPenalty ?? 0, 0)
+      assert.equal(defender.stunActionReducedThisRound ?? false, false)
+      assert.equal(defender.currentWounds, type === 'damage' ? 11 : 0)
+      assert.equal(result.pendingRequests.some(request => request.type === 'cleanse-select'), false)
+      assert.equal(result.battleLog.some(entry => entry.effects?.includes(`Applied: ${effect}`)), false)
+    })
+  }
+}
+
+test('legacy support Stun cannot impose a deferred action penalty on an immune target', async () => {
+  const f = fixture('support', [], 'Stun')
+  f.records[1].qualities = [{ id: 'immunity' }]
+  f.encounter.turnOrder = ['defender-token', 'taunter-token']
+  f.encounter.currentTurnIndex = 1
+  const result = await f.legacy()
+  const defender = result.participants.find(participant => participant.id === 'defender-token')
+  assert.equal(defender.actionsRemaining.simple, 2)
+  assert.equal(defender.interceptPenalty ?? 0, 0)
+  assert.equal(defender.stunActionReducedThisRound ?? false, false)
+})

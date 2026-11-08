@@ -195,12 +195,18 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  const targetDigimon: any = target.type === 'digimon'
+    ? (await db.select().from(digimon).where(eq(digimon.id, target.entityId)))[0] : null
+  const targetQualities = targetDigimon?.qualities ?? []
+  const effectBlocked = targetQualities.some((quality: any) => quality.id === 'immunity')
+    || !!(npcAttackDef?.effect && isImmuneToEffect(npcAttackDef.effect, targetQualities))
+
   const sourceEffectPotency = ['Taunt', 'Fear'].includes(npcAttackDef?.effect)
     ? calculateEffectPotency(npcAttackDef.effect, await getDigimonDerivedStats(actor.entityId, actor), null)
     : null
 
   const pendingRequests = [...(encounter.pendingRequests ?? [])]
-  const cleanseCastId = npcAttackDef?.effect === 'Cleanse' && hit ? startCleanseCast(pendingRequests, {
+  const cleanseCastId = npcAttackDef?.effect === 'Cleanse' && hit && !effectBlocked ? startCleanseCast(pendingRequests, {
     attackerId: actor.id, attackerName: attackerDigimon?.name ?? 'Digimon', attackName: npcAttackDef.name,
     attackerIsEnemy: !!actor.isEnemy, potency: Math.max(0, (await getDigimonDerivedStats(actor.entityId, actor))?.bit ?? 0),
     isArea: false, selectiveTargeting: false, targetIds: [target.id], ownerId: attackerDigimon?.partnerId ?? 'GM',
@@ -208,7 +214,7 @@ export default defineEventHandler(async (event) => {
 
   // Support attack: skip damage, apply effect only, return early
   if (npcAttackDef?.type === 'support') {
-    recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit)
+    recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit && !effectBlocked)
     let appliedEffectName: string | null = null
     // Digimon are not in turnOrder — use their partner Tamer's position instead.
     const targetParticipantForTurn = participants.find((p: any) => p.id === body.targetId)
@@ -217,7 +223,7 @@ export default defineEventHandler(async (event) => {
       const idx = turnOrder.indexOf(targetParticipantForTurn.id)
       targetHasGone = idx >= 0 && idx < currentIndex
     } else if (targetParticipantForTurn?.type === 'digimon') {
-      const [targetDigimonForTurn] = await db.select().from(digimon).where(eq(digimon.id, targetParticipantForTurn.entityId))
+      const targetDigimonForTurn = targetDigimon
       if (targetDigimonForTurn?.partnerId) {
         const tamerOfTarget = participants.find((p: any) => p.type === 'tamer' && p.entityId === targetDigimonForTurn.partnerId)
         if (tamerOfTarget) {
@@ -231,7 +237,7 @@ export default defineEventHandler(async (event) => {
       }
     }
     let supportParticipants = updatedParticipants.map((p: any) => {
-      if (p.id === body.targetId && hit && npcAttackDef.effect) {
+      if (p.id === body.targetId && hit && npcAttackDef.effect && !effectBlocked) {
         const effectDuration = Math.max(1, netSuccesses)
         const alignment = EFFECT_ALIGNMENT[npcAttackDef.effect]
         const effectType: 'buff' | 'debuff' | 'status' = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
@@ -249,7 +255,7 @@ export default defineEventHandler(async (event) => {
         const stunDeferred = npcAttackDef.effect === 'Stun' && targetHasGone
         return {
           ...p,
-          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules),
+          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities),
           ...(stunImmediate
             ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }, stunActionReducedThisRound: true }
             : stunDeferred
@@ -356,12 +362,9 @@ export default defineEventHandler(async (event) => {
     attackerCombatMonsterBonus = actor.combatMonsterBonus ?? 0
   }
 
-  // Fetch target's armor (and hold reference to targetDigimon for later use)
+  // Use the same target record for armor and incoming-effect immunity.
   let targetArmor = 0
-  let targetDigimon: any = null
   if (target.type === 'digimon') {
-    const [tDigimon] = await db.select().from(digimon).where(eq(digimon.id, target.entityId))
-    targetDigimon = tDigimon
     if (targetDigimon) {
       const targetBaseStats = targetDigimon.baseStats
       const targetBonusStats = (targetDigimon as any).bonusStats
@@ -402,7 +405,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Apply damage to target and auto-apply attack effects
-  recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit && damageDealt >= 2)
+  recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit && damageDealt >= 2 && !effectBlocked)
   let appliedEffectName: string | null = null
   let finalParticipants = updatedParticipants.map((p: any) => {
     // Handle attacker: reset Combat Monster bonus on hit
@@ -425,8 +428,8 @@ export default defineEventHandler(async (event) => {
         )
       }
 
-      // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
-      if (npcAttackDef?.effect && !isImmuneToEffect(npcAttackDef.effect, targetDigimon?.qualities)) {
+      // Immunity also blocks instant-effect side effects such as displacement and Stun action costs.
+      if (npcAttackDef?.effect && !effectBlocked) {
         const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
         if (shouldApply) {
           const effectDuration = Math.max(1, netSuccesses)
@@ -441,7 +444,7 @@ export default defineEventHandler(async (event) => {
             description: '',
             ...(sourceEffectPotency ?? {}),
           }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules)
+          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities)
           appliedEffectName = npcAttackDef.effect
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (npcAttackDef.effect === 'Stun' && !p.hasActed) {
