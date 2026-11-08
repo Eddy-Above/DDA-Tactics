@@ -1462,8 +1462,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Remove negative effects.',
-    effect: `Apply [Cleanse] tag to a support attack. Remove negative effects from ally. Sets effect durations to 1 (including Poison).`,
+    description: '[N/A] Reduce the duration of selected effects.',
+    effect: `Select up to the leftover Accuracy successes in individual effects and reduce each duration by your BIT. For an Area Attack, the shared selection limit is the highest leftover Accuracy among its targets. With Selective Targeting, Dispel removes enemy buffs or Purify removes ally debuffs; they cannot be combined in one cast.`,
   },
   {
     id: 'effect-haste',

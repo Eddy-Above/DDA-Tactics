@@ -21,7 +21,8 @@ import { calculateDigimonDerivedStats } from '~/types'
 import { sizeInteraction } from '~/utils/movementRules'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
-import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType } from '~/server/utils/resolveSupportAttack'
+import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType, getDigimonDerivedStats } from '~/server/utils/resolveSupportAttack'
+import { startCleanseCast, recordCleanseOutcome } from '~/server/utils/cleanse'
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
@@ -183,6 +184,17 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   // Clients may send only roll stats. Deferred support resolution also needs the
   // attack's type, effect and tags after the last intercede decision is answered.
   if (declaredAttack) body.attackData = { ...body.attackData, ...declaredAttack, effect: declaredAttack.effect }
+  if (declaredAttack?.effect === 'Cleanse' && body.accuracySuccesses > 0) {
+    const record = digimonById.get(attacker.entityId)
+    const derived = await getDigimonDerivedStats(attacker.entityId, attacker)
+    body.attackData.cleanseCastId = startCleanseCast(pendingRequests, {
+      attackerId: attacker.id, attackerName: record?.name ?? 'Digimon', attackName: declaredAttack.name,
+      attackerIsEnemy: !!attacker.isEnemy, potency: Math.max(0, derived?.bit ?? 0),
+      isArea: !!body.targetIds?.length, selectiveTargeting: !!record?.qualities?.some((quality: any) => quality.id === 'selective-targeting'),
+      targetIds: [...new Set((body.targetIds ?? [body.targetId!]).filter(id => participants.some((participant: any) => participant.id === id)))],
+      ownerId: record?.partnerId ?? 'GM',
+    })
+  }
   if (body.finishingTouch) body.accuracySuccesses = body.accuracyDice.filter(d => d >= 4).length
     + combatAttackStats(digimonById.get(attacker.entityId), attacker, declaredAttack ?? body.attackData).automaticSuccesses
   if (declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(attacker)) {
@@ -244,7 +256,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       attackerName = resolveParticipantName(attacker, participants, attackerDig?.name || 'Digimon', attackerDig?.isEnemy || false)
       if (attackerDig?.attacks) {
         const attacks = attackerDig.attacks
-        areaAttackDef = attacks?.find((a: any) => a.id === body.attackId)
+        areaAttackDef = attacks?.find((a: any) => a.id === body.attackId) ? body.attackData : null
         isSupportAttack = areaAttackDef?.type === 'support'
       }
     }
@@ -269,6 +281,10 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       }
       return true
     })
+    for (const id of selectiveTargetingExcludedIds) {
+      const recipient = participants.find((participant: any) => participant.id === id)
+      if (recipient) recordCleanseOutcome(pendingRequests, body.attackData?.cleanseCastId, id, recipient, 0, false)
+    }
 
     // Process each target: collect player targets and NPC targets separately
     const playerTargetIds: string[] = []
@@ -558,7 +574,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           let supportResult: any = null
           if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
           else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
-          else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+          else if (resolutionType === 'negative' || resolutionType === 'cleanse') supportResult = await resolveNegativeSupportNpc(supportParams)
           else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: areaAutoAdvanceTurnIndex ?? (encounter.currentTurnIndex || 0) })
           if (supportResult) {
             participants = supportResult.participants
@@ -570,6 +586,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           }
         } else {
           const result = await resolveNpcAttack({
+            pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
             participants, battleLog,
             attackerParticipantId: body.attackerId,
             targetParticipantId: tid,
@@ -854,7 +871,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     const attackerDigimon = digimonById.get(attacker.entityId)
     if (attackerDigimon?.attacks) {
       const attacks = attackerDigimon.attacks
-      attackDef = attacks?.find((a: any) => a.id === body.attackId)
+      attackDef = attacks?.find((a: any) => a.id === body.attackId) ? body.attackData : null
     }
   }
 
@@ -894,7 +911,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         supportResult = await resolvePositiveAuto(supportParams)
       } else if (resolutionType === 'positive-health') {
         supportResult = await resolvePositiveHealth(supportParams)
-      } else if (resolutionType === 'negative') {
+      } else if (resolutionType === 'negative' || resolutionType === 'cleanse') {
         supportResult = await resolveNegativeSupportNpc(supportParams)
       } else if (resolutionType === 'instant') {
         supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: encounter.currentTurnIndex || 0 })
@@ -1344,7 +1361,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         let supportResult: any = null
         if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
         else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
-        else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+        else if (resolutionType === 'negative' || resolutionType === 'cleanse') supportResult = await resolveNegativeSupportNpc(supportParams)
         else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: (encounter as any).mapId, campaignLevel: campaignLevel as any, currentTurnIndex: encounter.currentTurnIndex || 0 })
 
         if (supportResult) {
@@ -1366,6 +1383,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       } else {
         // Damage attack — auto-resolve NPC (roll dodge, calculate damage)
         const result = await resolveNpcAttack({
+          pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
           participants, battleLog,
           attackerParticipantId: body.attackerId,
           targetParticipantId: body.targetId!,

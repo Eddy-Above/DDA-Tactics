@@ -59,7 +59,7 @@ export const SPECIAL_P_EFFECTS = new Set(['Shield', 'Haste', 'Purify', 'Revitali
 /**
  * Instant effects — resolve once on hit, no duration tracking needed
  */
-export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal'])
+export const INSTANT_EFFECTS = new Set(['Knockback', 'Pull', 'Lifesteal', 'Cleanse'])
 
 /**
  * Permanent effects — no round duration; persist until replaced or removed by game event
@@ -208,8 +208,8 @@ export function getEffectResolutionType(
 ): 'positive-auto' | 'positive-health' | 'negative' | 'damage-negative' | 'cleanse' | 'instant' | 'no-effect' {
   if (!effectName) return 'no-effect'
 
-  if (INSTANT_EFFECTS.has(effectName)) return 'instant'
   if (effectName === 'Cleanse') return 'cleanse'
+  if (INSTANT_EFFECTS.has(effectName)) return 'instant'
 
   const alignment = EFFECT_ALIGNMENT[effectName]
 

@@ -26,6 +26,8 @@ function harness(size = 'large', giganticDimensions = null) {
   const labels = [], events = []
   const dependencies = {
     props, movingParticipantId, pathHighlightGroup, hoverGhostGroup, hoveredMoveScreen,
+    movementGhost: ref(null), movementGhostOverlay: ref(null), movementGapLabel: ref(null),
+    updateMovementGhostOverlay: () => {}, renderMovementGap: () => {},
     THREE, getFootprintDimensions, vec3Key, TILE_SIZE: 1, TILE_H: 0.1,
     lastPathKey: '', rightDragActive: false,
     tokenDrag: { isPressed: () => false }, updateTargetHover: () => {},

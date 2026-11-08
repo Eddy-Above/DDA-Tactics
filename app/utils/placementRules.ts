@@ -42,14 +42,12 @@ export function getPlaceableParticipantIds(ctx: PlacementContext): string[] {
 
 /**
  * Which tokens already on the map may be dragged to a new cell.
- * - GM: any placed, deployed character in any phase but `ended` (the same free, no-cost teleport
- *   GM free-move offers).
+ * - GM: any placed, deployed character during setup/initiative.
  * - Player: only their own, and only during setup/initiative. Dragging mid-combat would sidestep
  *   movement rules and action cost, so mid-combat movement stays on the radial Move.
  */
 export function getDraggableParticipantIds(ctx: PlacementContext): string[] {
-  if (!ctx.phase || ctx.phase === 'ended') return []
-  if (!ctx.isDm && !isSetupPhase(ctx.phase)) return []
+  if (!isSetupPhase(ctx.phase)) return []
   const mine = ctx.myParticipantIds ?? []
   return ctx.participants
     .filter(p => {

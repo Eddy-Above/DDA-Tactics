@@ -46,6 +46,11 @@
     </div>
     <!-- Character token overlays -->
     <div class="char-overlays">
+      <div v-if="movementGhostOverlay && aimedMoveParticipantId" class="char-token"
+        :style="{ left: movementGhostOverlay.x + 'px', top: movementGhostOverlay.y + 'px', width: movementGhostOverlay.h + 'px', height: movementGhostOverlay.h + 'px', opacity: 0.2, borderColor: movementGhostOverlay.valid ? STANCE_COLORS[movementGhostOverlay.stance] : '#ff3333', zIndex: 1000001 }">
+        <img v-if="movementGhostOverlay.spriteUrl" :src="movementGhostOverlay.spriteUrl" class="char-token-img" />
+        <div v-else class="char-token-fallback">{{ movementGhostOverlay.initial }}</div>
+      </div>
       <div
         v-for="(ov, pid) in characterOverlays"
         :key="pid"
@@ -63,6 +68,8 @@
       class="move-distance-label"
       :style="{ left: hoveredMoveScreen.x + 'px', top: hoveredMoveScreen.y + 'px' }"
     >{{ hoveredMoveDistance }} m</div>
+    <div v-if="movementGapLabel && aimedMoveParticipantId" class="move-distance-label"
+      :style="{ left: movementGapLabel.x + 'px', top: movementGapLabel.y + 'px', color: '#8edbff' }">{{ movementGapLabel.text }}</div>
     <MapRadialMenu
       v-if="participantChoice && participantChoiceScreen && participantChoiceItems.length"
       key="participant-choice"
@@ -114,6 +121,7 @@ import {
   type PlacementEvaluation, type PlacementFootprint,
 } from '~/utils/placementRules'
 import { createTokenDragController } from '~/utils/tokenDrag'
+import { buildMovementGroundIndex, movementGroundBelow } from '~/utils/movementGap'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 import type { MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
@@ -492,6 +500,10 @@ function onRadialSelect(item: MapRadialItem) {
 const moveStartPos = ref<Vec3 | null>(null)
 const hoveredMoveScreen = ref<{ x: number; y: number } | null>(null)
 const hoveredMoveDistance = ref<number>(0)
+const movementGhost = ref<{ participantId: string; cell: Vec3; valid: boolean } | null>(null)
+const movementGhostOverlay = ref<{ x: number; y: number; h: number; spriteUrl: string | null; initial: string; stance: Stance; valid: boolean } | null>(null)
+const movementGapLabel = ref<{ x: number; y: number; text: string } | null>(null)
+const movementGroundIndex = computed(() => buildMovementGroundIndex(props.map?.groundTiles ?? [], getMapVoxels(props.map)))
 const npcMoveY = ref<number>(0)
 const gmMoveY = ref<number>(0)
 const aimedMoveParticipantId = computed(() => movingParticipantId.value ?? props.gmMoveParticipantId)
@@ -1358,6 +1370,43 @@ function updateCharacterOverlays() {
     }
   }
   characterOverlays.value = overlays
+  updateMovementGhostOverlay()
+}
+
+function updateMovementGhostOverlay() {
+  movementGhostOverlay.value = null
+  movementGapLabel.value = null
+  const ghost = movementGhost.value
+  if (!ghost || getMoveAim()?.participantId !== ghost.participantId) return
+  const participant = props.participants.find(participant => participant.id === ghost.participantId)
+  if (!participant) return
+  const info = participant.type === 'tamer' ? props.tamerMap[participant.entityId] : props.digimonMap[participant.entityId]
+  const { imageScale } = getSizeParams(getParticipantSize(participant.id), participant.type === 'digimon' ? props.digimonMap[participant.entityId]?.giganticDimensions : undefined)
+  const dims = getParticipantFootprintDims(participant.id)
+  const center = movementPreviewCenter(ghost.cell, dims, dims.height * TILE_SIZE / 2)
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+  const screen = worldToScreen2D(center)
+  const edge = worldToScreen2D(center.clone().addScaledVector(right, imageScale * 0.45))
+  if (!screen || !edge) return
+  const h = Math.max(16, Math.hypot(edge.x - screen.x, edge.y - screen.y) * 2)
+  movementGhostOverlay.value = { x: screen.x, y: screen.y - h / 2, h, spriteUrl: info?.spriteUrl ?? null,
+    initial: (info?.name ?? '?')[0]!, stance: participant.currentStance ?? 'neutral', valid: ghost.valid }
+  const ground = movementGroundBelow(movementGroundIndex.value, ghost.cell, dims)
+  if (ground !== null && ground >= ghost.cell.y) return
+  const label = worldToScreen2D(movementPreviewCenter(ghost.cell, dims, ground === null ? -0.3 : -(ghost.cell.y - ground) * TILE_SIZE / 2))
+  if (label) movementGapLabel.value = { ...label, text: ground === null ? 'No ground below' : `${ghost.cell.y - ground} m gap` }
+}
+
+function renderMovementGap(cell: Vec3, dims: FootprintDims) {
+  const ground = movementGroundBelow(movementGroundIndex.value, cell, dims)
+  if (ground === null || ground >= cell.y) return
+  const top = movementPreviewCenter(cell, dims, 0.005)
+  const bottom = top.clone()
+  bottom.y = ground * TILE_SIZE + TILE_H + 0.005
+  const geometry = new THREE.BufferGeometry().setFromPoints([top, bottom])
+  const line = new THREE.Line(geometry, new THREE.LineDashedMaterial({ color: 0x8edbff, dashSize: 0.15, gapSize: 0.1, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false }))
+  line.computeLineDistances()
+  hoverGhostGroup.add(line)
 }
 
 // Share the portrait's projected center, including large-token footprints and camera zoom.
@@ -2187,7 +2236,16 @@ function onMouseMove(event: MouseEvent) {
   // preventing upper-floor geometry from blocking clicks on lower-floor tiles.
   const moveAim = getMoveAim()
   if (moveAim) {
+    for (const child of hoverGhostGroup.children) {
+      const object = child as THREE.Mesh | THREE.Line
+      object.geometry?.dispose()
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      for (const material of materials) material?.dispose()
+    }
     hoverGhostGroup.clear()
+    movementGhost.value = null
+    movementGhostOverlay.value = null
+    movementGapLabel.value = null
     hoveredMoveScreen.value = null
     const cell = moveCellAt(event, moveAim.y)
     if (cell) {
@@ -2195,12 +2253,15 @@ function onMouseMove(event: MouseEvent) {
       if (valid || moveAim.isGm) {
         const dims = getParticipantFootprintDims(moveAim.participantId)
         const ghostGeo = new THREE.CircleGeometry(TILE_SIZE * 0.42, 24)
-        const ghostMat = new THREE.MeshBasicMaterial({ color: valid ? 0x2255ff : 0xff3333, transparent: true, opacity: 0.55, depthWrite: false })
+        const ghostMat = new THREE.MeshBasicMaterial({ color: valid ? 0x2255ff : 0xff3333, transparent: true, opacity: 0.2, depthWrite: false })
         const ghostMesh = new THREE.Mesh(ghostGeo, ghostMat)
         ghostMesh.scale.set(dims.width, dims.depth, 1)
         ghostMesh.rotation.x = -Math.PI / 2
         ghostMesh.position.copy(movementPreviewCenter(cell, dims, 0.01))
         hoverGhostGroup.add(ghostMesh)
+        movementGhost.value = { participantId: moveAim.participantId, cell, valid }
+        updateMovementGhostOverlay()
+        renderMovementGap(cell, dims)
         const labelV = movementPreviewCenter(cell, dims, 0.6)
         hoveredMoveScreen.value = worldToScreen2D(labelV) ?? null
         if (moveAim.isGm) {

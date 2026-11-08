@@ -1,4 +1,5 @@
 import { serverDodgeDefense } from './combatDodge'
+import { recordCleanseOutcome } from './cleanse'
 import { eq } from 'drizzle-orm'
 import { db, digimon, tamers } from '../db'
 import {
@@ -480,6 +481,11 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
 
   const netSuccesses = params.accuracySuccesses - dodgeSuccesses
   const hit = netSuccesses >= 0
+
+  if (params.attackDef.effect === 'Cleanse') {
+    recordCleanseOutcome(params.pendingRequests, params.attackDef.cleanseCastId, target.id, target,
+      netSuccesses, hit && !(targetRecord as any)?.qualities?.some((quality: any) => quality.id === 'immunity'))
+  }
 
   const attackerDerived = await getDigimonDerivedStats(attacker.entityId, attacker)
   const targetDerived = target.type === 'digimon' ? await getDigimonDerivedStats(target.entityId, target) : null

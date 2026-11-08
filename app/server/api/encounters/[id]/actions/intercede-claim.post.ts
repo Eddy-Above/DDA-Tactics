@@ -5,6 +5,7 @@ import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup, isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
+import { recordCleanseOutcome } from '~/server/utils/cleanse'
 import { BASIC_ATTACKS } from '~/data/attackConstants'
 import {
   type FootprintDims,
@@ -527,6 +528,11 @@ async function resolveIntercedeClaim(
   })
 
   const npcAttackDef = damageCalc.attackDef
+  if (npcAttackDef?.effect === 'Cleanse') {
+    recordCleanseOutcome(pendingRequests, request.data.attackData?.cleanseCastId, effectiveTargetId, interceptor,
+      damageCalc.netSuccesses, (npcAttackDef.type === 'support' || damageCalc.damageDealt >= 2)
+        && !interceptorDigRec?.qualities?.some((quality: any) => quality.id === 'immunity'))
+  }
   const attackBaseDamage = damageCalc.attackBaseDamage
   const armorPiercing = damageCalc.armorPiercing
   const interceptorArmor = damageCalc.targetArmor

@@ -1,4 +1,5 @@
 import { autoDevolveParticipant } from './partnerDevolution'
+import { recordCleanseOutcome } from './cleanse'
 import { serverDodgeDefense } from './combatDodge'
 import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 import { eq, inArray } from 'drizzle-orm'
@@ -19,6 +20,8 @@ import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 
 interface ResolveNpcAttackParams {
+  pendingRequests?: any[]
+  cleanseCastId?: string
   participants: any[]
   battleLog: any[]
   attackerParticipantId: string
@@ -143,6 +146,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
   })
 
   const attackDef = damageCalc.attackDef
+  if (attackDef?.effect === 'Cleanse') {
+    recordCleanseOutcome(params.pendingRequests, params.cleanseCastId, target.id, target,
+      damageCalc.netSuccesses, damageCalc.hit && (attackDef.type === 'support' || damageCalc.damageDealt >= 2)
+        && !targetQualities.some((quality: any) => quality.id === 'immunity'))
+  }
   const attackBaseDamage = damageCalc.attackBaseDamage
   const armorPiercing = damageCalc.armorPiercing
   const attackerHasCombatMonster = damageCalc.attackerHasCombatMonster

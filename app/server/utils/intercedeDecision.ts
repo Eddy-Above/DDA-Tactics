@@ -10,6 +10,7 @@ import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, 
 import { getEffectResolutionType } from '~/data/attackConstants'
 import { GM_OPT_OUT_OWNER, isOfferPassed } from '~/utils/intercedeOptOuts'
 import { readCombatRecord } from './combatRecordCache'
+import { pruneEmptyCleanseRequests } from './cleanse'
 
 // What happens once an intercede-offer is answered without anyone stepping in — a Skip, or an
 // opt-out clearing it. Shared by intercede-skip and intercede-optouts so an opt-out can clear
@@ -75,7 +76,7 @@ export function initialDecisionState(encounter: any): IntercedeDecisionState {
  * reverting) participants another request is updating at the same moment.
  */
 export async function persistDecisionState(encounter: any, state: IntercedeDecisionState): Promise<void> {
-  const updateData: any = { pendingRequests: state.pendingRequests, updatedAt: new Date() }
+  const updateData: any = { pendingRequests: pruneEmptyCleanseRequests(state.pendingRequests, state.participants), updatedAt: new Date() }
   if (state.resolved) {
     updateData.participants = state.participants
     updateData.battleLog = state.battleLog
@@ -242,13 +243,14 @@ export async function resolveIntercedeGroupIfDecided(
     let supportResult: any = null
     if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
     else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
-    else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+    else if (resolutionType === 'negative' || resolutionType === 'cleanse') supportResult = await resolveNegativeSupportNpc(supportParams)
     else if (resolutionType === 'instant') supportResult = await resolveInstantSupportEffect({ ...supportParams, mapId: ctx.mapId as any, campaignLevel, currentTurnIndex })
     return supportResult ? withSupportResult(supportResult) : state
   }
 
   // Damage attack — auto-resolve (roll dodge, calculate damage)
   const result = await resolveNpcAttack({
+    pendingRequests, cleanseCastId: data.attackData?.cleanseCastId,
     strikeFast: !!data.attackData?.orderModifiers?.halfDodge,
     participants, battleLog,
     attackerParticipantId: data.attackerId,

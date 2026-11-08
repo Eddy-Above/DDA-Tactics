@@ -1,4 +1,5 @@
 import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
+import { startCleanseCast, recordCleanseOutcome } from '../../../../utils/cleanse'
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
@@ -198,8 +199,16 @@ export default defineEventHandler(async (event) => {
     ? calculateEffectPotency(npcAttackDef.effect, await getDigimonDerivedStats(actor.entityId, actor), null)
     : null
 
+  const pendingRequests = [...(encounter.pendingRequests ?? [])]
+  const cleanseCastId = npcAttackDef?.effect === 'Cleanse' && hit ? startCleanseCast(pendingRequests, {
+    attackerId: actor.id, attackerName: attackerDigimon?.name ?? 'Digimon', attackName: npcAttackDef.name,
+    attackerIsEnemy: !!actor.isEnemy, potency: Math.max(0, (await getDigimonDerivedStats(actor.entityId, actor))?.bit ?? 0),
+    isArea: false, selectiveTargeting: false, targetIds: [target.id], ownerId: attackerDigimon?.partnerId ?? 'GM',
+  }) : undefined
+
   // Support attack: skip damage, apply effect only, return early
   if (npcAttackDef?.type === 'support') {
+    recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit)
     let appliedEffectName: string | null = null
     // Digimon are not in turnOrder — use their partner Tamer's position instead.
     const targetParticipantForTurn = participants.find((p: any) => p.id === body.targetId)
@@ -323,6 +332,7 @@ export default defineEventHandler(async (event) => {
     }
 
     await db.update(encounters).set({
+      pendingRequests,
       participants: supportParticipants,
       battleLog: [...battleLog, supportAttackLog, supportDodgeLog],
       updatedAt: new Date(),
@@ -392,6 +402,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Apply damage to target and auto-apply attack effects
+  recordCleanseOutcome(pendingRequests, cleanseCastId, target.id, target, netSuccesses, hit && damageDealt >= 2)
   let appliedEffectName: string | null = null
   let finalParticipants = updatedParticipants.map((p: any) => {
     // Handle attacker: reset Combat Monster bonus on hit
@@ -691,6 +702,7 @@ export default defineEventHandler(async (event) => {
 
   // Update encounter
   const updateData: any = {
+    pendingRequests,
     participants: participantsForSave,
     battleLog: [...updatedBattleLog, ...knockout.logEntries],
     ...(turnStateChanged ? { turnOrder: knockout.turnOrder, currentTurnIndex: knockout.currentTurnIndex, round: knockout.round } : {}),

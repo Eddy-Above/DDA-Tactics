@@ -290,7 +290,7 @@ export const encounters = pgTable('encounters', {
   // Pending player requests (digimon selection, initiative roll, dodge roll, etc.)
   pendingRequests: jsonb('pending_requests').notNull().default([]).$type<Array<{
     id: string
-    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'strike-last-offer' | 'health-roll' | 'recovery-check' | 'divine-protection-offer' | 'throw-impact-attack'
+    type: 'digimon-selection' | 'initiative-roll' | 'dodge-roll' | 'intercede-offer' | 'intercede-group-state' | 'clash-check' | 'counterattack-prompt' | 'strike-last-offer' | 'health-roll' | 'recovery-check' | 'divine-protection-offer' | 'throw-impact-attack' | 'cleanse-select'
     targetTamerId: string
     targetParticipantId?: string
     timestamp: string

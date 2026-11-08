@@ -383,7 +383,7 @@ export async function resolveAreaIntercedeGroup({
       let supportResult: any = null
       if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
       else if (resolutionType === 'positive-health') supportResult = await resolvePositiveHealth(supportParams)
-      else if (resolutionType === 'negative') supportResult = await resolveNegativeSupportNpc(supportParams)
+      else if (resolutionType === 'negative' || resolutionType === 'cleanse') supportResult = await resolveNegativeSupportNpc(supportParams)
 
       if (supportResult) {
         updatedParticipants = supportResult.participants
@@ -393,6 +393,7 @@ export async function resolveAreaIntercedeGroup({
       }
     } else {
       const result = await resolveNpcAttack({
+        pendingRequests: updatedPendingRequests, cleanseCastId: groupData.attackData?.cleanseCastId,
         participants: updatedParticipants,
         battleLog: updatedBattleLog,
         attackerParticipantId: groupData.attackerId,

@@ -25,6 +25,7 @@ import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encoun
 import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, createRecordRefreshQueue, type CombatActionKind, type RecordRefreshPlan } from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
+import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { prepareAttackAccuracy } from '~/utils/attackAccuracy'
 import { useSpecialOrderTargets, type SpecialOrderChoice } from '~/composables/useSpecialOrderTargets'
 import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/useFatefulIntervention'
@@ -2695,6 +2696,28 @@ async function handleGmDodgeRoll(request: any) {
 
 // Selected participant for detailed view
 const selectedParticipantId = ref<string | null>(null)
+const unlockingAttackId = ref<string | null>(null)
+const lockedManageAttacks = computed(() => {
+  const participant = selectedParticipant.value
+  if (!participant || participant.type !== 'digimon') return []
+  const attacks = [...(digimonMap.value.get(participant.entityId)?.attacks ?? []), ...BASIC_ATTACKS]
+  return [...new Set(participant.usedAttackIds ?? [])].map(id => ({ id, name: attacks.find(attack => attack.id === id)?.name ?? 'Unavailable attack' }))
+})
+
+async function unlockUsedAttack(participantId: string, attackId: string) {
+  if (!currentEncounter.value || unlockingAttackId.value) return
+  const encounter = currentEncounter.value
+  const participant = (encounter.participants as CombatParticipant[]).find(participant => participant.id === participantId)
+  if (!participant || participant.type !== 'digimon' || !participant.usedAttackIds?.includes(attackId)) return
+  unlockingAttackId.value = attackId
+  try {
+    const participants = (encounter.participants as CombatParticipant[]).map(current => current.id === participantId
+      ? { ...current, usedAttackIds: (current.usedAttackIds ?? []).filter(id => id !== attackId) } : current)
+    const result = await updateEncounter(encounter.id, { participants })
+    if (result) await applyActionResult(result)
+  } finally { unlockingAttackId.value = null }
+}
+
 const effectSources = computed(() => (currentEncounter.value?.participants ?? []).map(participant => {
   const record = participant.type === 'digimon' ? digimonMap.value.get(participant.entityId) : undefined
   const derived = record ? applyDerivedStatEffects(calcDigimonStats(record), participant.activeEffects) : undefined
@@ -3311,10 +3334,18 @@ function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeD
 function onMapAttackCancelled() {
   selectedAttack.value = null
 }
+
+const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit: submitCleanse } = useCleanseSelection({
+  encounter: () => currentEncounter.value, ownerId: () => 'GM',
+  send: (id, body) => $fetch<any>(`/api/encounters/${id}/actions/cleanse` as string, { method: 'POST', body }),
+  apply: result => applyActionResult(result, 'attack'),
+})
 </script>
 
 <template>
   <div class="container mx-auto px-4 py-8">
+    <CleanseDialog v-if="cleanseRequest" :request="cleanseRequest" :participants="currentEncounter?.participants ?? []"
+      :participant-name="getDisplayName" :busy="cleanseBusy" :error="cleanseError" @confirm="submitCleanse" />
     <Teleport to="body">
       <div v-if="gmFatefulAvailableTamers.length" class="fixed top-4 right-4 z-[65] rounded-lg border border-amber-700 bg-digimon-dark-800 p-2 flex gap-2">
         <select v-model="gmFatefulTamer" :disabled="gmFateful.busy.value" aria-label="Tamer using Fateful Intervention" class="rounded bg-digimon-dark-700 text-white text-sm p-1">
@@ -5185,6 +5216,14 @@ function onMapAttackCancelled() {
             </div>
 
             <!-- Wound Tracker -->
+            <div v-if="lockedManageAttacks.length" class="mb-6 bg-digimon-dark-700 rounded-lg p-4">
+              <h3 class="font-semibold text-white mb-2">Used attacks</h3>
+              <div v-for="attack in lockedManageAttacks" :key="attack.id" class="flex items-center justify-between gap-3 py-1">
+                <span class="text-sm text-digimon-dark-300">{{ attack.name }}</span>
+                <button :disabled="!!unlockingAttackId" class="text-sm text-digimon-orange-400 hover:text-digimon-orange-300 disabled:opacity-50"
+                  @click="unlockUsedAttack(selectedParticipant.id, attack.id)">{{ unlockingAttackId === attack.id ? 'Unlocking…' : 'Unlock' }}</button>
+              </div>
+            </div>
             <div class="mb-6">
               <h3 class="font-semibold text-white mb-3">Wounds</h3>
               <WoundTracker

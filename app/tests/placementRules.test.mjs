@@ -64,10 +64,11 @@ test('token dragging: a player may drag only their own placed characters, and on
   assert.deepEqual(getDraggableParticipantIds(ctx({ phase: 'ended' })), [])
 })
 
-test('token dragging: the GM may drag any placed deployed character in any live phase', () => {
-  for (const phase of ['setup', 'initiative', 'combat']) {
+test('token dragging: the GM may drag placed characters only before combat starts', () => {
+  for (const phase of ['setup', 'initiative']) {
     assert.deepEqual(getDraggableParticipantIds(ctx({ isDm: true, phase })), ['my-tamer', 'other-tamer'])
   }
+  assert.deepEqual(getDraggableParticipantIds(ctx({ isDm: true, phase: 'combat' })), [])
   assert.deepEqual(getDraggableParticipantIds(ctx({ isDm: true, phase: 'ended' })), [])
   assert.deepEqual(getDraggableParticipantIds(ctx({ isDm: true, phase: undefined })), [])
 })

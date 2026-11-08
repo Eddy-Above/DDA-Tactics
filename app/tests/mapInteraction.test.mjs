@@ -52,6 +52,8 @@ function harness(t, isDm = false) {
     worldToScreen2D: p => ({ x: p.x * 10, y: p.z * 10 }),
     npcMoveY: ref(0), gmMoveY: ref(0), hoveredMoveDistance: ref(0),
     camera, controls, hoverGhostGroup: new THREE.Group(),
+    movementGhost: ref(null), movementGhostOverlay: ref(null), movementGapLabel: ref(null),
+    updateMovementGhostOverlay: () => {}, renderMovementGap: () => {},
     raycaster: new THREE.Raycaster(new THREE.Vector3(1000.2, 100, -500.2), new THREE.Vector3(0, -1, 0)),
     setMouseFromEvent: () => { if (pointer.useCamera) deps.raycaster.setFromCamera(new THREE.Vector2(), camera) },
     reticuleParticipantIds: ref([]),

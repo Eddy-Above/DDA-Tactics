@@ -46,6 +46,10 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
   })
   const unchanged = async state => ({ ...state, changed: false, logEntries: [] })
   const knockouts = { knockedOutEnemyIds: () => [], resolveEnemyKnockouts: unchanged }
+  const npc = loadTypeScriptWithMocks('server/utils/resolveNpcAttack.ts', {
+    '../db': store, 'drizzle-orm': sql, './computeAttackDamage': damage, './enemyKnockouts': knockouts,
+    './partnerDevolution': { autoDevolveParticipant: async () => null },
+  })
   const refresh = { refreshGuidingLightForParticipants: async (_id, current) => current }
   const unexpected = () => { throw new Error('Unexpected unrelated combat operation') }
   const mocks = {
@@ -78,13 +82,14 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
   let positions = {}
   const room = { getRoomPositions: async () => positions, broadcastPositionPatch: unexpected }
   const area = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
-    '../db': store, 'drizzle-orm': sql, './resolveNpcAttack': { resolveNpcAttack: unexpected },
+    '../db': store, 'drizzle-orm': sql, './resolveNpcAttack': npc,
     './enemyKnockouts': knockouts, '~/server/utils/resolveSupportAttack': support,
   })
   const decision = loadTypeScriptWithMocks('server/utils/intercedeDecision.ts', {
     '../db': store, 'drizzle-orm': sql, '~/server/utils/resolveSupportAttack': support,
     '~/server/utils/encounterRoom': room, '~/server/utils/resolveAreaIntercedeGroup': area,
     '~/server/utils/combatSpatial': { loadEncounterMap: async () => ({ id: 'map' }) },
+    '~/server/utils/resolveNpcAttack': npc,
   })
   return {
     attack, records, participants, encounter, support, params,
@@ -112,6 +117,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
       const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
         '../../../../db': store, 'drizzle-orm': sql,
         '~/server/utils/resolveSupportAttack': support,
+        '~/server/utils/resolveNpcAttack': npc,
         '~/server/utils/encounterRoom': room,
         '~/server/utils/intercedePasses': { applyActivePasses: unexpected, passableOfferOwners: () => [] },
         ...mapMocks,
@@ -130,12 +136,13 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
       return handler({ requestId })
     },
     respond: async (accuracySuccesses = 3) => {
-      encounter.pendingRequests = [{ id: 'defense', type: 'dodge-roll', targetTamerId: 'owner', targetParticipantId: participants[1].id,
+      const existing = encounter.pendingRequests.find(request => request.type === 'dodge-roll')
+      if (!existing) encounter.pendingRequests = [...encounter.pendingRequests, { id: 'defense', type: 'dodge-roll', targetTamerId: 'owner', targetParticipantId: participants[1].id,
         data: { attackerParticipantId: participants[0].id, attackerEntityId: records[0].id, targetEntityId: records[1].id,
           attackerName: 'Twinmon', targetName: 'Defender', attackId: attack.id, attackData: attack, isSupportAttack: type === 'support',
           accuracySuccesses, accuracyDice: [6, 6, 6], totalTargetCount: 1 } }]
       const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', mocks).default
-      return handler({ requestId: 'defense', tamerId: 'owner', response: { type: 'dodge-rolled', dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [] } })
+      return handler({ requestId: existing?.id ?? 'defense', tamerId: 'owner', response: { type: 'dodge-rolled', dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [] } })
     },
     legacy: async () => {
       const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', mocks).default
@@ -279,5 +286,39 @@ for (const type of ['support', 'damage']) {
       assert.equal(effect.source, 'taunter-token')
       assert.equal(effect.potency, derived.bit)
     }
+  })
+}
+
+for (const type of ['support', 'damage']) {
+  for (const areaAttack of [false, true]) {
+    test(`${type} Cleanse collects one selection after ${areaAttack ? 'area' : 'single-target'} intercede decisions`, async t => {
+      t.mock.method(Math, 'random', () => 0)
+      const f = fixture(type, areaAttack ? ['Area Attack: Burst'] : [], 'Cleanse')
+      f.participants[1].activeEffects = [{ id: 'fear', name: 'Fear', type: 'debuff', duration: 5, potency: 1, source: 'someone' }]
+      const offered = await f.offer(areaAttack)
+      const offer = offered.pendingRequests.find(request => request.type === 'intercede-offer')
+      const pending = offered.pendingRequests.find(request => request.type === 'cleanse-select')
+      assert.equal(pending.data.ready, false)
+      const result = await f.skip(offer.id)
+      const choice = result.pendingRequests.find(request => request.type === 'cleanse-select')
+      assert.ok(choice)
+      assert.equal(choice.data.ready, true)
+      assert.equal(choice.data.outcomes['defender-token'].leftover, 3)
+      assert.deepEqual(choice.data.outcomes['defender-token'].effectIds, ['fear'])
+      assert.equal(result.participants[1].activeEffects.some(effect => effect.name === 'Cleanse'), false)
+    })
+  }
+
+  test(`${type} Cleanse waits for a player-controlled defender before offering effect selection`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const f = fixture(type, [], 'Cleanse')
+    f.records[1].partnerId = 'owner'
+    f.participants[1].activeEffects = [{ id: 'poison', name: 'Poison', type: 'debuff', duration: 5 }]
+    const offered = await f.offer()
+    const result = await f.skip(offered.pendingRequests.find(request => request.type === 'intercede-offer').id)
+    assert.ok(result.pendingRequests.some(request => request.type === 'dodge-roll'))
+    assert.equal(result.pendingRequests.find(request => request.type === 'cleanse-select').data.ready, false)
+    const defended = await f.respond()
+    assert.equal(defended.pendingRequests.find(request => request.type === 'cleanse-select').data.ready, true)
   })
 }

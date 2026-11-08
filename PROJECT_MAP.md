@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-08l | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Cleanse selection and combat map controls.** Cleanse now gathers per-target defense outcomes and offers one GM/player effect-selection dialog per cast. The shared cap is the highest leftover Accuracy, and each chosen individual effect loses the caster's BIT turns; Selective Targeting offers mutually exclusive Dispel/Purify filters. Normal support/damage, NPC/player defenses, intercede claims and the legacy GM endpoint participate. GM Manage can unlock individual used attacks without refunding actions or other costs. Placed-token dragging is limited to setup/initiative, while radial GM Move remains available. Movement previews show the actual token at 20% opacity and a measured gap to the nearest floor/voxel beneath its centre. All 804 tests and typecheck pass. |
 | 2026-11-08k | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **GM map Manage and source-aware Taunt/Fear controls.** GM radial menus expose the existing participant Manage modal on any turn, including clashes. EffectManager requires a participant source for Taunt/Fear in Quick Apply and custom entry, auto-fills the source's CPU/BIT, stores Taunt potency doubled, and lets GMs repair an existing effect's source. Automatic Fear effects now also use participant IDs and BIT potency, and shared attack Accuracy applies Fear only against its source. |
 | 2026-11-08j | API Schema, Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Taunt and deferred support effects.** Intercede offers now snapshot the stored attack definition alongside roll data; single/area decisions recover missing definitions in older pending offers. This fixes support effects silently disappearing after Skip for player and GM attacks. Taunt is Negative, records the source participant ID and CPU x2 potency, and applies CPU -2 (minimum zero) for an area attack including its source. Swagger uses the same debuff classification. Regression coverage includes real offer/Skip flows, player defenses, NPC attacks, old pending data, other support effects and Selective Targeting. All 773 tests pass. |
 | 2026-11-08i | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **AoE previews use translucent voxel volumes.** `MapCanvas.vue` renders full-height cells with 30% fill opacity and only the combined volume's exposed faces and outer crease edges. Shared faces and flat grid seams are removed, including between hit and blocked regions; their exposed faces retain orange/red colors. Preview replacement, cancellation and unmount dispose geometry/materials. All six AoE shapes keep their existing gameplay cells. Validation: all 748 tests and typecheck pass. |
@@ -234,6 +235,8 @@ No other env vars detected. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` 
 
 ## 3. API Schema
 
+**2026-11-08l Cleanse:** New `POST /api/encounters/[id]/actions/cleanse` accepts `{ requestId, ownerId, mode: 'cleanse' | 'dispel' | 'purify', selections: { participantId, effectId }[] }`. It serializes with intercede/defense decisions, checks the pending request owner, readiness, shared maximum, duplicate/stale effects and mode eligibility, reduces selected durations, removes expired effects, logs the result and consumes the request once. Skipping submits an empty selection. Intercede creation snapshots the caster's BIT and starts one `cleanse-select` request; per-target outcomes make it ready only after defenses/intercedes finish. Divine Protection defers damage-Cleanse eligibility until protection is accepted or declined. Cleanse is instant and never persists as an active status effect.
+
 **2026-11-08k:** Fear now follows Taunt's participant-ID source convention in shared damage/intercede calculation, negative support resolution, submitted player defenses and legacy GM NPC attacks. The legacy endpoint also records Fear's BIT potency. No API shape changes.
 
 **2026-11-08j:** `actions/intercede-offer` enriches queued `attackData` with the attack record's definition before constructing single-target offers, area offers, group state or Dodge requests. Dice pools, calculated stats and order modifiers remain in the payload. `intercedeDecision` and `resolveAreaIntercedeGroup` can recover a missing support definition from the attacker record for already-pending exchanges. No endpoint or request-body contract changes. Taunt source/potency fixes cover shared damage/intercede calculation, negative support NPC resolution, submitted player defenses and the legacy GM NPC endpoint.
@@ -407,6 +410,8 @@ All are POST. Body always includes `encounterId` (path param) + action-specific 
 ---
 
 ## 4. Data Models & Storage
+
+**2026-11-08l:** The existing JSONB pending-request type adds `cleanse-select`; no migration is required. Its data stores caster identity/faction, BIT potency, area/Selective Targeting flags, original target IDs, per-target leftover Accuracy and recipient effect IDs, plus readiness. Interception records the actual interceptor as the recipient while resolving the original target's slot. The cap is the maximum eligible leftover Accuracy, never the sum. A `(participantId, effectId)` pair identifies an individual effect, including same-name effects on separate targets. Only effects with a finite positive duration can be reduced. Existing `usedAttackIds` supports the GM's per-attack Unlock control.
 
 **2026-11-08j:** Taunt's existing `ActiveEffect.source` stores the source participant ID, and its existing `potency` stores that user's CPU x2. It is a `debuff` (`[N]`), including Swagger, so negative-effect stacking, filtering and removal apply. There is no schema migration. Previously queued support attacks missing their effect definition are recovered during decision resolution.
 
@@ -652,6 +657,10 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 
 ## 5. Pages & Components
 
+**2026-11-08l:** New shared `CleanseDialog.vue` and `useCleanseSelection` serve both encounter pages in card/map views. They offer one shared effect budget across all recipients, preview duration reductions, prevent mixed Dispel/Purify selections, wait for all defenses, suppress duplicate submissions and retain the prompt after a failed save. Cleanse quality text now matches the supplied BIT/leftover-Accuracy rule. The GM Manage modal lists used attacks with individual Unlock buttons; it clears only that attack's used ID. `getDraggableParticipantIds` permits both GM/player dragging only in setup/initiative; the live drop guard rejects a drag whose eligibility expired when combat began. Radial GM Move is unchanged.
+
+**Movement previews (2026-11-08l):** `MapCanvas` renders a second copy of the moving character's portrait/initial and stance border at the destination with opacity 0.2. Its position and scale follow the camera and actual footprint. A dashed vertical guide and metre label measure the gap from the feet to the highest floor/voxel surface below the footprint centre; a grounded preview has no gap, and a column without a surface says "No ground below". Normal movement and unrestricted GM aiming share the preview. The existing destination footprint marker also uses opacity 0.2.
+
 **2026-11-08k:** `MapCanvas` offers GM-only Manage in its generic GM radial and alongside NPC/clash actions; its guarded `gm-manage` event passes through `EncounterMap` to the encounter page's existing `selectedParticipantId` modal. It costs no actions and identifies the exact token chosen from an overlap. `EffectManager` accepts named source options with CPU/BIT, requires a valid source for Taunt/Fear Quick Apply and custom entry, and allows existing source repairs through its `update` event. The GM page computes source options from current participants and effect-adjusted Digimon stats, then persists updates through the existing encounter PUT. Taunt's entered CPU is doubled once; Fear stores entered BIT.
 
 **2026-11-08j:** Shared `combatDice` applies the full Taunt penalty when a cast excludes its source, no penalty for a single-target attack against the source, and `max(0, CPU - 2)` for an Area Attack including the source (even when it is the only target). GM/player callers and counterattacks share this policy. The Taunt quality text now describes the penalty rather than forced targeting.
@@ -888,6 +897,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**2026-11-08l:** Pure `utils/cleanse.ts` owns selection limits, candidate filtering and immutable duration reduction. `server/utils/cleanse.ts` initializes casts, records target/interceptor outcomes and prunes empty requests. Intercede creation/decisions/claims, NPC attack resolution, submitted defenses and the legacy endpoint share those helpers. Both pages use `useCleanseSelection -> actions/cleanse` and `CleanseDialog`. `MapCanvas` imports pure `utils/movementGap.ts`, caching sorted floor/voxel heights by column in a map-only computed; each hover uses a binary search rather than scanning or serializing the map. No packages or map-size limits are added.
+
 **2026-11-08k:** GM management adds the `MapCanvas -> EncounterMap -> encounter page` `gm-manage` event and passes source options from the page into `EffectManager`. The page reuses `applyDerivedStatEffects` for source SPEC values. Shared `combatDice` adds the target-dependent Fear penalty. No packages or storage fields are added.
 
 **2026-11-08j:** `intercedeDecision.ts` adds `readCombatRecord` from the existing request-local cache for legacy pending-definition recovery; area resolution already imports it. Deferred support routing consumes server attack metadata rather than relying on a client's roll-only payload. No packages are added.
@@ -1058,6 +1069,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**2026-11-08l:** Cleanse changes normal support/damage exchanges and delayed intercede/defense resolution. Preserve the one-cast maximum, actual intercepted recipient, damage gates, immunity, finite-duration eligibility and once-only selection consumption. It does not imply that every other effect's bespoke mechanics have been audited. GM unlocking preserves action counts, Battery and other cooldowns. Drag restrictions apply to placed tokens; unplaced reinforcement placement and explicit radial GM Move remain available. Movement gap rendering is a visual aid and does not alter movement legality, falling, terrain capabilities or occupancy.
 
 **2026-11-08k:** Manage remains GM-only, available without action/turn/clash restrictions. Source identity affects Taunt/Fear targeting in GM/player ordinary attacks and shared counterattack/clash adapters. Source labels distinguish same-name tokens by participant identity. Source repair updates potency when derived stats are available; other effects keep their existing source-free Quick Apply behavior.
 
@@ -1233,6 +1246,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Cleanse/map controls (2026-11-08l): `cleanse.test.mjs` covers the supplied multi-target example's shared maximum, individual effect counts, BIT reductions/removal, mutually exclusive modes, misses/interception, stale/duplicate/permanent effects, no-op casts, endpoint ownership/replay and failed/double UI submissions. Real attack-route tests cover single/area support/damage offer/Skip flows and player defenses. `gmAttackUnlock.test.mjs` verifies locks become selectable individually and failed unlocks preserve them. Placement tests enforce the combat drag restriction. `movementGhost.test.mjs` checks nearest lower floors/voxel tops, footprint centres, portrait/stance projection, gap geometry and grounded/bottomless cases; existing movement/path/GM-scroll tests still pass. All 804 tests and typecheck pass. Live browser interaction was not exercised.
 
 - GM source management (2026-11-08k): `effectManagement.test.mjs` executes real Quick Apply/custom/source-edit handlers, covering required sources, same-name tokens, raw CPU versus stored Taunt potency, Fear BIT, immutable updates and ordinary effects. `mapRadialActions.test.mjs` verifies GM dispatch, repeat selection and player/removed-token rejection. `combatDice.test.mjs` checks directional Fear penalties; attack-route tests verify automatic Fear identity/potency. All 784 tests and typecheck pass.
 

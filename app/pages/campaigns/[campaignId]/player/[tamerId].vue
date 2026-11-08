@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
@@ -4688,10 +4689,17 @@ async function handleBreakClash(participantId: string, clashId: string) {
     alert(e?.data?.message || 'Failed to break clash')
   }
 }
+const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit: submitCleanse } = useCleanseSelection({
+  encounter: () => activeEncounter.value, ownerId: () => tamer.value?.id,
+  send: (id, body) => $fetch<any>(`/api/encounters/${id}/actions/cleanse` as string, { method: 'POST', body }),
+  apply: result => applyActionResult(result, 'attack'),
+})
 </script>
 
 <template>
   <div class="min-h-screen bg-digimon-dark-900">
+    <CleanseDialog v-if="cleanseRequest" :request="cleanseRequest" :participants="activeEncounter?.participants ?? []"
+      :participant-name="getParticipantName" :busy="cleanseBusy" :error="cleanseError" @confirm="submitCleanse" />
     <ReactionOrdersPanel :choices="reactionOrders.choices.value" :busy="reactionOrders.busy.value" @declare="reactionOrders.declare" @skip="reactionOrders.skip" />
     <SpecialOrderTargetDialog
       v-if="specialOrderTargets.selection.value"

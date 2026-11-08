@@ -1,4 +1,5 @@
 import { autoDevolveParticipant } from '../../../utils/partnerDevolution'
+import { recordCleanseOutcome, pruneEmptyCleanseRequests } from '../../../utils/cleanse'
 import { serverDodgeDefense, recountSubmittedDodge } from '../../../utils/combatDodge'
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../db'
@@ -371,6 +372,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
     )
 
     if (isSupportAttack) {
+      if (attackDef?.effect === 'Cleanse') {
+        recordCleanseOutcome(pendingRequests, request.data.attackData?.cleanseCastId, request.targetParticipantId,
+          targetParticipantForTurn, netSuccesses, hit && !targetQualitiesForDodge.some((quality: any) => quality.id === 'immunity'))
+      }
       // === SUPPORT ATTACK: no damage, only debuff on hit ===
       let appliedEffectName: string | null = null
 
@@ -707,6 +712,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
             timestamp: new Date().toISOString(),
             data: {
               pendingDamage: damageDealt,
+              cleanseCastId: attackDef?.effect === 'Cleanse' ? request.data.attackData?.cleanseCastId : undefined,
+              cleanseLeftover: netSuccesses,
               targetName: request.data.targetName,
               attackerName: request.data.attackerName,
               targetParticipantId: request.targetParticipantId,
@@ -730,6 +737,10 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       }
 
       // Apply damage to target and auto-apply attack effects
+      if (attackDef?.effect === 'Cleanse') {
+        recordCleanseOutcome(pendingRequests, request.data.attackData?.cleanseCastId, request.targetParticipantId,
+          targetParticipant, netSuccesses, hit && damageDealt >= 2 && !targetQualitiesForDodge.some((quality: any) => quality.id === 'immunity'))
+      }
       let appliedEffectName: string | null = null
 
       // Pre-calculate effect potency (async, can't be inside .map())
@@ -1391,6 +1402,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
   if (body.response.type === 'divine-protection-used') {
     let participants = encounter.participants
     const battleLog = encounter.battleLog
+    const cleanseRecipient = participants.find((participant: any) => participant.id === request.targetParticipantId)
+    if (cleanseRecipient) recordCleanseOutcome(pendingRequests, request.data?.cleanseCastId,
+      cleanseRecipient.id, cleanseRecipient, request.data.cleanseLeftover ?? 0, false)
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     const targetParticipantId = request.data?.targetParticipantId
@@ -1461,6 +1475,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
   if (body.response.type === 'divine-protection-declined') {
     let participants = encounter.participants
     const battleLog = encounter.battleLog
+    const cleanseRecipient = participants.find((participant: any) => participant.id === request.targetParticipantId)
+    if (cleanseRecipient) recordCleanseOutcome(pendingRequests, request.data?.cleanseCastId,
+      cleanseRecipient.id, cleanseRecipient, request.data.cleanseLeftover ?? 0, (request.data.pendingDamage ?? 0) >= 2)
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
     const targetParticipantId = request.data?.targetParticipantId
@@ -1499,6 +1516,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
 
   // Update encounter
   // NOTE: Don't remove the request from pendingRequests yet - it will be removed when the GM processes the response via cancelRequest
+
+  if (updateData.pendingRequests) updateData.pendingRequests = pruneEmptyCleanseRequests(updateData.pendingRequests, updateData.participants ?? encounter.participants)
 
   await db.update(encounters).set(updateData).where(eq(encounters.id, encounterId))
 
