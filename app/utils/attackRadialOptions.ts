@@ -84,7 +84,6 @@ export function radialAttackItem(participant: any, attack: any, context: AttackR
   const totalActions = Math.max(actions, configured.bolster || configured.lifesteal ? 2 : 1)
   const inspiration = entries.filter(entry => selected.includes(entry.id)).reduce((sum, entry) => sum + entry.inspiration, 0)
   return { ...item, cost: `${actions} Simple`, children: [
-    { id: `attack-none:${id}`, label: 'None', description: 'Attack without extra options', cost: `${actions} Simple`, attackId: attack.id, attackRiders: [] },
     ...entries.map(entry => ({ id: `attack-rider:${id}:${entry.id}`, label: entry.label, cost: entry.cost,
       active: selected.includes(entry.id), disabled: !selected.includes(entry.id) && !validAttackRiders(participant, attack, context, toggleAttackRider(selected, entry.id)),
       attackId: attack.id, attackRider: entry.id })),

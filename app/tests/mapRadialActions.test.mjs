@@ -63,7 +63,7 @@ function createMapActions(role) {
 }
 
 for (const role of Object.keys(pages)) {
-  test(`${role} radial toggles combine riders, Continue keeps them and None clears them without spending`, () => {
+  test(`${role} radial toggles combine riders and Continue also supports no riders without spending`, () => {
     const page = createMapActions(role)
     page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'bolster-bit-cpu')
     page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'huge-power-2')
@@ -212,12 +212,11 @@ test('GM Manage dispatches the chosen token once and rejects players or removed 
   assert.deepEqual(events, [['gm-manage', 'shared-token-choice']])
 })
 
-test('canvas rider toggles keep the wheel open and Continue/None dispatch only the current tree metadata', () => {
+test('canvas rider toggles keep the wheel open and Continue dispatches the current rider selection including empty', () => {
   const participantId = ref('actor'), events = []
   const option = { id: 'toggle', label: 'Huge Power', attackId: 'attack:colon', attackRider: 'huge-power' }
   const confirm = { id: 'continue', label: 'Continue', attackId: 'attack:colon', attackRiders: ['huge-power'] }
-  const none = { id: 'none', label: 'None', attackId: 'attack:colon', attackRiders: [] }
-  const radialItems = ref([{ id: 'attack', label: 'Attack', children: [{ id: 'attack:colon', label: 'Claw', children: [option, confirm, none] }] }])
+  const radialItems = ref([{ id: 'attack', label: 'Attack', children: [{ id: 'attack:colon', label: 'Claw', children: [option, confirm] }] }])
   const handlers = loadPageFunctions('components/MapCanvas.vue', ['enabledRadialLeaf', 'onRadialSelect'], {
     radialParticipantId: participantId, radialItems, closeRadial: () => { participantId.value = null }, emit: (...args) => events.push(args),
   })
@@ -228,7 +227,8 @@ test('canvas rider toggles keep the wheel open and Continue/None dispatch only t
   assert.equal(participantId.value, null)
   assert.deepEqual(events.pop(), ['attack-selected', 'actor', 'attack:colon', ['huge-power']])
   participantId.value = 'actor'
-  handlers.onRadialSelect(none)
+  radialItems.value[0].children[0].children[1].attackRiders = []
+  handlers.onRadialSelect(confirm)
   assert.deepEqual(events.pop(), ['attack-selected', 'actor', 'attack:colon', []])
   participantId.value = 'actor'
   radialItems.value[0].children[0].disabled = true

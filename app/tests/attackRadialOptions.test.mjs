@@ -12,14 +12,18 @@ const context = () => ({ record: { qualities: [{ id: 'huge-power', ranks: 2 }] }
   campaignLevel: 'standard', hasTamer: true, inspiration: 100, fatefulAvailable: true })
 const rider = (item, id) => item.children.find(child => child.attackRider === id)
 
-test('attacks open an options layer with None, compatible riders and an exact total on Continue', () => {
+test('attack options have compatible riders and Continue handles both ordinary and configured attacks', () => {
   const selected = ['bolster-bit-cpu', 'huge-power-2', 'act-of-inspiration', 'fateful-intervention']
   const item = radialAttackItem(actor(), attack, context(), selected)
   assert.equal(item.id, attack.id)
   assert.equal(item.cost, '1 Simple')
-  assert.deepEqual(item.children[0].attackRiders, [])
-  assert.equal(item.children[0].attackId, attack.id)
-  assert.equal(item.children[0].label, 'None')
+  assert.equal(item.children.some(child => child.label === 'None'), false)
+  const ordinary = radialAttackItem(actor(), attack, context()).children.at(-1)
+  assert.equal(ordinary.label, 'Continue')
+  assert.equal(ordinary.disabled, false)
+  assert.equal(ordinary.attackId, attack.id)
+  assert.deepEqual(ordinary.attackRiders, [])
+  assert.equal(ordinary.cost, '1 Simple')
   assert.equal(rider(item, 'huge-power-2').active, true)
   const confirm = item.children.at(-1)
   assert.deepEqual(confirm.attackRiders, selected)

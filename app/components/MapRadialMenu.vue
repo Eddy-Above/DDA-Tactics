@@ -15,7 +15,7 @@
   >
     <svg :viewBox="`${-extent} ${-extent} ${diameter} ${diameter}`" class="radial-svg" aria-label="Character action wheel">
       <defs>
-        <clipPath v-for="sector in childSectors" :id="sector.clipId" :key="sector.clipId" clipPathUnits="userSpaceOnUse">
+        <clipPath v-for="sector in detailSectors" :id="sector.clipId" :key="sector.clipId" clipPathUnits="userSpaceOnUse">
           <path :d="sector.path" />
         </clipPath>
       </defs>
@@ -54,18 +54,19 @@
         </g>
       </g>
       <g
-        v-for="sector in childSectors"
-        :key="`${branchIds.join('/')}:${sector.item.id}`"
+        v-for="sector in detailSectors"
+        :key="`${sector.tier}:${sector.item.id}`"
         class="radial-sector child-sector"
-        :class="{ active: sector.item.active, disabled: sector.item.disabled }"
+        :class="{ selected: branchIds[sector.tier === 'child' ? 1 : 2] === sector.item.id, active: sector.item.active, disabled: sector.item.disabled }"
         role="menuitem"
         :aria-label="sector.item.label"
         :aria-description="[sector.item.cost, sector.item.description].filter(Boolean).join(' · ')"
         :aria-disabled="!!sector.item.disabled"
         :aria-haspopup="sector.item.children ? 'menu' : undefined"
+        :aria-expanded="sector.item.children ? branchIds[sector.tier === 'child' ? 1 : 2] === sector.item.id : undefined"
         :tabindex="sector.item.disabled ? -1 : 0"
-        data-radial-item="child"
-        @click="activate(sector.item, 'child', $event)"
+        :data-radial-item="sector.tier"
+        @click="activate(sector.item, sector.tier, $event)"
         @mouseenter="hover(sector.item)"
         @mouseleave="hover(null)"
         @focus="hover(sector.item)"
@@ -163,26 +164,32 @@ function refreshTextMetrics() {
   fontRevision.value++
 }
 const branchIds = ref<string[]>([])
+type RadialTier = 'root' | 'child' | 'third'
 const rootPage = ref(0)
 const childPage = ref(0)
+const thirdPage = ref(0)
 const innerRadius = computed(() => Math.max(43, Math.min(70, (props.tokenRadius ?? 28) + 12)))
 const rootRadius = computed(() => innerRadius.value + 68)
-const outerRadius = computed(() => rootRadius.value + 87)
+const childOuterRadius = computed(() => rootRadius.value + 87)
+// Reserve the third ring before opening it so the fan and its parent choices stay put.
+const outerRadius = computed(() => childOuterRadius.value + (props.items.some(item => item.children?.some(child => child.children?.length)) ? 87 : 0))
 const extent = computed(() => outerRadius.value + 5)
 const diameter = computed(() => extent.value * 2)
 const arc = computed(() => fitRadialArc(props.center, props.bounds, outerRadius.value + 2))
 const rootCapacity = computed(() => Math.max(2, Math.min(7, Math.floor(arc.value.sweep / 43))))
 const childCapacity = computed(() => Math.max(2, Math.min(8, Math.floor(arc.value.sweep / 31))))
-const branch = computed(() => {
+const branches = computed(() => {
   let options = props.items
-  let selected: MapRadialItem | undefined
+  const result: { options: MapRadialItem[]; selected: MapRadialItem }[] = []
   for (const id of branchIds.value) {
-    selected = options.find(item => item.id === id)
-    if (!selected?.children || selected.disabled) return null
+    const selected = options.find(item => item.id === id)
+    if (!selected?.children || selected.disabled) break
     options = selected.children
+    result.push({ options, selected })
   }
-  return branchIds.value.length ? { options, selected } : null
+  return result
 })
+const branch = computed(() => branches.value.at(-1))
 const branchLabel = computed(() => branch.value?.selected?.label)
 
 function paged(items: MapRadialItem[], page: number, capacity: number): MapRadialItem[] {
@@ -196,18 +203,19 @@ function paged(items: MapRadialItem[], page: number, capacity: number): MapRadia
   ]
 }
 
-function sectors(items: MapRadialItem[], inner: number, outer: number, start: number, sweep: number, child = false) {
+function sectors(items: MapRadialItem[], inner: number, outer: number, start: number, sweep: number, tier: RadialTier = 'root') {
   void fontRevision.value
   const width = sweep / Math.max(1, items.length)
   return items.map((item, index) => {
     const geometry = { inner, outer, start: start + index * width + 1.1, end: start + (index + 1) * width - 1.1 }
     return {
       item,
-      clipId: `${menuId}-child-${index}`,
+      tier,
+      clipId: `${menuId}-${tier}-${index}`,
       path: radialSectorPath(inner, outer, geometry.start, geometry.end),
       position: radialPoint((inner + outer) / 2, start + (index + 0.5) * width),
-      lines: wrapRadialLabel(item.label, child ? 15 : 11, 3),
-      rows: child ? radialDetailRows(item, geometry, textContext ? measureText : undefined) : null,
+      lines: wrapRadialLabel(item.label, tier === 'root' ? 11 : 15, 3),
+      rows: tier === 'root' ? null : radialDetailRows(item, geometry, textContext ? measureText : undefined),
     }
   })
 }
@@ -224,18 +232,24 @@ const rootSectors = computed(() => {
   const sweep = Math.min(arc.value.sweep, Math.max(70, items.length * 53))
   return sectors(items, innerRadius.value, rootRadius.value, arc.value.start + (arc.value.sweep - sweep) / 2, sweep)
 })
-const childSectors = computed(() => {
-  if (!branch.value) return []
-  const choices = branch.value.options.length ? branch.value.options : [{ id: '__radial-empty', label: 'No choices available', disabled: true }]
-  const items = paged(choices, childPage.value, childCapacity.value)
+function choiceSectors(tier: 'child' | 'third', parentSectors: ReturnType<typeof sectors>) {
+  const depth = tier === 'child' ? 0 : 1
+  const selectedBranch = branches.value[depth]
+  if (!selectedBranch) return []
+  const choices = selectedBranch.options.length ? selectedBranch.options : [{ id: '__radial-empty', label: 'No choices available', disabled: true }]
+  const items = paged(choices, tier === 'child' ? childPage.value : thirdPage.value, childCapacity.value)
   const sweep = Math.min(arc.value.sweep, Math.max(60, items.length * 43))
-  const parent = rootSectors.value.find(sector => sector.item.id === branchIds.value[0])
+  const parent = parentSectors.find(sector => sector.item.id === branchIds.value[depth])
   const angle = parent ? Math.atan2(parent.position.y, parent.position.x) * 180 / Math.PI : arc.value.start + arc.value.sweep / 2
   // Unwrap the angle into the same turn as the fitted fan before clamping it.
   const unwrapped = angle + 360 * Math.round((arc.value.start + arc.value.sweep / 2 - angle) / 360)
   const start = Math.max(arc.value.start, Math.min(arc.value.start + arc.value.sweep - sweep, unwrapped - sweep / 2))
-  return sectors(items, rootRadius.value + 7, outerRadius.value, start, sweep, true)
-})
+  const previousRadius = tier === 'child' ? rootRadius.value : childOuterRadius.value
+  return sectors(items, previousRadius + 7, previousRadius + 87, start, sweep, tier)
+}
+const childSectors = computed(() => choiceSectors('child', rootSectors.value))
+const thirdSectors = computed(() => choiceSectors('third', childSectors.value))
+const detailSectors = computed(() => [...childSectors.value, ...thirdSectors.value])
 
 const iconPaths: Record<string, string> = {
   move: 'M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4M7 8l-4 4 4 4M17 8l4 4-4 4',
@@ -253,26 +267,28 @@ const iconPaths: Record<string, string> = {
 }
 
 function hover(item: MapRadialItem | null) { emit('hover', item?.disabled ? null : item) }
-function focusItems(ring?: 'root' | 'child') {
+function focusItems(ring?: RadialTier) {
   return Array.from(menuRef.value?.querySelectorAll<SVGElement>(`[data-radial-item${ring ? `="${ring}"` : ''}]:not([aria-disabled="true"])`) ?? [])
 }
-async function focusFirst(ring: 'root' | 'child') {
+async function focusFirst(ring: RadialTier) {
   await nextTick()
   focusItems(ring)[0]?.focus()
 }
-function activate(item: MapRadialItem, ring: 'root' | 'child', event?: Event) {
+function activate(item: MapRadialItem, ring: RadialTier, event?: Event) {
   if (item.disabled) return
   if (event?.currentTarget instanceof SVGElement) event.currentTarget.focus()
   if (item.id === '__radial-more') {
-    if (ring === 'root') { rootPage.value++; branchIds.value = [] }
-    else childPage.value++
+    if (ring === 'root') { rootPage.value++; branchIds.value = []; childPage.value = 0; thirdPage.value = 0 }
+    else if (ring === 'child') { childPage.value++; branchIds.value = branchIds.value.slice(0, 1); thirdPage.value = 0 }
+    else thirdPage.value++
     hover(null)
     void focusFirst(ring)
   } else if (item.children) {
-    branchIds.value = ring === 'root' ? [item.id] : [...branchIds.value, item.id]
-    childPage.value = 0
+    branchIds.value = [...branchIds.value.slice(0, ring === 'root' ? 0 : ring === 'child' ? 1 : 2), item.id]
+    if (ring === 'root') childPage.value = 0
+    thirdPage.value = 0
     hover(null)
-    void focusFirst('child')
+    void focusFirst(ring === 'root' ? 'child' : 'third')
   } else {
     hover(null)
     emit('select', item)
@@ -282,21 +298,30 @@ function back() {
   hover(null)
   if (!branchIds.value.length) { emit('close'); return }
   branchIds.value = branchIds.value.slice(0, -1)
-  childPage.value = 0
+  if (!branchIds.value.length) childPage.value = 0
+  thirdPage.value = 0
   void focusFirst(branchIds.value.length ? 'child' : 'root')
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' || event.key === 'Backspace') { event.preventDefault(); back(); return }
   const target = event.target as HTMLElement
-  const ring = target.dataset?.radialItem === 'child' ? 'child' : 'root'
-  const currentSectors = ring === 'child' ? childSectors.value : rootSectors.value
+  const ring: RadialTier = target.dataset?.radialItem === 'third' ? 'third' : target.dataset?.radialItem === 'child' ? 'child' : 'root'
+  const currentSectors = ring === 'third' ? thirdSectors.value : ring === 'child' ? childSectors.value : rootSectors.value
   if (event.key === 'Enter' || event.key === ' ') {
     const current = focusItems(ring).indexOf(target as unknown as SVGElement)
     const item = currentSectors.filter(sector => !sector.item.disabled)[current]?.item
     if (item) { event.preventDefault(); activate(item, ring) }
     return
   }
-  if (event.key === 'ArrowLeft' && ring === 'child') { event.preventDefault(); back(); return }
+  if (event.key === 'ArrowLeft' && ring !== 'root') {
+    event.preventDefault()
+    branchIds.value = branchIds.value.slice(0, ring === 'third' ? 1 : 0)
+    if (ring === 'child') childPage.value = 0
+    thirdPage.value = 0
+    hover(null)
+    void focusFirst(ring === 'third' ? 'child' : 'root')
+    return
+  }
   if (event.key === 'ArrowRight') {
     const sector = currentSectors.find(sector => sector.item.label === target.getAttribute('aria-label'))
     if (sector?.item.children) { event.preventDefault(); activate(sector.item, ring); return }
@@ -312,7 +337,11 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(() => props.items, () => {
-  if (branchIds.value.length && !branch.value) { branchIds.value = []; childPage.value = 0 }
+  if (branchIds.value.length > branches.value.length) {
+    branchIds.value = branchIds.value.slice(0, branches.value.length)
+    if (!branchIds.value.length) childPage.value = 0
+    thirdPage.value = 0
+  }
 })
 onMounted(() => {
   refreshTextMetrics()
