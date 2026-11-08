@@ -1,10 +1,11 @@
 import { eq, inArray } from 'drizzle-orm'
-import { db, digimon, maps } from '../db'
+import { db, digimon, tamers, maps, type Digimon, type Tamer } from '../db'
 import type { GameMap } from '../../types'
 import { calculateDigimonDerivedStats } from '../../types'
 import { detectCapabilities, type MovementCapabilities, type FallerProfile } from '../../utils/movementRules'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
 import { applyDerivedStatEffects } from '../../data/attackConstants'
+import { readCombatRecords } from './combatRecordCache'
 
 // Loads a full GameMap (all tile/structure layers) from the maps table for the given id, or null.
 // Centralises the map-record construction that was previously copied across every map-aware handler,
@@ -26,17 +27,18 @@ export async function loadEncounterMap(mapId: string | null | undefined): Promis
   } as unknown as GameMap
 }
 
-// Bulk-fetches the digimon rows backing the given participants, keyed by entityId. Replaces the
-// repeated "unique entityIds → inArray → Map" boilerplate.
+// Bulk-fetches only records absent from the current action's cache, keyed by entityId.
 export async function loadParticipantDigimon(
   participants: Array<{ type: string; entityId: string }>,
-): Promise<Map<string, any>> {
-  const entityIds = [...new Set(
-    participants.filter(p => p.type === 'digimon').map(p => p.entityId),
-  )]
-  if (entityIds.length === 0) return new Map()
-  const rows = await db.select().from(digimon).where(inArray(digimon.id, entityIds))
-  return new Map(rows.map((d: any) => [d.id, d]))
+): Promise<Map<string, Digimon>> {
+  const entityIds = participants.filter(p => p.type === 'digimon').map(p => p.entityId)
+  return readCombatRecords('digimon', entityIds,
+    ids => db.select().from(digimon).where(inArray(digimon.id, ids)))
+}
+
+export async function loadTamersByIds(ids: readonly string[]): Promise<Map<string, Tamer>> {
+  return readCombatRecords('tamer', ids,
+    missingIds => db.select().from(tamers).where(inArray(tamers.id, missingIds)))
 }
 
 export interface MovementProfile {

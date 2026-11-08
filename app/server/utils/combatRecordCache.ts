@@ -31,6 +31,34 @@ export function readCombatRecord<T>(kind: RecordKind, id: string, query: () => P
   return scope ? remember(scope[kind], id, load) : load()
 }
 
+/** Bulk and single reads share per-ID promises, including absent records, within one action. */
+export async function readCombatRecords<T extends { id: string }>(
+  kind: RecordKind,
+  ids: readonly string[],
+  queryMissing: (ids: string[]) => PromiseLike<T[]>,
+): Promise<Map<string, T>> {
+  const uniqueIds = [...new Set(ids)]
+  if (uniqueIds.length === 0) return new Map()
+
+  const cache = scopes.getStore()?.[kind]
+  const missingIds = uniqueIds.filter(id => !cache?.has(id))
+  // Defer the query until all missing IDs have pending entries. An overlapping bulk/single
+  // read can then join the same work before any database request has completed.
+  const batch = missingIds.length > 0
+    ? Promise.resolve().then(() => queryMissing(missingIds))
+      .then(rows => new Map(rows.map(row => [row.id, row])))
+    : undefined
+  const records = await Promise.all(uniqueIds.map(id => {
+    const load = () => batch!.then(rows => rows.get(id))
+    return cache ? remember<T | undefined>(cache, id, load) : load()
+  }))
+  const result = new Map<string, T>()
+  records.forEach((record, index) => {
+    if (record !== undefined) result.set(uniqueIds[index]!, record)
+  })
+  return result
+}
+
 export function readCombatDerivedStats<T>(id: string, compute: () => Promise<T>): Promise<T> {
   const scope = scopes.getStore()
   return scope ? remember(scope.derived, id, compute) : compute()

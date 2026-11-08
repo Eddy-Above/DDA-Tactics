@@ -10,10 +10,12 @@ import { applyTurnEndEffects, applyRoundEndEffects, loadStationaryBurnPositions,
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../utils/enemyKnockouts'
 import { loadCampaignCombatContext } from '../../utils/combatContext'
 import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
+import { readCombatRecord, withCombatRecords } from '../../utils/combatRecordCache'
+import { loadParticipantDigimon, loadTamersByIds } from '../../utils/combatSpatial'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => withCombatRecords(async () => {
   const id = getRouterParam(event, 'id')
   const body = await readBody<UpdateEncounterBody>(event)
 
@@ -39,6 +41,19 @@ export default defineEventHandler(async (event) => {
       statusCode: 404,
       message: `Encounter with ID ${id} not found`,
     })
+  }
+
+  const isCombatStart = existing.phase !== 'combat' && body.phase === 'combat'
+  if (body.participants || isCombatStart) {
+    // Later checks can restore an earlier form. Load both rosters and their form histories once
+    // so gravity, round triggers and aura refreshes share the same request-local records.
+    const roster = [...((existing.participants as any[]) || []), ...((body.participants as any[]) || [])]
+    const forms = roster.flatMap(p => p.type === 'digimon' && Array.isArray(p.woundsHistory)
+      ? p.woundsHistory.flatMap((state: any) => typeof state?.entityId === 'string' && state.entityId
+        ? [{ type: 'digimon', entityId: state.entityId }] : [])
+      : [])
+    const records = await loadParticipantDigimon([...roster, ...forms])
+    await loadTamersByIds([...records.values()].flatMap(record => record.partnerId ? [record.partnerId] : []))
   }
 
   // Intercede opt-outs are written only by the intercede-optouts/intercede-skip endpoints (under a
@@ -101,7 +116,8 @@ export default defineEventHandler(async (event) => {
       const active = existingById.get(existing.turnOrder?.[existing.currentTurnIndex ?? 0])
       let canMove = !!mover && !!stored && !stored.inReserve && stored.id === active?.id
       if (!canMove && mover?.type === 'digimon' && !stored?.inReserve && active?.type === 'tamer') {
-        const [record] = await db.select().from(digimon).where(eq(digimon.id, mover.entityId))
+        const record = await readCombatRecord('digimon', mover.entityId,
+          () => db.select().from(digimon).where(eq(digimon.id, mover.entityId)))
         canMove = record?.partnerId === active.entityId
       }
       if (!canMove || !stored || (stored.actionsRemaining?.simple ?? 0) - (mover?.actionsRemaining?.simple ?? 0) !== 1) {
@@ -184,7 +200,8 @@ export default defineEventHandler(async (event) => {
             updatedAt: new Date(),
           }).where(eq(evolutionLines.id, p.evolutionLineId))
 
-          const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, previousState.entityId))
+          const newDigimon = await readCombatRecord('digimon', previousState.entityId,
+            () => db.select().from(digimon).where(eq(digimon.id, previousState.entityId)))
           const devolvedQualities = newDigimon?.qualities || []
           const devolvedHasCombatMonster = (devolvedQualities as any[]).some((q: any) => q.id === 'combat-monster')
           p.combatMonsterBonus = devolvedHasCombatMonster
@@ -228,7 +245,6 @@ export default defineEventHandler(async (event) => {
   // Encounter-start triggers: [Challenger] grants temp wounds (via Shield) to eligible partner
   // digimon the moment the encounter's phase transitions into 'combat' for the first time, and
   // again to any partner digimon added as reinforcements after combat has already begun.
-  const isCombatStart = existing.phase !== 'combat' && body.phase === 'combat'
   const isReinforcement = !isCombatStart && existing.phase === 'combat' && !!body.participants
 
   if (isCombatStart || isReinforcement) {
@@ -290,4 +306,4 @@ export default defineEventHandler(async (event) => {
     participantPositions: room.participantPositions,
     destructibleStates: room.destructibleStates,
   }
-})
+}))

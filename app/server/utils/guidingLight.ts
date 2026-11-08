@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, tamers, type Digimon, type Tamer } from '../db'
+import { db, encounters } from '../db'
 import type { Vec3 } from '../../types'
 import { applyEffectToParticipant } from './applyEffect'
 import { getUnlockedSpecialOrders } from '../../utils/specialOrders'
@@ -9,6 +9,7 @@ import { getFootprintCells, getFootprintDimensions } from '../../utils/movementR
 import { getRoomPositions, broadcast } from './encounterRoom'
 import { buildEncounterPayload } from './encounterPayload'
 import { loadEncounterCombatContext } from './combatContext'
+import { loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 
 const AURA_NAME = 'Guiding Light'
 const FOCUS_NAME = 'Guiding Light (Focus)'
@@ -40,22 +41,13 @@ export async function applyGuidingLightAuras(
 ): Promise<{ participants: any[]; changed: boolean }> {
   const digimonParticipants = participants.filter((p) => p.type === 'digimon' && !p.inReserve && !p.isMinion && !p.summonerId && !p.summonedByParticipantId)
 
-  const digimonRows = new Map<string, Digimon>()
-  for (const p of digimonParticipants) {
-    if (digimonRows.has(p.entityId)) continue
-    const [d] = await db.select().from(digimon).where(eq(digimon.id, p.entityId))
-    if (d) digimonRows.set(p.entityId, d)
-  }
-
-  const tamerRows = new Map<string, Tamer>()
-  const getTamer = async (partnerId: string): Promise<Tamer | undefined> => {
-    let t = tamerRows.get(partnerId)
-    if (!t) {
-      const [row] = await db.select().from(tamers).where(eq(tamers.id, partnerId))
-      if (row) { tamerRows.set(partnerId, row); t = row }
-    }
-    return t
-  }
+  const digimonRows = await loadParticipantDigimon(digimonParticipants)
+  const partnerIds = digimonParticipants.flatMap(p => {
+    if (!positions[p.id]) return []
+    const partnerId = digimonRows.get(p.entityId)?.partnerId
+    return partnerId ? [partnerId] : []
+  })
+  const tamerRows = await loadTamersByIds(partnerIds)
 
   const footprints = new Map<string, Vec3[]>()
   for (const p of digimonParticipants) {
@@ -72,7 +64,7 @@ export async function applyGuidingLightAuras(
     if (!ownerPos) continue
     const d = digimonRows.get(p.entityId)
     if (!d?.partnerId) continue
-    const tamer = await getTamer(d.partnerId)
+    const tamer = tamerRows.get(d.partnerId)
     if (!tamer) continue
     const unlocked = getUnlockedSpecialOrders(tamer.attributes as any, tamer.xpBonuses as any, campaignLevel)
     if (!unlocked.some((o) => o.name === AURA_NAME)) continue

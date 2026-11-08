@@ -6,9 +6,9 @@ const cache = loadTypeScript('server/utils/combatRecordCache.ts')
 const types = loadTypeScript('types/index.ts')
 const unexpected = () => { throw new Error('unexpected combat side effect') }
 function deferred() {
-  let resolve
-  const promise = new Promise(done => { resolve = done })
-  return { promise, resolve }
+  let resolve, reject
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
 test('record and derived reads share pending work only inside an action, including nested resolution', async () => {
@@ -75,6 +75,152 @@ test('a failed read can be retried within the same action', async () => {
     await assert.rejects(cache.readCombatRecord('digimon', 'mon', async () => { throw new Error('offline') }), /offline/)
     assert.equal((await cache.readCombatRecord('digimon', 'mon', async () => [{ id: 'mon' }])).id, 'mon')
   })
+})
+
+test('bulk reads deduplicate IDs, preserve requested order, and cache missing records beside single reads', async () => {
+  const first = { id: 'first', value: 1 }, second = { id: 'second', value: 2 }
+  const queries = []
+  await cache.withCombatRecords(async () => {
+    const rows = await cache.readCombatRecords('digimon', Object.freeze(['first', 'missing', 'second', 'first']), async ids => {
+      queries.push(ids)
+      return [second, { id: 'unrequested' }, first]
+    })
+    assert.deepEqual(queries, [['first', 'missing', 'second']])
+    assert.deepEqual([...rows.keys()], ['first', 'second'])
+    assert.equal(rows.get('first'), first)
+    assert.equal(await cache.readCombatRecord('digimon', 'first', unexpected), first)
+    assert.equal(await cache.readCombatRecord('digimon', 'missing', unexpected), undefined)
+    assert.deepEqual([...await cache.readCombatRecords('digimon', ['missing', 'second'], unexpected)], [['second', second]])
+    const tamers = await cache.readCombatRecords('tamer', ['first'], async () => [{ id: 'first', value: 'Tamer' }])
+    assert.equal(tamers.get('first').value, 'Tamer', 'entity kinds keep separate caches')
+  })
+})
+
+test('a pending bulk query publishes its IDs before another single or bulk reader starts', async () => {
+  const pending = deferred()
+  let queries = 0
+  await cache.withCombatRecords(async () => {
+    const batch = cache.readCombatRecords('digimon', ['a', 'b'], () => { queries++; return pending.promise })
+    const single = cache.readCombatRecord('digimon', 'a', unexpected)
+    const overlapping = cache.readCombatRecords('digimon', ['b', 'a'], unexpected)
+    await Promise.resolve()
+    assert.equal(queries, 1)
+    const record = { id: 'a' }
+    pending.resolve([record, { id: 'b' }])
+    const [rows, row, shared] = await Promise.all([batch, single, overlapping])
+    assert.equal(row, record)
+    assert.equal(rows.get('a'), shared.get('a'))
+    assert.equal(rows.get('b'), shared.get('b'))
+  })
+})
+
+test('overlapping bulk readers query only uncached IDs and join existing pending single reads', async () => {
+  const pending = deferred()
+  const queries = []
+  await cache.withCombatRecords(async () => {
+    const single = cache.readCombatRecord('digimon', 'a', () => pending.promise)
+    const query = async ids => { queries.push(ids); return ids.map(id => ({ id })) }
+    const first = cache.readCombatRecords('digimon', ['a', 'b'], query)
+    const second = cache.readCombatRecords('digimon', ['b', 'c'], query)
+    pending.resolve([{ id: 'a' }])
+    const [, left, right] = await Promise.all([single, first, second])
+    assert.deepEqual(queries, [['b'], ['c']])
+    assert.equal(left.get('b'), right.get('b'))
+    assert.deepEqual([...left.keys()], ['a', 'b'])
+    assert.deepEqual([...right.keys()], ['b', 'c'])
+    const introduced = await cache.readCombatRecords('digimon', ['a', 'b', 'new-form'], query)
+    assert.deepEqual(queries.at(-1), ['new-form'])
+    assert.equal(introduced.get('a'), left.get('a'))
+  })
+})
+
+test('bulk reads skip empty queries and never retain records beyond their action', async () => {
+  let queries = 0
+  const query = async ids => { queries++; return ids.map(id => ({ id, value: queries })) }
+  assert.deepEqual(await cache.readCombatRecords('digimon', [], unexpected), new Map())
+  await cache.withCombatRecords(async () => {
+    assert.deepEqual(await cache.readCombatRecords('digimon', [], unexpected), new Map())
+    assert.equal((await cache.readCombatRecords('digimon', ['a'], query)).get('a').value, 1)
+  })
+  await cache.withCombatRecords(async () => {
+    assert.equal((await cache.readCombatRecords('digimon', ['a'], query)).get('a').value, 2)
+  })
+  assert.equal((await cache.readCombatRecords('digimon', ['a'], query)).get('a').value, 3)
+  assert.equal((await cache.readCombatRecords('digimon', ['a'], query)).get('a').value, 4)
+})
+
+test('a failed bulk query evicts its missing-ID promises so all failed records can be retried', async () => {
+  await cache.withCombatRecords(async () => {
+    cache.primeCombatRecords('digimon', [{ id: 'existing' }])
+    await assert.rejects(cache.readCombatRecords('digimon', ['existing', 'a', 'b'], async () => {
+      throw new Error('database offline')
+    }), /database offline/)
+    let requested
+    const rows = await cache.readCombatRecords('digimon', ['existing', 'a', 'b'], async ids => {
+      requested = ids
+      return ids.map(id => ({ id }))
+    })
+    assert.deepEqual(requested, ['a', 'b'])
+    assert.deepEqual([...rows.keys()], ['existing', 'a', 'b'])
+  })
+})
+
+test('invalidation during a pending batch cannot overwrite a fresh entity or its derived stats', async () => {
+  await cache.withCombatRecords(async () => {
+    const pending = deferred()
+    const batch = cache.readCombatRecords('digimon', ['a', 'b'], () => pending.promise)
+    await cache.readCombatDerivedStats('a', async () => ({ cpu: 1 }))
+    cache.invalidateCombatRecord('digimon', 'a')
+    const fresh = await cache.readCombatRecords('digimon', ['a'], async () => [{ id: 'a', value: 2 }])
+    assert.equal((await cache.readCombatDerivedStats('a', async () => ({ cpu: 2 }))).cpu, 2)
+    pending.resolve([{ id: 'a', value: 1 }, { id: 'b', value: 1 }])
+    assert.equal((await batch).get('a').value, 1, 'the old reader may finish with its original record')
+    const current = await cache.readCombatRecords('digimon', ['a', 'b'], unexpected)
+    assert.equal(current.get('a'), fresh.get('a'))
+    assert.equal(current.get('b').value, 1)
+    assert.equal((await cache.readCombatDerivedStats('a', unexpected)).cpu, 2)
+  })
+})
+
+test('a late failed batch cannot evict a record loaded after invalidation', async () => {
+  await cache.withCombatRecords(async () => {
+    const pending = deferred()
+    const batch = cache.readCombatRecords('digimon', ['a', 'b'], () => pending.promise)
+    const failed = assert.rejects(batch, /old batch failed/)
+    cache.invalidateCombatRecord('digimon', 'a')
+    const fresh = await cache.readCombatRecord('digimon', 'a', async () => [{ id: 'a', value: 2 }])
+    pending.reject(new Error('old batch failed'))
+    await failed
+    assert.equal(await cache.readCombatRecord('digimon', 'a', unexpected), fresh)
+    const rows = await cache.readCombatRecords('digimon', ['a', 'b'], async ids => {
+      assert.deepEqual(ids, ['b'])
+      return [{ id: 'b' }]
+    })
+    assert.equal(rows.get('a'), fresh)
+  })
+})
+
+test('overlapping actions keep their bulk records and missing-record results isolated', async () => {
+  const ready = deferred(), release = deferred()
+  const results = await Promise.all([
+    cache.withCombatRecords(async () => {
+      await cache.readCombatRecords('digimon', ['a', 'missing'], async () => [{ id: 'a', value: 1 }])
+      ready.resolve()
+      await release.promise
+      assert.equal(await cache.readCombatRecord('digimon', 'missing', unexpected), undefined)
+      return (await cache.readCombatRecords('digimon', ['a'], unexpected)).get('a').value
+    }),
+    cache.withCombatRecords(async () => {
+      await ready.promise
+      const rows = await cache.readCombatRecords('digimon', ['a', 'missing'], async () => [
+        { id: 'a', value: 2 }, { id: 'missing', value: 3 },
+      ])
+      release.resolve()
+      assert.equal(rows.get('missing').value, 3)
+      return rows.get('a').value
+    }),
+  ])
+  assert.deepEqual(results, [1, 2])
 })
 
 function castHarness(caching = true) {

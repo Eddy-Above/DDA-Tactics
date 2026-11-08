@@ -43,6 +43,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   const db = {
     select: () => ({ from: table => ({ where: async filter => {
       reads.push({ table: table.name, id: filter.value })
+      if (Array.isArray(filter.value)) return filter.value.flatMap(id => rows[table.name][id] ? [structuredClone(rows[table.name][id])] : [])
       const row = rows[table.name][filter.value]
       return row ? [structuredClone(row)] : []
     } }) }),
@@ -65,10 +66,14 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   const combatContext = loadTypeScriptWithMocks('server/utils/combatContext.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
+  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+    'drizzle-orm': sql, '../db': dbModule,
+  })
   const mocks = {
     'drizzle-orm': sql,
     '../../db': dbModule,
     '../../utils/combatContext': combatContext,
+    '../../utils/combatSpatial': spatial,
     '../../utils/encounterRoom': { getRoomSnapshot: async () => structuredClone(room) },
     '../../utils/endOfTurnGravity': {
       applyEndOfTurnGravity: async (_id, _map, current) => ({ participants: current, logEntries: [] }),
