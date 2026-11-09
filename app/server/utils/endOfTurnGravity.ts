@@ -3,7 +3,7 @@ import { getRoomSnapshot, getDestroyedStructureIds, broadcastPositionPatch } fro
 import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
-import { applyGuidingLightAuras } from './guidingLight'
+import { refreshGuidingLightForParticipants } from './guidingLight'
 import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
@@ -86,11 +86,10 @@ export async function applyEndOfTurnGravity(
 
   if (Object.keys(patch).length > 0) {
     await broadcastPositionPatch(encounterId, patch)
-    // [Guiding Light]: a fall can move a unit across an aura's burst radius. Fold the recompute
+    // A fall can cross an aura's burst radius or change the unit's Naturewalk environment. Fold the recompute
     // into the returned `participants` — the caller still has to persist it, so a standalone
     // recompute here would race that later write.
-    const auraResult = await applyGuidingLightAuras(participants, { ...positions, ...patch }, campaignLevel ?? 'standard', houseRules)
-    if (auraResult.changed) participants = auraResult.participants
+    participants = await refreshGuidingLightForParticipants(encounterId, participants, { ...positions, ...patch })
   }
 
   return { participants, logEntries }

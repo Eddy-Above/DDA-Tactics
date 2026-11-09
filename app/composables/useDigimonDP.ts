@@ -44,11 +44,14 @@ export function useDigimonDP(form: Ref<DigimonFormData> | DigimonFormData, eddyS
 
   // DP used on qualities
   const dpUsedOnQualities = computed(() => {
+    const seenIds = new Set<string>()
     return formValue.value.qualities.reduce((total, q) => {
       const template = QUALITY_DATABASE.find((t) => t.id === q.id)
       const baseCost = (q.dpCost || 0) as number
       if (!template) return total + baseCost * (q.ranks || 1)
-      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, formValue.value.stage, true, rulesValue.value)
+      const firstOfType = !seenIds.has(q.id)
+      seenIds.add(q.id)
+      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, formValue.value.stage, firstOfType, rulesValue.value)
       return total + cost
     }, 0)
   })

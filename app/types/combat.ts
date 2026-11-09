@@ -1,4 +1,4 @@
-import type { Stance, Vec3 } from './index'
+import type { Stance, Vec3, ElementType } from './index'
 
 export interface ActiveEffect {
   id: string
@@ -51,6 +51,8 @@ export interface CombatParticipant {
   currentWounds: number
   maxWounds: number
   currentTempWounds?: number
+  naturewalkActiveElements?: ElementType[]
+  naturewalkWaterGranted?: boolean
   usedAttackIds?: string[]
   dodgePenalty?: number
   evolutionLineId?: string

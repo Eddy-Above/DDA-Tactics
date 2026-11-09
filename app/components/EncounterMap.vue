@@ -170,6 +170,7 @@ import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composabl
 import { useMapEditor } from '~/composables/useMapEditor'
 import { useMapAutosave } from '~/composables/useMapAutosave'
 import { getMapEditChange, getMapGeometryRevision } from '~/utils/mapEdits'
+import { getNaturewalkBonuses, getNaturewalkEnvironmentSettings, resolveNaturewalkEnvironment } from '~/utils/naturewalk'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
 import { getAllStatEffectModifier, applyDerivedStatEffects } from '~/data/attackConstants'
@@ -691,13 +692,16 @@ function npcMoveCaps(participantId: string) {
   } else {
     const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
     const modifier = getAllStatEffectModifier(p.activeEffects ?? [])
-    budget = applyStanceToMovement((dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus)
-    basicMovement = applyStanceToMovement((dInfo?.baseMovement ?? dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus)
+    const environment = map.value ? resolveNaturewalkEnvironment(map.value, pos, getNaturewalkEnvironmentSettings(props.encounter.hazards)) : p.naturewalkActiveElements
+    const naturewalkMovement = getNaturewalkBonuses(dInfo?.qualities, environment).movementBonus
+    budget = applyStanceToMovement((dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus) + naturewalkMovement
+    basicMovement = applyStanceToMovement((dInfo?.baseMovement ?? dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus) + naturewalkMovement
     ram = Math.max(0, (dInfo?.ram ?? 0) + modifier)
     cpu = Math.max(0, (dInfo?.cpu ?? 0) + modifier)
     qualities = dInfo?.qualities ?? []
   }
   const caps = movement.detectCapabilities(qualities, budget, ram, cpu, p.type === 'tamer' ? 0 : undefined, basicMovement)
+  caps.naturewalkEnvironment = getNaturewalkEnvironmentSettings(props.encounter.hazards)
   // Tamers are always player-side; digimon carry isEnemy from their DB record
   const moverIsEnemy: boolean = p.type === 'digimon' && ((p as any).isEnemy === true)
   const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean; giganticDimensions?: { width: number; height: number; depth: number } | null }>()
@@ -954,12 +958,13 @@ watch(() => JSON.stringify([
   (props.encounter.destructibleStates ?? [])
     .filter(s => s.currentWounds <= 0).map(s => s.structureId).sort(),
   props.encounter.participants.map(p => [
-    p.id, p.type, p.entityId, p.currentStance, p.activeEffects, p.isEnemy,
+    p.id, p.type, p.entityId, p.currentStance, p.activeEffects, p.isEnemy, p.naturewalkActiveElements,
   ]).sort(([a], [b]) => String(a).localeCompare(String(b))),
   Object.entries(props.digimonMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, d]) => [
     id, d.size, d.giganticDimensions, d.stage, d.baseStats, d.movement, d.baseMovement, d.ram, d.cpu, d.qualities, d.isEnemy,
   ]),
   Object.entries(props.tamerMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, t]) => [id, t.speed, t.body]),
+  props.encounter.hazards,
 ]), () => {
   lastHoveredMovementCell = null
   movement.invalidateSearch()

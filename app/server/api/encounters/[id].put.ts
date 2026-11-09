@@ -14,6 +14,9 @@ import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
 import { readCombatRecord, withCombatRecords } from '../../utils/combatRecordCache'
 import { loadParticipantDigimon, loadTamersByIds } from '../../utils/combatSpatial'
 import { applyLagInitiative } from '../../../utils/lagInitiative'
+import { applyNaturewalkEnvironment } from '../../utils/naturewalk'
+import { getNaturewalkEnvironmentSettings } from '../../../utils/naturewalk'
+import { requireCampaignDm } from '../../utils/campaignDm'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
@@ -46,6 +49,9 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
   }
 
   const isCombatStart = existing.phase !== 'combat' && body.phase === 'combat'
+  if (body.hazards && JSON.stringify(getNaturewalkEnvironmentSettings(body.hazards)) !== JSON.stringify(getNaturewalkEnvironmentSettings(existing.hazards))) {
+    if (existing.campaignId) await requireCampaignDm(event, existing.campaignId)
+  }
   if (body.participants || isCombatStart) {
     // Later checks can restore an earlier form. Load both rosters and their form histories once
     // so gravity, round triggers and aura refreshes share the same request-local records.
@@ -101,7 +107,7 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
         // These are server-owned declarations/passives. A stale turn-save cannot restore a spent order.
         next = { ...next }
         for (const field of ['lastMovedTurnKey', 'strikeFastReady', 'strikeFastTurnKey', 'finishingTouchReady', 'decimationReady',
-          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus', 'lastShieldRound', 'lagBaseOrder', 'lagOrderRound']) {
+          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus', 'lastShieldRound', 'lagBaseOrder', 'lagOrderRound', 'naturewalkActiveElements', 'naturewalkWaterGranted']) {
           if (Object.prototype.hasOwnProperty.call(stored, field)) next[field] = stored[field]
           else delete next[field]
         }
@@ -278,6 +284,12 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
   // auto-devolve a knocked-out source without moving it. Recompute from the final roster
   // after gravity, knockouts and encounter-start effects, then persist everything together.
   const resultingPhase = updateData.phase ?? existing.phase
+  if (isCombatStart || body.participants || body.hazards) {
+    const naturewalk = await applyNaturewalkEnvironment({ ...existing, ...updateData },
+      (updateData.participants ?? existing.participants) as any[], undefined, { grantWater: true, resetWater: isCombatStart,
+        records: await loadParticipantDigimon((updateData.participants ?? existing.participants) as any[]) })
+    if (naturewalk.changed) updateData.participants = naturewalk.participants
+  }
   if (resultingPhase === 'ended') {
     updateData.participants = ((updateData.participants ?? existing.participants) as any[]).map(participant => ({
       ...participant, currentTempWounds: 0, activeEffects: (participant.activeEffects ?? []).filter((effect: any) => effect.name !== 'Shield'),

@@ -8,6 +8,7 @@ import { applyStanceToMovement } from '../../utils/stanceModifiers'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
 import { applyDerivedStatEffects } from '../../data/attackConstants'
 import { readCombatRecords } from './combatRecordCache'
+import { getNaturewalkBonuses, type NaturewalkEnvironmentSettings } from '../../utils/naturewalk'
 
 // Loads a full GameMap (all tile/structure layers) from the maps table for the given id, or null.
 // Centralises the map-record construction that was previously copied across every map-aware handler,
@@ -88,9 +89,10 @@ function getMobilityStats(digRec: any) {
 // Derives a participant's movement profile (capabilities + move budget + Body stat) for spatial
 // pathing. Digimon use derived stats + qualities; tamers use Agility+Survival for budget and Body.
 export function getMovementProfile(
-  participant: { type: string; entityId: string; activeEffects?: any[]; currentStance?: string },
+  participant: { type: string; entityId: string; activeEffects?: any[]; currentStance?: string; naturewalkActiveElements?: string[] },
   digimonById: Map<string, any>,
   tamerById: Map<string, any>,
+  naturewalkEnvironment?: NaturewalkEnvironmentSettings,
 ): MovementProfile {
   if (participant.type === 'digimon') {
     const digRec = digimonById.get(participant.entityId)
@@ -107,16 +109,18 @@ export function getMovementProfile(
       movement,
     }, participant.activeEffects ?? [])
     deriv.movement = applyStanceToMovement(deriv.movement, stance, baseStats.stageBonus)
+    const naturewalkMovement = getNaturewalkBonuses(quals, participant.naturewalkActiveElements).movementBonus
+    deriv.movement += naturewalkMovement
     const effectiveBasicMovement = applyStanceToMovement(
       applyDerivedStatEffects({ movement: basicMovement }, participant.activeEffects ?? []).movement,
       stance,
       baseStats.stageBonus,
-    )
+    ) + naturewalkMovement
     const ram = Math.max(0, deriv.ram), cpu = Math.max(0, deriv.cpu)
     const swimSpeed = calculateSwimSpeed(quals, deriv.movement, ram, effectiveBasicMovement)
     return {
       budget: Math.max(0, deriv.movement),
-      caps: detectCapabilities(quals, deriv.movement, ram, cpu, swimSpeed, effectiveBasicMovement),
+      caps: { ...detectCapabilities(quals, deriv.movement, ram, cpu, swimSpeed, effectiveBasicMovement), naturewalkEnvironment },
       bodyStat: applyDerivedStatEffects(baseStats, participant.activeEffects ?? []).body,
     }
   }

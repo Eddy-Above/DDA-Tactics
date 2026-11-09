@@ -4,6 +4,7 @@ import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
 import {
   type FootprintDims,
   getReachableCells,
+  getMovementReachability,
   detectCapabilitiesFromQualities,
   isValidLandingPosition,
   isPositionInAir,
@@ -27,8 +28,9 @@ import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
 import { getRoomPositions, getDestroyedStructureIds, broadcastPositionPatch } from '~/server/utils/encounterRoom'
-import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
+import { refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
+import { getNaturewalkEnvironmentSettings } from '~/utils/naturewalk'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
@@ -353,7 +355,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     // Movement/throw profile of a participant for the unified area-intercede flow:
     // budget/caps drive repositioning into the AoE (Rule 2), bodyStat drives the
     // subsequent throw-out-of-AoE range (Rule 3, mirrors EncounterMap.vue's throwCaps).
-    const movementProfileFor = (p: any) => getMovementProfile(p, digimonById, tamerById)
+    const movementProfileFor = (p: any) => getMovementProfile(p, digimonById, tamerById, getNaturewalkEnvironmentSettings(encounter.hazards))
 
     // Offer-time eligibility gates for the unified area-attack intercede flow:
     // Rule 1 — candidate's current footprint must not already be inside the AoE.
@@ -640,8 +642,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             // [Guiding Light]: fold the recompute into the in-memory `participants` this handler
             // still has to persist below (a standalone recompute here would race the later write).
             const positions = await getRoomPositions(encounterId)
-            const auraResult = await applyGuidingLightAuras(participants, positions, campaignLevel as any, houseRules)
-            if (auraResult.changed) participants = auraResult.participants
+            participants = await refreshGuidingLightForParticipants(encounterId, participants, positions)
           }
         }
       }
@@ -1074,7 +1075,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       } else if (targetPos_map) {
         const digRec = digimonById.get(partnerParticipant.entityId)
         if (digRec) {
-          const { caps, budget } = getMovementProfile(partnerParticipant, digimonById, tamerById)
+          const { caps, budget } = getMovementProfile(partnerParticipant, digimonById, tamerById, getNaturewalkEnvironmentSettings(encounter.hazards))
           const interceptorDims = getFootprintDimensions(digRec.size as any, (digRec as any).giganticDimensions)
 
           let foundPos: { x: number; y: number; z: number } | null = null
@@ -1092,10 +1093,10 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             // Melee: interceptor must reach the footprint cell of the target closest to the attacker
             const meleeOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id, body.targetId!]), partnerParticipant)
             const meleeBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([partnerParticipant.id, body.targetId!]), partnerParticipant, 'traversal')
-            const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord, new Set(), meleeBlocked, interceptorDims)
+            const reachable = getMovementReachability(interceptorPos, budget, caps, mapRecord, new Set(), meleeBlocked, interceptorDims)
             if (
-              reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps, interceptorPos)
+              reachable.cells.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
+              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps, reachable.launchOriginTo(meleeInterceptCell))
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
               const targetParticipant = participants.find((p: any) => p.id === body.targetId)
@@ -1449,8 +1450,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           // [Guiding Light]: fold the recompute into `result.participants`, which the write just
           // below still has to persist (a standalone recompute here would race that later write).
           const positions = await getRoomPositions(encounterId)
-          const auraResult = await applyGuidingLightAuras(result.participants, positions, campaignLevel as any, houseRules)
-          if (auraResult.changed) result.participants = auraResult.participants
+          result.participants = await refreshGuidingLightForParticipants(encounterId, result.participants, positions)
         }
 
         await db.update(encounters).set({

@@ -4,7 +4,7 @@ import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage } from '../../../../../types'
 import { getDigizoidArmorBonus } from '../../../../utils/digizoidArmor'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
-import { applyGuidingLightAuras } from '../../../../utils/guidingLight'
+import { refreshGuidingLightForParticipants } from '../../../../utils/guidingLight'
 import { loadCampaignCombatContext } from '../../../../utils/combatContext'
 import { buildCombatDevolutionState } from '../../../../utils/partnerDevolution'
 import { resolveCombatEvolutionIndex } from '../../../../../utils/combatEvolutionOptions'
@@ -318,12 +318,11 @@ export default defineEventHandler(async (event) => {
     effects: [],
   }
 
-  // Evolution changes the source's BIT and footprint while its map anchor stays put.
+  // Evolution changes the source's BIT, footprint and Naturewalk choices while its map anchor stays put.
   // Use the new form and live room positions before the same final encounter write.
   if (encounter.phase === 'combat') {
     const positions = await getRoomPositions(encounterId)
-    const auraResult = await applyGuidingLightAuras(participants, positions, campaignLevel, houseRules)
-    if (auraResult.changed) participants = auraResult.participants
+    participants = await refreshGuidingLightForParticipants(encounterId, participants, positions)
   }
 
   // Update encounter

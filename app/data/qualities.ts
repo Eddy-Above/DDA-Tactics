@@ -1189,19 +1189,19 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     maxRanks: 2,
     singleRankPerChoice: true, // Each element can only be taken once
     prerequisites: [],
-    description: 'At home in certain terrain. First rank free.',
-    effect: `Choose an Element. No difficult terrain penalty in that environment. Element-specific bonuses (Fire: +2 Damage, can't be Burned; Water: breathe underwater, +2 Temp WB with Adv Swimmer; etc.).`,
+    description: 'At home in a chosen environment. First rank free; up to two different elements.',
+    effect: `Choose a different Element for each rank. The first rank is free; the second costs 1 DP. Ignore movement penalties from Difficult Terrain in the chosen environment. This does not grant passage through otherwise impassable terrain, such as molten lava. The GM decides which environments qualify. Prerequisite for Element Master.`,
     choices: [
-      { id: 'fire', name: 'Fire', effect: 'Deserts, volcanic. Resist hot temps. +2 Damage in element. Cannot be [Burned].' },
-      { id: 'water', name: 'Water', effect: 'Oceans, rivers. Breathe underwater. With Adv Swimmer: +2 Temp WB in water combat.' },
-      { id: 'wind', name: 'Wind', effect: 'Mountains, open skies. Resist high winds. +2 Dodge in element.' },
-      { id: 'ice', name: 'Ice', effect: 'Glaciers, tundra. Resist cold. +2 Armor in element.' },
-      { id: 'thunder', name: 'Thunder', effect: 'Electric areas, factories. +1 Resistance vs [Paralysis].' },
-      { id: 'wood', name: 'Wood', effect: 'Forests, swamps. [Poison] min duration 2 instead of 3.' },
-      { id: 'earth', name: 'Earth', effect: 'Caves, canyons. With Adv Digger: +1 Armor Piercing rank.' },
-      { id: 'darkness', name: 'Darkness', effect: 'Dim areas, cemeteries. See through darkness.' },
-      { id: 'steel', name: 'Steel', effect: 'Cities, factories. +2 Movement in urban. +2 more with Adv Wallclimber/Jumper.' },
-      { id: 'light', name: 'Light', effect: 'Holy grounds. +1 Resistance vs [Blind].' },
+      { id: 'fire', name: 'Fire', effect: 'Deserts, volcanic areas, dunes and crags. Resist hot temperatures. Gain +2 Damage in qualifying Fire environments. Cannot be [Burned], in any environment.' },
+      { id: 'water', name: 'Water', effect: 'Oceans, rivers and lakes. Breathe underwater. With Advanced Mobility: Swimmer, gain +2 Temporary Wound Boxes in water-based combat. These do not replenish until the next combat.' },
+      { id: 'wind', name: 'Wind', effect: 'Mountains, open skies and plateaus. Resist high winds. Gain +2 Dodge in qualifying Wind environments.' },
+      { id: 'ice', name: 'Ice', effect: 'Icy mountains, glaciers and tundra. Resist cold temperatures. Gain +2 Armor in qualifying Ice environments.' },
+      { id: 'thunder', name: 'Thunder', effect: 'Electrically charged areas, hazardous factories and areas prone to lightning. Gain one additional rank of Resistance against attacks tagged with [Paralysis], in any environment.' },
+      { id: 'wood', name: 'Wood', effect: 'Forests, jungles, swamps and marshes. In qualifying Wood environments, reduce the minimum [Poison] duration to 2 rounds instead of 3.' },
+      { id: 'earth', name: 'Earth', effect: 'Caves, savannahs, cliffs, canyons and valleys. With Advanced Mobility: Digger, gain one additional rank of Armor Piercing on all moves in qualifying Earth environments.' },
+      { id: 'darkness', name: 'Darkness', effect: 'Dim areas and places associated with darkness. See through dark or dimly lit areas unimpeded.' },
+      { id: 'steel', name: 'Steel', effect: 'Civilization, cities, factories and urban ruins. Gain +2 Movement in urban environments. With Advanced Mobility: Wallclimber or Advanced Mobility: Jumper, gain a further +2 Movement there (maximum +4 total).' },
+      { id: 'light', name: 'Light', effect: 'Holy grounds and angelic areas. Gain one additional rank of Resistance against attacks tagged with [Blind], in any environment.' },
     ],
   },
 
@@ -2636,9 +2636,8 @@ export function getEffectiveDPCost(
   }
 
   if (quality.freeFirstRank) {
-    // First rank is free, subsequent ranks cost dpCost each
-    // ranks=1 -> 0, ranks=2 -> 1×dpCost, etc.
-    return Math.max(0, ranks - 1) * baseCost
+    // Choices are stored as separate entries: only the first entry receives the free rank.
+    return Math.max(0, ranks - (isFirstOfType === false ? 0 : 1)) * baseCost
   }
 
   let totalCost = ranks * baseCost

@@ -604,6 +604,7 @@ export interface EnvironmentHazard {
   effect: string
   affectedArea: string
   duration: number | null  // null = permanent
+  naturewalkEnvironment?: { elements: ElementType[]; useMapTerrain: boolean }
 }
 
 // === Campaign Types ===

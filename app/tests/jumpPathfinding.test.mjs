@@ -75,6 +75,7 @@ test('Advanced Jumper can use its full vertical height beyond walking speed', ()
 test('jump direction uses the relevant height or horizontal limit after prior movement', () => {
   const caps = { ...jumpCaps, movementSpeed: 4, jumpRange: 5, jumpHeight: 9 }
   const map = emptyMap(), origin = point(0), costs = getMovementCostProfile(caps, undefined, new Set(), origin)
+  map.groundTiles.push(origin)
   assert.equal(costs.budget, 9)
   assert.equal(costs.stepCost(point(2, 3), point(2, 4), map, 5), 1, 'vertical rise uses Jump Height nine')
   assert.equal(costs.stepCost(point(3, 1), point(4, 1), map, 5), Infinity, 'horizontal movement cannot exceed Jump Range five')

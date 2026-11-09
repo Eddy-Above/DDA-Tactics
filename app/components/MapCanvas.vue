@@ -1793,7 +1793,12 @@ function renderBlastFromStoredCenter() {
 // Line of sight between two cells' centres, against the map's blockers (utils/lineOfSight.ts —
 // shared with single-target reticules so both always agree). No map → always clear.
 function currentLosIndex(): LosIndex | null {
-  if (!losIndex && props.map) losIndex = buildLosIndex(props.map, new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId)))
+  const canSeeDarkness = props.attackerCaps?.naturewalkElements?.includes('darkness') ?? false
+  if (losIndex && (losIndex as LosIndex & { canSeeDarkness?: boolean }).canSeeDarkness !== canSeeDarkness) losIndex = null
+  if (!losIndex && props.map) {
+    losIndex = buildLosIndex(props.map, new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId)), { canSeeDarkness })
+    ;(losIndex as LosIndex & { canSeeDarkness?: boolean }).canSeeDarkness = canSeeDarkness
+  }
   return losIndex
 }
 
@@ -2862,6 +2867,14 @@ watch(reticuleParticipantIds, ids => {
 })
 
 watch(() => props.reachableCells, () => { lastAttackKey = '' }, { deep: true })
+
+watch(() => props.attackerCaps?.naturewalkElements?.includes('darkness') ?? false, () => {
+  lastAttackKey = ''
+  lastAoeKey = ''
+  if (lastAreaAimEvent) computeAndRenderAoe(lastAreaAimEvent)
+  else if (lastBlastCenter.value) renderBlastFromStoredCenter()
+  requestRender()
+})
 
 watch(() => props.activeTool, (tool) => {
   if (tool !== 'select') closeRadial()

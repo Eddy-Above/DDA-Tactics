@@ -1,6 +1,7 @@
 import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
 import { startCleanseCast, recordCleanseOutcome } from '../../../../utils/cleanse'
 import { eq } from 'drizzle-orm'
+import { getNaturewalkBonuses } from '../../../../../utils/naturewalk'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
@@ -269,7 +270,7 @@ export default defineEventHandler(async (event) => {
         if (newEffect.name === 'Shield' || newEffect.name === 'Haste') return applyPositiveSupportEffect(p, newEffect, houseRules, targetQualities)
         return {
           ...p,
-          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round),
+          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round, p.naturewalkActiveElements),
           ...(stunImmediate
             ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }, stunActionReducedThisRound: true }
             : stunDeferred
@@ -407,6 +408,10 @@ export default defineEventHandler(async (event) => {
   }
 
   // Calculate damage with armor and minimum damage of 1 on successful hits
+  const attackerNaturewalk = getNaturewalkBonuses(attackerDigimon?.qualities, actor.naturewalkActiveElements)
+  attackBaseDamage += attackerNaturewalk.damageBonus
+  armorPiercing += attackerNaturewalk.armorPiercingRanks * 2
+  targetArmor += target.type === 'digimon' ? getNaturewalkBonuses(targetDigimon?.qualities, target.naturewalkActiveElements).armorBonus : 0
   let damageDealt = 0
   if (hit) {
     // Apply Combat Monster bonus from attacker
@@ -459,7 +464,7 @@ export default defineEventHandler(async (event) => {
             ...(sourceEffectPotency ?? {}),
           }
           if (newEffect.name === 'Shield' || newEffect.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, newEffect, houseRules, targetQualities))
-          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round)
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round, p.naturewalkActiveElements)
           appliedEffectName = npcAttackDef.effect
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (npcAttackDef.effect === 'Stun' && !p.hasActed) {

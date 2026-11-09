@@ -143,7 +143,7 @@ const filteredQualities = computed(() => {
   // When no DP remaining, only show qualities that cost 0 DP
   if (!props.canAdd) {
     qualities = QUALITY_DATABASE.filter(
-      (q) => getEffectiveDPCost(q, 1, getTemplateDPCost(q), props.stage, true, props.eddySoulRules) <= 0
+      (q) => getSelectionDPCost(q) <= 0
     )
   } else {
     // Filter by type
@@ -200,7 +200,7 @@ function getFullQualityStatus(template: QualityTemplate): { canSelect: boolean; 
 
   // Check if there's DP available for purchasable qualities (adding new or increasing ranks)
   if (template.type === 'purchasable') {
-    const cost = getTemplateDPCost(template)
+    const cost = getSelectionDPCost(template)
     if (cost > 0 && !props.canAdd) {
       reasons.push('No DP remaining for qualities')
     } else if (cost > props.availableDP) {
@@ -340,6 +340,7 @@ function selectQuality(template: QualityTemplate) {
 }
 
 function selectChoice(template: QualityTemplate, choice: NonNullable<QualityTemplate['choices']>[0]) {
+  if (getSelectionDPCost(template, choice) > props.availableDP || template.singleRankPerChoice && isAtMaxChoices(template)) return
   // Check if this specific choice already exists
   const existingIndex = props.currentQualities.findIndex(
     (q) => q.id === template.id && q.choiceId === choice.id
@@ -413,6 +414,11 @@ function getTemplateDPCost(template: QualityTemplate): number {
   if (props.eddySoulRules?.chargeAttackCosts3DP && template.id === 'charge-attack') return 3
   if (template.id === 'signature-move' && props.houseRules?.signatureMoveBattery) return 0
   return template.dpCost
+}
+
+function getSelectionDPCost(template: QualityTemplate, choice?: { dpCost?: number }): number {
+  const firstOfType = !props.currentQualities.some((q) => q.id === template.id)
+  return getEffectiveDPCost(template, 1, choice?.dpCost ?? getTemplateDPCost(template), props.stage, firstOfType, props.eddySoulRules)
 }
 
 function getCostDisplay(template: QualityTemplate) {
@@ -1003,7 +1009,7 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                 </div>
               </template>
               <!-- Check if choice DP cost exceeds available budget -->
-              <template v-else-if="(choice.dpCost ?? pendingQuality?.dpCost ?? 0) > availableDP">
+              <template v-else-if="pendingQuality && getSelectionDPCost(pendingQuality, choice) > availableDP">
                 <!-- Not enough DP -->
                 <div class="w-full text-left bg-digimon-dark-800 border border-digimon-dark-700 rounded-lg p-4 opacity-50">
                   <div class="flex items-center gap-2 mb-2">
@@ -1017,7 +1023,7 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
                   </div>
                   <p class="text-sm text-digimon-dark-500 whitespace-pre-line">{{ choice.effect }}</p>
                   <p class="text-xs text-red-400 mt-2">
-                    Costs {{ choice.dpCost ?? pendingQuality?.dpCost ?? 0 }} DP ({{ availableDP }} available)
+                    Costs {{ getSelectionDPCost(pendingQuality!, choice) }} DP ({{ availableDP }} available)
                   </p>
                 </div>
               </template>

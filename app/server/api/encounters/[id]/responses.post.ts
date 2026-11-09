@@ -6,6 +6,7 @@ import { db, encounters, digimon, tamers, campaigns, maps } from '../../../db'
 import { applyPushPullDisplacement, resolveInstantSupportEffect } from '../../../utils/pushPull'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
+import { getNaturewalkBonuses } from '../../../../utils/naturewalk'
 import { applyPositiveSupportEffect } from '../../../utils/positiveSupportEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
 import { triggerCounterattack } from '../../../utils/triggerCounterattack'
@@ -425,7 +426,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
               potencyStat,
             }
             if (effectData.name === 'Shield' || effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, effectData, houseRules, targetQualitiesForDodge))
-            else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules, undefined, encounter.round)
+            else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules, targetQualitiesForDodge, encounter.round, p.naturewalkActiveElements)
             appliedEffectName = attackDef.effect
             // Stun: immediately reduce actions if target hasn't taken their turn yet this round
             if (attackDef.effect === 'Stun' && !targetHasGone) {
@@ -600,6 +601,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
           attackerHealthStat = (baseStats?.health ?? 0) + (bonusStats?.health ?? 0)
 
           const attackerQualities = attackerDigimon.qualities
+          const naturewalk = getNaturewalkBonuses(attackerQualities, attackerParticipant.naturewalkActiveElements)
+          attackBaseDamage += naturewalk.damageBonus
+          armorPiercing += naturewalk.armorPiercingRanks * 2
           attackerHasCombatMonster = (attackerQualities || []).some((q: any) => q.id === 'combat-monster')
           attackerCombatMonsterBonus = attackerParticipant.combatMonsterBonus ?? 0
           attackerHasPositiveReinforcement = (attackerQualities || []).some((q: any) => q.id === 'positive-reinforcement')
@@ -607,6 +611,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
 
           // Attacker's own total Armor (only needed for Gold/Obsidian Digizoid Armor reflect damage below)
           attackerTotalArmor = (baseStats?.armor ?? 0) + (bonusStats?.armor ?? 0)
+          attackerTotalArmor += naturewalk.armorBonus
           attackerTotalArmor += getDigizoidArmorBonus(attackerQualities).armor
           attackerTotalArmor += (attackerParticipant as any)?.blackArmorRoundBonus?.armor ?? 0
           const attackerDataOpt = (attackerQualities || []).find((q: any) => q.id === 'data-optimization')
@@ -636,6 +641,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
           targetHealthStat = (targetBaseStats?.health ?? 0) + (targetBonusStats?.health ?? 0)
 
           const targetQualities = targetDigimon.qualities
+          targetArmor += getNaturewalkBonuses(targetQualities, targetParticipant.naturewalkActiveElements).armorBonus
           const targetDataOpt = targetQualities?.find((q: any) => q.id === 'data-optimization')
           if (targetDataOpt?.choiceId === 'guardian') {
             targetArmor += 2
@@ -860,7 +866,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
                   potencyStat: damageEffectPotencyStat,
                 }
                 if (newEffect.name === 'Shield' || newEffect.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, newEffect, houseRules, targetQualitiesForDodge))
-                else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, undefined, encounter.round)
+                else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, targetDigimonRef?.qualities, encounter.round, p.naturewalkActiveElements)
                 appliedEffectName = attackDef.effect
                 // Stun: immediately reduce actions if target hasn't taken their turn yet this round
                 if (attackDef.effect === 'Stun' && !targetHasGone) {

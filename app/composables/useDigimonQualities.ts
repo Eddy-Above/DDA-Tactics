@@ -29,11 +29,14 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
   // ========================
   const dpUsedOnQualities = computed(() => {
     const f = formRef.value
+    const seenIds = new Set<string>()
     return (f.qualities || []).reduce((total: number, q: any) => {
       const template = QUALITY_DATABASE.find((t) => t.id === q.id)
       const baseCost = (q.dpCost || 0) as number
       if (!template) return total + baseCost * (q.ranks || 1)
-      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, f.stage, true, options.eddySoulRules?.value)
+      const firstOfType = !seenIds.has(q.id)
+      seenIds.add(q.id)
+      const cost = getEffectiveDPCost(template, q.ranks || 1, baseCost, f.stage, firstOfType, options.eddySoulRules?.value)
       return total + cost
     }, 0)
   })
@@ -66,10 +69,14 @@ export function useDigimonQualities(options: UseDigimonQualitiesOptions) {
 
   const handleAddQuality = (quality: any) => {
     const template = QUALITY_DATABASE.find((t) => t.id === quality.id)
+    const existing = (formRef.value.qualities || []).filter((q: any) => q.id === quality.id)
+    if (template?.singleRankPerChoice && (existing.length >= template.maxRanks
+      || existing.some((q: any) => q.choiceId === quality.choiceId)
+      || (quality.ranks || 1) !== 1)) return
     const baseCost = (quality.dpCost || 0) as number
     let qualityCost: number
     if (template) {
-      qualityCost = getEffectiveDPCost(template, quality.ranks || 1, baseCost, formRef.value.stage, true, options.eddySoulRules?.value)
+      qualityCost = getEffectiveDPCost(template, quality.ranks || 1, baseCost, formRef.value.stage, existing.length === 0, options.eddySoulRules?.value)
     } else {
       qualityCost = baseCost * (quality.ranks || 1)
     }

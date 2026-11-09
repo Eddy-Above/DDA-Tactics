@@ -4,6 +4,7 @@ import { ref, effectScope } from 'vue'
 import { loadTypeScript, loadPageFunctions } from './helpers/loadTypeScript.mjs'
 
 const rules = loadTypeScript('utils/movementRules.ts')
+const naturewalk = loadTypeScript('utils/naturewalk.ts')
 const { STAGE_CONFIG } = loadTypeScript('types/index.ts')
 const { applyStanceToMovement } = loadTypeScript('utils/stanceModifiers.ts')
 const { getAllStatEffectModifier } = loadTypeScript('data/attackConstants.ts')
@@ -39,6 +40,7 @@ function preview(digimon, participantOverrides = {}) {
     digimonMapForCanvas: ref({ mon: { ...digimon, ...stats } }),
     tamerMapForCanvas: ref({ mon: { speed: 6 } }),
     movement: rules, STAGE_CONFIG, applyStanceToMovement, getAllStatEffectModifier,
+    map: ref(null), ...naturewalk,
   }
   return loadPageFunctions('components/EncounterMap.vue', ['npcMoveCaps'], context).npcMoveCaps('unit')
 }
@@ -104,7 +106,7 @@ test('player movement display shares the map formulas for swim, jump height and 
   ])
   const stats = derived(digimon)
   const { getMovementTypes } = loadPageFunctions('pages/campaigns/[campaignId]/player/[tamerId].vue', ['getMovementTypes'], {
-    calcDigimonStats: () => stats, ...rules,
+    calcDigimonStats: () => stats, ...rules, ...naturewalk,
   })
   const shown = Object.fromEntries(getMovementTypes(digimon).map(row => [row.type, row.speed]))
   assert.equal(shown.Swim, 12 + stats.ram)
@@ -126,7 +128,7 @@ test('advanced flight, digging and wallclimbing previews and player display use 
   assert.equal(caps.canClimbCeilings, true)
   assert.equal(caps.canDigHardSurfaces, true)
   const { getMovementTypes } = loadPageFunctions('pages/campaigns/[campaignId]/player/[tamerId].vue', ['getMovementTypes'], {
-    calcDigimonStats: () => stats, ...rules,
+    calcDigimonStats: () => stats, ...rules, ...naturewalk,
   })
   const shown = Object.fromEntries(getMovementTypes(digimon).map(row => [row.type, row.speed]))
   for (const key of ['Fly', 'Burrow', 'Climb']) assert.equal(shown[key], 12 + stats.ram, key)

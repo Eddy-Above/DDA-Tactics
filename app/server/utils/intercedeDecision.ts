@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, campaigns } from '../db'
 import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
-import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
+import { refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap } from '~/server/utils/combatSpatial'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
 import { resolveNpcAttack } from '~/server/utils/resolveNpcAttack'
@@ -279,8 +279,7 @@ export async function resolveIntercedeGroupIfDecided(
     // [Guiding Light]: fold the recompute into `result.participants`, which the caller's
     // single persist still has to write (a standalone recompute here would race that write).
     const positions = await getRoomPositions(encounterId)
-    const auraResult = await applyGuidingLightAuras(result.participants, positions, campaignLevel, houseRules)
-    if (auraResult.changed) result.participants = auraResult.participants
+    result.participants = await refreshGuidingLightForParticipants(encounterId, result.participants, positions)
   }
 
   return {

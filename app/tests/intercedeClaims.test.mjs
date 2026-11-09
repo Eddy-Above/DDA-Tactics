@@ -201,6 +201,10 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
       resolveNegativeSupportNpc: unexpected, getPositiveSupportResolutionType: () => null,
     },
     './guidingLight': guidingLight,
+    './combatSpatial': { loadParticipantDigimon: async participants => new Map(participants.flatMap(p => {
+      const record = rows.digimon.get(p.entityId)
+      return record ? [[p.entityId, copy(record)]] : []
+    })) },
     './partnerDevolution': partnerDevolution,
   })
   const queue = bypassQueue
@@ -465,6 +469,7 @@ for (const mode of ['wall', 'ceiling', 'burrow', 'jump']) {
     subject.rows.tamers.set('owner', { id: 'owner', name: 'Owner', attributes: { agility: 0, body: 1 }, skills: {} })
     Object.assign(subject.rows.digimon.get('guard-a'), { partnerId: 'owner', qualities })
     subject.rooms.get('encounter').participantPositions = { attacker: point(0, 8), target: point(6, 8), 'guard-a': point(2, 8) }
+    if (mode === 'jump') subject.spatialMap.groundTiles.push(point(2, 8))
     for (let x = 2; x <= 5; x++) {
       if (mode === 'wall') subject.spatialMap.walls.push({ id: `wall-${x}`, ...point(x, 8), face: 'north' })
       if (mode === 'ceiling') subject.spatialMap.ceilings.push({ id: `ceiling-${x}`, ...point(x, 8) })

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { HAZARD_DATABASE, type HazardTemplate } from '../data/hazards'
+import { NATUREWALK_ELEMENTS, NATUREWALK_ENVIRONMENT_ID, getNaturewalkEnvironmentSettings } from '~/utils/naturewalk'
+import type { ElementType } from '~/types'
 
 interface Hazard {
   id: string
@@ -8,6 +10,7 @@ interface Hazard {
   effect: string
   affectedArea: string
   duration: number | null
+  naturewalkEnvironment?: { elements: ElementType[]; useMapTerrain: boolean }
 }
 
 interface Props {
@@ -58,6 +61,20 @@ const customHazard = reactive({
   affectedArea: '',
   duration: null as number | null,
 })
+
+const naturewalkEnvironment = computed(() => getNaturewalkEnvironmentSettings(props.hazards))
+function setNaturewalkEnvironment(element: ElementType | null, enabled: boolean) {
+  const settings = naturewalkEnvironment.value
+  const next = element === null ? { ...settings, useMapTerrain: enabled }
+    : { ...settings, elements: enabled ? [...new Set([...settings.elements, element])] : settings.elements.filter(value => value !== element) }
+  const hazard: Hazard = {
+    id: NATUREWALK_ENVIRONMENT_ID, name: 'Naturewalk Environment', description: 'GM-designated environments for Naturewalk benefits.',
+    effect: [next.useMapTerrain ? 'Map terrain applies.' : '', next.elements.length ? `Qualifying elements: ${next.elements.join(', ')}.` : ''].filter(Boolean).join(' ') || 'No qualifying environments.',
+    affectedArea: 'Encounter', duration: null, naturewalkEnvironment: next,
+  }
+  if (props.hazards.some(value => value.id === hazard.id)) emit('update', hazard)
+  else emit('add', hazard)
+}
 
 function selectHazard(template: HazardTemplate) {
   const hazard: Hazard = {
@@ -139,6 +156,16 @@ function getCategoryIcon(category: HazardTemplate['category']) {
 
 <template>
   <div class="space-y-4">
+    <fieldset class="rounded-lg bg-digimon-dark-700 p-4 space-y-3">
+      <legend class="font-semibold">Naturewalk environment</legend>
+      <p class="text-sm text-digimon-dark-300">Map elements apply automatically. Select additional environments that qualify for this encounter.</p>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" :checked="naturewalkEnvironment.useMapTerrain" @change="setNaturewalkEnvironment(null, ($event.target as HTMLInputElement).checked)"> Use map terrain</label>
+      <div class="flex flex-wrap gap-x-4 gap-y-2">
+        <label v-for="element in NATUREWALK_ELEMENTS" :key="element" class="flex items-center gap-2 text-sm capitalize">
+          <input type="checkbox" :checked="naturewalkEnvironment.elements.includes(element)" @change="setNaturewalkEnvironment(element, ($event.target as HTMLInputElement).checked)">{{ element }}
+        </label>
+      </div>
+    </fieldset>
     <!-- Active Hazards -->
     <div v-if="hazards.length > 0" class="space-y-3">
       <div

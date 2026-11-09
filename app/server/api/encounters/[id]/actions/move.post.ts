@@ -4,6 +4,7 @@ import { applyMovementBurn, loadCampaignDamageOverTimeRules } from '../../../../
 import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
 import { knockedOutEnemyIds, resolveEnemyKnockouts, type KnockoutResult } from '../../../../utils/enemyKnockouts'
 import { combatTurnKey } from '../../../../../utils/specialOrderCombat'
+import { applyNaturewalkEnvironment } from '../../../../utils/naturewalk'
 
 interface MoveBody {
   participantId: string
@@ -51,11 +52,14 @@ export default defineEventHandler(async (event) => {
   let battleLog: any[] | undefined
   const distance = Math.max(0, Math.floor(Number(body.distance) || 0))
   if (encounter.phase === 'combat' && distance > 0) {
+    const records = await loadParticipantDigimon([mover])
+    const refreshed = await applyNaturewalkEnvironment(encounter, [mover], undefined, { grantWater: true, records })
+    updatedParticipants = updatedParticipants.map(p => p.id === mover.id ? { ...p, ...refreshed.participants[0], actionsRemaining: p.actionsRemaining } : p)
     updatedParticipants = updatedParticipants.map((p: any) => p.id === body.participantId
       ? { ...p, lastMovedTurnKey: combatTurnKey(encounter.round ?? 0, encounter.currentTurnIndex ?? 0) } : p)
     const moved = applyMovementBurn(updatedParticipants, [{ participantId: body.participantId, meters: distance }], {
       round: encounter.round ?? 0,
-      digimonById: await loadParticipantDigimon([mover]),
+      digimonById: records,
       rules: await loadCampaignDamageOverTimeRules(encounter.campaignId),
     })
     updatedParticipants = moved.participants

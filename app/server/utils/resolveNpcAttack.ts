@@ -184,10 +184,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
         if (hit && damageCalc.effectData) {
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
-          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round)
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.appliedEffectName
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef.effect === 'Stun' && !targetHasGone) {
@@ -311,10 +311,10 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
         if (damageCalc.effectData) {
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
-          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round)
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.appliedEffectName
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef?.effect === 'Stun' && !targetHasGone) {

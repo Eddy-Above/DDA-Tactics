@@ -6,6 +6,7 @@ import {
   getMovementOccupancy,
   createMovementMapView,
   getMovementCostProfile,
+  createJumpTraversal,
   isSwimmingCell,
   getDigTerrainMultiplier,
   hasClimbSupport,
@@ -21,7 +22,7 @@ import {
   detectCapabilities,
   PROJECTILE_CAPS,
 } from '../../utils/movementRules'
-import { searchReachable } from '../../utils/pathfinding'
+import { searchReachable, searchReachableWithState, type ReachableSearch } from '../../utils/pathfinding'
 import { getMovementMapIndex } from '../../utils/movementMapIndex'
 
 // This module is the server's spatial/pathfinding layer. All pure map geometry (canPassThrough,
@@ -61,12 +62,32 @@ export function getReachableCells(
   blockedPositions: Set<string> = new Set(),
   moverDims: FootprintDims = { width: 1, height: 1, depth: 1 },
 ): Set<string> {
+  return getMovementReachability(origin, budget, caps, map, destroyed, blockedPositions, moverDims).cells
+}
+
+/** Retain the legal launch point for airborne landings after mixed movement. */
+export function getMovementReachability(
+  origin: Vec3,
+  budget: number,
+  caps: MovementCapabilities,
+  map: GameMap,
+  destroyed: Set<string> = new Set(),
+  blockedPositions: Set<string> = new Set(),
+  moverDims: FootprintDims = { width: 1, height: 1, depth: 1 },
+): ReachableSearch & { launchOriginTo: (position: Vec3) => Vec3 | undefined } {
   const queryMap = createMovementMapView(map)
   const costProfile = getMovementCostProfile(caps, budget, destroyed, origin)
-  return searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
+  if (caps.canJump && costProfile) {
+    const search = searchReachableWithState(origin, costProfile.budget,
+      createJumpTraversal(origin, caps, queryMap, costProfile, destroyed,
+        pos => Boolean(blockedPositions.size && getFootprintCells(pos, moverDims).some(cell => blockedPositions.has(key(cell))))))
+    return { ...search, launchOriginTo: position => search.stateTo(position) ?? undefined }
+  }
+  const search = searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
     if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(key(cell)))) return false
     return canPassThrough(from, to, caps, queryMap, destroyed, origin)
-  }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined).cells
+  }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined)
+  return { ...search, launchOriginTo: () => origin }
 }
 
 export function isValidLandingPosition(
@@ -175,9 +196,9 @@ export function findRangedIntercedPosition(
   const lineCells = getCellsOnLine(attackerPos, targetPos)
   if (lineCells.length === 0) return null
   const sorted = [...lineCells].reverse() // closest to target first
-  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
+  const reachable = getMovementReachability(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
   for (const cell of sorted) {
-    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps, interceptorPos)) return cell
+    if (reachable.cells.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps, reachable.launchOriginTo(cell))) return cell
   }
   return null
 }

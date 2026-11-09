@@ -99,6 +99,10 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
       auraCalls.push(copy({ participants: args[0], positions: args[1] }))
       return actualGuidingLight.applyGuidingLightAuras(...args)
     },
+    refreshGuidingLightForParticipants: async (...args) => {
+      auraCalls.push(copy({ participants: args[1], positions: args[2] }))
+      return actualGuidingLight.refreshGuidingLightForParticipants(...args)
+    },
   }
   const gravity = loadTypeScriptWithMocks('server/utils/endOfTurnGravity.ts', {
     './combatSpatial': spatial, './guidingLight': guidingLight, './encounterRoom': room,

@@ -4,6 +4,7 @@ import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import { calculateSwimSpeed, calculateJumpProfile, calculateSpecialMovementSpeeds } from '~/utils/movementRules'
+import { getNaturewalkBonuses } from '~/utils/naturewalk'
 import { buildCombatEvolutionOptions } from '~/utils/combatEvolutionOptions'
 import { applyFatefulPool } from '~/utils/fatefulIntervention'
 
@@ -4276,10 +4277,11 @@ function getEvolutionPath(chainId: string): Digimon[] {
 }
 
 // Get all movement types available to a Digimon based on qualities
-function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
+function getMovementTypes(digimon: Digimon, environmentElements: readonly string[] = []): { type: string; speed: number }[] {
   const stats = calcDigimonStats(digimon)
-  const baseMove = stats.movement
-  const basicMovement = stats.baseMovement ?? baseMove
+  const movementBonus = getNaturewalkBonuses(digimon.qualities, environmentElements).movementBonus
+  const baseMove = stats.movement + movementBonus
+  const basicMovement = (stats.baseMovement ?? stats.movement) + movementBonus
   const jump = calculateJumpProfile(digimon.qualities, baseMove, stats.cpu, basicMovement)
   const special = calculateSpecialMovementSpeeds(digimon.qualities, baseMove, stats.ram)
 
@@ -4302,6 +4304,11 @@ function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
   }
 
   return movements
+}
+
+function getCombatMovementTypes(digimon: Digimon) {
+  const participant = (activeEncounter.value?.participants as CombatParticipant[] | undefined)?.find(p => p.type === 'digimon' && p.entityId === digimon.id)
+  return getMovementTypes(digimon, participant?.naturewalkActiveElements)
 }
 
 // === Clash actions ===
@@ -6241,12 +6248,12 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <span class="relative group">
                   <span class="text-digimon-dark-400">Move: </span>
                   <span class="text-white cursor-help border-b border-dotted border-digimon-dark-500">
-                    {{ getMovementTypes(getCurrentForm(chain.chainId)!)[0].speed }}m
+                    {{ getCombatMovementTypes(getCurrentForm(chain.chainId)!)[0].speed }}m
                   </span>
                   <!-- Hover tooltip with all movement types -->
                   <div class="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10">
                     <div class="bg-digimon-dark-800 border border-digimon-dark-600 rounded-lg p-2 shadow-lg whitespace-nowrap">
-                      <div v-for="move in getMovementTypes(getCurrentForm(chain.chainId)!)" :key="move.type" class="text-sm">
+                      <div v-for="move in getCombatMovementTypes(getCurrentForm(chain.chainId)!)" :key="move.type" class="text-sm">
                         <span class="text-digimon-dark-400">{{ move.type }}:</span>
                         <span class="text-white ml-1">{{ move.speed }}m</span>
                       </div>

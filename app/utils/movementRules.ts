@@ -2,6 +2,9 @@ import type { GameMap, Vec3, DigimonSize } from '~/types'
 import { getVoxelMaterialId, mapVoxelAt as findMapVoxelAt, voxelBlocksMovement } from '~/utils/mapVoxels'
 import { getMovementMapIndex } from '~/utils/movementMapIndex'
 export { createMovementMapView } from '~/utils/movementMapIndex'
+import { getNaturewalkElements, resolveNaturewalkEnvironment, type NaturewalkEnvironmentSettings } from '~/utils/naturewalk'
+import type { ElementType } from '~/types'
+import type { StatefulTraversal } from '~/utils/pathfinding'
 
 export interface MovementCapabilities {
   canFly: boolean
@@ -11,6 +14,9 @@ export interface MovementCapabilities {
   canClimb: boolean
   canSwim: boolean
   canDig: boolean
+  canJumpFromWater?: boolean
+  naturewalkElements?: ElementType[]
+  naturewalkEnvironment?: NaturewalkEnvironmentSettings
   movementSpeed?: number
   swimSpeed?: number
   digSpeed?: number
@@ -229,7 +235,7 @@ export function getMovementCostProfile(
   landBudget = caps.movementSpeed ?? 0,
   destroyedStructures: Set<string> = new Set(),
   origin?: Vec3,
-): { budget: number; stepCost: (from: Vec3, to: Vec3, map: GameMap, spent?: number) => number } | null {
+): { budget: number; stepCost: (from: Vec3, to: Vec3, map: GameMap, spent?: number, launchOrigin?: Vec3 | null) => number } | null {
   if ([caps.swimSpeed, caps.digSpeed, caps.climbSpeed, caps.flySpeed].every(speed => speed === undefined)) return null
   const landSpeed = Math.max(0, landBudget)
   const swimSpeed = caps.canSwim ? Math.max(0, caps.swimSpeed ?? landSpeed) : 0
@@ -260,12 +266,17 @@ export function getMovementCostProfile(
     speed > 0 && Number.isFinite(cost) && spent + cost <= speed + 1e-9 ? cost : Infinity
   return {
     budget,
-    stepCost: (from, to, map, spent = 0) => {
+    stepCost: (from, to, map, spent = 0, launchOrigin) => {
       const destination = cellAt(to, map)
       if (destination.water) return withinSpeed(swimSpeed, spent)
       if (destination.swimming) return withinSpeed(Math.max(swimSpeed, flySpeed), spent)
       destination.dig ??= getDigTerrainMultiplier(map, to, caps)
-      if (destination.dig > 0) return withinSpeed(digSpeed, spent, destination.dig)
+      if (destination.dig > 0) {
+        const environment = caps.naturewalkElements?.length
+          ? resolveNaturewalkEnvironment(map, to, caps.naturewalkEnvironment ?? { elements: [], useMapTerrain: true }) : []
+        const ignoresPenalty = Number.isFinite(destination.dig) && caps.naturewalkElements?.some(element => environment.includes(element))
+        return withinSpeed(digSpeed, spent, ignoresPenalty ? 1 : destination.dig)
+      }
       destination.walk ??= Boolean(getGroundTile(map, to)) || hasSolidVoxelSupport(map, to) || hasSolidStairSupport(map, to)
       const walking = destination.walk && !(to.y > from.y && to.x === from.x && to.z === from.z)
       let speed = Math.max(walking ? landSpeed : 0, flySpeed)
@@ -273,7 +284,7 @@ export function getMovementCostProfile(
         destination.climb ??= hasClimbSupport(map, to, caps, destroyedStructures)
         if (destination.climb) speed = Math.max(speed, climbSpeed)
       }
-      const jumpOrigin = origin ?? from
+      const jumpOrigin = launchOrigin === undefined ? origin ?? from : launchOrigin ?? undefined
       let jumpTransition = !walking
       if (walking && caps.canJump) {
         const source = cellAt(from, map)
@@ -283,12 +294,43 @@ export function getMovementCostProfile(
         // use walking speed, counting the distance already spent on that jump.
         jumpTransition = !source.walk && !source.swimming && source.dig === 0
       }
-      if (jumpTransition && canJumpTo(to, jumpOrigin, caps)) {
-        const horizontal = Math.max(Math.abs(to.x - jumpOrigin.x), Math.abs(to.z - jumpOrigin.z))
-        const vertical = Math.abs(to.y - jumpOrigin.y)
+      if (jumpTransition && canJumpTo(to, jumpOrigin, caps, map)) {
+        const horizontal = Math.max(Math.abs(to.x - jumpOrigin!.x), Math.abs(to.z - jumpOrigin!.z))
+        const vertical = Math.abs(to.y - jumpOrigin!.y)
         speed = Math.max(speed, vertical > horizontal ? caps.jumpHeight : caps.jumpRange)
       }
       return withinSpeed(speed, spent)
+    },
+  }
+}
+
+/** A jump keeps its launch point until landing; other modes cannot restart it in mid-air. */
+export function createJumpTraversal(
+  origin: Vec3,
+  caps: MovementCapabilities,
+  map: GameMap,
+  costProfile: NonNullable<ReturnType<typeof getMovementCostProfile>>,
+  destroyed: Set<string> = new Set(),
+  blocked: (position: Vec3) => boolean = () => false,
+): StatefulTraversal<Vec3 | null> {
+  const noJump = { ...caps, canJump: false }
+  const supported = (pos: Vec3) => canStartJump(pos, map, caps)
+  return {
+    initial: supported(origin) ? origin : null,
+    // When height and length match, total distance already bounds horizontal
+    // range. Launches at the same height then have identical continuations.
+    key: state => state ? caps.jumpHeight === caps.jumpRange ? String(state.y) : key(state) : '',
+    step: (from, to, spent, state) => {
+      if (blocked(to)) return null
+      // Water, burrowing and climbing end an earlier jump. Only solid footing or
+      // the Swimmer quality authorises a new launch from the current cell.
+      const launch = supported(from) ? from : state
+      const activeCaps = launch ? caps : noJump
+      if (!canPassThrough(from, to, activeCaps, map, destroyed, launch ?? from)) return null
+      const cost = costProfile.stepCost(from, to, map, spent, launch)
+      if (!Number.isFinite(cost)) return null
+      const landed = supported(to) || isSwimmingCell(map, to) || getDigTerrainMultiplier(map, to, caps) > 0 || hasClimbSupport(map, to, caps, destroyed)
+      return { cost, state: landed ? null : launch }
     },
   }
 }
@@ -298,14 +340,14 @@ export function hasSolidVoxelSupport(map: GameMap, pos: Vec3): boolean {
   return Boolean(below && voxelBlocksMovement(below))
 }
 
-function canMoveOntoSupportedVoxelTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap): boolean {
+function canMoveOntoSupportedVoxelTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap, jumpAllowed = caps.canJump): boolean {
   if (!hasSolidVoxelSupport(map, to)) return false
   const dx = to.x - from.x
   const dy = to.y - from.y
   const dz = to.z - from.z
   if (dy > 0) {
     if (caps.canFly) return true
-    if (caps.canJump && dy <= caps.jumpHeight) return true
+    if (jumpAllowed && dy <= caps.jumpHeight) return true
     if (dy === 1 && (dx !== 0 || dz !== 0)) return true
     return false
   }
@@ -324,14 +366,14 @@ export function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
   return map.stairs.some(s => s.x === pos.x && s.y === pos.y - 1 && s.z === pos.z)
 }
 
-function canMoveOntoSupportedStairTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap): boolean {
+function canMoveOntoSupportedStairTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap, jumpAllowed = caps.canJump): boolean {
   if (!hasSolidStairSupport(map, to)) return false
   const dx = to.x - from.x
   const dy = to.y - from.y
   const dz = to.z - from.z
   if (dy > 0) {
     if (caps.canFly) return true
-    if (caps.canJump && dy <= caps.jumpHeight) return true
+    if (jumpAllowed && dy <= caps.jumpHeight) return true
     if (dy === 1 && (dx !== 0 || dz !== 0)) return true
     return false
   }
@@ -351,6 +393,7 @@ export function canPassThrough(
   const dx = to.x - from.x
   const dy = to.y - from.y
   const dz = to.z - from.z
+  const jumpAllowed = caps.canJump && (!origin || canStartJump(origin, map, caps))
 
   // Diagonal horizontal moves must not cut through walls on either cardinal axis.
   // Applies regardless of Y change so 3D diagonal moves can't bypass y=0 walls.
@@ -384,7 +427,7 @@ export function canPassThrough(
     if (groundTile.terrain === 'earth' && !caps.canDig) return false
     if (dy > 0) {
       if (caps.canFly) return true
-      if (caps.canJump && dy <= caps.jumpHeight) return true
+      if (jumpAllowed && dy <= caps.jumpHeight) return true
       // Natural step-up: walking up one level while also moving laterally (like climbing a stair step).
       // This is already gated by ceiling checks above (ceilings inside rooms prevent it) and by wall
       // checks (a wall in the lateral direction blocks the step-up too).
@@ -402,33 +445,40 @@ export function canPassThrough(
     if (to.y > from.y) {
       // Going up in air
       if (caps.canFly) return true
-      if (origin ? canJumpTo(to, origin, caps) : caps.canJump && to.y - from.y <= caps.jumpHeight) return true
+      if (origin ? canJumpTo(to, origin, caps, map) : caps.canJump && to.y - from.y <= caps.jumpHeight) return true
       return false
     }
     if (to.y < from.y) {
       // Searches keep descending jumps within their horizontal range; omitted origins retain
       // legacy unrestricted descent for displacement/gravity callers.
-      return !origin || caps.canFly || canJumpTo(to, origin, caps)
+      return !origin || caps.canFly || canJumpTo(to, origin, caps, map)
     }
     // Moving laterally through air
     if (caps.canFly) return true
     // Can move laterally at same air-level if jumping (horizontal jump)
-    if (caps.canJump) return !origin || canJumpTo(to, origin, caps)
+    if (caps.canJump) return !origin || canJumpTo(to, origin, caps, map)
     return false
   }
 
   // No tile at destination: allow standing/moving on top of solid voxels or stairs.
-  if (canMoveOntoSupportedVoxelTop(from, to, caps, map)) return true
-  if (canMoveOntoSupportedStairTop(from, to, caps, map)) return true
+  if (canMoveOntoSupportedVoxelTop(from, to, caps, map, jumpAllowed)) return true
+  if (canMoveOntoSupportedStairTop(from, to, caps, map, jumpAllowed)) return true
   if (caps.canFly && isWithinMapFootprint(map, to)) return true  // fliers traverse open (unpainted) air
-  if ((origin ? canJumpTo(to, origin, caps) : caps.canJump && dy <= caps.jumpHeight) && isWithinMapFootprint(map, to)) return true
+  if ((origin ? canJumpTo(to, origin, caps, map) : caps.canJump && dy <= caps.jumpHeight) && isWithinMapFootprint(map, to)) return true
   return false
 }
 
 // Airborne jump landings are measured from the move's origin in both height and horizontal range.
 // Descending is unrestricted vertically; omitting the origin keeps the stricter fliers-only rule.
-function canJumpTo(pos: Vec3, origin: Vec3 | undefined, caps: MovementCapabilities): boolean {
+export function canStartJump(origin: Vec3, map: GameMap, caps: MovementCapabilities): boolean {
+  if (isSwimmingCell(map, origin)) return caps.canJumpFromWater === true
+  if (mapVoxelBlocksMovement(map, origin) || hasStairAt(map, origin)) return false
+  return Boolean(getGroundTile(map, origin)) || hasSolidVoxelSupport(map, origin) || hasSolidStairSupport(map, origin)
+}
+
+function canJumpTo(pos: Vec3, origin: Vec3 | undefined, caps: MovementCapabilities, map: GameMap): boolean {
   return !!origin && caps.canJump
+    && canStartJump(origin, map, caps)
     && (pos.y - origin.y) <= caps.jumpHeight
     && Math.max(Math.abs(pos.x - origin.x), Math.abs(pos.z - origin.z)) <= caps.jumpRange
 }
@@ -463,7 +513,7 @@ export function canLandOn(
     if (spaceTile.spaceType === 'water') return caps.canSwim
     if (spaceTile.spaceType === 'earth') return caps.canDig
     // Air tile — can land if flying/hovering, or jumping up to jump height
-    return caps.canFly || canJumpTo(pos, origin, caps)
+    return caps.canFly || canJumpTo(pos, origin, caps, map)
   }
 
   // Empty cell directly above a solid voxel or stair is a valid landing surface.
@@ -472,7 +522,7 @@ export function canLandOn(
 
   // Open (unpainted) air — fliers hover/land within the map footprint; jumpers may finish here
   // up to their jump height (they fall to the ground at end of turn, taking no damage).
-  if ((caps.canFly || canJumpTo(pos, origin, caps)) && isWithinMapFootprint(map, pos)) return true
+  if ((caps.canFly || canJumpTo(pos, origin, caps, map)) && isWithinMapFootprint(map, pos)) return true
 
   return false
 }
@@ -588,6 +638,8 @@ export function detectCapabilities(
   return {
     canFly: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'flight'),
     canJump: jump.jumpRange > 0 || jump.jumpHeight > 0,
+    canJumpFromWater: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'swimmer'),
+    naturewalkElements: getNaturewalkElements(qualities),
     ...jump,
     canClimb: qualities.some(q => q.id === 'extra-movement' && q.choiceId === 'wallclimber'),
     canClimbCeilings: qualities.some(q => q.id === 'advanced-mobility' && q.choiceId === 'adv-wallclimber'),

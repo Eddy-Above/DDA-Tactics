@@ -1,8 +1,8 @@
 import { ref } from 'vue'
 import type { GameMap, Vec3, DigimonSize } from '~/types'
 import type { MovementCapabilities } from '~/utils/movementRules'
-import { canPassThrough, canLandOn, createMovementMapView, getMovementOccupancy, getFootprintDimensions, getFootprintCells, getMovementCostProfile, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
-import { searchReachable, findPath, chebyshev, type ReachableSearch } from '~/utils/pathfinding'
+import { canPassThrough, canLandOn, createMovementMapView, createJumpTraversal, getMovementOccupancy, getFootprintDimensions, getFootprintCells, getMovementCostProfile, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
+import { searchReachable, searchReachableWithState, findPath, chebyshev, type ReachableSearch } from '~/utils/pathfinding'
 import { vec3Key } from '~/utils/mapGeometry'
 
 type GiganticDims = { width: number; height: number; depth: number } | null
@@ -51,7 +51,10 @@ export function useMapMovement() {
     const queryMap = createMovementMapView(map)
     const costProfile = getMovementCostProfile(caps, budget, destroyedStructures, origin)
 
-    const search = searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
+    const blocked = (pos: Vec3) => Boolean(blockedPositions.size && getFootprintCells(pos, moverDims).some(cell => blockedPositions.has(vec3Key(cell))))
+    const jumpSearch = caps.canJump && costProfile ? searchReachableWithState(origin, costProfile.budget,
+      createJumpTraversal(origin, caps, queryMap, costProfile, destroyedStructures, blocked)) : null
+    const search = jumpSearch ?? searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
       if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
       return canPassThrough(from, to, caps, queryMap, destroyedStructures, origin)
     }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined)
@@ -62,7 +65,9 @@ export function useMapMovement() {
       if (k === vec3Key(origin)) continue
       const [x, y, z] = k.split(',').map(Number)
       const pos = { x, y, z }
-      if (!canLandOn(pos, caps, queryMap, landingBlockedPositions, origin, destroyedStructures)) continue
+      const launch = jumpSearch?.stateTo(pos)
+      const landingCaps = jumpSearch && !launch ? { ...caps, canJump: false } : caps
+      if (!canLandOn(pos, landingCaps, queryMap, landingBlockedPositions, jumpSearch ? launch ?? undefined : origin, destroyedStructures)) continue
       const overlaps = getFootprintCells(pos, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
       if (overlaps) continue
       landable.add(k)
@@ -117,18 +122,28 @@ export function useMapMovement() {
     const queryMap = createMovementMapView(map)
     if (vec3Key(from) !== vec3Key(to) && (
       getFootprintCells(to, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
-      || (costProfile && !canLandOn(to, caps, queryMap, landingBlockedPositions, from, destroyedStructures))
+      || (costProfile && !caps.canJump && !canLandOn(to, caps, queryMap, landingBlockedPositions, from, destroyedStructures))
     )) {
       activePath.value = []
       return null
     }
     // Numeric mode costs reject every edge beyond their finite movement limits,
     // so their frontier is bounded without an arbitrary expansion cutoff.
-    const path = findPath(from, to, (f, t) => {
+    const blocked = (pos: Vec3) => Boolean(blockedPositions.size && getFootprintCells(pos, moverDims).some(cell => blockedPositions.has(vec3Key(cell))))
+    const jumpSearch = caps.canJump && costProfile ? searchReachableWithState(from, costProfile.budget,
+      createJumpTraversal(from, caps, queryMap, costProfile, destroyedStructures, blocked)) : null
+    const path = jumpSearch ? jumpSearch.pathTo(to) : findPath(from, to, (f, t) => {
       if (blockedPositions.size && getFootprintCells(t, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
       return canPassThrough(f, t, caps, queryMap, destroyedStructures, from)
     }, costProfile ? Infinity : 200, costProfile ? (f, t, spent) => costProfile.stepCost(f, t, queryMap, spent) : undefined)
-    if (path && costProfile) {
+    if (path && jumpSearch) {
+      const launch = jumpSearch.stateTo(to)
+      if (!canLandOn(to, launch ? caps : { ...caps, canJump: false }, queryMap, landingBlockedPositions, launch ?? undefined, destroyedStructures)) {
+        activePath.value = []
+        return null
+      }
+    }
+    if (path && costProfile && !jumpSearch) {
       let cost = 0
       for (let i = 1; i < path.length; i++) cost += costProfile.stepCost(path[i - 1], path[i], queryMap, cost)
       if (cost > costProfile.budget + 1e-9) {

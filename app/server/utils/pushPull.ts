@@ -4,7 +4,7 @@ import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './co
 import { getFootprintDimsForParticipant, buildFootprintOccupiedSet, findPushPullLandingCell } from './mapMovement'
 import { resolveFall } from '../../utils/movementRules'
 import { getDigimonDerivedStats, calculateEffectPotency } from './resolveSupportAttack'
-import { applyGuidingLightAuras } from './guidingLight'
+import { refreshGuidingLightForParticipants } from './guidingLight'
 import { applyMovementBurn, loadEncounterRules } from './damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { chebyshev } from './gridDistance'
@@ -124,11 +124,10 @@ export async function applyPushPullDisplacement(args: {
 
   if (patch) {
     await broadcastPositionPatch(encounterId, patch)
-    // [Guiding Light]: Knockback/Pull can move a unit across an aura's burst radius. Fold the
+    // Knockback/Pull can cross an aura's burst radius or change Naturewalk terrain benefits. Fold the
     // recompute into the returned `participants` — the caller still has to persist it, so a
     // standalone recompute here would race that later write.
-    const auraResult = await applyGuidingLightAuras(participants, { ...positions, ...patch }, args.campaignLevel ?? 'standard', args.houseRules)
-    if (auraResult.changed) participants = auraResult.participants
+    participants = await refreshGuidingLightForParticipants(encounterId, participants, { ...positions, ...patch })
   }
   return { participants, logNote }
 }

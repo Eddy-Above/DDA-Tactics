@@ -14,6 +14,7 @@ import {
   isValidLandingPosition,
   getFootprintCells,
   getReachableCells,
+  getMovementReachability,
   isFootprintValid,
   isPositionInAir,
   findClosestValidDisplacementPosition,
@@ -31,6 +32,7 @@ import { type Vec3, computeAreaCellsFromData } from '~/utils/areaShapes'
 import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/server/utils/encounterRoom'
 import { recomputeGuidingLightForEncounter, refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
+import { getNaturewalkEnvironmentSettings } from '~/utils/naturewalk'
 import { resolveFall } from '~/utils/movementRules'
 import { applyMovementBurn, movesFromPositions, applyWoundDamage } from '~/server/utils/damageOverTime'
 import { applyPositiveSupportEffect } from '../../../../utils/positiveSupportEffect'
@@ -367,7 +369,7 @@ async function resolveIntercedeClaim(
 
     // Interceptor's movement/throw profile: budget+caps drive repositioning into the AoE,
     // bodyStat drives how far the target can then be thrown out of the AoE
-    const { caps, budget, bodyStat } = getMovementProfile(interceptor, digimonById, tamerById)
+    const { caps, budget, bodyStat } = getMovementProfile(interceptor, digimonById, tamerById, getNaturewalkEnvironmentSettings(encounter.hazards))
 
     // Step 1: reposition the interceptor into the AoE, adjacent to the target
     const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([body.interceptorParticipantId, effectiveTargetId]), interceptor)
@@ -409,7 +411,7 @@ async function resolveIntercedeClaim(
     const targetPos = participantPositions[effectiveTargetId]
     const attackerPos = participantPositions[attackerId]
     const interceptorDims = getFootprintDimsForParticipant(interceptor, digimonById)
-    const { caps, budget } = getMovementProfile(interceptor, digimonById, tamerById)
+    const { caps, budget } = getMovementProfile(interceptor, digimonById, tamerById, getNaturewalkEnvironmentSettings(encounter.hazards))
     const excluded = new Set(isRangedIntercede ? [interceptor.id] : [interceptor.id, effectiveTargetId])
     const occupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, excluded, interceptor)
     const blocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, excluded, interceptor, 'traversal')
@@ -427,9 +429,10 @@ async function resolveIntercedeClaim(
 
     // An offer can outlive a token move. Recheck passage and landing for the chosen
     // interceptor, including stored player positions, before spending the claim.
-    if (!interceptorPos || !intercDePos ||
-      !getReachableCells(interceptorPos, budget, caps, claimMapRecord, new Set(), blocked, interceptorDims).has(`${intercDePos.x},${intercDePos.y},${intercDePos.z}`) ||
-      !isFootprintValid(intercDePos, interceptorDims, claimMapRecord, occupied, caps, interceptorPos)) {
+    const reachable = interceptorPos ? getMovementReachability(interceptorPos, budget, caps, claimMapRecord, new Set(), blocked, interceptorDims) : null
+    if (!reachable || !intercDePos ||
+      !reachable.cells.has(`${intercDePos.x},${intercDePos.y},${intercDePos.z}`) ||
+      !isFootprintValid(intercDePos, interceptorDims, claimMapRecord, occupied, caps, reachable.launchOriginTo(intercDePos))) {
       throw createError({ statusCode: 409, message: 'No valid intercede path available — board state changed' })
     }
 
@@ -596,10 +599,10 @@ async function resolveIntercedeClaim(
         // Effects on activeEffects: only apply immediately for single-target intercede
         if (!isAreaAttack && damageCalc.effectData) {
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
-          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round)
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.attackDef?.effect ?? null
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, undefined, encounter.round)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
           }
         }
 
@@ -784,10 +787,10 @@ async function resolveIntercedeClaim(
       // Effects on activeEffects: only apply immediately for single-target intercede
       if (!isAreaAttack && damageCalc.effectData) {
         if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
-        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round)
+        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
         appliedEffectName = damageCalc.attackDef?.effect ?? null
         if (damageCalc.secondaryEffectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, undefined, encounter.round)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
         }
       }
 

@@ -8,6 +8,7 @@ import { applyStanceToDodge } from './stanceModifiers'
 import { getEffectStatModifiers } from '../data/attackConstants'
 import { isAttackedFromOutsideClash } from './clashRules'
 import { rawCombatStats, digimonDodgeBase, tamerDodgeBase } from './combatDice'
+import { getNaturewalkBonuses } from './naturewalk'
 
 export interface DodgeRequestGroup<R = any> {
   /** The cast (`intercedeGroupId`) the requests share, or a per-request key when there is none. */
@@ -120,6 +121,8 @@ export function computeDodgeDefense(request: any, ctx: DodgeDefenseContext): Dod
     pool = next
   }
 
+  const naturewalk = target.type === 'digimon' ? getNaturewalkBonuses(ctx.findDigimon(target.entityId)?.qualities, target.naturewalkActiveElements) : null
+  apply('Naturewalk: Wind', pool + (naturewalk?.dodgeBonus ?? 0))
   apply('Stance', applyStanceToDodge(pool, target.currentStance))
   apply('Quick Reaction', pool + (target.quickReactionDiceBonus ?? 0))
   apply('Successive attack penalty', Math.max(1, pool - (request.data?.dodgePenalty ?? target.dodgePenalty ?? 0)))

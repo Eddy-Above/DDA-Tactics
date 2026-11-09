@@ -146,6 +146,7 @@ export async function resolveAreaIntercedeGroup({
   const now = Date.now()
 
   // Apply damage / effects to interceptors; apply dodge penalty to intercepted targets
+  const claimRecords = claims.some(claim => claim.effectData) ? await loadParticipantDigimon(updatedParticipants.filter(p => claims.some(claim => claim.interceptorParticipantId === p.id))) : new Map()
   updatedParticipants = updatedParticipants.map((p: any) => {
     const claim = claims.find(c => c.interceptorParticipantId === p.id)
     if (claim) {
@@ -160,7 +161,7 @@ export async function resolveAreaIntercedeGroup({
       }
       if (claim.effectData) {
         if (claim.effectData.name === 'Shield' || claim.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, claim.effectData, houseRules))
-        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], claim.effectData, houseRules, undefined, round)
+        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], claim.effectData, houseRules, claimRecords.get(p.entityId)?.qualities, round, p.naturewalkActiveElements)
       }
       return updated
     }

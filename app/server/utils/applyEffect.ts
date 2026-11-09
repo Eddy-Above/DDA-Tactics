@@ -4,6 +4,7 @@ import {
   INSTANT_EFFECTS,
   PERMANENT_EFFECTS,
 } from '../../data/attackConstants'
+import { getNaturewalkBonuses, getNaturewalkResistanceRanks } from '../../utils/naturewalk'
 
 interface EffectInput {
   name: string
@@ -34,13 +35,15 @@ export function applyEffectToParticipant(
   activeEffects: ActiveEffect[],
   newEffect: EffectInput,
   houseRules?: { stunMaxDuration1?: boolean },
-  targetQualities?: Array<{ id: string }>,
+  targetQualities?: Array<{ id: string; choiceId?: string; ranks?: number }>,
   round?: number,
+  environmentElements: readonly string[] = [],
 ): ActiveEffect[] {
   // Boss quality: Immunity — any effect targeting this digimon has no Duration or Potency
   if (targetQualities?.some((q) => q.id === 'immunity')) {
     return [...activeEffects]
   }
+  if (newEffect.name === 'Burn' && getNaturewalkBonuses(targetQualities).immuneToBurn) return [...activeEffects]
 
   // Don't persist instant effects
   if (INSTANT_EFFECTS.has(newEffect.name)) {
@@ -83,10 +86,16 @@ export function applyEffectToParticipant(
   // Apply duration limits
   let duration = newEffect.duration
   const limits = EFFECT_DURATION_LIMITS[newEffect.name]
+  const poisonMinimum = getNaturewalkBonuses(targetQualities, environmentElements).poisonMinimumDuration
+  const minimum = newEffect.name === 'Poison' ? poisonMinimum : limits?.min
   if (limits) {
-    if (limits.min !== undefined) duration = Math.max(limits.min, duration)
     if (limits.max !== undefined) duration = Math.min(limits.max, duration)
   }
+  const keepsBuffs = newEffect.type === 'buff' && targetQualities?.some(q => q.id === 'decisive-defenses')
+  const resistant = keepsBuffs ? 0 : targetQualities?.find(q => q.id === 'resistant')?.ranks ?? 0
+  const resistance = resistant + getNaturewalkResistanceRanks(targetQualities, newEffect.name)
+  if (resistance > 0) duration = Math.max(1, duration - resistance * 2)
+  if (minimum !== undefined) duration = Math.max(minimum, duration)
   if (houseRules?.stunMaxDuration1 && newEffect.name === 'Stun') {
     duration = Math.min(1, duration)
   }

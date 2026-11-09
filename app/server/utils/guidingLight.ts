@@ -10,6 +10,8 @@ import { getRoomPositions, broadcast } from './encounterRoom'
 import { buildEncounterPayload } from './encounterPayload'
 import { loadEncounterCombatContext } from './combatContext'
 import { loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
+import { applyNaturewalkEnvironment } from './naturewalk'
+import { withCombatRecords } from './combatRecordCache'
 
 const AURA_NAME = 'Guiding Light'
 const FOCUS_NAME = 'Guiding Light (Focus)'
@@ -130,13 +132,16 @@ export async function refreshGuidingLightForParticipants(
   participants: any[],
   positions?: Record<string, Vec3>,
 ): Promise<any[]> {
-  const context = await loadEncounterCombatContext(encounterId)
-  if (!context) return participants
+  return withCombatRecords(async () => {
+    const context = await loadEncounterCombatContext(encounterId)
+    if (!context) return participants
 
-  const result = await applyGuidingLightAuras(
-    participants, positions ?? await getRoomPositions(context.encounter.id), context.campaignLevel, context.houseRules,
-  )
-  return result.participants
+    const currentPositions = positions ?? await getRoomPositions(context.encounter.id)
+    const result = await applyGuidingLightAuras(
+      participants, currentPositions, context.campaignLevel, context.houseRules,
+    )
+    return (await applyNaturewalkEnvironment(context.encounter, result.participants, currentPositions, { grantWater: true, records: await loadParticipantDigimon(result.participants) })).participants
+  })
 }
 
 async function recomputeGuidingLightForEncounterOnce(encounterId: string): Promise<boolean> {
@@ -145,13 +150,15 @@ async function recomputeGuidingLightForEncounterOnce(encounterId: string): Promi
   const { encounter, campaignLevel, houseRules } = context
 
   const positions = await getRoomPositions(encounterId)
-  const { participants, changed } = await applyGuidingLightAuras(
+  const aura = await applyGuidingLightAuras(
     (encounter.participants as any[]) ?? [],
     positions,
     campaignLevel,
     houseRules
   )
-  if (!changed) return false
+  const naturewalk = await applyNaturewalkEnvironment(encounter, aura.participants, positions, { grantWater: true, records: await loadParticipantDigimon(aura.participants) })
+  const participants = naturewalk.participants
+  if (!aura.changed && !naturewalk.changed) return false
 
   await db.update(encounters).set({ participants, updatedAt: new Date() }).where(eq(encounters.id, encounterId))
 
@@ -186,7 +193,7 @@ export function recomputeGuidingLightForEncounter(encounterId: string): Promise<
   const run = (async (): Promise<boolean> => {
     let result = false
     try {
-      result = await recomputeGuidingLightForEncounterOnce(encounterId)
+      result = await withCombatRecords(() => recomputeGuidingLightForEncounterOnce(encounterId))
     } finally {
       inFlight.delete(encounterId)
     }

@@ -85,9 +85,9 @@ function harness({ withTamer = true, actor = {}, currentRecord = {}, parentRecor
     '../../../../utils/partnerDevolution': partnerDevolution,
     '../../../../utils/combatContext': { loadCampaignCombatContext: async () => ({ campaignLevel: 'standard', eddySoulRules: rules, houseRules: {} }) },
     '../../../../utils/encounterRoom': { getRoomPositions: async () => ({ partner: { x: 1, y: 0, z: 1 } }) },
-    '../../../../utils/guidingLight': { applyGuidingLightAuras: async participants => {
+    '../../../../utils/guidingLight': { refreshGuidingLightForParticipants: async (_id, participants) => {
       auraRosters.push(copy(participants))
-      return { participants, changed: false }
+      return participants
     } },
   }).default
   return {

@@ -45,6 +45,7 @@ export interface BattleLogEntry {
 
 export interface Hazard {
   id: string
+  naturewalkEnvironment?: import('../utils/naturewalk').NaturewalkEnvironmentSettings
   name: string
   description: string
   effect: string

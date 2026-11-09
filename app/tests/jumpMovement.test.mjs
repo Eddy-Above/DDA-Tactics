@@ -41,6 +41,7 @@ for (const painted of [false, true]) {
   test(`${painted ? 'painted' : 'open'} air jump landings respect height and horizontal range from the origin`, () => {
     const map = emptyMap()
     const origin = point(1, 2, 1)
+    map.groundTiles.push(origin)
     const caps = detectCapabilities([], 13, 2, 2, undefined, 7)
     const destinations = [point(4, 5, 4), point(4, -5, 4), point(4, 6, 4), point(5, 2, 1)]
     if (painted) map.spaceTiles = destinations.map(pos => ({ ...pos, spaceType: 'air' }))
@@ -74,6 +75,7 @@ for (const painted of [false, true]) {
     const map = emptyMap()
     const caps = detectCapabilities([], 13, 2, 2, undefined, 7)
     const origin = point()
+    map.groundTiles.push(origin)
     const transitions = [
       [point(2, 2), point(3, 3), true],
       [point(3, 3), point(3, 4), false],
@@ -92,6 +94,7 @@ for (const painted of [false, true]) {
 
 test('manual capability objects and projectile caps retain their existing limits', () => {
   const map = emptyMap()
+  map.groundTiles.push(point())
   const manual = { canFly: false, canJump: true, jumpHeight: 2, jumpRange: 4, canClimb: false, canSwim: false, canDig: false }
   assert.equal(canLandOn(point(4, 2, 4), manual, map, new Set(), point()), true)
   assert.equal(canLandOn(point(5, 2), manual, map, new Set(), point()), false)

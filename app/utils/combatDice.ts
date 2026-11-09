@@ -2,6 +2,7 @@ import { applyStatSwaps, type StatBlock } from './statSwaps'
 import { applyStanceToAccuracy } from './stanceModifiers'
 import { getEffectStatModifiers, applyDerivedStatEffects } from '../data/attackConstants'
 import { calculateDigimonDerivedStats, STAGE_BATTERY_CAPACITY } from '../types'
+import { getNaturewalkBonuses } from './naturewalk'
 
 /** Raw form stats, before stance and qualities. Stat swaps always use this same snapshot. */
 export function rawCombatStats(record: any): StatBlock {
@@ -41,6 +42,7 @@ export function combatAttackStats(record: any, participant: any, attack: any, op
     accuracyBonus += accuracy; damageBonus += damage
     if (accuracy || damage) modifiers.push({ label, accuracy, damage })
   }
+  add('Naturewalk: Fire', 0, getNaturewalkBonuses(qualities, participant?.naturewalkActiveElements).damageBonus)
   const derived = applyDerivedStatEffects(options.derived ?? calculateDigimonDerivedStats({ ...raw, health: (record?.baseStats?.health ?? 0) + (record?.bonusStats?.health ?? 0) + (record?.isDarkEvolution ? 2 : 0) }, record?.stage ?? 'rookie', record?.size ?? 'medium'), participant?.activeEffects ?? [])
   if (has('true-guardian')) add('True Guardian', -2)
   if (has('huge-power')) {

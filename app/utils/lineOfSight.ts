@@ -1,7 +1,7 @@
 import type { GameMap, Vec3 } from '~/types'
 import type { FootprintDims } from '~/utils/movementRules'
 import { getFootprintCells } from '~/utils/movementRules'
-import { getMapVoxels, voxelBlocksTargeting } from '~/utils/mapVoxels'
+import { getMapVoxels, getVoxelMaterialId, voxelBlocksMovement, voxelBlocksTargeting } from '~/utils/mapVoxels'
 
 // Rendered map geometry in world units (1 unit = 1 grid cell). MapCanvas builds its meshes from
 // these, so line of sight always matches what is drawn.
@@ -38,7 +38,7 @@ export interface LosIndex {
  * open doorways are clear) and every voxel except non-solid see-through ones (water, air).
  * Destroyed walls/windows/ceilings are skipped. Space tiles and stairs never block.
  */
-export function buildLosIndex(map: GameMap, destroyedIds: Set<string> = new Set()): LosIndex {
+export function buildLosIndex(map: GameMap, destroyedIds: Set<string> = new Set(), viewer?: { canSeeDarkness?: boolean }): LosIndex {
   const { TILE_H, WALL_H, WALL_D, WINDOW_H, WINDOW_FRAME, DOOR_H, PILLAR_W, CEILING_H } = MAP_GEOMETRY
   const index: LosIndex = { boxes: [], cells: new Map() }
 
@@ -57,6 +57,7 @@ export function buildLosIndex(map: GameMap, destroyedIds: Set<string> = new Set(
 
   for (const t of map.groundTiles ?? []) add(t.x, t.y, t.z, t.x + 1, t.y + TILE_H, t.z + 1)
   for (const v of getMapVoxels(map)) {
+    if (viewer?.canSeeDarkness && getVoxelMaterialId(v) === 'darkness' && !voxelBlocksMovement(v)) continue
     if (voxelBlocksTargeting(v)) add(v.x, v.y, v.z, v.x + 1, v.y + 1, v.z + 1)
   }
   for (const c of map.ceilings ?? []) {

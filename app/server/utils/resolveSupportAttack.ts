@@ -494,7 +494,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
             targetDerived,
             params.isSignatureMove ? (params.batteryCount ?? 0) : 0
           )
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules, undefined, params.round)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules, (targetRecord as any)?.qualities, params.round, p.naturewalkActiveElements)
           appliedEffectName = params.attackDef.effect
         }
       }

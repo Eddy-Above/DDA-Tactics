@@ -287,6 +287,7 @@ export const encounters = pgTable('encounters', {
     effect: string
     affectedArea: string
     duration: number | null
+    naturewalkEnvironment?: { elements: import('../../types').ElementType[]; useMapTerrain: boolean }
   }>>(),
 
   // Pending player requests (digimon selection, initiative roll, dodge roll, etc.)

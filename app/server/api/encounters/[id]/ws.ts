@@ -54,6 +54,7 @@ export default defineWebSocketHandler({
       broadcast(encounterId, msg, peer)
     } else if (msg.type === 'element-painted' || msg.type === 'map-edited') {
       broadcast(encounterId, msg, peer)
+      recomputeGuidingLightForEncounter(encounterId).catch((e) => console.error('[ws] Terrain benefits recompute failed:', e))
     } else if (msg.type === 'structure-damaged') {
       const version = await applyStructureDamaged(encounterId, msg.structureId, msg.woundsRemaining)
       broadcast(encounterId, { ...msg, version }, peer)

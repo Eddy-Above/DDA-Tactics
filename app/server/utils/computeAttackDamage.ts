@@ -8,6 +8,7 @@ import { getDigizoidArmorBonus, getReflectArmorRange } from './digizoidArmor'
 import { getOutsideClashArmorBonus } from './clashArmor'
 import { isImmuneToEffect } from './damageOverTime'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
+import { getNaturewalkBonuses } from '../../utils/naturewalk'
 
 export interface ComputeAttackDamageParams {
   shieldComplex?: boolean
@@ -125,12 +126,16 @@ export async function computeAttackDamage(
       }
 
       const qualities = attackerDigimon.qualities
+      const naturewalk = getNaturewalkBonuses(qualities, attackerParticipant.naturewalkActiveElements)
+      attackBaseDamage += naturewalk.damageBonus
+      armorPiercing += naturewalk.armorPiercingRanks * 2
       attackerHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       attackerHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       attackerHasSelectiveTargeting = (qualities || []).some((q: any) => q.id === 'selective-targeting')
 
       // Attacker's own total Armor (only needed for Gold/Obsidian Digizoid Armor reflect damage below)
       attackerTotalArmor = resolvedAttackerStats.armor
+      attackerTotalArmor += naturewalk.armorBonus
       attackerTotalArmor += getDigizoidArmorBonus(qualities).armor
       attackerTotalArmor += attackerParticipant.blackArmorRoundBonus?.armor ?? 0
       const attackerDataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')
@@ -199,6 +204,7 @@ export async function computeAttackDamage(
 
       const qualities = targetDigimon.qualities
       targetQualities = qualities || []
+      targetArmor += getNaturewalkBonuses(qualities, targetParticipant.naturewalkActiveElements).armorBonus
       targetHasCombatMonster = (qualities || []).some((q: any) => q.id === 'combat-monster')
       targetHasPositiveReinforcement = (qualities || []).some((q: any) => q.id === 'positive-reinforcement')
       const dataOpt = (qualities || []).find((q: any) => q.id === 'data-optimization')

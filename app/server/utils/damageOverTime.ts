@@ -10,6 +10,7 @@ import { getDigizoidArmorBonus } from './digizoidArmor'
 import { getRoomPositions } from './encounterRoom'
 import { chebyshev } from './gridDistance'
 import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
+import { getNaturewalkBonuses } from '../../utils/naturewalk'
 
 // Damage over time — [Poison] and [Burn]. Both their damage and their duration countdown are
 // resolved here, server-side, so a tick and its countdown always happen together (a 3-round
@@ -121,6 +122,7 @@ export function getBurnArmor(participant: any, record: any): number {
   let armor = applyStatSwaps(raw, participant.statSwaps).armor
 
   const qualities = record.qualities || []
+  armor += getNaturewalkBonuses(qualities, participant.naturewalkActiveElements).armorBonus
   if (qualities.find((q: any) => q.id === 'data-optimization')?.choiceId === 'guardian') armor += 2
   armor += getDigizoidArmorBonus(qualities).armor
   armor += participant.blackArmorRoundBonus?.armor ?? 0
@@ -186,6 +188,10 @@ export function applyMovementBurn(
     if (meters === undefined) return p
     const next = { ...p, lastMovedRound: opts.round }
     if (next.type !== 'digimon' || !hasEffect(next, 'Burn')) return next
+    if (getNaturewalkBonuses(opts.digimonById.get(next.entityId)?.qualities).immuneToBurn) {
+      next.activeEffects = next.activeEffects.filter((effect: any) => effect.name !== 'Burn')
+      return next
+    }
 
     const armor = perTwoSpaces ? 0 : getBurnArmor(next, opts.digimonById.get(next.entityId))
     const damage = burnMovementDamage(meters, armor, perTwoSpaces)
@@ -247,6 +253,10 @@ async function tickPoison(p: any, ctx: TickContext): Promise<void> {
 // round takes its Stage Bonus × 2, reduced by Armor to a minimum of 1 (house rule
 // `burnStationaryIgnoresArmor`: flat), then the countdown.
 function tickBurnAtRoundEnd(p: any, ctx: TickContext, positions: Record<string, Vec3> | null | undefined, rules?: DamageOverTimeRules): void {
+  if (getNaturewalkBonuses(ctx.digimonById.get(p.entityId)?.qualities).immuneToBurn) {
+    p.activeEffects = p.activeEffects.filter((effect: any) => effect.name !== 'Burn')
+    return
+  }
   const stationary = !rules?.burnPerTwoSpacesMoved
     && p.type === 'digimon'
     && !!positions?.[p.id]

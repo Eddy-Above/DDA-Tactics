@@ -178,6 +178,55 @@ export interface ReachableSearch {
   pathTo: (goal: Vec3) => Vec3[] | null
 }
 
+export interface StatefulTraversal<State> {
+  initial: State
+  key: (state: State) => string
+  step: (from: Vec3, to: Vec3, spent: number, state: State) => { cost: number; state: State } | null
+}
+
+/** Different launch points at one airborne cell can have different legal continuations. */
+export function searchReachableWithState<State>(
+  origin: Vec3, budget: number, traversal: StatefulTraversal<State>,
+): ReachableSearch & { stateTo: (goal: Vec3) => State | undefined } {
+  type Node = WeightedNode & { state: State; stateKey: string; parent?: Node }
+  const nodeKey = (pos: Vec3, state: State) => `${key(pos)}|${traversal.key(state)}`
+  const initial: Node = { pos: origin, state: traversal.initial, stateKey: nodeKey(origin, traversal.initial), cost: 0, verticalSteps: 0, priority: 0, order: 0 }
+  const scores = new Map<string, SearchScore>([[initial.stateKey, initial]])
+  const best = new Map<string, Node>([[key(origin), initial]])
+  const queue = new SearchHeap()
+  queue.push(initial)
+  let order = 1
+  while (queue.size) {
+    const current = queue.pop()! as Node
+    const score = scores.get(current.stateKey)
+    if (!score || current.cost !== score.cost || current.verticalSteps !== score.verticalSteps || current.cost >= budget - COST_EPSILON) continue
+    for (const pos of neighbours(current.pos)) {
+      const edge = traversal.step(current.pos, pos, current.cost, current.state)
+      if (!edge || !Number.isFinite(edge.cost) || edge.cost < 1) continue
+      const cost = current.cost + edge.cost
+      if (cost > budget + COST_EPSILON) continue
+      const verticalSteps = current.verticalSteps + Math.abs(pos.y - current.pos.y)
+      const stateKey = nodeKey(pos, edge.state)
+      if (!improvesScore(cost, verticalSteps, scores.get(stateKey))) continue
+      const next: Node = { pos, state: edge.state, stateKey, cost, verticalSteps, priority: cost, order: order++, parent: current }
+      scores.set(stateKey, next)
+      if (improvesScore(cost, verticalSteps, best.get(key(pos)))) best.set(key(pos), next)
+      queue.push(next)
+    }
+  }
+  return {
+    cells: new Set(best.keys()),
+    stateTo: goal => best.get(key(goal))?.state,
+    pathTo: goal => {
+      let node = best.get(key(goal))
+      if (!node) return null
+      const path: Vec3[] = []
+      while (node) { path.push(node.pos); node = node.parent }
+      return path.reverse()
+    },
+  }
+}
+
 // Retain the shortest-path tree so movement previews need no second search.
 export function searchReachable(
   origin: Vec3,
