@@ -104,11 +104,13 @@ import type {
   GameMap, MapVoxel, Vec3, CombatParticipant, ElementType, MapTool, DigimonSize,
   DestructibleState, WallFace, Stance, EddySoulRules,
 } from '~/types'
-import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
-import { getMapVoxels, getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
+import { getMapVoxels, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { buildVoxelSurface } from '~/utils/voxelSurface'
-import { createVoxelGeometry, rampRotationY } from '~/utils/voxelGeometry'
+import { createMapTerrainChunks } from '~/utils/mapTerrainChunks'
+import { getMapGeometryRevision } from '~/utils/mapEdits'
+import { clearMapGroup, disposeMapObjects, mapPreviewChanged } from '~/utils/mapRenderResources'
+import { createVoxelGeometry, createStairGeometry, stairDirectionForFace } from '~/utils/voxelGeometry'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
@@ -333,7 +335,7 @@ const modeChangeDisabled = computed(() => {
 function radialDoorButtons(participantId: string | null): { id: string; isOpen: boolean; label: string }[] {
   const pos = participantId ? props.participantPositions[participantId] : null
   if (!props.map || !pos) return []
-  const destroyed = new Set(props.destructibleStates.filter(s => s.currentWounds <= 0).map(s => s.structureId))
+  const destroyed = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
   const doors = doorsAdjacentTo(props.map, pos, getParticipantFootprintDims(participantId), destroyed)
   return doors.map((d, i) => ({
     id: d.id,
@@ -551,7 +553,7 @@ function validGmMoveCell(cell: Vec3, participantId: string): boolean {
 function cancelMoveAim() {
   if (movingParticipantId.value) movingParticipantId.value = null
   else if (props.gmMoveParticipantId) emit('movement-cancelled')
-  hoverGhostGroup.clear()
+  clearMapGroup(hoverGhostGroup)
   hoveredMoveScreen.value = null
   emit('cell-hovered', null)
 }
@@ -589,19 +591,22 @@ let renderer: THREE.WebGLRenderer
 let scene: THREE.Scene
 let camera: THREE.PerspectiveCamera
 let controls: OrbitControls
-let rafId: number
+let rafId = 0
+let canvasDisposed = false
+let terrain: ReturnType<typeof createMapTerrainChunks> | null = null
+let overlaysDirty = true
+let highlightsDirty = true
+let reticulesDirty = true
+let pendingPointerEvent: MouseEvent | null = null
+let structureSources: unknown[] = []
 let blendTextureCache: Map<string, THREE.CanvasTexture> = new Map()
 let occludeRaycaster: THREE.Raycaster
 let spriteGroups: Map<string, THREE.Group>  // participantId → group
 const borderMaterials = new Map<string, THREE.LineBasicMaterial>()  // participantId → volume-outline material
 // Participant whose volume outline is tinted green because a click under the cursor would target it.
 let hoveredTargetId: string | null = null
-let tileMeshes: THREE.Mesh[] = []
 let buildMeshes: THREE.Object3D[] = []
-let spawnMeshes: THREE.Object3D[] = []
 let wallMeshes: Array<{ mesh: THREE.Mesh; wallId: string; cell: Vec3 }> = []
-let voxelMeshes: THREE.Mesh[] = []
-let transparentVoxelOutline: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial> | null = null
 let doorMeshes = new Map<string, THREE.Mesh>()  // doorId → door panel
 // Game-rules line of sight (single-target reticules + area shapes), rebuilt with the scene.
 let losIndex: LosIndex | null = null
@@ -713,7 +718,7 @@ function anyPassLandingValid(attackerPos: Vec3, dir: Vec3, movement: number, ram
 // Renders the [Pass] landing footprint: green if a valid finish is reachable from here
 // (using RAM if needed), red if filtered (no amount of RAM lands clear).
 function renderPassLandingMarker(anchor: Vec3, dims: FootprintDims, valid: boolean) {
-  passLandingGroup.clear()
+  clearMapGroup(passLandingGroup)
   const color = valid ? 0x33ff66 : 0xff3300
   for (const c of getFootprintCells(anchor, dims)) {
     const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
@@ -729,10 +734,10 @@ onMounted(() => {
   initScene()
   buildMap()
   buildSprites()
-  animate()
+  requestRender()
 
   window.addEventListener('resize', onResize)
-  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keydown', queueKeyDown)
   window.addEventListener('keyup', onKeyUp)
   // Capture phase: must run before OrbitControls' own (bubble-phase) pointerdown so a token press
   // can switch the camera controls off before they start panning.
@@ -740,26 +745,33 @@ onMounted(() => {
   window.addEventListener('pointermove', onTokenPointerMove)
   window.addEventListener('pointerup', onTokenPointerUp)
   window.addEventListener('pointercancel', onTokenPointerCancel)
-  canvasRef.value!.addEventListener('click', onCanvasClick)
-  canvasRef.value!.addEventListener('mousemove', onMouseMove)
-  canvasRef.value!.addEventListener('mousedown', onMouseDown)
-  canvasRef.value!.addEventListener('mouseup', onMouseUp)
-  canvasRef.value!.addEventListener('mouseleave', () => setHoveredTarget(null))
+  canvasRef.value!.addEventListener('click', e => { onCanvasClick(e); invalidateFrame() })
+  canvasRef.value!.addEventListener('mousemove', queueMouseMove)
+  canvasRef.value!.addEventListener('mousedown', e => { onMouseDown(e); invalidateFrame() })
+  canvasRef.value!.addEventListener('mouseup', e => { onMouseUp(e); invalidateFrame() })
+  canvasRef.value!.addEventListener('mouseleave', onCanvasLeave)
   canvasRef.value!.addEventListener('contextmenu', e => e.preventDefault())
   // Capture before OrbitControls so aiming and ramp rotation consume the wheel without zooming.
-  canvasRef.value!.addEventListener('wheel', onCanvasWheel, { passive: false, capture: true })
+  canvasRef.value!.addEventListener('wheel', queueCanvasWheel, { passive: false, capture: true })
 })
 
 onUnmounted(() => {
+  canvasDisposed = true
   cancelAnimationFrame(rafId)
+  rafId = 0
+  pendingPointerEvent = null
   clearAoeHighlights()
-  clearTransparentVoxelOutline()
+  terrain?.dispose()
+  disposeMapObjects(buildMeshes)
+  for (const group of spriteGroups.values()) disposeMapObjects([group])
+  for (const group of [hoverGhostGroup, movementHighlightGroup, pathHighlightGroup, reticuleGroup, passRangeGroup, passLandingGroup]) if (group) clearMapGroup(group)
+  controls?.dispose()
   renderer?.dispose()
   window.removeEventListener('resize', onResize)
-  window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keydown', queueKeyDown)
   window.removeEventListener('keyup', onKeyUp)
   canvasRef.value?.removeEventListener('pointerdown', onTokenPointerDown, { capture: true })
-  canvasRef.value?.removeEventListener('wheel', onCanvasWheel, { capture: true })
+  canvasRef.value?.removeEventListener('wheel', queueCanvasWheel, { capture: true })
   window.removeEventListener('pointermove', onTokenPointerMove)
   window.removeEventListener('pointerup', onTokenPointerUp)
   window.removeEventListener('pointercancel', onTokenPointerCancel)
@@ -798,7 +810,7 @@ function initScene() {
   controls.screenSpacePanning = false
   controls.target.set(cx, 0, cz)
   controls.update()
-  controls.addEventListener('change', () => emit('map-changed'))
+  controls.addEventListener('change', () => { overlaysDirty = true; requestRender(); emit('map-changed') })
 
   // Lights
   const ambient = new THREE.AmbientLight(0xffffff, 0.55)
@@ -819,7 +831,6 @@ function initScene() {
   scene.add(reticuleGroup, aoeGroup, passRangeGroup, movementHighlightGroup, pathHighlightGroup, hoverGhostGroup, passLandingGroup)
 
   spriteGroups = new Map()
-  tileMeshes = []
   occludeRaycaster = new THREE.Raycaster()
   occludeRaycaster.near = 0.1
 
@@ -895,176 +906,39 @@ function makeBlendTexture(center: number, n?: number, s?: number, e?: number, w?
 }
 
 // ── Map building ───────────────────────────────────────────────────────────
-function clearTransparentVoxelOutline() {
-  if (!transparentVoxelOutline) return
-  scene.remove(transparentVoxelOutline)
-  transparentVoxelOutline.geometry.dispose()
-  transparentVoxelOutline.material.dispose()
-  transparentVoxelOutline = null
-}
-
-// Keep separate meshes/userData for cell picking, but render only the outside of
-// each visible transparent element/material volume. Recompute at a floor cut to expose its new top.
-function refreshTransparentVoxels() {
-  clearTransparentVoxelOutline()
-  const meshes = voxelMeshes.filter(mesh => mesh.userData.transparentVoxel &&
-    mesh.userData.voxel.shape !== 'ramp' && mesh.userData.floorY <= clipY.value)
-  const surface = buildVoxelSurface(meshes.map(mesh => mesh.userData.voxel as MapVoxel), voxel => {
-    const materialId = getVoxelMaterialId(voxel)
-    return JSON.stringify([materialId, voxel.element ?? materialId])
-  })
-
-  for (const mesh of meshes) {
-    const voxel = mesh.userData.voxel as Vec3
-    const faces = surface.exposedFaces.get(vec3Key(voxel)) ?? []
-    const geometry = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
-    const boxIndices = geometry.getIndex()!
-    const indices = faces.flatMap(face => Array.from({ length: 6 }, (_, i) => boxIndices.getX(face * 6 + i)))
-    geometry.setIndex(indices)
-    geometry.clearGroups()
-    mesh.geometry.dispose()
-    mesh.geometry = geometry
-  }
-
-  if (!surface.outlinePositions.length) return
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(surface.outlinePositions, 3))
-  const material = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false })
-  transparentVoxelOutline = new THREE.LineSegments(geometry, material)
-  scene.add(transparentVoxelOutline)
+function releaseBlendTexture(texture: THREE.Texture) {
+  for (const [key, cached] of blendTextureCache) if (cached === texture) blendTextureCache.delete(key)
+  texture.dispose()
 }
 
 function buildMap() {
   losIndex = null
-  clearTransparentVoxelOutline()
-  if (!props.map) return
+  if (!props.map) {
+    terrain?.dispose(); terrain = null
+    disposeMapObjects(buildMeshes)
+    for (const object of buildMeshes) scene.remove(object)
+    buildMeshes = []; wallMeshes = []; doorMeshes.clear(); structureSources = []
+    invalidateFrame()
+    return
+  }
   const map = props.map
-  const destroyedIds = new Set(props.destructibleStates.filter(s => s.currentWounds <= 0).map(s => s.structureId))
+  const destroyedIds = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
 
-  // Ground tiles
-  const tileIndex = new Map<string, number>()
-  for (const t of map.groundTiles) {
-    if (t.element !== 'void')
-      tileIndex.set(`${t.x},${t.y},${t.z}`, ELEMENT_COLORS[t.element as ElementType] ?? 0x888888)
+  if (!terrain) terrain = createMapTerrainChunks({ scene, tileHeight: TILE_H, makeBlendTexture, releaseBlendTexture })
+  terrain.sync(map, { clipY: clipY.value, showSpawnIndicators: props.showSpawnIndicators !== false })
+  const sources = [map.walls, map.windows, map.doors, map.ceilings, map.stairs, JSON.stringify(props.destructibleStates)]
+  if (sources.every((source, i) => source === structureSources[i])) {
+    lastAttackKey = ''
+    invalidateFrame()
+    return
   }
-
-  for (const tile of map.groundTiles) {
-    const centerColor = ELEMENT_COLORS[tile.element as ElementType] ?? 0x888888
-    const y = tile.y
-    const nc = tileIndex.get(`${tile.x},${y},${tile.z - 1}`)
-    const sc = tileIndex.get(`${tile.x},${y},${tile.z + 1}`)
-    const wc = tileIndex.get(`${tile.x - 1},${y},${tile.z}`)
-    const ec = tileIndex.get(`${tile.x + 1},${y},${tile.z}`)
-    const hasBlend = tile.element !== 'void' && (
-      (nc && nc !== centerColor) || (sc && sc !== centerColor) ||
-      (wc && wc !== centerColor) || (ec && ec !== centerColor)
-    )
-    const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_H, TILE_SIZE)
-    const mat = new THREE.MeshLambertMaterial({ color: centerColor })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(tile.x + 0.5, tile.y * TILE_SIZE + TILE_H / 2, tile.z + 0.5)
-    mesh.receiveShadow = true
-    mesh.userData = { type: 'ground', tile, floorY: tile.y }
-    scene.add(mesh)
-    tileMeshes.push(mesh)
-    buildMeshes.push(mesh)
-    if (hasBlend) {
-      const overlayGeo = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE)
-      const overlayMat = new THREE.MeshBasicMaterial({
-        map: makeBlendTexture(centerColor, nc, sc, ec, wc),
-        transparent: true,
-        depthWrite: false,
-      })
-      const overlay = new THREE.Mesh(overlayGeo, overlayMat)
-      overlay.rotation.x = -Math.PI / 2
-      overlay.position.set(tile.x + 0.5, tile.y * TILE_SIZE + TILE_H + 0.001, tile.z + 0.5)
-      overlay.userData = { floorY: tile.y }
-      scene.add(overlay)
-      buildMeshes.push(overlay)
-    }
-    const edgesGeo = new THREE.EdgesGeometry(geo)
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 })
-    const lines = new THREE.LineSegments(edgesGeo, lineMat)
-    lines.position.copy(mesh.position)
-    lines.userData = { floorY: tile.y }
-    scene.add(lines)
-    buildMeshes.push(lines)
-    if (tile.isSpawnPoint) {
-      const spawnGeo = new THREE.PlaneGeometry(TILE_SIZE * 0.7, TILE_SIZE * 0.7)
-      const spawnMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.4, depthWrite: false })
-      const spawnMesh = new THREE.Mesh(spawnGeo, spawnMat)
-      spawnMesh.rotation.x = -Math.PI / 2
-      spawnMesh.position.set(tile.x + 0.5, tile.y * TILE_SIZE + TILE_H + 0.003, tile.z + 0.5)
-      spawnMesh.userData = { floorY: tile.y }
-      spawnMesh.visible = props.showSpawnIndicators !== false
-      scene.add(spawnMesh)
-      buildMeshes.push(spawnMesh)
-      spawnMeshes.push(spawnMesh)
-    }
-  }
-
-  // Space tiles (wireframe outlines)
-  for (const tile of map.spaceTiles) {
-    const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
-    const mat = new THREE.MeshBasicMaterial({ color: 0x334455, wireframe: true, opacity: 0.25, transparent: true })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(tile.x + 0.5, tile.y * TILE_SIZE + 0.5, tile.z + 0.5)
-    mesh.userData = { type: 'space', tile, floorY: tile.y }
-    scene.add(mesh)
-    buildMeshes.push(mesh)
-  }
-
-  // Voxels (one-cell terrain/cover blocks and directional ramps)
-  for (const voxel of map.voxels ?? []) {
-    const geo = createVoxelGeometry(voxel)
-    const opacity = getVoxelOpacity(voxel)
-    const def = getVoxelMaterialDefinition(voxel)
-    const mat = new THREE.MeshLambertMaterial({
-      color: getVoxelColor(voxel),
-      transparent: opacity < 1 || Boolean(def.transparent),
-      opacity,
-      depthWrite: opacity >= 1,
-    })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + 0.5, voxel.z + 0.5)
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    mesh.userData = { type: 'voxel', voxel, floorY: voxel.y, transparentVoxel: opacity < 1 }
-    scene.add(mesh)
-    buildMeshes.push(mesh)
-    voxelMeshes.push(mesh)
-
-    if (opacity >= 1 || voxel.shape === 'ramp') {
-      const edgesGeo = new THREE.EdgesGeometry(geo)
-      const edgeMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
-      const edges = new THREE.LineSegments(edgesGeo, edgeMat)
-      edges.position.copy(mesh.position)
-      edges.userData = { floorY: voxel.y }
-      scene.add(edges)
-      buildMeshes.push(edges)
-    }
-
-    if (voxel.isSpawnPoint) {
-      const spawnGeo = new THREE.PlaneGeometry(TILE_SIZE * 0.72, TILE_SIZE * 0.72)
-      const spawnMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.48, depthWrite: false })
-      const spawnMesh = new THREE.Mesh(spawnGeo, spawnMat)
-      if (voxel.shape === 'ramp') {
-        spawnMesh.rotation.set(-Math.PI / 4, rampRotationY(voxel.rampDirection), 0, 'YXZ')
-        spawnMesh.scale.y = Math.SQRT2
-        spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + 0.5 + 0.004, voxel.z + 0.5)
-      } else {
-        spawnMesh.rotation.x = -Math.PI / 2
-        spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + TILE_SIZE + 0.004, voxel.z + 0.5)
-      }
-      spawnMesh.userData = { floorY: voxel.y, type: 'voxel-spawn', voxel }
-      spawnMesh.visible = props.showSpawnIndicators !== false
-      scene.add(spawnMesh)
-      buildMeshes.push(spawnMesh)
-      spawnMeshes.push(spawnMesh)
-    }
-  }
-
-  refreshTransparentVoxels()
+  structureSources = sources
+  disposeMapObjects(buildMeshes)
+  for (const object of buildMeshes) scene.remove(object)
+  buildMeshes = []
+  wallMeshes = []
+  doorMeshes = new Map()
+  highlightedDoorId = null
 
   // Walls — frame-only when a window or door is present
   const walledWindowIds = new Set(map.windows.map(w => w.wallId))
@@ -1185,33 +1059,19 @@ function buildMap() {
     buildMeshes.push(mesh)
   }
 
-  // Stairs
+  // Stairs and their drawing preview share exactly the same three-step geometry.
   for (const stair of map.stairs) {
-    const group = new THREE.Group()
-    for (let step = 0; step < 3; step++) {
-      const stepH = (step + 1) / 3
-      const geo = new THREE.BoxGeometry(1, stepH, 1 / 3)
-      const mat = new THREE.MeshLambertMaterial({ color: 0x887766 })
-      const mesh = new THREE.Mesh(geo, mat)
-      mesh.position.set(0, stepH / 2, (step - 1) * (1 / 3))
-      group.add(mesh)
-    }
-    group.position.set(stair.x + 0.5, stair.y * TILE_SIZE, stair.z + 0.5)
-    if (stair.face === 'north') group.rotation.y = Math.PI
-    else if (stair.face === 'east') group.rotation.y = -Math.PI / 2
-    else if (stair.face === 'west') group.rotation.y = Math.PI / 2
-    group.userData = { floorY: stair.y }
-    scene.add(group)
-    buildMeshes.push(group)
+    const mesh = new THREE.Mesh(createStairGeometry(stairDirectionForFace(stair.face)), new THREE.MeshLambertMaterial({ color: 0x887766 }))
+    mesh.position.set(stair.x + 0.5, stair.y * TILE_SIZE + 0.5, stair.z + 0.5)
+    mesh.userData = { floorY: stair.y }
+    scene.add(mesh)
+    buildMeshes.push(mesh)
   }
 
   // Apply current clip and ghost state after full rebuild
   for (const obj of buildMeshes) {
     const fY = (obj as any).userData?.floorY
     if (fY !== undefined) obj.visible = fY <= clipY.value
-  }
-  if (props.showSpawnIndicators === false) {
-    for (const m of spawnMeshes) m.visible = false
   }
   if (ghostWalls.value) {
     for (const obj of buildMeshes) {
@@ -1226,8 +1086,8 @@ function buildMap() {
   }
 
   // Built from map data (not meshes), so the Y-clip/ghost view aids never change targeting.
-  losIndex = buildLosIndex(map, destroyedIds)
   lastAttackKey = ''  // re-check reticules against the new geometry (doors, edits)
+  invalidateFrame()
 }
 
 // ── Character footprints + HTML token overlays ───────────────────────────────
@@ -1236,7 +1096,7 @@ const characterOverlays = ref<Record<string, { x: number; y: number; w: number; 
 const reticuleParticipantIds = ref<string[]>([])
 
 function buildSprites() {
-  for (const [, group] of spriteGroups) scene.remove(group)
+  for (const [, group] of spriteGroups) { scene.remove(group); disposeMapObjects([group]) }
   spriteGroups.clear()
   borderMaterials.clear()
 
@@ -1311,6 +1171,9 @@ function refreshBorderColors() {
 
 function updateCharacterOverlays() {
   const overlays: typeof characterOverlays.value = {}
+  const wallOccluders = wallMeshes.filter(w => w.mesh.visible).map(w => w.mesh)
+  const wallByMesh = new Map(wallMeshes.map(entry => [entry.mesh, entry]))
+  const windowWallIds = new Set((props.map?.windows ?? []).map(w => w.wallId))
 
   // Camera right vector from world matrix column 0 — used to measure footprint
   // width in screen space the same way Three.js measures the 3D shadow disc.
@@ -1336,14 +1199,14 @@ function updateCharacterOverlays() {
     // Ghost Walls mode disables occlusion so tokens show through walls.
     if (!ghostWalls.value) {
       const dir        = center.clone().sub(camera.position).normalize()
-      const occRay     = new THREE.Raycaster(camera.position, dir, 0, distToChar - 0.1)
+      const occRay = occludeRaycaster
+      occRay.set(camera.position, dir)
+      occRay.near = 0
+      occRay.far = distToChar - 0.1
       // Raycasting ignores Object3D.visible, so clipped-away geometry must be excluded by hand.
-      const occluders  = [...wallMeshes.map(w => w.mesh), ...voxelMeshes].filter(m => m.visible)
-      const hits       = occRay.intersectObjects(occluders, false)
-      const windowWallIds = new Set((props.map?.windows ?? []).map(w => w.wallId))
-      const isOccluded = hits.some(hit => {
-        if (voxelMeshes.includes(hit.object as THREE.Mesh)) return true
-        const entry = wallMeshes.find(w => w.mesh === hit.object)
+      const hits = occRay.intersectObjects(wallOccluders, false)
+      const isOccluded = Boolean(terrain?.isOccluded(occRay)) || hits.some(hit => {
+        const entry = wallByMesh.get(hit.object as THREE.Mesh)
         if (!entry) return true
         if (!windowWallIds.has(entry.wallId)) return true
         const floorY = entry.cell.y * TILE_SIZE
@@ -1456,6 +1319,7 @@ function highlightDoor(doorId: string | null) {
   tint(highlightedDoorId, 0x000000)
   highlightedDoorId = doorId
   tint(doorId, 0x664400)
+  requestRender()
 }
 
 // Open/close a door from the radial (a free action), then close the radial like any other action.
@@ -1503,30 +1367,77 @@ function onKeyUp(e: KeyboardEvent) {
   keysHeld.delete(e.key)
 }
 
-function animate() {
+function requestRender() {
+  if (canvasDisposed || !renderer || rafId) return
   rafId = requestAnimationFrame(animate)
+}
+
+function invalidateFrame() {
+  overlaysDirty = true
+  highlightsDirty = true
+  reticulesDirty = true
+  requestRender()
+}
+
+function queueMouseMove(event: MouseEvent) {
+  pendingPointerEvent = event
+  requestRender()
+}
+
+function onCanvasLeave() {
+  pendingPointerEvent = null
+  setHoveredTarget(null)
+  if (!tokenDrag.isPressed()) {
+    clearMapGroup(hoverGhostGroup)
+    movementGhost.value = null
+    movementGhostOverlay.value = null
+    movementGapLabel.value = null
+    hoveredMoveScreen.value = null
+  }
+  requestRender()
+}
+
+function queueCanvasWheel(event: WheelEvent) {
+  onCanvasWheel(event)
+  invalidateFrame()
+}
+
+function queueKeyDown(event: KeyboardEvent) {
+  onKeyDown(event)
+  requestRender()
+}
+
+function animate() {
+  rafId = 0
   applyKeyMovement()
   tickAzimuthTween()
   controls.update()
-
-  // Health bar screen position stays fixed after click — no update needed
-
-  // Update pending move screen position
-  if (pendingMovePos.value) {
+  if (pendingPointerEvent) {
+    const event = pendingPointerEvent
+    pendingPointerEvent = null
+    onMouseMove(event)
+    reticulesDirty = true
+  }
+  if (pendingMovePos.value && overlaysDirty) {
     const v = new THREE.Vector3(pendingMovePos.value.x + 0.5, pendingMovePos.value.y + 1.5, pendingMovePos.value.z + 0.5)
     movePendingScreen.value = worldToScreen2D(v) ?? movePendingScreen.value
   }
-
-  // HTML token overlays + NPC/player radial pin
-  updateCharacterOverlays()
+  if (overlaysDirty) {
+    overlaysDirty = false
+    updateCharacterOverlays()
+  }
   updateRadialScreen()
-
-  // Sync movement highlight with reactive data
-  updateMovementHighlights()
-  updatePathHighlights()
-  updateReticules()
-
+  if (highlightsDirty) {
+    highlightsDirty = false
+    updateMovementHighlights()
+    updatePathHighlights()
+  }
+  if (reticulesDirty) {
+    reticulesDirty = false
+    updateReticules()
+  }
   renderer.render(scene, camera)
+  if (keysHeld.size || azimuthTween) requestRender()
 }
 
 function worldToScreen2D(v: THREE.Vector3): { x: number; y: number } | null {
@@ -1547,7 +1458,7 @@ function updateMovementHighlights() {
   if (key === lastReachableKey) return
   lastReachableKey = key
 
-  movementHighlightGroup.clear()
+  clearMapGroup(movementHighlightGroup)
   for (const k of props.reachableCells) {
     const [x, y, z] = k.split(',').map(Number)
     if (yFilter !== null && y !== yFilter) continue
@@ -1571,7 +1482,7 @@ function updatePathHighlights() {
   if (key === lastPathKey) return
   lastPathKey = key
 
-  pathHighlightGroup.clear()
+  clearMapGroup(pathHighlightGroup)
   for (const v of props.activePath) {
     const geo = new THREE.BoxGeometry(TILE_SIZE * 0.6, 0.06, TILE_SIZE * 0.6)
     const mat = new THREE.MeshBasicMaterial({ color: 0xffdd00, transparent: true, opacity: 0.7 })
@@ -1591,6 +1502,9 @@ function updateReticules() {
     effectiveAttackerId.value ?? '',
     attackerPosKey,
     props.attackerEffectiveLimit,
+    props.attackerRange,
+    props.attackerMeleeRange,
+    props.chargeMode,
     'aoe:' + (aoeActive ? lastAoeKey : ''),
     'area:' + isAreaTargeting.value,
     'selectable:' + (props.selectableParticipantIds?.join(',') ?? ''),
@@ -1598,7 +1512,7 @@ function updateReticules() {
   if (key === lastAttackKey) return
   lastAttackKey = key
 
-  reticuleGroup.clear()
+  clearMapGroup(reticuleGroup)
   const ids: string[] = []
 
   if (!props.selectedAttack || !attackerPos) {
@@ -1644,7 +1558,8 @@ function updateReticules() {
       const dz = pos.z - attackerPos.z
       const dist3d = Math.sqrt(dx * dx + dy * dy + dz * dz)
       if (dist3d > maxDist) continue
-      if (losIndex && !canSeeFootprint(losIndex, attackerPos, attackerDims, pos, getParticipantFootprintDims(p.id))) continue
+      const index = currentLosIndex()
+      if (index && !canSeeFootprint(index, attackerPos, attackerDims, pos, getParticipantFootprintDims(p.id))) continue
     }
 
     ids.push(p.id)
@@ -1674,8 +1589,8 @@ function resetPassState() {
   passLockedDir = null
   passMovementLength = 0
   passLandingValid = true
-  if (passRangeGroup) passRangeGroup.clear()
-  if (passLandingGroup) passLandingGroup.clear()
+  if (passRangeGroup) clearMapGroup(passRangeGroup)
+  if (passLandingGroup) clearMapGroup(passLandingGroup)
 }
 
 function clearAoeState() {
@@ -1763,7 +1678,7 @@ function updateAoeHighlight(
 // [Pass] step 2: highlight the band of cells reachable by extra movement (0..RAM) beyond the
 // locked movement length, along the locked direction — a static preview of the max extension.
 function renderPassRangeBand() {
-  passRangeGroup.clear()
+  clearMapGroup(passRangeGroup)
   const attack = props.selectedAttack
   const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
   if (!attack || !attackerPos || !passLockedDir) return
@@ -1873,13 +1788,20 @@ function renderBlastFromStoredCenter() {
 
 // Line of sight between two cells' centres, against the map's blockers (utils/lineOfSight.ts —
 // shared with single-target reticules so both always agree). No map → always clear.
+function currentLosIndex(): LosIndex | null {
+  if (!losIndex && props.map) losIndex = buildLosIndex(props.map, new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId)))
+  return losIndex
+}
+
 function hasLineOfSight(from: Vec3, to: Vec3): boolean {
-  return !losIndex || losClear(losIndex, from, to)
+  const index = currentLosIndex()
+  return !index || losClear(index, from, to)
 }
 
 // The cell where the line from→to first hits a blocker (or `to` if it's clear).
 function clipToLos(from: Vec3, to: Vec3): Vec3 {
-  return losIndex ? losClip(losIndex, from, to) : to
+  const index = currentLosIndex()
+  return index ? losClip(index, from, to) : to
 }
 
 function classifyCellsByLos(
@@ -2038,7 +1960,11 @@ function getIntersection(event: MouseEvent) {
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(mouse, camera)
-  return raycaster.intersectObjects(scene.children, true)
+  scene.updateMatrixWorld(true)
+  const candidates = [...spriteGroups.values(), ...buildMeshes].filter(object => object.visible)
+  return [...(terrain?.pick(raycaster) ?? []), ...raycaster.intersectObjects(candidates, true)]
+    .filter(hit => ['sprite', 'wall', 'door', 'ceiling', 'ground', 'space', 'voxel'].includes(hit.object.userData.type))
+    .sort((a, b) => a.distance - b.distance)
 }
 
 function setMouseFromEvent(event: MouseEvent) {
@@ -2090,7 +2016,7 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
     if (!we) return null
     return { type: 'wall-edge', tile: we.tile, face: we.face }
   }
-  if (tool === 'wall' || tool === 'stairs' || tool === 'door') {
+  if (tool === 'wall' || tool === 'door') {
     const we = wallEdgeFromEvent(event)
     if (!we) return null
     return { type: 'wall-edge', tile: we.tile, face: we.face }
@@ -2166,12 +2092,23 @@ function makeVoxelGhostMesh(cell: Vec3, color: number): THREE.Mesh {
   return mesh
 }
 
+function makeStairGhostMesh(cell: Vec3, color: number): THREE.Mesh {
+  const mesh = new THREE.Mesh(createStairGeometry(props.rampDirection ?? 'north'),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45 }))
+  mesh.position.set(cell.x + 0.5, cell.y * TILE_SIZE + 0.5, cell.z + 0.5)
+  return mesh
+}
+
 function updateHoverGhost(event: MouseEvent) {
-  hoverGhostGroup.clear()
+  const hit = ['voxel', 'ramp', 'stairs', 'add-ground', 'add-space', 'paint-element', 'ceiling'].includes(props.activeTool)
+    ? planeCell(event) : [event.clientX, event.clientY, event.shiftKey, event.ctrlKey]
+  const key = JSON.stringify([props.activeTool, props.drawMode, props.currentEditY, props.rampDirection, hit, dragStartHit, getMapGeometryRevision(props.map)])
+  if (!mapPreviewChanged(hoverGhostGroup, key)) return
+  clearMapGroup(hoverGhostGroup)
   if (props.activeTool === 'select' || !props.isDm) return
   const tool = props.activeTool
 
-  if (tool === 'wall' || tool === 'stairs' || tool === 'window' || tool === 'door') {
+  if (tool === 'wall' || tool === 'window' || tool === 'door') {
     const color = tool === 'window' ? 0x88ccff : tool === 'door' ? 0x886644 : 0x00aaff
     if (tool === 'window') {
       const voxel = voxelCellFromEvent(event)
@@ -2224,9 +2161,10 @@ function updateHoverGhost(event: MouseEvent) {
   } else {
     const cell = planeCell(event)
     if (!cell) return
-    const color = tool === 'voxel' || tool === 'ramp' ? 0x88ccff : 0x00aaff
-    const makeGhost = tool === 'voxel' || tool === 'ramp' ? makeVoxelGhostMesh : makeTileGhostMesh
-    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel' || tool === 'ramp')) {
+    const color = tool === 'voxel' || tool === 'ramp' || tool === 'stairs' ? 0x88ccff : 0x00aaff
+    const makeGhost = tool === 'stairs' ? makeStairGhostMesh
+      : tool === 'voxel' || tool === 'ramp' ? makeVoxelGhostMesh : makeTileGhostMesh
+    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel' || tool === 'ramp' || tool === 'stairs')) {
       for (const tile of tilesBetween(dragStartHit.cell, cell))
         hoverGhostGroup.add(makeGhost(tile, color))
     } else {
@@ -2252,13 +2190,7 @@ function onMouseMove(event: MouseEvent) {
   // preventing upper-floor geometry from blocking clicks on lower-floor tiles.
   const moveAim = getMoveAim()
   if (moveAim) {
-    for (const child of hoverGhostGroup.children) {
-      const object = child as THREE.Mesh | THREE.Line
-      object.geometry?.dispose()
-      const materials = Array.isArray(object.material) ? object.material : [object.material]
-      for (const material of materials) material?.dispose()
-    }
-    hoverGhostGroup.clear()
+    clearMapGroup(hoverGhostGroup)
     movementGhost.value = null
     movementGhostOverlay.value = null
     movementGapLabel.value = null
@@ -2489,7 +2421,8 @@ function dropTargetAt(event: MouseEvent, participantId: string): PlacementEvalua
 
 // Green footprint where the drop would land, red where it would be refused.
 function showDropGhost(placement: PlacementEvaluation | null) {
-  hoverGhostGroup.clear()
+  clearMapGroup(hoverGhostGroup)
+  requestRender()
   if (!placement) return
   const color = placement.valid ? 0x00ff88 : 0xff3333
   for (let dx = 0; dx < placement.footprint.width; dx++) {
@@ -2538,7 +2471,7 @@ const tokenDrag = createTokenDragController<PointerEvent>({
     return placement?.valid ? placement.cell : null
   },
   commit: (participantId, cell) => emit('unit-dragged', participantId, cell),
-  clearPreview: () => { if (hoverGhostGroup) hoverGhostGroup.clear() },
+  clearPreview: () => { if (hoverGhostGroup) clearMapGroup(hoverGhostGroup); requestRender() },
   lockCamera: () => { if (controls) controls.enabled = false },
   unlockCamera: () => { if (controls) controls.enabled = props.activeTool === 'select' },
   setCursor: (cursor) => { if (canvasRef.value) canvasRef.value.style.cursor = cursor },
@@ -2575,7 +2508,8 @@ function onExternalDragLeave(event: DragEvent) {
   // dragleave also fires when crossing between children of the container; only react to really leaving it.
   const container = containerRef.value
   if (container && event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return
-  if (hoverGhostGroup) hoverGhostGroup.clear()
+  if (hoverGhostGroup) clearMapGroup(hoverGhostGroup)
+  requestRender()
 }
 
 function onExternalDrop(event: DragEvent) {
@@ -2583,7 +2517,8 @@ function onExternalDrop(event: DragEvent) {
   if (!participantId) return
   event.preventDefault()
   const placement = dropTargetAt(event, participantId)
-  hoverGhostGroup.clear()
+  clearMapGroup(hoverGhostGroup)
+  requestRender()
   if (placement?.valid) emit('unit-dragged', participantId, placement.cell)
 }
 
@@ -2664,7 +2599,7 @@ function onCanvasClick(event: MouseEvent) {
     if (cell) {
       if (moveAim.isGm) {
         if (validGmMoveCell(cell, moveAim.participantId)) {
-          hoverGhostGroup.clear()
+          clearMapGroup(hoverGhostGroup)
           hoveredMoveScreen.value = null
           emit('gm-moved', moveAim.participantId, cell)
         }
@@ -2673,7 +2608,7 @@ function onCanvasClick(event: MouseEvent) {
         const isChargeAfter = pid === props.chargeMoveParticipantId
         if (!isChargeAfter || !footprintOccupied(cell, getParticipantFootprintDims(pid), pid)) {
           movingParticipantId.value = null
-          hoverGhostGroup.clear()
+          clearMapGroup(hoverGhostGroup)
           hoveredMoveScreen.value = null
           emit('unit-moved', pid, cell, props.activePath)
         }
@@ -2795,14 +2730,14 @@ function onCanvasWheel(event: WheelEvent) {
     onWheel(event)
     return
   }
-  if (!props.isDm || props.activeTool !== 'ramp') return
+  if (!props.isDm || (props.activeTool !== 'ramp' && props.activeTool !== 'stairs')) return
   event.preventDefault()
   event.stopImmediatePropagation()
   if (event.deltaY === 0) return
   emit('rotate-ramp', event.deltaY > 0 ? 1 : -1)
   // The parent owns the brush direction; redraw once its updated prop reaches this canvas.
   nextTick(() => {
-    if (props.isDm && props.activeTool === 'ramp') updateHoverGhost(event)
+    if (props.isDm && (props.activeTool === 'ramp' || props.activeTool === 'stairs')) updateHoverGhost(event)
   })
 }
 
@@ -2860,17 +2795,22 @@ function onResize() {
   camera.aspect = container.clientWidth / container.clientHeight
   camera.updateProjectionMatrix()
   renderer.setSize(container.clientWidth, container.clientHeight)
+  invalidateFrame()
 }
 
 // ── Watchers — rebuild scene on prop changes ───────────────────────────────
-watch(() => props.map, () => {
-  if (!scene) return
-  buildMeshes.forEach(m => scene.remove(m))
-  buildMeshes = []; tileMeshes = []; wallMeshes = []; voxelMeshes = []; spawnMeshes = []
-  doorMeshes = new Map(); highlightedDoorId = null
-  blendTextureCache = new Map()
-  buildMap()
-}, { deep: true })
+watch(() => props.map, () => { if (scene) buildMap() })
+watch(() => props.destructibleStates, () => { if (scene) buildMap() }, { deep: true })
+watch([
+  () => props.participants, () => props.participantPositions, () => props.tamerMap, () => props.digimonMap,
+  () => props.selectedAttack, () => props.selectableParticipantIds, () => props.activeParticipantId,
+  () => props.secondaryActiveParticipantId, () => props.attackerRange, () => props.attackerEffectiveLimit,
+  () => props.attackerMeleeRange, () => props.activePath, () => props.reachableCells,
+  () => props.activeTool, () => props.rampDirection, () => props.currentEditY,
+  () => props.chargeMode, () => props.chargeMoveParticipantId, () => props.npcMoveParticipantId,
+  () => props.gmMoveParticipantId,
+  movingParticipantId, pendingMovePos, npcMoveY, gmMoveY, areaHighlightCells, radialParticipantId, participantChoice,
+], invalidateFrame, { deep: true })
 
 // Snapshots recreate the entity maps even when only actions or the active turn changed.
 // Compare the inputs used by buildSprites, leaving portrait/health/stance updates to the overlays.
@@ -2914,7 +2854,10 @@ watch(() => props.participants.map(p => p.id).join(','), () => {
 watch(reticuleParticipantIds, ids => {
   if (hoveredTargetId && !ids.includes(hoveredTargetId)) hoveredTargetId = null
   refreshBorderColors()
+  requestRender()
 })
+
+watch(() => props.reachableCells, () => { lastAttackKey = '' }, { deep: true })
 
 watch(() => props.activeTool, (tool) => {
   if (tool !== 'select') closeRadial()
@@ -2924,7 +2867,8 @@ watch(() => props.activeTool, (tool) => {
 // A HUD drag that ends anywhere but a valid cell (dropped off the map, or Esc) leaves its preview
 // behind, since `dragleave`/`drop` never fire for a refused spot.
 watch(() => props.externalDragParticipantId, (id) => {
-  if (!id && hoverGhostGroup) hoverGhostGroup.clear()
+  if (!id && hoverGhostGroup) clearMapGroup(hoverGhostGroup)
+  requestRender()
 })
 
 // Enter NPC movement mode when EncounterMap signals reachable cells are ready
@@ -2967,7 +2911,7 @@ watch([movingParticipantId, () => props.gmMoveParticipantId], ([normalId, gmId],
     moveStartPos.value = null
     hoveredMoveScreen.value = null
     hoveredMoveDistance.value = 0
-    if (hoverGhostGroup) hoverGhostGroup.clear()
+    if (hoverGhostGroup) clearMapGroup(hoverGhostGroup)
     if (controls) controls.enableZoom = true
     emit('cell-hovered', null)
     if (previousNormalId) emit('movement-cancelled')
@@ -3014,14 +2958,13 @@ watch(clipY, (y) => {
     const fY = (obj as any).userData?.floorY
     if (fY !== undefined) obj.visible = fY <= y
   }
-  if (props.showSpawnIndicators === false) {
-    for (const m of spawnMeshes) m.visible = false
-  }
-  refreshTransparentVoxels()
+  terrain?.setClipY(y)
+  invalidateFrame()
 })
 
 watch(() => props.showSpawnIndicators, (show) => {
-  for (const m of spawnMeshes) m.visible = show !== false
+  terrain?.setSpawnVisible(show !== false)
+  invalidateFrame()
 })
 
 watch(ghostWalls, (ghost) => {
@@ -3034,6 +2977,7 @@ watch(ghostWalls, (ghost) => {
     mat.opacity = ghost ? 0.2 : 1.0
     mat.needsUpdate = true
   }
+  invalidateFrame()
 })
 
 // ── Helpers ────────────────────────────────────────────────────────────────

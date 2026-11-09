@@ -59,6 +59,11 @@ export function loadVueComponent(relativePath) {
 
 /** Run selected real page handlers with explicit refs/callbacks, without starting Nuxt. */
 export function loadPageFunctions(relativePath, functionNames, dependencies) {
+  dependencies = {
+    ...loadTypeScript('utils/mapRenderResources.ts'),
+    ...loadTypeScript('utils/mapEdits.ts'),
+    ...dependencies,
+  }
   const filename = resolve(appDirectory, relativePath)
   const { descriptor, errors } = parse(readFileSync(filename, 'utf8'), { filename })
   if (errors.length) throw errors[0]

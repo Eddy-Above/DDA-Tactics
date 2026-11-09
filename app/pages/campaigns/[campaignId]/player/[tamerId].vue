@@ -4538,6 +4538,21 @@ async function handleEndTurn() {
 // ── Map integration ────────────────────────────────────────────────────────
 const showMapView = ref(false)
 const encounterMapRef = ref<any>(null)
+
+async function closeMapView() {
+  const flush = encounterMapRef.value?.flushMapSaves
+  if (flush && !(await flush())) return false
+  showMapView.value = false
+  mapDirectMode.value = null
+  showDirectChoicePicker.value = false
+  return true
+}
+
+async function toggleMapView() {
+  if (showMapView.value) await closeMapView()
+  else showMapView.value = true
+}
+
 const throwAimControllerId = ref<string | null>(null)
 const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 const playerAttackParticipantId = ref<string | null>(null)
@@ -4914,7 +4929,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   >Intercede Options</button>
                   <button
                     class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                    @click="showMapView = false; mapDirectMode = null; showDirectChoicePicker = false"
+                    @click="closeMapView"
                   >✕ Close Map</button>
                 </div>
               </template>
@@ -5145,7 +5160,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 v-if="(activeEncounter as any).mapId"
                 class="text-xs px-3 py-1.5 rounded-lg border font-semibold transition-colors"
                 :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
-                @click="showMapView = !showMapView"
+                @click="toggleMapView"
               >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
               <div v-if="isMyTurn && activeEncounter?.phase === 'combat'">
                 <button
@@ -5625,7 +5640,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 v-if="(activeEncounter as any).mapId"
                 class="text-xs px-3 py-1 rounded border font-semibold transition-colors"
                 :class="showMapView ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white' : 'bg-digimon-dark-700 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
-                @click="showMapView = !showMapView"
+                @click="toggleMapView"
               >{{ showMapView ? '📋 Card View' : '🗺 Map View' }}</button>
               <IntercedePassNotice v-if="isPassingOnIntercede" :busy="intercedePassBusy" @resume="resumeIntercedePass" />
               <button

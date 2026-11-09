@@ -8,6 +8,7 @@ import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const rules = loadTypeScript('utils/movementRules.ts')
 const voxels = loadTypeScript('utils/mapVoxels.ts')
+const renderResources = loadTypeScript('utils/mapRenderResources.ts')
 const point = (x = 0, y = 0, z = 0) => ({ x, y, z })
 const sprite = id => ({ object: { userData: { type: 'sprite', participantId: id } }, point: new THREE.Vector3(0.5, 0.5, 0.5) })
 const ground = (x = 0, y = 0, z = 0) => ({ object: { userData: { type: 'ground', tile: point(x, y, z) } }, point: new THREE.Vector3(x + 0.5, y, z + 0.5) })
@@ -43,7 +44,7 @@ function harness(t, isDm = false) {
   } }
   let handlers
   const deps = {
-    ...refs, props, THREE, ...rules, ...voxels, watch,
+    ...refs, props, THREE, ...rules, ...voxels, ...renderResources, watch,
     vec3Key: p => `${p.x},${p.y},${p.z}`, TILE_SIZE: 1, TILE_H: 0.1,
     participantDisplayNames: ref({ partner: 'Partner', ally: 'Ally', enemy: 'Enemy' }),
     participantChoiceItems: computed(() => handlers?.participantChoiceOptions() ?? []),

@@ -3423,6 +3423,19 @@ watch(() => [currentEncounter.value?.phase, currentEncounter.value?.round, curre
   mapDirectMode.value = null
 })
 const encounterMapRef = ref<any>(null)
+
+async function closeMapView() {
+  const flush = encounterMapRef.value?.flushMapSaves
+  if (flush && !(await flush())) return false
+  showMapView.value = false
+  return true
+}
+
+async function toggleMapView() {
+  if (showMapView.value) await closeMapView()
+  else showMapView.value = true
+}
+
 const throwAimControllerId = ref<string | null>(null)
 const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 const showMapPicker = ref(false)
@@ -3615,7 +3628,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
             :class="showMapView
               ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white'
               : 'bg-digimon-dark-800 border-digimon-dark-600 text-digimon-dark-300 hover:text-white'"
-            @click="showMapView = !showMapView"
+            @click="toggleMapView"
           >
             {{ showMapView ? '📋 Card View' : '🗺 Map View' }}
           </button>
@@ -3692,7 +3705,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               >Intercede Targets</button>
               <button
                 class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm"
-                @click="showMapView = false"
+                @click="closeMapView"
               >✕ Close Map</button>
             </div>
           </template>

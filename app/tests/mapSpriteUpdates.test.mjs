@@ -43,7 +43,7 @@ function harness() {
     refreshBorderColors: () => { calls.highlights++; colors.refreshBorderColors() },
     closeRadial: () => calls.closes++,
     areaHighlightCells: ref([]), effectiveAttackerId: ref('tamer'), isAreaTargeting: ref(false),
-    reticuleGroup: { clear: () => calls.reticules++ }, reticuleParticipantIds,
+    reticuleGroup: { children: [], clear: () => calls.reticules++ }, reticuleParticipantIds,
   })
   const scope = effectScope()
   scope.run(() => handlers.watchParticipantSprites())

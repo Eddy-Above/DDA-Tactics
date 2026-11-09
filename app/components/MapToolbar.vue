@@ -52,7 +52,7 @@
       </button>
     </div>
 
-    <div v-if="activeTool === 'ramp'" class="toolbar-section">
+    <div v-if="activeTool === 'ramp' || activeTool === 'stairs'" class="toolbar-section">
       <label for="ramp-direction" class="y-label">Uphill</label>
       <select
         id="ramp-direction"
@@ -125,7 +125,7 @@ const drawModes: Array<{ id: 'line' | 'square' | 'cube'; label: string }> = [
 ]
 
 const showDrawMode = computed(() => {
-  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'spawn', 'delete'].includes(props.activeTool)
+  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'stairs', 'spawn', 'delete'].includes(props.activeTool)
 })
 
 const elements: Array<{ id: ElementType; label: string; short: string; color: string }> = [

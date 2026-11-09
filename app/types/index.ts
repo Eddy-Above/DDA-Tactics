@@ -130,7 +130,8 @@ export interface MapStair {
   x: number
   y: number
   z: number
-  face: WallFace  // direction the stair ascends
+  /** Legacy facing; use stairDirectionForFace to resolve the visible uphill direction. */
+  face: WallFace
 }
 
 export interface GameMap {

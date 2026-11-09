@@ -5,7 +5,7 @@ import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue'
 import { loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
 
 const { useMapEditor } = loadTypeScript('composables/useMapEditor.ts')
-const { createVoxelGeometry } = loadTypeScript('utils/voxelGeometry.ts')
+const { createVoxelGeometry, createStairGeometry, stairDirectionForFace } = loadTypeScript('utils/voxelGeometry.ts')
 const point = (x = 0, y = 0, z = 0) => ({ x, y, z })
 
 function wheel(deltaY) {
@@ -33,7 +33,7 @@ function fixture({ direction = 'north', tool = 'ramp', isDm = true, dragging = f
   // Parent refs update synchronously on emits; child props follow on Vue's next render flush.
   scope.run(() => watch(editor.rampDirection, value => { props.rampDirection = value }))
   const events = [], delegated = []
-  const deps = { THREE, createVoxelGeometry, props, nextTick, TILE_SIZE: 1,
+  const deps = { THREE, createVoxelGeometry, createStairGeometry, props, nextTick, TILE_SIZE: 1,
     hoverGhostGroup: new THREE.Group(),
     dragStartHit: dragging ? { type: 'cell', cell: point() } : null,
     planeCell: () => dragging ? point(2) : point(),
@@ -46,7 +46,7 @@ function fixture({ direction = 'north', tool = 'ramp', isDm = true, dragging = f
     },
   }
   const handlers = loadPageFunctions('components/MapCanvas.vue', [
-    'tilesBetween', 'makeVoxelGhostMesh', 'updateHoverGhost', 'onCanvasWheel',
+    'tilesBetween', 'makeVoxelGhostMesh', 'makeStairGhostMesh', 'updateHoverGhost', 'onCanvasWheel', 'getHoveredHit',
   ], deps)
   return { map, editor, props, events, delegated, scope, ...deps, ...handlers }
 }
@@ -146,4 +146,28 @@ test('movement and area elevation aiming retain wheel priority over the ramp too
       assert.equal(h.editor.rampDirection.value, 'north')
     } finally { h.scope.stop() }
   }
+})
+
+test('stairs place on cells with a scroll-rotated ghost and preserve the visible direction on save', async () => {
+  const h = fixture({ tool: 'stairs', direction: 'north', dragging: true })
+  try {
+    assert.deepEqual(h.getHoveredHit(wheel(1)), { type: 'cell', cell: point(2) })
+    h.updateHoverGhost(wheel(1))
+    assert.equal(h.hoverGhostGroup.children.length, 3)
+    h.onCanvasWheel(wheel(100))
+    await nextTick()
+    assert.equal(h.editor.rampDirection.value, 'east')
+    const expected = createStairGeometry('east')
+    for (const mesh of h.hoverGhostGroup.children) {
+      assert.deepEqual(Array.from(mesh.geometry.attributes.position.array), Array.from(expected.attributes.position.array))
+    }
+    expected.dispose()
+    const { onCellDraw } = loadPageFunctions('components/EncounterMap.vue', ['onCellDraw'], {
+      map: h.map, editor: h.editor, props: { encounter: { mapId: 'map' } }, persistMap: async () => {},
+    })
+    await onCellDraw(point(), point(2))
+    assert.equal(h.map.value.stairs.length, 3)
+    assert.ok(h.map.value.stairs.every(stair => stairDirectionForFace(stair.face) === 'east'))
+    assert.deepEqual(h.map.value.voxels, [])
+  } finally { h.scope.stop() }
 })

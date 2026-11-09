@@ -8,14 +8,12 @@ export default defineEventHandler(async (event) => {
     'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs'
   >>>(event)
 
-  const [existing] = await db.select().from(maps).where(eq(maps.id, mapId))
-  if (!existing) throw createError({ statusCode: 404, message: 'Map not found' })
-
   const updates: Partial<Map> = { ...body, updatedAt: new Date() }
-
-  await db.update(maps).set(updates).where(eq(maps.id, mapId))
-
-  const [updated] = await db.select().from(maps).where(eq(maps.id, mapId))
+  const query = db.update(maps).set(updates).where(eq(maps.id, mapId))
+  const [updated] = getQuery(event).return === 'minimal'
+    ? await query.returning({ id: maps.id, updatedAt: maps.updatedAt })
+    : await query.returning()
+  if (!updated) throw createError({ statusCode: 404, message: 'Map not found' })
 
   return updated
 })

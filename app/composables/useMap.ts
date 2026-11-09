@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import type { GameMap } from '~/types'
 
 export function useMap() {
@@ -5,6 +6,7 @@ export function useMap() {
   const currentMap = ref<GameMap | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  let fetchVersion = 0
 
   async function fetchMaps(campaignId: string) {
     loading.value = true
@@ -20,17 +22,18 @@ export function useMap() {
   }
 
   async function fetchMap(mapId: string) {
+    const version = ++fetchVersion
     loading.value = true
     error.value = null
     try {
       const data = await $fetch<GameMap>(`/api/maps/${mapId}`)
-      currentMap.value = data
+      if (version === fetchVersion) currentMap.value = data
       return data
     } catch (e: any) {
-      error.value = e.message ?? 'Failed to load map'
+      if (version === fetchVersion) error.value = e.message ?? 'Failed to load map'
       return null
     } finally {
-      loading.value = false
+      if (version === fetchVersion) loading.value = false
     }
   }
 
@@ -48,11 +51,17 @@ export function useMap() {
     return data
   }
 
+  // Autosave keeps the editor's newer immutable map root. A compact acknowledgement
+  // deliberately does not replace currentMap or the map-list cache with an older snapshot.
+  async function updateMapMinimal(mapId: string, body: Partial<GameMap>) {
+    return await $fetch<Pick<GameMap, 'id' | 'updatedAt'>>(`/api/maps/${mapId}?return=minimal`, { method: 'PUT', body })
+  }
+
   async function deleteMap(mapId: string) {
     await $fetch(`/api/maps/${mapId}`, { method: 'DELETE' })
     maps.value = maps.value.filter(m => m.id !== mapId)
     if (currentMap.value?.id === mapId) currentMap.value = null
   }
 
-  return { maps, currentMap, loading, error, fetchMaps, fetchMap, createMap, updateMap, deleteMap }
+  return { maps, currentMap, loading, error, fetchMaps, fetchMap, createMap, updateMap, updateMapMinimal, deleteMap }
 }

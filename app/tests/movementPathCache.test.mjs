@@ -7,6 +7,9 @@ import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScrip
 
 const pathfinding = loadTypeScript('utils/pathfinding.ts')
 const rules = loadTypeScript('utils/movementRules.ts')
+const mapEdits = loadTypeScript('utils/mapEdits.ts')
+const { getMapGeometryRevision } = mapEdits
+const { useMapEditor } = loadTypeScriptWithMocks('composables/useMapEditor.ts', { '~/utils/mapEdits': mapEdits })
 const point = (x, z = 0, y = 0) => ({ x, y, z })
 const key = p => `${p.x},${p.y},${p.z}`
 const walking = { canFly: false, canJump: false, jumpHeight: 0, jumpRange: 0, canClimb: false, canSwim: false, canDig: false }
@@ -169,7 +172,7 @@ function hoverHarness(mapData = floor()) {
   const calls = { paths: 0, invalidations: 0, throws: 0, movers: [] }
   const movement = { reachableCells: ref(new Set()), activePath: ref([]), invalidateSearch: () => calls.invalidations++, computePath: () => calls.paths++ }
   const ctx = { pos: point(0), caps: walking, occupied: new Map(), dInfo: {}, moverSize: 'medium', moverIsEnemy: false, moverGig: null }
-  const deps = { map, positions, props, movement, computed, watch, npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: id => { calls.movers.push(id); return ctx }, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
+  const deps = { map, positions, props, movement, computed, watch, getMapGeometryRevision, npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAllyAimContext, npcMoveCaps: id => { calls.movers.push(id); return ctx }, throwCaps: () => { calls.throws++; return ctx }, destroyedIds: () => new Set() }
   const scope = effectScope()
   const handlers = scope.run(() => new Function(...Object.keys(deps), `${compiled}\nreturn { onCellHovered }`)(...Object.values(deps)))
   return { ...deps, ...handlers, scope, calls }
@@ -199,7 +202,7 @@ test('real synchronous map/occupancy/record watchers invalidate even when the ho
   try {
     h.onCellHovered(point(2))
     const mutations = [
-      () => h.map.value.voxels.push({ ...point(1), materialId: 'steel' }),
+      () => useMapEditor(h.map).applyVoxelDraw(point(1), point(1)),
       () => { h.positions.value.mover.x = 1 },
       () => h.props.encounter.destructibleStates.push({ structureId: 'wall', currentWounds: 0 }),
       () => h.props.encounter.participants.push({ id: 'mover', currentStance: 'defensive' }),
@@ -220,7 +223,7 @@ test('position, participant and record changes do not serialize the unchanged ma
   let serializations = 0
   const h = hoverHarness({ ...floor(), toJSON() { serializations++; return this } })
   try {
-    assert.equal(serializations, 1, 'the watcher initializes the map signature once')
+    assert.equal(serializations, 0, 'geometry revisions initialize without serializing map data')
     const mutations = [
       () => { h.positions.value.mover.x = 1 },
       () => { h.positions.value = { mover: point(2) } },
@@ -234,22 +237,23 @@ test('position, participant and record changes do not serialize the unchanged ma
       const before = h.calls.invalidations
       mutate()
       assert.equal(h.calls.invalidations, before + 1, 'non-map movement changes still invalidate synchronously')
-      assert.equal(serializations, 1, 'non-map dependencies must reuse the cached map signature')
+      assert.equal(serializations, 0, 'non-map dependencies must never serialize the map')
     }
     h.props.encounter.participants = JSON.parse(JSON.stringify(h.props.encounter.participants))
-    assert.equal(serializations, 1, 'a polling snapshot also reuses the map signature')
+    assert.equal(serializations, 0, 'a polling snapshot does not serialize geometry')
     assert.equal(h.calls.invalidations, mutations.length, 'equivalent polling input must keep its prior behavior')
   } finally { h.scope.stop() }
 })
 
-test('voxel, wall and door edits and map replacement refresh the signature and invalidate synchronously', () => {
+test('atomic voxel, wall and door edits invalidate synchronously without serializing geometry', () => {
   let serializations = 0
-  const h = hoverHarness({ ...floor(), doors: [{ id: 'door', wallId: 'wall', isOpen: false }], toJSON() { serializations++; return this } })
+  const h = hoverHarness({ ...floor(), walls: [{ id: 'wall', ...point(2), face: 'east' }], doors: [{ id: 'door', wallId: 'wall', isOpen: false }], toJSON() { serializations++; return this } })
+  const editor = useMapEditor(h.map)
   try {
     const mutations = [
-      () => h.map.value.voxels.push({ ...point(1), materialId: 'steel' }),
-      () => h.map.value.walls.push({ id: 'wall', ...point(2), face: 'east' }),
-      () => { h.map.value.doors[0].isOpen = true },
+      () => editor.applyVoxelDraw(point(1), point(1)),
+      () => editor.applyWallDraw(point(3), point(3), 'east'),
+      () => editor.setDoorsOpen(['door'], true),
       () => { h.map.value = { ...h.map.value, name: 'replacement' } },
     ]
     for (const mutate of mutations) {
@@ -257,16 +261,16 @@ test('voxel, wall and door edits and map replacement refresh the signature and i
       h.movement.activePath.value = [point(0), point(1), point(2)]
       const before = { invalidations: h.calls.invalidations, paths: h.calls.paths, serializations }
       mutate()
-      assert.equal(serializations, before.serializations + 1, 'map mutations recompute the signature immediately')
+      assert.equal(serializations, 0, 'geometry commits do not serialize the map')
       assert.equal(h.calls.invalidations, before.invalidations + 1, 'the search is invalidated before any tick or hover')
       assert.deepEqual(h.movement.activePath.value, [])
       h.onCellHovered(point(2)); h.onCellHovered(point(2))
       assert.equal(h.calls.paths, before.paths + 1, 'the same destination gets a fresh path after the edit')
     }
     const before = { invalidations: h.calls.invalidations, serializations }
-    h.map.value = { ...h.map.value }
-    assert.equal(serializations, before.serializations + 1, 'an equivalent map replacement is still inspected')
-    assert.equal(h.calls.invalidations, before.invalidations, 'an identical map signature must keep its prior behavior')
+    h.map.value = h.map.value
+    assert.equal(serializations, 0)
+    assert.equal(h.calls.invalidations, before.invalidations, 'retaining an unchanged loaded map keeps its revision')
   } finally { h.scope.stop() }
 })
 
@@ -282,7 +286,7 @@ test('partner path stays visible across polling snapshots and health or action u
     const shownPath = h.movement.activePath.value
     const before = { paths: h.calls.paths, invalidations: h.calls.invalidations }
 
-    h.map.value = JSON.parse(JSON.stringify(h.map.value))
+    // The map loader retains its current root when the server updatedAt is unchanged.
     h.positions.value = JSON.parse(JSON.stringify(h.positions.value))
     h.props.encounter.participants = JSON.parse(JSON.stringify(h.props.encounter.participants))
     h.props.encounter.destructibleStates = []

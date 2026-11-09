@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { computed, createSSRApp, ref } from 'vue'
 import { renderToString } from '@vue/server-renderer'
-import { loadPageFunctions, loadTypeScript, loadVueComponent } from './helpers/loadTypeScript.mjs'
+import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks, loadVueComponent } from './helpers/loadTypeScript.mjs'
 
-const { useMapEditor } = loadTypeScript('composables/useMapEditor.ts')
+const mapEdits = loadTypeScript('utils/mapEdits.ts')
+const { useMapEditor } = loadTypeScriptWithMocks('composables/useMapEditor.ts', { '~/utils/mapEdits': mapEdits })
 const { canPassThrough, canLandOn, settleFootprintY } = loadTypeScript('utils/movementRules.ts')
 const { makeSpawnCellChecker, placementCellFromHit } = loadTypeScript('utils/placementRules.ts')
 const { useMapMovement } = loadTypeScript('composables/useMapMovement.ts')
@@ -79,21 +80,22 @@ test('painting preserves ramp shape, and undo/redo restores orientation, spawn s
   assert.deepEqual(map.value.voxels, [])
 })
 
-test('the encounter draw handler saves ramps and broadcasts an ordinary voxel update', async () => {
+test('the encounter draw handler queues ramp geometry with its complete direction metadata', async () => {
   const { map, editor } = fixture()
   editor.selectTool('ramp')
   editor.rampDirection.value = 'south'
-  const saved = [], messages = []
-  const deps = { map, editor, props: { encounter: { id: 'encounter', mapId: 'map' } },
-    mapStore: { updateMap: async (id, body) => saved.push({ id, body: JSON.parse(JSON.stringify(body)) }) },
-    ws: { send: message => messages.push(message) } }
+  const saved = []
+  const deps = { map, editor, ...mapEdits, lastQueuedRevision: 0, props: { encounter: { id: 'encounter', mapId: 'map' } },
+    autosave: { enqueue: (value, collections, tool) => saved.push({ id: value.id, tool,
+      body: JSON.parse(JSON.stringify(Object.fromEntries(collections.map(key => [key, value[key]])))) }) } }
   const { persistMap } = loadPageFunctions('components/EncounterMap.vue', ['persistMap'], deps)
   const { onCellDraw } = loadPageFunctions('components/EncounterMap.vue', ['onCellDraw'], { ...deps, persistMap })
   await onCellDraw(point(), point())
   assert.equal(saved.length, 1)
   assert.equal(saved[0].id, 'map')
+  assert.deepEqual(Object.keys(saved[0].body), ['voxels'])
   assert.deepEqual(saved[0].body.voxels[0], { ...point(), shape: 'ramp', rampDirection: 'south', materialId: 'void', element: 'void' })
-  assert.equal(messages[0].tileType, 'voxel')
+  assert.equal(saved[0].tool, 'ramp')
   const reloaded = fixture(saved[0].body.voxels)
   assert.equal(reloaded.map.value.voxels[0].rampDirection, 'south')
 })

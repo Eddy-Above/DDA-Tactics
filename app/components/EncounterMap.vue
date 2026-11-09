@@ -5,7 +5,7 @@
   >
     <!-- GM Toolbar (top) -->
     <MapToolbar
-      v-if="isDm && map"
+      v-if="isDm && map && map.id === encounter.mapId"
       :active-tool="editor.activeTool.value"
       :draw-mode="editor.drawMode.value"
       :element-brush="editor.elementBrush.value"
@@ -22,11 +22,17 @@
       @redo="onRedo"
     />
 
+    <div v-if="isDm && map" class="map-save-status" role="status" aria-live="polite">
+      <span>{{ saveStatus }}</span>
+      <button v-if="autosave.status.value === 'error'" type="button" @click="retryMapSaves">Retry</button>
+      <span v-if="autosave.status.value === 'error'">{{ autosave.error.value }}</span>
+    </div>
+
     <!-- 3D Canvas (fills remaining space) -->
     <div class="canvas-wrapper">
       <ClientOnly>
         <MapCanvas
-          v-if="map"
+          v-if="map && map.id === encounter.mapId"
           :map="map"
           :participants="liveParticipants"
           :participant-positions="positions"
@@ -151,6 +157,7 @@
 </template>
 
 <script setup lang="ts">
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules, Stance,
 } from '~/types'
@@ -161,6 +168,8 @@ import { useMap } from '~/composables/useMap'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
+import { useMapAutosave } from '~/composables/useMapAutosave'
+import { getMapEditChange, getMapGeometryRevision } from '~/utils/mapEdits'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
 import { applyStanceToMovement } from '~/utils/stanceModifiers'
 import { getAllStatEffectModifier, applyDerivedStatEffects } from '~/data/attackConstants'
@@ -192,6 +201,7 @@ const props = defineProps<{
   playerPlacementMode?: boolean
   myParticipantIds?: string[]
   editorMode?: boolean
+  initialMap?: GameMap | null
   selectableParticipantIds?: string[]
   eddySoulRules?: EddySoulRules
   radialOptions?: Record<string, MapRadialOptions>
@@ -217,18 +227,53 @@ const emit = defineEmits<{
 
 // ── Map state ──────────────────────────────────────────────────────────────
 const mapStore = useMap()
-const map = ref<GameMap | null>(null)
+const map = shallowRef<GameMap | null>(props.initialMap ?? null)
+let mapLoadGeneration = 0
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+let refreshInFlight = false
+let refreshAgain = false
+let mapDisposed = false
 const encounterId = computed(() => props.encounter.id)
 
-onMounted(async () => {
-  if (props.encounter.mapId) {
-    map.value = await mapStore.fetchMap(props.encounter.mapId)
-  }
+async function loadMap(mapId: string) {
+  const generation = ++mapLoadGeneration
+  const localRevision = getMapGeometryRevision(map.value)
+  const loaded = await mapStore.fetchMap(mapId)
+  if (mapDisposed || !loaded || generation !== mapLoadGeneration || props.encounter.mapId !== mapId) return
+  if (autosave.hasUnsaved.value || getMapGeometryRevision(map.value) !== localRevision) return
+  if (map.value?.id === loaded.id && map.value.updatedAt === loaded.updatedAt) return
+  map.value = loaded
+}
+
+onMounted(() => {
+  if (props.encounter.mapId && map.value?.id !== props.encounter.mapId) void loadMap(props.encounter.mapId)
+  window.addEventListener('beforeunload', beforeMapUnload)
 })
 
-watch(() => props.encounter.mapId, async (id) => {
-  map.value = id ? await mapStore.fetchMap(id) : null
+watch(() => props.encounter.mapId, async (id, previousId) => {
+  ++mapLoadGeneration
+  if (!(await autosave.flush())) return
+  if (id !== props.encounter.mapId) return
+  map.value = id && props.initialMap?.id === id ? props.initialMap : null
+  if (id && !map.value) await loadMap(id)
 })
+
+function scheduleMapRefresh() {
+  if (mapDisposed) return
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null
+    if (mapDisposed) return
+    if (refreshInFlight) { refreshAgain = true; return }
+    if (!props.encounter.mapId || autosave.hasUnsaved.value) { refreshAgain = true; return }
+    refreshInFlight = true
+    try { await loadMap(props.encounter.mapId) }
+    finally {
+      refreshInFlight = false
+      if (refreshAgain) { refreshAgain = false; scheduleMapRefresh() }
+    }
+  }, 300)
+}
 
 // ── Positions (local, authoritative within this component) ─────────────────
 // participantPositions can arrive as a parsed object (GET endpoint) or as a raw JSON
@@ -260,7 +305,8 @@ ws.onMessage((msg) => {
     lastAppliedVersion = msg.version
     positions.value = { ...positions.value, ...msg.patch }
   } else if (msg.type === 'map-edited' || msg.type === 'element-painted' || msg.type === 'door-toggled') {
-    if (props.encounter.mapId) mapStore.fetchMap(props.encounter.mapId).then(m => { map.value = m })
+    const notifiedMapId = 'data' in msg ? (msg.data as { mapId?: string } | null)?.mapId : undefined
+    if (!notifiedMapId || notifiedMapId === props.encounter.mapId) scheduleMapRefresh()
   } else if (msg.type === 'full-state') {
     lastAppliedVersion = msg.version
     positions.value = toPositionsObj(msg.participantPositions)
@@ -269,6 +315,46 @@ ws.onMessage((msg) => {
 
 // ── Editor ─────────────────────────────────────────────────────────────────
 const editor = useMapEditor(map)
+let lastQueuedRevision = 0
+const autosave = useMapAutosave({
+  save: (mapId, patch) => mapStore.updateMapMinimal(mapId, patch),
+  onSaved: (mapId, acknowledgement, notifications) => {
+    if (mapDisposed || mapId !== props.encounter.mapId) return
+    const tool = notifications.at(-1) ?? 'voxel'
+    ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add',
+      tileType: (tool === 'ramp' ? 'voxel' : tool) as any,
+      data: { mapId, updatedAt: acknowledgement.updatedAt } })
+    if (refreshAgain) { refreshAgain = false; scheduleMapRefresh() }
+  },
+})
+const saveStatus = computed(() => autosave.status.value === 'error' ? 'Save failed'
+  : autosave.hasUnsaved.value ? 'Saving?' : 'Saved')
+
+function beforeMapUnload(event: BeforeUnloadEvent) {
+  if (!autosave.hasUnsaved.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+async function retryMapSaves() {
+  if (!(await autosave.retry())) return
+  const mapId = props.encounter.mapId
+  if (mapId && map.value?.id !== mapId) {
+    map.value = null
+    await loadMap(mapId)
+  }
+}
+
+onBeforeRouteLeave(async () => await autosave.flush())
+onBeforeRouteUpdate(async () => await autosave.flush())
+onBeforeUnmount(() => {
+  mapDisposed = true
+  ++mapLoadGeneration
+  if (refreshTimer) clearTimeout(refreshTimer)
+  window.removeEventListener('beforeunload', beforeMapUnload)
+  void autosave.flush().finally(() => autosave.dispose())
+})
+
 
 // ── Movement ───────────────────────────────────────────────────────────────
 const movement = useMapMovement()
@@ -541,18 +627,7 @@ function onGmMove(participantId: string, position: Vec3) {
 // Door state lives on the map record, like in-encounter map edits: update it locally (MapCanvas
 // rebuilds the scene and its line-of-sight model), save it, then tell other viewers to refetch.
 async function setDoorsOpen(doorIds: string[], isOpen: boolean) {
-  const mapId = props.encounter.mapId
-  if (!map.value || !mapId || doorIds.length === 0) return
-  const ids = new Set(doorIds)
-  map.value.doors = map.value.doors.map(d => (ids.has(d.id) ? { ...d, isOpen } : d))
-  try {
-    await mapStore.updateMap(mapId, { doors: map.value.doors })
-    for (const doorId of doorIds) ws.send({ type: 'door-toggled', encounterId: props.encounter.id, doorId, isOpen })
-  } catch (e) {
-    console.error('door toggle failed', e)
-    const fresh = await mapStore.fetchMap(mapId)  // resync; null means the fetch failed too
-    if (fresh) map.value = fresh
-  }
+  if (editor.setDoorsOpen(doorIds, isOpen)) await persistMap('door')
 }
 
 // The mover's path to `destination` (for opening doors and measuring the move): the drawn path when
@@ -858,8 +933,8 @@ function cancelThrowAllyAim() {
 }
 
 let lastHoveredMovementCell: string | null = null
-// Cache map serialization independently of token, participant and record changes.
-const mapSignature = computed(() => JSON.stringify(map.value))
+// Atomic map roots carry a cheap client-only revision; no geometry serialization on movement.
+const mapSignature = computed(() => getMapGeometryRevision(map.value))
 
 // Polling recreates participant and character records. Compare movement inputs by
 // value so an unchanged snapshot (or a health/action update) keeps the hovered path.
@@ -922,18 +997,13 @@ function onNpcAction(participantId: string, action: 'move' | 'stance' | 'attack'
 const selectedStructure = ref<any | null>(null)
 
 async function persistMap(tool: string) {
-  if (!map.value || !props.encounter.mapId) return
-  await mapStore.updateMap(props.encounter.mapId, {
-    groundTiles: map.value.groundTiles,
-    spaceTiles: map.value.spaceTiles,
-    voxels: map.value.voxels ?? [],
-    walls: map.value.walls,
-    windows: map.value.windows,
-    doors: map.value.doors,
-    ceilings: map.value.ceilings,
-    stairs: map.value.stairs,
-  } as any)
-  ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add', tileType: (tool === 'ramp' ? 'voxel' : tool) as any, data: null })
+  if (!map.value || map.value.id !== props.encounter.mapId) return
+  const revision = getMapGeometryRevision(map.value)
+  if (revision === lastQueuedRevision) return
+  const change = getMapEditChange(map.value)
+  if (!change) return
+  autosave.enqueue(map.value, change.collections, tool)
+  lastQueuedRevision = revision
 }
 
 async function onCellDraw(start: Vec3, end: Vec3) {
@@ -944,6 +1014,7 @@ async function onCellDraw(start: Vec3, end: Vec3) {
   else if (tool === 'paint-element') editor.applyPaintElement(start, end)
   else if (tool === 'voxel')         editor.applyVoxelDraw(start, end)
   else if (tool === 'ramp')          editor.applyVoxelDraw(start, end, 'ramp')
+  else if (tool === 'stairs')        editor.applyStairDraw(start, end)
   else if (tool === 'ceiling')       editor.applyCeilingDraw(start, end)
   else if (tool === 'spawn')         editor.applySpawnToggle(start, end)
   else if (tool === 'delete')        editor.deleteAt(start, end)
@@ -1012,32 +1083,16 @@ function onWallSelected(wallId: string) {
 }
 
 function onStructureSave(id: string, type: string, woundBoxes: number | null, face?: WallFace) {
-  if (!map.value) return
-  if (type === 'wall') {
-    const wall = map.value.walls.find(w => w.id === id)
-    if (wall) wall.woundBoxes = woundBoxes ?? undefined
-  } else if (type === 'ceiling') {
-    const ceiling = map.value.ceilings.find(c => c.id === id)
-    if (ceiling) ceiling.woundBoxes = woundBoxes ?? undefined
-  } else if (type === 'window') {
-    const win = map.value.windows.find(w => w.id === id)
-    if (win) win.woundBoxes = woundBoxes ?? undefined
-  }
-  if (props.encounter.mapId) {
-    mapStore.updateMap(props.encounter.mapId, {
-      walls: map.value.walls,
-      ceilings: map.value.ceilings,
-      windows: map.value.windows,
-    } as any)
-    ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add', tileType: type as any, data: null })
-  }
+  if (editor.updateStructure(id, type, woundBoxes, face)) void persistMap(type)
   selectedStructure.value = null
 }
 
-defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim, startChargeAfterMove })
+defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim, startChargeAfterMove, flushMapSaves: autosave.flush })
 </script>
 
 <style scoped>
+.map-save-status { display:flex; align-items:center; gap:10px; padding:4px 10px; color:#aabbcc; font-size:12px; background:#151526; }
+.map-save-status button { color:#fff; text-decoration:underline; }
 .encounter-map-root {
   display: flex;
   flex-direction: column;
