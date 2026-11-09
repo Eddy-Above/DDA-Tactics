@@ -21,7 +21,7 @@ export interface MapRadialItem {
   children?: MapRadialItem[]
 }
 
-export type MapRadialChoiceAction = 'direct' | 'digivolve' | 'mode-change'
+export type MapRadialChoiceAction = 'direct' | 'digivolve' | 'mode-change' | 'special-order'
 
 export interface MapRadialOptions {
   attacks: MapRadialItem[]
@@ -29,4 +29,5 @@ export interface MapRadialOptions {
   direct?: MapRadialItem[]
   digivolve?: MapRadialItem[]
   'mode-change'?: MapRadialItem[]
+  'special-order'?: MapRadialItem[]
 }

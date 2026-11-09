@@ -140,6 +140,7 @@ const props = defineProps<{
   drawMode: 'line' | 'square' | 'cube'
   currentEditY: number
   isDm: boolean
+  combatActive?: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
   activeParticipantId: string | null  // whose turn it is
   secondaryActiveParticipantId: string | null  // partner of the active participant, also highlighted
@@ -374,7 +375,7 @@ const participantChoiceItems = computed(participantChoiceOptions)
 function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, disabled: boolean): MapRadialItem {
   const options = radialParticipantId.value ? props.radialOptions?.[radialParticipantId.value] : undefined
   const choices = options?.[action === 'attack' ? 'attacks' : action === 'stance' ? 'stances' : action]
-  const labels = { attack: 'Attack', stance: 'Stance', direct: 'Direct', digivolve: 'Digivolve', 'mode-change': 'Mode Change' }
+  const labels = { attack: 'Attack', stance: 'Stance', direct: 'Direct', digivolve: 'Digivolve', 'mode-change': 'Mode Change', 'special-order': 'Orders' }
   return {
     id: action,
     label: labels[action],
@@ -388,10 +389,12 @@ function radialChoiceGroup(action: 'attack' | 'stance' | MapRadialChoiceAction, 
 }
 
 const radialItems = computed<MapRadialItem[]>(() => {
-  if (gmRadialId.value) return props.isDm ? [
+  const gmOptions: MapRadialItem[] = props.isDm ? [
     { id: 'gm-move', label: 'GM Move', icon: 'gm-move', description: 'Reposition freely', cost: 'Free' },
     { id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls', cost: 'Free' },
   ] : []
+  const participant = props.participants.find(p => p.id === radialParticipantId.value)
+  if (gmRadialId.value || (props.isDm && (!participant || !canUseTurnRadial(participant)))) return gmOptions
   const isNpc = !!npcRadialId.value
   const clashButtons = isNpc ? npcClashButtons.value : radialPlayerClashButtons.value
   const outOfActions = isNpc ? npcOutOfActions.value : radialPlayerOutOfActions.value
@@ -407,7 +410,7 @@ const radialItems = computed<MapRadialItem[]>(() => {
     } else if (playerRadialParticipantType.value === 'tamer') {
       items.push(
         radialChoiceGroup('direct', directDisabled.value),
-        { id: 'special-order', label: 'Orders', icon: 'orders' },
+        { ...radialChoiceGroup('special-order', false), icon: 'orders' },
       )
     }
     items.push(radialChoiceGroup('stance', outOfActions))
@@ -415,7 +418,6 @@ const radialItems = computed<MapRadialItem[]>(() => {
       items.push(radialChoiceGroup('mode-change', modeChangeDisabled.value))
     }
     items.push({ id: 'clash', label: 'Clash', icon: 'clash', disabled: outOfActions })
-    if (isNpc && props.isDm) items.push({ id: 'gm-move', label: 'GM Move', icon: 'gm-move' })
     const doors = isNpc ? npcDoorButtons.value : playerDoorButtons.value
     if (doors.length) items.push({ id: 'doors', label: 'Doors', icon: 'door', children: doors.map(door => ({
       id: `door:${door.id}`, label: door.label, icon: 'door', description: 'Free action',
@@ -427,8 +429,7 @@ const radialItems = computed<MapRadialItem[]>(() => {
   if (isNpc && props.isDm && props.radialOptions?.[npcRadialId.value!]?.digivolve?.length) {
     items.push(radialChoiceGroup('digivolve', outOfActions))
   }
-  if (props.isDm) items.push({ id: 'gm-manage', label: 'Manage', icon: 'manage', description: 'Wounds, effects and GM controls' })
-  const participant = props.participants.find(p => p.id === radialParticipantId.value)
+  items.push(...gmOptions)
   return withRadialActionCosts(items, participant, participant ? props.digimonMap?.[participant.entityId] : undefined, props.eddySoulRules, props.participants)
 })
 
@@ -489,7 +490,7 @@ function onRadialSelect(item: MapRadialItem) {
   } else if (item.id.startsWith('stance:')) {
     closeRadial()
     emit('stance-selected', participantId, item.id.slice(7) as Stance)
-  } else if (['direct:', 'digivolve:', 'mode-change:'].some(prefix => item.id.startsWith(prefix))) {
+  } else if (['direct:', 'digivolve:', 'mode-change:', 'special-order:'].some(prefix => item.id.startsWith(prefix))) {
     const separator = item.id.indexOf(':')
     closeRadial()
     emit('action-selected', participantId, item.id.slice(0, separator) as MapRadialChoiceAction, item.id.slice(separator + 1))
@@ -2600,6 +2601,14 @@ function participantRegionFromHits(hits: THREE.Intersection[]): { anchor: Vec3; 
 
 // Both direct clicks and the overlap chooser continue through the same selection
 // rules: valid targets, GM actions, owned actions, or a character's health.
+function canUseTurnRadial(participant: CombatParticipant): boolean {
+  if (props.combatActive === false || participant.inReserve || !['tamer', 'digimon'].includes(participant.type)) return false
+  if (participant.id === props.activeParticipantId) return true
+  const active = props.participants.find(p => p.id === props.activeParticipantId && !p.inReserve)
+  return participant.type === 'digimon' && active?.type === 'tamer'
+    && props.digimonMap[participant.entityId]?.partnerId === active.entityId
+}
+
 function selectMapParticipant(participantId: string, point: THREE.Vector3) {
   const p = props.participants.find(p => p.id === participantId)
   if (!p || p.inReserve || !props.participantPositions[participantId]) return
@@ -2607,8 +2616,8 @@ function selectMapParticipant(participantId: string, point: THREE.Vector3) {
   clickedHealthBar.value = null
 
   if (props.isDm) {
-    const npcTurn = p.isEnemy && p.id === props.activeParticipantId
-    const current = npcTurn ? npcRadialId : gmRadialId
+    const playerControlled = p.type === 'tamer' || !!props.digimonMap[p.entityId]?.partnerId
+    const current = canUseTurnRadial(p) ? (playerControlled ? playerRadialId : npcRadialId) : gmRadialId
     const wasOpen = current.value === participantId
     closeRadial()
     if (!wasOpen) current.value = participantId

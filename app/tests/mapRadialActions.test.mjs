@@ -17,13 +17,14 @@ function createMapActions(role) {
   const signature = { id: 'signature', name: 'Signature', range: 'ranged', tags: ['Signature Move'] }
   const record = { id: 'agumon', attacks: [attack, areaAttack, signature] }
   const actor = { id: 'actor', entityId: record.id, type: 'digimon', currentStance: 'neutral', actionsRemaining: { simple: 2 } }
-  const encounter = shallowRef({ id: 'encounter', round: 3, participants: [actor] })
+  const encounter = shallowRef({ id: 'encounter', phase: 'combat', round: 3, participants: [actor] })
   const updates = []
   const logs = []
   const dependencies = {
     ...attackOptions,
     ...radialAttackOptions,
     radialAttackDraft: ref(null),
+    mapDirectMode: ref(null),
     getMapAttackContext: () => ({ round: 3, campaignLevel: 'standard', hasTamer: true, inspiration: 100, fatefulAvailable: true,
       record: { qualities: [{ id: 'huge-power', ranks: 2 }] } }),
     canParticipantAct: () => true,
@@ -177,6 +178,18 @@ for (const role of Object.keys(pages)) {
     assert.equal(page.logs.length, 0)
   })
 }
+
+test('GM map attack, rider and stance choices stop when combat ends with the same active token', async () => {
+  const page = createMapActions('gm')
+  page.encounter.value.phase = 'ended'
+  page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'huge-power')
+  page.onMapAttackSelected(page.actor.id, page.attack.id)
+  await page.onMapStanceSelected(page.actor.id, 'defensive')
+  assert.equal(page.dependencies.selectedAttack.value, null)
+  assert.equal(page.dependencies.radialAttackDraft.value, null)
+  assert.equal(page.actor.currentStance, 'neutral')
+  assert.deepEqual(page.updates, [])
+})
 
 test('canvas radial choices recheck the live branch and preserve colon-containing choice ids', () => {
   const participantId = ref('actor')

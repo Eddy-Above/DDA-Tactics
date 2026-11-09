@@ -14,6 +14,7 @@ import type { Tamer } from '~/server/db/schema'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { computeAreaCellsFromData } from '~/utils/areaShapes'
 import { vec3Key } from '~/utils/mapGeometry'
+import { chebyshev } from '~/utils/pathfinding'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit, hasPartnerStrikeFirst } from '~/utils/specialOrders'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '~/utils/skillOrders'
 import { type StatBlock, type SwappableStat, type StatSwaps, applyStatSwaps } from '~/utils/statSwaps'
@@ -529,6 +530,29 @@ const npcAttackOptions = computed(() => {
 })
 
 const radialAttackDraft = ref<{ participantId: string; attackId: string; riders: AttackRadialRider[] } | null>(null)
+const mapDirectMode = ref<{ participantId: string; bolstered: boolean } | null>(null)
+const directRanges = computed(() => ({
+  direct: eddySoulRules.value?.directRangeOverrides?.direct ?? 15,
+  bolsterDirect: eddySoulRules.value?.directRangeOverrides?.bolsterDirect ?? 10,
+}))
+function canMapDirect(participant: CombatParticipant, bolstered: boolean): boolean {
+  return currentEncounter.value?.phase === 'combat' && !participant.inReserve && canParticipantAct(participant)
+    && participant.type === 'tamer' && !participant.clash && !participant.hasDirectedThisTurn
+    && (participant.actionsRemaining?.simple ?? 0) >= (bolstered ? 2 : 1)
+}
+const directMapTargetIds = computed(() => {
+  const mode = mapDirectMode.value
+  const encounter = currentEncounter.value
+  const participants = (encounter?.participants as CombatParticipant[]) ?? []
+  const actor = participants.find(p => p.id === mode?.participantId)
+  if (!mode || !actor || !canMapDirect(actor, mode.bolstered)) return []
+  const positions = (encounter?.participantPositions as Record<string, Vec3>) ?? {}
+  const origin = positions[actor.id]
+  if (!origin) return []
+  const range = mode.bolstered ? directRanges.value.bolsterDirect : directRanges.value.direct
+  return participants.filter(p => p.type === 'digimon' && !p.inReserve && positions[p.id]
+    && chebyshev(origin, positions[p.id]) <= range).map(p => p.id)
+})
 function getMapAttackTamer(p: CombatParticipant) {
   const partnerId = digimonMap.value.get(p.entityId)?.partnerId
   return (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(t => t.type === 'tamer' && !t.inReserve && t.entityId === partnerId)
@@ -543,7 +567,7 @@ function getMapAttackContext(p: CombatParticipant) {
 function onMapAttackRiderSelected(participantId: string, attackId: string, rider: AttackRadialRider) {
   const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(p => p.id === participantId)
   const attack = p && getParticipantAttacks(p).find(a => a.id === attackId)
-  if (!p || !attack || !canParticipantAct(p)) return
+  if (!p || p.inReserve || !attack || currentEncounter.value?.phase !== 'combat' || !canParticipantAct(p)) return
   const draft = radialAttackDraft.value
   const selected = draft?.participantId === participantId && draft.attackId === attackId ? draft.riders : []
   const next = toggleAttackRider(selected, rider)
@@ -564,9 +588,29 @@ const mapRadialOptions = computed(() => {
         disabled: p.currentStance === stance || !!p.clash || (p.actionsRemaining?.simple || 0) < 1,
       })),
     }
+    if (p.type === 'tamer') {
+      options[p.id].direct = [
+        { id: 'direct', label: 'Direct', description: `Range ${directRanges.value.direct}`, disabled: !canMapDirect(p, false) },
+        { id: 'bolster', label: 'Bolster Direct', description: `Range ${directRanges.value.bolsterDirect}`, disabled: !canMapDirect(p, true) },
+      ]
+      options[p.id]['special-order'] = [
+        ...getTamerSpecialOrders(p).map(order => ({
+          id: `special:${order.name}`, label: order.name, description: order.effect,
+          cost: order.name === 'Fateful Intervention' ? `${INSPIRATION_FATEFUL_COST[campaignLevel.value]} Inspiration`
+            : getOrderActionCost(order.type) ? `${getOrderActionCost(order.type)} Simple` : 'Free',
+          disabled: !canUseGmSpecialOrder(p, order),
+        })),
+        ...getTamerSkillOrders(p).map(order => ({
+          id: `skill:${order.name}`, label: order.name, description: order.effect,
+          cost: getSkillOrderActionCost(order.type) ? `${getSkillOrderActionCost(order.type)} Simple` : 'Free',
+          disabled: !canUseGmSkillOrder(p, order),
+        })),
+      ]
+    }
     if (p.type === 'digimon' && p.evolutionLineId) {
       const evolution = getParticipantEvolutionOptions(p)
-      const canAct = currentEncounter.value?.phase === 'combat' && canParticipantAct(p) && (p.actionsRemaining?.simple ?? 0) >= 1
+      const payer = getMapAttackTamer(p) ?? p
+      const canAct = currentEncounter.value?.phase === 'combat' && canParticipantAct(p) && (payer.actionsRemaining?.simple ?? 0) >= 1
       options[p.id].digivolve = evolution.evolveTargets.map(target => ({
         id: String(target.chainIndex), label: `Digivolve → ${target.species}`, description: '1 Simple Action',
         disabled: !canAct || !!p.hasAttemptedDigivolve,
@@ -576,38 +620,59 @@ const mapRadialOptions = computed(() => {
         description: '1 Simple Action', disabled: !canAct,
       })
     }
+    if (p.type === 'digimon') options[p.id]['mode-change'] = getModeChangePairs(p, digimonMap.value).map(pair => ({
+      id: `${pair.a}:${pair.b}`, label: pair.label,
+      description: isSwapActive(p, pair) ? 'Active · Select to revert' : 'Swap combat stats',
+      active: isSwapActive(p, pair), disabled: !!p.clash || !canUseModeChangeSwap(p, digimonMap.value, eddySoulRules.value),
+    }))
   }
   return options
 })
 
 function onMapAttackSelected(participantId: string, attackId: string, riders?: AttackRadialRider[]) {
   const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === participantId)
-  if (!p) return
+  if (!p || p.inReserve || currentEncounter.value?.phase !== 'combat' || !canParticipantAct(p)) return
   const attack = getParticipantAttacks(p).find(a => a.id === attackId)
   if (!attack || !canUseAttack(p, attack)) return
   if (riders && (!canParticipantAct(p) || !validAttackRiders(p, attack, getMapAttackContext(p), riders))) return
   npcAttackParticipantId.value = null
+  mapDirectMode.value = null
   selectAttackAndShowTargets(p, attack, riders ? attackRiderSelection(riders) : undefined)
   if (riders) radialAttackDraft.value = null
 }
 
 function onMapStanceSelected(participantId: string, stance: Stance) {
   const p = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(x => x.id === participantId)
-  if (!p || p.currentStance === stance) return
+  if (!p || p.inReserve || currentEncounter.value?.phase !== 'combat' || !canParticipantAct(p) || p.currentStance === stance) return
   npcStanceParticipantId.value = null
   return changeStance(stance, participantId)
 }
 
 function onMapActionSelected(participantId: string, action: MapRadialChoiceAction, choiceId: string) {
-  if (action !== 'digivolve' || currentEncounter.value?.phase !== 'combat') return
+  if (currentEncounter.value?.phase !== 'combat') return
   const participant = (currentEncounter.value.participants as CombatParticipant[]).find(participant => participant.id === participantId)
-  const choice = mapRadialOptions.value[participantId]?.digivolve?.find(choice => choice.id === choiceId)
-  if (!participant || participant.type !== 'digimon' || !canParticipantAct(participant) || !choice || choice.disabled) return
-  const evolution = getParticipantEvolutionOptions(participant)
-  const target = evolution.evolveTargets.find(target => String(target.chainIndex) === choiceId)
-    ?? (evolution.canDevolve && String(evolution.devolveTarget?.chainIndex) === choiceId ? evolution.devolveTarget : null)
-  if (!target) return
-  return handleDigivolve(participant, target.chainIndex)
+  const choice = mapRadialOptions.value[participantId]?.[action]?.find(choice => choice.id === choiceId)
+  if (!participant || participant.inReserve || !canParticipantAct(participant) || !choice || choice.disabled) return
+  if (action === 'direct' && canMapDirect(participant, choiceId === 'bolster')) {
+    selectedAttack.value = null
+    mapDirectMode.value = { participantId, bolstered: choiceId === 'bolster' }
+  } else if (action === 'digivolve' && participant.type === 'digimon') {
+    const evolution = getParticipantEvolutionOptions(participant)
+    const target = evolution.evolveTargets.find(target => String(target.chainIndex) === choiceId)
+      ?? (evolution.canDevolve && String(evolution.devolveTarget?.chainIndex) === choiceId ? evolution.devolveTarget : null)
+    if (target) return handleDigivolve(participant, target.chainIndex)
+  } else if (action === 'mode-change' && participant.type === 'digimon') {
+    const pair = getModeChangePairs(participant, digimonMap.value).find(pair => `${pair.a}:${pair.b}` === choiceId)
+    if (pair) return handleModeChangeSwap(participant, pair.a, pair.b)
+  } else if (action === 'special-order' && participant.type === 'tamer' && !participant.clash) {
+    const special = getTamerSpecialOrders(participant).find(order => `special:${order.name}` === choiceId)
+    if (special && canUseGmSpecialOrder(participant, special)) {
+      return special.name === 'Fateful Intervention' ? handleUseSpecialOrder(participant, special.name)
+        : specialOrderTargets.open(participant, special.name)
+    }
+    const skill = getTamerSkillOrders(participant).find(order => `skill:${order.name}` === choiceId)
+    if (skill && canUseGmSkillOrder(participant, skill)) return handleUseSkillOrder(participant, skill.name)
+  }
 }
 
 const {
@@ -2130,13 +2195,6 @@ function getTamerSpecialOrders(participant: CombatParticipant) {
 
 const pendingAttackFateful = usePendingAttackFateful()
 const gmFatefulTamer = ref<CombatParticipant | null>(null)
-const gmFatefulAvailableTamers = computed(() => currentEncounter.value?.phase === 'combat'
-  ? (currentEncounter.value.participants as CombatParticipant[]).filter(p => p.type === 'tamer' && !p.inReserve && (p.currentInspiration ?? 0) >= INSPIRATION_FATEFUL_COST[campaignLevel.value])
-  : [])
-watch(gmFatefulAvailableTamers, available => {
-  if (pendingAttackFateful.target.value) return
-  gmFatefulTamer.value = available.find(p => p.id === gmFatefulTamer.value?.id) ?? available[0] ?? null
-}, { immediate: true })
 const gmFatefulWillpower = computed(() => {
   const tamer = tamers.value.find(t => t.id === gmFatefulTamer.value?.entityId)
   return (tamer?.attributes?.willpower ?? 0) + (tamer?.xpBonuses?.attributes?.willpower ?? 0)
@@ -2272,6 +2330,13 @@ function isPassiveSkillOrder(order: { type: string }) {
   return getSkillOrderActionCost(order.type) === 0 && getOrderUsageLimit(order.type) === 'passive'
 }
 
+function canUseGmSkillOrder(participant: CombatParticipant, order: any): boolean {
+  if (isPassiveSkillOrder(order) || (participant.usedSkillOrders ?? []).includes(order.name)) return false
+  if (getOrderUsageLimit(order.type) === 'per-day'
+    && (tamers.value.find(t => t.id === participant.entityId)?.usedPerDaySkillOrders ?? []).includes(order.name)) return false
+  return (participant.actionsRemaining?.simple ?? 0) >= getSkillOrderActionCost(order.type)
+}
+
 async function handleUseSkillOrder(participant: CombatParticipant, orderName: string) {
   if (!currentEncounter.value) return
   try {
@@ -2325,7 +2390,7 @@ function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash
   // clash-move (reposition) is handled inside EncounterMap; nothing to do at the page level.
   if (action === 'clash-move') return
   const p = (currentEncounter.value.participants as CombatParticipant[]).find(x => x.id === participantId)
-  if (!p) return
+  if (!p || p.inReserve || currentEncounter.value.phase !== 'combat' || !canParticipantAct(p)) return
   if (action === 'attack') {
     npcAttackParticipantId.value = npcAttackParticipantId.value === participantId ? null : participantId
   } else if (action === 'clash') {
@@ -2342,6 +2407,12 @@ function onNpcAction(participantId: string, action: 'stance' | 'attack' | 'clash
     handleClashCheck(participantId)
   } else {
     npcStanceParticipantId.value = npcStanceParticipantId.value === participantId ? null : participantId
+  }
+}
+
+function onMapPlayerAction(participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move') {
+  if (['attack', 'stance', 'clash', 'clash-attack', 'clash-pin', 'clash-throw', 'clash-end', 'clash-check', 'clash-move'].includes(action)) {
+    return onNpcAction(participantId, action as Parameters<typeof onNpcAction>[1])
   }
 }
 
@@ -2423,10 +2494,10 @@ function getDirectTargets(): CombatParticipant[] {
 }
 
 // Confirm direct action on selected digimon
-async function confirmDirect(targetDigimon: CombatParticipant) {
+async function confirmDirect(targetDigimon: CombatParticipant, participantId = activeParticipant.value?.id, bolstered = pendingDirectBolstered.value) {
   if (!currentEncounter.value) return
-  const tamer = activeParticipant.value
-  if (!tamer || tamer.type !== 'tamer') return
+  const tamer = (currentEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
+  if (!tamer || !canMapDirect(tamer, bolstered)) return
 
   try {
     const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/direct`, {
@@ -2434,7 +2505,7 @@ async function confirmDirect(targetDigimon: CombatParticipant) {
       body: {
         participantId: tamer.id,
         targetDigimonId: targetDigimon.id,
-        bolstered: pendingDirectBolstered.value,
+        bolstered,
       },
     })
     showDirectTargetSelector.value = false
@@ -3348,6 +3419,9 @@ const myTamerId = computed<string | null>(() => {
 })
 
 const showMapView = ref(false)
+watch(() => [currentEncounter.value?.phase, currentEncounter.value?.round, currentEncounter.value?.currentTurnIndex, showMapView.value], () => {
+  mapDirectMode.value = null
+})
 const encounterMapRef = ref<any>(null)
 const throwAimControllerId = ref<string | null>(null)
 const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
@@ -3420,6 +3494,13 @@ const mapSelectedAttackProp = computed(() => {
 })
 
 function onMapTargetSelected(targetId: string) {
+  if (mapDirectMode.value) {
+    const mode = mapDirectMode.value
+    const target = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(p => p.id === targetId)
+    if (!target || !directMapTargetIds.value.includes(targetId)) return
+    mapDirectMode.value = null
+    return confirmDirect(target, mode.participantId, mode.bolstered)
+  }
   if (selectedAttack.value?.attack.type === 'clash-initiate') {
     handleInitiateClash(selectedAttack.value.participant.id, targetId)
     return
@@ -3452,14 +3533,6 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
   <div class="container mx-auto px-4 py-8">
     <CleanseDialog v-if="cleanseRequest" :request="cleanseRequest" :participants="currentEncounter?.participants ?? []"
       :participant-name="getDisplayName" :busy="cleanseBusy" :error="cleanseError" @confirm="submitCleanse" />
-    <Teleport to="body">
-      <div v-if="gmFatefulAvailableTamers.length" class="fixed top-4 right-4 z-[65] rounded-lg border border-amber-700 bg-digimon-dark-800 p-2 flex gap-2">
-        <select v-model="gmFatefulTamer" :disabled="gmFateful.busy.value || !!pendingAttackFateful.target.value" aria-label="Tamer using Fateful Intervention" class="rounded bg-digimon-dark-700 text-white text-sm p-1">
-          <option v-for="participant in gmFatefulAvailableTamers" :key="participant.id" :value="participant">{{ getEntityDetails(participant)?.name ?? 'Tamer' }}</option>
-        </select>
-        <button :disabled="!gmFatefulTamer || gmFateful.busy.value" class="rounded bg-amber-800 text-white text-sm px-2 py-1 disabled:opacity-40" @click="gmFateful.open()">Fateful Intervention</button>
-      </div>
-    </Teleport>
     <ReactionOrdersPanel :choices="gmReactionOrders.choices.value" :busy="gmReactionOrders.busy.value" @declare="gmReactionOrders.declare" @skip="gmReactionOrders.skip" />
     <FatefulInterventionDialog v-if="gmFateful.visible.value" :rolls="gmFatefulOptions" :willpower="gmFatefulWillpower" :cost="INSPIRATION_FATEFUL_COST[campaignLevel]" :inspiration="gmFatefulTamer?.currentInspiration ?? 0" :busy="gmFateful.busy.value" :error="gmFateful.error.value" @confirm="gmFateful.confirm" @cancel="cancelGmFateful" />
     <SpecialOrderTargetDialog
@@ -3571,10 +3644,12 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           :digimon-map="digimonMapForMap"
           :selected-attack="mapSelectedAttackProp"
           :radial-options="mapRadialOptions"
+          :selectable-participant-ids="directMapTargetIds"
           :player-placement-mode="false"
           :eddy-soul-rules="eddySoulRules"
           @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
           @npc-action="onNpcAction"
+          @player-action="onMapPlayerAction"
           @gm-manage="selectedParticipantId = $event"
           @attack-selected="onMapAttackSelected"
           @attack-rider-selected="onMapAttackRiderSelected"
@@ -3677,6 +3752,17 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="npcAttackParticipantId = null">Cancel</button>
         </div>
         <!-- Map targeting hint; attack options are chosen in the radial menu. -->
+        <div
+          v-if="mapDirectMode"
+          class="fixed z-50 bg-digimon-dark-800 border border-amber-600 rounded-xl p-3 shadow-xl flex items-center gap-4"
+          style="bottom: 120px; left: 16px; max-width: 380px;"
+        >
+          <div class="text-sm text-amber-300">
+            {{ mapDirectMode.bolstered ? 'Bolster Direct' : 'Direct' }} — select a Digimon
+            (range {{ mapDirectMode.bolstered ? directRanges.bolsterDirect : directRanges.direct }})
+          </div>
+          <button class="text-xs text-digimon-dark-400 hover:text-white" @click="mapDirectMode = null">Cancel</button>
+        </div>
         <div
           v-if="selectedAttack"
           class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-3 shadow-xl flex items-center gap-4"

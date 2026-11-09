@@ -75,7 +75,7 @@ function harness(t, isDm = false) {
   handlers = loadPageFunctions('components/MapCanvas.vue', [
     'getParticipantSize', 'getParticipantFootprintDims', 'footprintIntersectsArea', 'footprintOccupied',
     'participantCandidatesAt', 'participantRegionFromHits', 'participantChoiceOptions',
-    'closeRadial', 'onParticipantChoice', 'onParticipantChoiceHover', 'updateRadialScreen', 'selectMapParticipant',
+    'closeRadial', 'onParticipantChoice', 'onParticipantChoiceHover', 'updateRadialScreen', 'canUseTurnRadial', 'selectMapParticipant',
     'tryReticuleTarget', 'getMoveAim', 'moveCellAt', 'validGmMoveCell', 'cancelMoveAim', 'movementPreviewCenter',
     'onCanvasClick', 'onMouseMove', 'onMouseDown', 'onWheel',
   ], deps)

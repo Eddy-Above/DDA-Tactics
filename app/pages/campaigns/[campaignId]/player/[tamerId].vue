@@ -1871,7 +1871,8 @@ function onMapStanceSelected(participantId: string, stance: Stance) {
   return changePlayerStance(p, stance)
 }
 
-function onMapActionSelected(participantId: string, action: 'direct' | 'digivolve' | 'mode-change', choiceId: string) {
+function onMapActionSelected(participantId: string, action: 'direct' | 'digivolve' | 'mode-change' | 'special-order', choiceId: string) {
+  if (action === 'special-order') return // This page opens its existing Orders dialog from player-action.
   const p = myParticipants.value.find(x => x.id === participantId)
   const choice = mapRadialOptions.value[participantId]?.[action]?.find(item => item.id === choiceId)
   if (!p || !choice || choice.disabled) return

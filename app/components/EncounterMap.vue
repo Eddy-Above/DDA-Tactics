@@ -35,6 +35,7 @@
           :draw-mode="editor.drawMode.value"
           :current-edit-y="editor.currentEditY.value"
           :is-dm="isDm"
+          :combat-active="encounter.phase === 'combat'"
           :my-participant-ids="myParticipantIds"
           :active-participant-id="activeParticipantId"
           :secondary-active-participant-id="secondaryActiveParticipantId"

@@ -38,6 +38,7 @@ function fixture() {
     { digimonId: 'locked', species: 'Locked form', evolvesFromIndex: 0, isUnlocked: false },
   ] }]), buildCombatEvolutionOptions, eddySoulRules: ref({}), campaignLevel: ref('standard'), DIGIVOLVE_WILLPOWER_DC: { standard: 12 },
     getParticipantAttacks: () => [], canUseAttack: () => true, attackRadialItem: () => {},
+    getMapAttackTamer: () => null, getModeChangePairs: () => [],
     $fetch: async (url, options) => { calls.push({ url, ...options }); return { id: 'updated' } },
     applyActionResult: async (...args) => applied.push(args),
     openWillpower: () => { throw new Error('An NPC must not need a Tamer Willpower roll') },
@@ -50,12 +51,12 @@ function fixture() {
   deps.mapRadialOptions = options
   // Rebind the action handler to the live options computed.
   const actions = loadPageFunctions(page, ['onMapActionSelected'], deps)
-  const props = { isDm: true, participants: encounter.value.participants, get radialOptions() { return options.value } }
+  const props = { isDm: true, activeParticipantId: 'npc', digimonMap: {}, participants: encounter.value.participants, get radialOptions() { return options.value } }
   const radialParticipantId = ref('npc')
   const radialDeps = { props, radialParticipantId, npcRadialId: ref('npc'), gmRadialId: ref(null),
     npcClashButtons: ref(null), npcOutOfActions: computed(() => participant.actionsRemaining.simple < 1), npcDoorButtons: ref([]),
     computed, withRadialActionCosts }
-  Object.assign(radialDeps, loadPageFunctions('components/MapCanvas.vue', ['radialChoiceGroup'], radialDeps))
+  Object.assign(radialDeps, loadPageFunctions('components/MapCanvas.vue', ['radialChoiceGroup', 'canUseTurnRadial'], radialDeps))
   const radialItems = initializer('components/MapCanvas.vue', 'radialItems', radialDeps)
   return { encounter, participant, calls, applied, options, radialItems, ...actions }
 }
