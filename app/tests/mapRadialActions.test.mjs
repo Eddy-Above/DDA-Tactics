@@ -63,6 +63,24 @@ function createMapActions(role) {
 }
 
 for (const role of Object.keys(pages)) {
+  test(`${role} charge choices reach map targeting and empty Continue clears a previous movement choice`, () => {
+    const page = createMapActions(role)
+    page.attack.tags.push('Charge Attack')
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'charge-before')
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'charge-after')
+    page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'huge-power')
+    const selected = page.dependencies.radialAttackDraft.value.riders
+    assert.deepEqual(selected, ['charge-after', 'huge-power'])
+    page.onMapAttackSelected(page.actor.id, page.attack.id, selected)
+    assert.equal(page.dependencies.selectedAttack.value.radialOptions.chargeMode, 'after')
+    assert.equal(page.dependencies.hugePowerEnabled.value, true)
+    page.onMapAttackSelected(page.actor.id, page.attack.id, [])
+    assert.equal(page.dependencies.selectedAttack.value.radialOptions.chargeMode, null)
+    assert.equal(page.dependencies.hugePowerEnabled.value, false)
+    assert.equal(page.actor.actionsRemaining.simple, 2)
+    assert.deepEqual(page.updates, [])
+  })
+
   test(`${role} radial toggles combine riders and Continue also supports no riders without spending`, () => {
     const page = createMapActions(role)
     page.onMapAttackRiderSelected(page.actor.id, page.attack.id, 'bolster-bit-cpu')

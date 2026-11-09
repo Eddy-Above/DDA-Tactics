@@ -44,7 +44,38 @@ test('options toggle off and replace mutually exclusive Bolster, Lifesteal and H
   assert.equal(attackRiderSelection(selected).hugePower, true)
   assert.equal(attackRiderSelection(selected).hugePowerRank2, true)
   assert.deepEqual(attackRiderSelection([]), { bolster: false, bolsterType: 'damage-accuracy', lifesteal: false,
-    hugePower: false, hugePowerRank2: false, actOfInspiration: false, fatefulIntervention: false })
+    hugePower: false, hugePowerRank2: false, actOfInspiration: false, fatefulIntervention: false, chargeMode: null })
+})
+
+test('Charge movement is optional, mutually exclusive and compatible with the other third-tier options', () => {
+  const charge = { ...attack, tags: ['Charge Attack'] }, p = actor(), ctx = context()
+  const item = radialAttackItem(p, charge, ctx)
+  assert.equal(rider(item, 'charge-before').label, 'Move Before Attack')
+  assert.equal(rider(item, 'charge-after').label, 'Move After Attack')
+  assert.equal(rider(item, 'charge-before').disabled, false)
+  assert.equal(rider(item, 'charge-before').cost, 'No extra cost')
+  assert.deepEqual(item.children.at(-1).attackRiders, [])
+  assert.equal(attackRiderSelection([]).chargeMode, null, 'Continue without a movement choice means no move')
+  let selected = toggleAttackRider(['huge-power', 'act-of-inspiration'], 'charge-before')
+  assert.equal(attackRiderSelection(selected).chargeMode, 'before')
+  selected = toggleAttackRider(selected, 'charge-after')
+  assert.deepEqual(selected, ['huge-power', 'act-of-inspiration', 'charge-after'])
+  assert.equal(attackRiderSelection(selected).chargeMode, 'after')
+  assert.equal(validAttackRiders(p, charge, ctx, selected), true)
+  assert.equal(radialAttackItem(p, charge, ctx, selected).children.at(-1).cost, `1 Simple + ${INSPIRATION_ACT_COST.standard} Insp`)
+  assert.equal(attackRiderSelection(toggleAttackRider(selected, 'charge-after')).chargeMode, null)
+  assert.equal(validAttackRiders(p, charge, ctx, ['charge-before', 'charge-after']), false)
+})
+
+test('ordinary attacks and Pass never offer or accept separate Charge movement choices', () => {
+  for (const tags of [[], ['Area Attack: Burst'], ['Charge Attack', 'Area Attack: Pass']]) {
+    const current = { ...attack, tags }, p = actor(), ctx = context()
+    const item = radialAttackItem(p, current, ctx)
+    assert.equal(rider(item, 'charge-before'), undefined)
+    assert.equal(rider(item, 'charge-after'), undefined)
+    assert.equal(validAttackRiders(p, current, ctx, ['charge-before']), false)
+    assert.equal(validAttackRiders(p, current, ctx, ['charge-after']), false)
+  }
 })
 
 test('rider availability respects actions, Bolster limits, cooldowns, Signature, Haste and Combat Monster', () => {

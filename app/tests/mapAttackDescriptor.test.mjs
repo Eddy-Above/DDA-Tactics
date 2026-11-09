@@ -20,13 +20,26 @@ const source = (digimon = {}) => ({
 
 test('a missing record preserves attack metadata and the original map fallback', () => {
   assert.deepEqual(buildMapAttackDescriptor(selection()), {
+    attackId: undefined, chargeMode: null,
     tags: ['Charge Attack', 'Area Attack: Burst 3'], range: 'ranged', type: 'damage',
     bit: 0, effectiveLimit: 0, meleeRange: 1, attackerParticipantId: 'actor',
   })
   assert.deepEqual(buildMapAttackDescriptor(selection({ attack: { type: 'clash-initiate' } })), {
+    attackId: undefined, chargeMode: null,
     tags: [], range: 'melee', type: 'clash-initiate',
     bit: 0, effectiveLimit: 0, meleeRange: 1, attackerParticipantId: 'actor',
   })
+})
+
+test('the map descriptor carries the chosen Charge mode and attack identity without affecting attack stats', () => {
+  for (const chargeMode of [null, 'before', 'after']) {
+    const selected = selection({ attack: { id: 'charge', range: 'melee', tags: ['Charge Attack'] }, radialOptions: { chargeMode } })
+    const result = buildMapAttackDescriptor(selected, source())
+    assert.equal(result.attackId, 'charge')
+    assert.equal(result.chargeMode, chargeMode)
+    assert.equal(result.movement, 8)
+    assert.equal(result.meleeRange, 1)
+  }
 })
 
 test('map ranges use size and Reach ranks independently', () => {

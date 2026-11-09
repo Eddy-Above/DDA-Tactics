@@ -1,8 +1,9 @@
-import type { AttackRadialRider, MapRadialItem } from '../types/mapRadial'
+import type { AttackRadialRider, ChargeAttackMode, MapRadialItem } from '../types/mapRadial'
 import type { AttackRiders } from './attackAccuracy'
 import { attackRadialItem } from './attackBadges'
 import { attackActionCost, canBolsterCombatAttack, canUseCombatAttack, hugePowerAvailability } from './combatAttackOptions'
 import { getAttackOrderModifiers } from './specialOrderCombat'
+import { getAreaShape } from './areaShapes'
 import { INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST, type CampaignLevel } from '../types'
 
 export interface AttackRadialContext {
@@ -18,6 +19,7 @@ export interface AttackRadialContext {
 export interface RadialAttackSelection extends AttackRiders {
   actOfInspiration: boolean
   fatefulIntervention: boolean
+  chargeMode: ChargeAttackMode
 }
 
 export function attackRiderSelection(selected: readonly AttackRadialRider[]): RadialAttackSelection {
@@ -25,7 +27,8 @@ export function attackRiderSelection(selected: readonly AttackRadialRider[]): Ra
     bolsterType: selected.includes('bolster-bit-cpu') ? 'bit-cpu' : 'damage-accuracy',
     hugePower: selected.includes('huge-power') || selected.includes('huge-power-2'), hugePowerRank2: selected.includes('huge-power-2'),
     lifesteal: selected.includes('lifesteal'), actOfInspiration: selected.includes('act-of-inspiration'),
-    fatefulIntervention: selected.includes('fateful-intervention') }
+    fatefulIntervention: selected.includes('fateful-intervention'),
+    chargeMode: selected.includes('charge-before') ? 'before' : selected.includes('charge-after') ? 'after' : null }
 }
 
 export function toggleAttackRider(selected: readonly AttackRadialRider[], rider: AttackRadialRider): AttackRadialRider[] {
@@ -34,6 +37,7 @@ export function toggleAttackRider(selected: readonly AttackRadialRider[], rider:
   if (rider.startsWith('bolster-')) next = next.filter(current => !current.startsWith('bolster-') && current !== 'lifesteal')
   if (rider === 'lifesteal') next = next.filter(current => !current.startsWith('bolster-'))
   if (rider.startsWith('huge-power')) next = next.filter(current => !current.startsWith('huge-power'))
+  if (rider.startsWith('charge-')) next = next.filter(current => !current.startsWith('charge-'))
   return [...next, rider]
 }
 
@@ -49,6 +53,10 @@ function catalog(participant: any, attack: any, context: AttackRadialContext) {
     { id: 'bolster-damage-accuracy', label: 'Bolster Accuracy/Damage', allowed: bolster, cost: '2 Simple', inspiration: 0 },
     { id: 'bolster-bit-cpu', label: 'Bolster BIT/CPU', allowed: bolster && (participant.lastBitCpuBolsterRound === undefined || context.round - participant.lastBitCpuBolsterRound >= 2), cost: '2 Simple', inspiration: 0 },
   ]
+  if (attack.tags?.includes('Charge Attack') && getAreaShape(attack.tags) !== 'pass') {
+    entries.push({ id: 'charge-before', label: 'Move Before Attack', allowed: true, cost: 'No extra cost', inspiration: 0 },
+      { id: 'charge-after', label: 'Move After Attack', allowed: true, cost: 'No extra cost', inspiration: 0 })
+  }
   if (context.record?.qualities?.some((quality: any) => quality.id === 'huge-power')) {
     entries.push({ id: 'huge-power', label: 'Huge Power', allowed: power.rank1 && !suppressed, cost: 'No extra cost', inspiration: 0 })
     if ((context.record.qualities.find((quality: any) => quality.id === 'huge-power')?.ranks ?? 1) >= 2) {
@@ -69,7 +77,7 @@ export function validAttackRiders(participant: any, attack: any, context: Attack
   const entries = catalog(participant, attack, context)
   if (selected.some(rider => !entries.some(entry => entry.id === rider && entry.allowed))) return false
   const selection = attackRiderSelection(selected)
-  if (selected.filter(rider => rider.startsWith('bolster-')).length > 1 || selected.filter(rider => rider.startsWith('huge-power')).length > 1 || (selection.bolster && selection.lifesteal)) return false
+  if (selected.filter(rider => rider.startsWith('bolster-')).length > 1 || selected.filter(rider => rider.startsWith('huge-power')).length > 1 || selected.filter(rider => rider.startsWith('charge-')).length > 1 || (selection.bolster && selection.lifesteal)) return false
   const actions = Math.max(baseActions(participant, attack, context), selection.bolster || selection.lifesteal ? 2 : 1)
   const inspiration = entries.filter(entry => selected.includes(entry.id)).reduce((sum, entry) => sum + entry.inspiration, 0)
   return (participant.actionsRemaining?.simple ?? 0) >= actions && context.inspiration >= inspiration

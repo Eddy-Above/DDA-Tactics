@@ -4979,31 +4979,16 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               </div>
               <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="showDirectChoicePicker = false">Cancel</button>
             </div>
-            <!-- Floating attack rider-options panel — shown after an attack is selected in map view -->
+            <!-- Map targeting hint; attack options are chosen in the radial menu. -->
             <div
               v-if="selectedAttack"
-              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl max-h-[60vh] overflow-y-auto"
-              style="bottom: 120px; left: 16px; min-width: 280px; max-width: 380px;"
+              class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-3 shadow-xl flex items-center gap-4"
+              style="bottom: 120px; left: 16px; max-width: 380px;"
             >
-              <div class="text-sm text-digimon-dark-400 mb-3 text-center">
+              <div class="text-sm text-digimon-dark-400">
                 {{ selectedAttack.attack.name }} — click a target on the map
               </div>
-              <AttackRiderOptions
-                :selected-attack="selectedAttack"
-                :round="activeEncounter?.round || 0"
-                :eddy-soul-rules="eddySoulRules"
-                :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
-                :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
-                :act-of-inspiration-cost="actOfInspirationCost"
-                :current-inspiration="currentCombatInspiration"
-                v-model:bolster-attack-enabled="bolsterAttackEnabled"
-                v-model:bolster-attack-type="bolsterAttackType"
-                v-model:lifesteal-complex-enabled="lifestealComplexEnabled"
-                v-model:huge-power-enabled="hugePowerEnabled"
-                v-model:huge-power-rank2-enabled="hugePowerRank2Enabled"
-                v-model:act-of-inspiration-enabled="actOfInspirationEnabled"
-              />
-              <button class="mt-1 w-full text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
+              <button class="text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
             <!-- Floating Inspiration panel — always available during combat in map view. Clicking
                  "✦ Inspiration" minimises it to a ✦ n/m chip; no min-width, or the chip would stretch to it. -->

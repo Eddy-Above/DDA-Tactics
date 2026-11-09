@@ -38,7 +38,7 @@
           :my-participant-ids="myParticipantIds"
           :active-participant-id="activeParticipantId"
           :secondary-active-participant-id="secondaryActiveParticipantId"
-          :selected-attack="mapSelectedAttack"
+          :selected-attack="selectedAttack"
           :selectable-participant-ids="selectableParticipantIds"
           :attacker-range="attackerStats.range"
           :attacker-effective-limit="attackerStats.effectiveLimit"
@@ -141,25 +141,6 @@
         />
       </div>
 
-      <!-- Floating charge attack picker (shown when a Charge Attack is selected) -->
-      <div
-        v-if="isChargeAttack && chargeMode === null && !chargeAttackInFlight"
-        class="fixed z-50 bg-digimon-dark-800 border border-digimon-dark-600 rounded-xl p-4 shadow-xl"
-        style="bottom: 120px; left: 50%; transform: translateX(-50%); min-width: 280px; max-width: 380px;"
-      >
-        <div class="text-sm text-digimon-dark-400 mb-3 text-center">Charge Attack</div>
-        <div class="flex flex-col gap-2">
-          <button
-            class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-            @click="startChargeBefore"
-          >Move Before Attack</button>
-          <button
-            class="px-3 py-2 rounded text-sm text-left bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
-            @click="chargeMode = 'after'"
-          >Move After Attack</button>
-        </div>
-        <button class="mt-3 w-full text-xs text-digimon-dark-500 hover:text-white" @click="$emit('attack-cancelled')">Cancel</button>
-      </div>
     </div>
   </div>
 </template>
@@ -401,16 +382,11 @@ const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticip
 const chargeMode = ref<'before' | 'after' | null>(null)
 const chargeAfterAttackerId = ref<string | null>(null)
 const chargeMoveParticipantId = ref<string | null>(null)
-const chargeAttackInFlight = ref(false)
 
 const isChargeAttack = computed(() => {
   if (!props.selectedAttack?.tags?.includes('Charge Attack')) return false
   return getAreaShape(props.selectedAttack.tags) !== 'pass'
 })
-
-const mapSelectedAttack = computed(() =>
-  isChargeAttack.value && chargeMode.value === null && !chargeAttackInFlight.value ? null : props.selectedAttack
-)
 
 // During setup the whole roster is offered and a card can be clicked to pick a unit back up and
 // re-place it. Once combat is underway that would silently yank a placed unit off the board
@@ -713,7 +689,6 @@ async function onChargeTargetSelected(attackerId: string, destination: Vec3, tar
   chargeMode.value = null
   movement.clearMovement()
   if (targetId) {
-    chargeAttackInFlight.value = true
     const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Charge move's
     if (moved?.defeated) {
       // Burn on the way in knocked the attacker out: there's no attack
@@ -728,7 +703,6 @@ function onTargetSelected(targetId: string) {
   if (chargeMode.value === 'after') {
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
-    chargeAttackInFlight.value = true
   }
   emit('target-selected', targetId)
 }
@@ -751,7 +725,6 @@ async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaSha
   if (chargeMode.value === 'after') {
     chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
     chargeMode.value = null
-    chargeAttackInFlight.value = true
   }
   const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Pass move's
   if (moved?.defeated) {
@@ -763,13 +736,24 @@ async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaSha
   emit('area-attack-confirmed', targetIds, areaShapeData)
 }
 
-watch(() => props.selectedAttack, (val) => {
-  if (val !== null) return
-  chargeAttackInFlight.value = false
-  if (chargeMode.value === 'before') {
+watch(() => props.selectedAttack, (val, previous) => {
+  if (val !== null) {
+    // Record polling rebuilds the descriptor; keep the selected charge step across equivalent snapshots.
+    if (previous && val.attackId === previous.attackId && val.attackerParticipantId === previous.attackerParticipantId && val.chargeMode === previous.chargeMode) return
+    if (chargeMode.value === 'before' || chargeMoveParticipantId.value) movement.clearMovement()
     chargeMode.value = null
+    chargeAfterAttackerId.value = null
+    chargeMoveParticipantId.value = null
+    if (isChargeAttack.value) {
+      if (val.chargeMode === 'before') startChargeBefore()
+      else if (val.chargeMode === 'after') chargeMode.value = 'after'
+    }
+    return
+  }
+  if (chargeMode.value === 'before') {
     movement.clearMovement()
   }
+  chargeMode.value = null
   if (chargeAfterAttackerId.value) {
     const attackerId = chargeAfterAttackerId.value
     chargeAfterAttackerId.value = null
