@@ -38,7 +38,7 @@ import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercede
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatRecordCache'
 import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '~/utils/specialOrderCombat'
-import { attackActionCost } from '~/utils/combatAttackOptions'
+import { attackActionCost, effectActionError } from '~/utils/combatAttackOptions'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
 
@@ -54,6 +54,7 @@ interface IntercedeOfferBody {
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
   lifestealed?: boolean
+  shieldComplex?: boolean
   hugePowerUsed?: boolean
   hugePowerAttackRange?: 'melee' | 'ranged'
   skipActionDeduction?: boolean // When called from attack.post.ts which already deducted actions
@@ -182,6 +183,17 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   body.suppressPower = !!orderModifiers.suppressPower
   body.attackData = { ...body.attackData, orderModifiers }
   const declaredAttack: any = digimonById.get(attacker.entityId)?.attacks?.find((a: any) => a.id === body.attackId)
+  const actionAttack = declaredAttack ?? body.attackData ?? {}
+  const optionError = effectActionError(actionAttack, body)
+  if (optionError) throw createError({ statusCode: 400, message: optionError })
+  if (!body.skipActionDeduction) {
+    if (actionAttack.effect === 'Shield' && attacker.lastShieldRound === encounter.round) {
+      throw createError({ statusCode: 403, message: 'Shield can only be used once per round' })
+    }
+    if ((attacker.actionsRemaining?.simple ?? 0) < attackActionCost(attacker, actionAttack, eddySoulRules, body)) {
+      throw createError({ statusCode: 403, message: 'Not enough actions remaining' })
+    }
+  }
   // Clients may send only roll stats. Deferred support resolution also needs the
   // attack's type, effect and tags after the last intercede decision is answered.
   if (declaredAttack) body.attackData = { ...body.attackData, ...declaredAttack, effect: declaredAttack.effect }
@@ -224,6 +236,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
           }
+          if (actionAttack.effect === 'Shield') updated.lastShieldRound = encounter.round
           if (body.bolstered && p.type === 'digimon') {
             updated.digimonBolsterCount = (p.digimonBolsterCount ?? 0) + 1
             if (body.bolsterType === 'bit-cpu') {
@@ -480,6 +493,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           isSupportAttack,
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+          lifestealed: body.lifestealed || false,
+          shieldComplex: body.shieldComplex || false,
           clashAttack: body.clashAttack || false,
           canUseQuickReaction: canUseQR,
           quickReactionDiceCount: qrDiceCount,
@@ -532,6 +547,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           isSupportAttack,
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+          lifestealed: body.lifestealed || false,
+          shieldComplex: body.shieldComplex || false,
           clashAttack: body.clashAttack || false,
           areaShapeData: body.areaShapeData ?? null,
         },
@@ -568,6 +585,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             turnOrder, houseRules,
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.batteryCount ?? 0,
+            lifestealed: body.lifestealed || false,
+            shieldComplex: body.shieldComplex || false,
             selectiveTargetingFilter: getSelectiveTargetingFilter(
               attackerHasSelectiveTargeting, true, totalTargetCount, attackerIsEnemy, npcTargetIsEnemy,
             ),
@@ -588,6 +607,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         } else {
           const result = await resolveNpcAttack({
             pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
+            lifestealed: body.lifestealed || false,
+            shieldComplex: body.shieldComplex || false,
             participants, battleLog,
             attackerParticipantId: body.attackerId,
             targetParticipantId: tid,
@@ -647,6 +668,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             turnOrder, houseRules,
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.batteryCount ?? 0,
+            lifestealed: body.lifestealed || false,
+            shieldComplex: body.shieldComplex || false,
             selectiveTargetingFilter: getSelectiveTargetingFilter(
               attackerHasSelectiveTargeting, true, totalTargetCount, attackerIsEnemy, false,
             ),
@@ -690,6 +713,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             isSupportAttack,
             isSignatureMove: body.isSignatureMove || false,
             batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+            shieldComplex: body.shieldComplex || false,
             clashAttack: body.clashAttack || false,
             cannotDodge: targetCannotDodge(target),
             totalTargetCount,
@@ -738,6 +762,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         isSupportAttack,
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+        shieldComplex: body.shieldComplex || false,
         clashAttack: body.clashAttack || false,
         areaShapeData: body.areaShapeData ?? null,
         attackerHasSelectiveTargeting,
@@ -781,6 +806,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
         }
         // Track bolster usage for digimon
+        if (actionAttack.effect === 'Shield') updated.lastShieldRound = encounter.round
         if (body.bolstered && p.type === 'digimon') {
           updated.digimonBolsterCount = (p.digimonBolsterCount ?? 0) + 1
           if (body.bolsterType === 'bit-cpu') {
@@ -905,6 +931,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         eddySoulRules,
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.batteryCount ?? 0,
+        lifestealed: body.lifestealed || false,
+        shieldComplex: body.shieldComplex || false,
       }
 
       let supportResult: any = null
@@ -1267,6 +1295,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           turnOrder, houseRules,
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.batteryCount ?? 0,
+          lifestealed: body.lifestealed || false,
+          shieldComplex: body.shieldComplex || false,
         }
         const supportResult = positiveResolutionType === 'positive-auto'
           ? await resolvePositiveAuto(supportParams)
@@ -1322,6 +1352,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           // Signature Move Battery bonus
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+          shieldComplex: body.shieldComplex || false,
           // Clash modifiers
           clashAttack: body.clashAttack || false,
           cannotDodge: targetCannotDodge(target),
@@ -1359,6 +1390,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           turnOrder, houseRules,
           isSignatureMove: body.isSignatureMove || false,
           batteryCount: body.batteryCount ?? 0,
+          lifestealed: body.lifestealed || false,
+          shieldComplex: body.shieldComplex || false,
         }
         let supportResult: any = null
         if (resolutionType === 'positive-auto') supportResult = await resolvePositiveAuto(supportParams)
@@ -1386,6 +1419,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         // Damage attack — auto-resolve NPC (roll dodge, calculate damage)
         const result = await resolveNpcAttack({
           pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
+          lifestealed: body.lifestealed || false,
+          shieldComplex: body.shieldComplex || false,
           participants, battleLog,
           attackerParticipantId: body.attackerId,
           targetParticipantId: body.targetId!,
@@ -1492,6 +1527,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         isSupportAttack: isSupportAttack || false,
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+        lifestealed: body.lifestealed || false,
+        shieldComplex: body.shieldComplex || false,
         clashAttack: body.clashAttack || false,
         isRangedIntercede: isRangedAttack,
       },
@@ -1546,6 +1583,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         isSupportAttack: isSupportAttack || false,
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+        lifestealed: body.lifestealed || false,
+        shieldComplex: body.shieldComplex || false,
         clashAttack: body.clashAttack || false,
         canUseQuickReaction: qr.canUse,
         quickReactionDiceCount: qr.diceCount,
@@ -1584,6 +1623,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         isSupportAttack: isSupportAttack || false,
         isSignatureMove: body.isSignatureMove || false,
         batteryCount: body.isSignatureMove ? (body.batteryCount ?? 0) : 0,
+        lifestealed: body.lifestealed || false,
+        shieldComplex: body.shieldComplex || false,
         clashAttack: body.clashAttack || false,
         isRangedIntercede: isRangedAttack,
       },

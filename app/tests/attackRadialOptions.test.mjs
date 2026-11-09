@@ -44,7 +44,7 @@ test('options toggle off and replace mutually exclusive Bolster, Lifesteal and H
   assert.equal(attackRiderSelection(selected).hugePower, true)
   assert.equal(attackRiderSelection(selected).hugePowerRank2, true)
   assert.deepEqual(attackRiderSelection([]), { bolster: false, bolsterType: 'damage-accuracy', lifesteal: false,
-    hugePower: false, hugePowerRank2: false, actOfInspiration: false, fatefulIntervention: false, chargeMode: null })
+    hugePower: false, hugePowerRank2: false, shieldComplex: false, actOfInspiration: false, fatefulIntervention: false, chargeMode: null })
 })
 
 test('Charge movement is optional, mutually exclusive and compatible with the other third-tier options', () => {
@@ -75,6 +75,42 @@ test('ordinary attacks and Pass never offer or accept separate Charge movement c
     assert.equal(rider(item, 'charge-after'), undefined)
     assert.equal(validAttackRiders(p, current, ctx, ['charge-before']), false)
     assert.equal(validAttackRiders(p, current, ctx, ['charge-after']), false)
+  }
+})
+
+test('Double Lifesteal and Triple Shield appear only for their effect and replace either Bolster option', () => {
+  const p = actor(), ctx = context()
+  for (const [effect, id, label] of [['Lifesteal', 'lifesteal', 'Double Lifesteal'], ['Shield', 'shield-complex', 'Triple Shield']]) {
+    const current = { ...attack, effect }
+    const choice = rider(radialAttackItem(p, current, ctx), id)
+    assert.equal(choice.label, label)
+    assert.equal(choice.cost, '2 Simple (Complex)')
+    assert.equal(choice.disabled, false)
+    assert.equal(radialAttackItem(p, current, ctx, [id]).children.at(-1).cost, '2 Simple')
+    assert.equal(radialAttackItem(p, current, ctx).children.at(-1).cost, '1 Simple')
+    for (const bolster of ['bolster-damage-accuracy', 'bolster-bit-cpu']) {
+      assert.deepEqual(toggleAttackRider([bolster, 'huge-power'], id), ['huge-power', id])
+      assert.deepEqual(toggleAttackRider([id, 'huge-power'], bolster), ['huge-power', bolster])
+      assert.equal(validAttackRiders(p, current, ctx, [id, bolster]), false)
+    }
+    assert.equal(rider(radialAttackItem(p, attack, ctx), id), undefined)
+    assert.equal(rider(radialAttackItem({ ...p, actionsRemaining: { simple: 1 } }, current, ctx), id).disabled, true)
+  }
+})
+
+test('Shield is limited across all Shield attacks in a round, while Haste and Lag always cost two actions', () => {
+  const p = actor(), ctx = context(), shield = { ...attack, effect: 'Shield' }
+  p.lastShieldRound = ctx.round
+  assert.equal(radialAttackItem(p, shield, ctx).disabled, true)
+  assert.equal(validAttackRiders(p, shield, ctx, []), false)
+  assert.equal(validAttackRiders(p, shield, ctx, ['shield-complex']), false)
+  ctx.round++
+  assert.equal(radialAttackItem(p, shield, ctx).disabled, false)
+  for (const effect of ['Haste', 'Lag']) {
+    const current = { ...attack, effect }
+    assert.equal(radialAttackItem(p, current, ctx).cost, '2 Simple')
+    assert.equal(validAttackRiders(p, current, ctx, ['bolster-damage-accuracy']), false)
+    assert.equal(radialAttackItem({ ...p, actionsRemaining: { simple: 1 } }, current, ctx).disabled, true)
   }
 })
 

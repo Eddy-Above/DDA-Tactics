@@ -11,6 +11,7 @@ import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { autoDevolveParticipant } from './partnerDevolution'
+import { applyLagInitiative } from '../../utils/lagInitiative'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -364,6 +365,9 @@ export async function resolveEnemyKnockouts(
       currentTurnIndex = 0
       round = endingRound + 1
       resetRound(participants)
+      if (participants.some(participant => participant.lagBaseOrder !== undefined || participant.activeEffects?.some((effect: any) => effect.name === 'Lag'))) {
+        turnOrder = applyLagInitiative(participants, turnOrder, round, await loadParticipantDigimon(participants))
+      }
       participants = await applyRoundStartQualityTriggers(participants)
     }
 

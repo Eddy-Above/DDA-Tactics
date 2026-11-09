@@ -960,6 +960,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
 
     const prepared = radialOptions ? await prepareRadialAttackAccuracy(participant, attack, [target.id], radialOptions) : prepareAttackAccuracy(getAttackStats(participant, attack, [target.id]).accuracy, {
       bolster: bolsterAttackEnabled.value, bolsterType: bolsterAttackType.value, lifesteal: lifestealComplexEnabled.value,
+      shieldComplex: false,
       hugePower: hugePowerEnabled.value, hugePowerRank2: hugePowerRank2Enabled.value,
     }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, [target.id]).automaticSuccesses })
     if (!prepared) return
@@ -991,6 +992,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
           bolstered: riders.bolster,
           bolsterType: riders.bolster ? riders.bolsterType : undefined,
           lifestealed: riders.lifesteal || false,
+          ...(riders.shieldComplex ? { shieldComplex: true } : {}),
           hugePowerUsed: riders.hugePower,
           hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
           hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,
@@ -1053,6 +1055,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
 
     const prepared = radialOptions ? await prepareRadialAttackAccuracy(participant, attack, targets.map(t => t.id), radialOptions) : prepareAttackAccuracy(getAttackStats(participant, attack, targets.map(t => t.id)).accuracy, {
       bolster: bolsterAttackEnabled.value, bolsterType: bolsterAttackType.value, lifesteal: lifestealComplexEnabled.value,
+      shieldComplex: false,
       hugePower: hugePowerEnabled.value, hugePowerRank2: hugePowerRank2Enabled.value,
     }, { ...getAttackOrderModifiers(participant), automaticSuccesses: getAttackStats(participant, attack, targets.map(t => t.id)).automaticSuccesses })
     if (!prepared) return
@@ -1075,6 +1078,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       bolstered: riders.bolster,
       bolsterType: riders.bolster ? riders.bolsterType : undefined,
       lifestealed: riders.lifesteal || false,
+      ...(riders.shieldComplex ? { shieldComplex: true } : {}),
       hugePowerUsed: riders.hugePower,
       hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
       hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,

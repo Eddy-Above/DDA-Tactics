@@ -14,6 +14,9 @@ import { loadParticipantDigimon } from './combatSpatial'
 import { resolveInstantSupportEffect } from './pushPull'
 import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
+import { applyWoundDamage } from './damageOverTime'
+import { applyPositiveSupportEffect } from './positiveSupportEffect'
+import { lifestealHealing } from '../../utils/lifesteal'
 
 export interface AreaAttackClaim {
   interceptorParticipantId: string
@@ -146,18 +149,18 @@ export async function resolveAreaIntercedeGroup({
   updatedParticipants = updatedParticipants.map((p: any) => {
     const claim = claims.find(c => c.interceptorParticipantId === p.id)
     if (claim) {
-      const updated: any = {
-        ...p,
-        currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + claim.damageDealt),
-      }
-      if (claim.interceptorHasCombatMonster && claim.damageDealt > 0) {
+      const updated: any = { ...p }
+      const woundDamage = Math.max(0, claim.damageDealt - (p.currentTempWounds ?? 0))
+      applyWoundDamage(updated, claim.damageDealt)
+      if (claim.interceptorHasCombatMonster && woundDamage > 0) {
         updated.combatMonsterBonus = Math.min(
           p.totalHealth ?? claim.interceptorHealthStat ?? p.maxWounds,
-          (p.combatMonsterBonus ?? 0) + claim.damageDealt
+          (p.combatMonsterBonus ?? 0) + woundDamage
         )
       }
       if (claim.effectData) {
-        updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], claim.effectData, houseRules)
+        if (claim.effectData.name === 'Shield' || claim.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, claim.effectData, houseRules))
+        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], claim.effectData, houseRules, undefined, round)
       }
       return updated
     }
@@ -167,6 +170,11 @@ export async function resolveAreaIntercedeGroup({
     }
     return p
   })
+
+  const claimedHealing = claims.reduce((healing, claim) => healing + (claim.effectData?.name === 'Lifesteal'
+    ? lifestealHealing(claim.damageDealt, claim.effectData.potency ?? 0, groupData.lifestealed) : 0), 0)
+  if (claimedHealing > 0) updatedParticipants = updatedParticipants.map(participant => participant.id === groupData.attackerId
+    ? { ...participant, currentWounds: Math.max(0, (participant.currentWounds ?? 0) - claimedHealing) } : participant)
 
   updatedParticipants = preserveEnduringSouls(updatedParticipants, participants)
 
@@ -331,6 +339,8 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
+        lifestealed: groupData.lifestealed || false,
+        shieldComplex: groupData.shieldComplex || false,
         selectiveTargetingFilter,
       }
       const supportResult = positiveResolutionType === 'positive-auto'
@@ -370,6 +380,7 @@ export async function resolveAreaIntercedeGroup({
         isSupportAttack: groupData.isSupportAttack || false,
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
+        shieldComplex: groupData.shieldComplex || false,
         clashAttack: groupData.clashAttack || false,
         totalTargetCount: originalTargetIds.length,
         // The cast these requests came from (the no-offer area path sets it too): the player page
@@ -416,6 +427,8 @@ export async function resolveAreaIntercedeGroup({
         houseRules,
         isSignatureMove: groupData.isSignatureMove || false,
         batteryCount: groupData.batteryCount ?? 0,
+        lifestealed: groupData.lifestealed || false,
+        shieldComplex: groupData.shieldComplex || false,
         selectiveTargetingFilter,
       }
       let supportResult: any = null
@@ -432,6 +445,8 @@ export async function resolveAreaIntercedeGroup({
     } else {
       const result = await resolveNpcAttack({
         pendingRequests: updatedPendingRequests, cleanseCastId: groupData.attackData?.cleanseCastId,
+        lifestealed: groupData.lifestealed || false,
+        shieldComplex: groupData.shieldComplex || false,
         participants: updatedParticipants,
         battleLog: updatedBattleLog,
         attackerParticipantId: groupData.attackerId,

@@ -385,6 +385,7 @@ const accuracyReviewContext = ref<{
   bolster: boolean
   bolsterType: 'damage-accuracy' | 'bit-cpu'
   lifesteal: boolean
+  shieldComplex: boolean
   hugePower: boolean
   hugePowerRank2: boolean
   clashAreaAttack?: { controllerId: string; opponentId: string } | null
@@ -2349,6 +2350,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
+      shieldComplex: radialOptions?.shieldComplex ?? false,
       hugePower: hugePowerEnabled.value && !getAttackOrderModifiers(participant).suppressPower,
       hugePowerRank2: hugePowerRank2Enabled.value && !getAttackOrderModifiers(participant).suppressPower,
     })
@@ -2403,6 +2405,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       bolster: bolsterAttackEnabled.value,
       bolsterType: bolsterAttackType.value,
       lifesteal: lifestealComplexEnabled.value,
+      shieldComplex: radialOptions?.shieldComplex ?? false,
       hugePower: hugePowerEnabled.value && !getAttackOrderModifiers(participant).suppressPower,
       hugePowerRank2: hugePowerRank2Enabled.value && !getAttackOrderModifiers(participant).suppressPower,
     })
@@ -2464,7 +2467,7 @@ async function confirmAccuracyReview() {
         attack.name,
         ctx.bolster ? { bolstered: true, bolsterType: ctx.bolsterType } : undefined,
         ctx.hugePower ? { hugePowerUsed: true, attackRange: attack.range, hugePowerRank: ctx.hugePowerRank2 ? 2 : 1, hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn } : undefined,
-        ctx.lifesteal ? { lifestealed: true } : undefined,
+        ctx.lifesteal || ctx.shieldComplex ? { lifestealed: ctx.lifesteal, ...(ctx.shieldComplex ? { shieldComplex: true } : {}) } : undefined,
         { targetIds: targets.map(t => t.id), areaShapeData: ctx.areaShapeData, clashNoInterceptTargetId: ctx.clashAreaAttack?.opponentId }
       )
 
@@ -2570,7 +2573,7 @@ async function confirmAccuracyReview() {
           hugePowerRank: ctx.hugePowerRank2 ? 2 : 1,
           hugePowerTrackAll: !!eddySoulRules.value?.hugePowerOncePerTurn,
         } : undefined,
-        ctx.lifesteal ? { lifestealed: true } : undefined
+        ctx.lifesteal || ctx.shieldComplex ? { lifestealed: ctx.lifesteal, ...(ctx.shieldComplex ? { shieldComplex: true } : {}) } : undefined
       )
 
       if (result) {

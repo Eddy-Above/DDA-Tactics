@@ -14,6 +14,7 @@ import {
 import { calculateDigimonDerivedStats, STAGE_CONFIG } from '../../types'
 import type { DigimonBaseStats, DigimonStage, DigimonSize, EddySoulRules } from '../../types'
 import { applyEffectToParticipant } from './applyEffect'
+import { applyPositiveSupportEffect } from './positiveSupportEffect'
 import { applyStanceToDodge } from '../../utils/stanceModifiers'
 import { resolveParticipantName } from './participantName'
 import { selectiveTargetingBlocksEffect } from './selectiveTargeting'
@@ -36,6 +37,7 @@ interface SupportAttackParams {
   turnOrder?: string[]
   bolstered?: boolean
   bolsterType?: string
+  shieldComplex?: boolean
   houseRules?: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean }
   eddySoulRules?: EddySoulRules
   isSignatureMove?: boolean
@@ -177,7 +179,7 @@ export function calculateEffectPotency(
 /**
  * Build effect object for application
  */
-function buildEffectData(effectName: string, duration: number, source: string, attackerDerived: any, targetDerived?: any, batteryBonus?: number) {
+function buildEffectData(effectName: string, duration: number, source: string, attackerDerived: any, targetDerived?: any, batteryBonus?: number, shieldComplex = false) {
   const alignment = EFFECT_ALIGNMENT[effectName]
   const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'
   const { potency, potencyStat } = calculateEffectPotency(effectName, attackerDerived, targetDerived || null)
@@ -188,7 +190,7 @@ function buildEffectData(effectName: string, duration: number, source: string, a
     duration,
     source,
     description: '',
-    potency: potency + (batteryBonus ?? 0),
+    potency: potency * (effectName === 'Shield' && shieldComplex ? 3 : 1) + (batteryBonus ?? 0),
     potencyStat,
   }
 }
@@ -245,32 +247,13 @@ export async function resolvePositiveAuto(params: SupportAttackParams): Promise<
     params.attackerName,
     derivedStats,
     undefined,
-    params.isSignatureMove ? (params.batteryCount ?? 0) : 0
+    params.isSignatureMove ? (params.batteryCount ?? 0) : 0,
+    params.shieldComplex
   )
 
   participants = participants.map((p: any) => {
     if (p.id === params.targetParticipantId) {
-      const updated: any = {
-        ...p,
-        activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, params.houseRules),
-      }
-      if (params.attackDef.effect === 'Shield') {
-        const newTempWounds = effectData.potency ?? 0
-        const currentTemp = p.currentTempWounds ?? 0
-        const shouldOverride = !params.houseRules?.maxTempWoundsRule || newTempWounds >= currentTemp
-        if (shouldOverride) {
-          updated.currentTempWounds = newTempWounds
-        }
-      }
-      if (params.attackDef.effect === 'Haste') {
-        updated.actionsRemaining = { simple: (p.actionsRemaining?.simple ?? 0) + 1 }
-        if (p.hasActed) {
-          updated.activeEffects = (updated.activeEffects || []).map((e: any) =>
-            e.name === 'Haste' ? { ...e, potency: 1 } : e
-          )
-        }
-      }
-      return updated
+      return applyPositiveSupportEffect(p, effectData, params.houseRules)
     }
     return p
   })
@@ -367,6 +350,7 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
         healthDicePool: healthPool,
         isAoe,
         isSupportAttack: true,
+        shieldComplex: params.shieldComplex || false,
         buffingContested: !!params.eddySoulRules?.buffingContested,
       },
     }
@@ -420,15 +404,13 @@ export async function resolvePositiveHealth(params: SupportAttackParams): Promis
       params.attackerName,
       derivedStats,
       undefined,
-      params.isSignatureMove ? (params.batteryCount ?? 0) : 0
+      params.isSignatureMove ? (params.batteryCount ?? 0) : 0,
+      params.shieldComplex
     )
 
     participants = participants.map((p: any) => {
       if (p.id === params.targetParticipantId) {
-        return {
-          ...p,
-          activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, params.houseRules),
-        }
+        return applyPositiveSupportEffect(p, effectData, params.houseRules)
       }
       return p
     })
@@ -512,7 +494,7 @@ export async function resolveNegativeSupportNpc(params: SupportAttackParams): Pr
             targetDerived,
             params.isSignatureMove ? (params.batteryCount ?? 0) : 0
           )
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, effectData, params.houseRules, undefined, params.round)
           appliedEffectName = params.attackDef.effect
         }
       }

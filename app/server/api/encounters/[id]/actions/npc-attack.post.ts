@@ -17,8 +17,16 @@ import { applyRoundStartQualityTriggers } from '../../../../utils/roundStartQual
 import { applyRoundEndEffects, loadStationaryBurnPositions, isImmuneToEffect, damageOverTimeRules } from '../../../../utils/damageOverTime'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
 import { refreshGuidingLightForParticipants } from '../../../../utils/guidingLight'
+import { applyLagInitiative } from '../../../../../utils/lagInitiative'
+import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
+import { attackActionCost, effectActionError } from '../../../../../utils/combatAttackOptions'
+import { applyPositiveSupportEffect } from '../../../../utils/positiveSupportEffect'
+import { applyWoundDamage } from '../../../../utils/damageOverTime'
+import { lifestealHealing } from '../../../../../utils/lifesteal'
 
 interface NpcAttackBody {
+  lifestealed?: boolean
+  shieldComplex?: boolean
   participantId: string
   attackId: string
   targetId: string
@@ -112,7 +120,12 @@ export default defineEventHandler(async (event) => {
   }
 
   // Check actions
-  const actionCost = 1
+  const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
+  const declaredAttack = attackerDigimon?.attacks?.find((attack: any) => attack.id === body.attackId)
+  const optionError = effectActionError(declaredAttack ?? {}, body)
+  if (optionError) throw createError({ statusCode: 400, message: optionError })
+  if (declaredAttack?.effect === 'Shield' && actor.lastShieldRound === encounter.round) throw createError({ statusCode: 403, message: 'Shield can only be used once per round' })
+  const actionCost = attackActionCost(actor, declaredAttack ?? {}, eddySoulRules, body)
   if ((actor.actionsRemaining?.simple || 0) < actionCost) {
     throw createError({
       statusCode: 403,
@@ -129,6 +142,7 @@ export default defineEventHandler(async (event) => {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost),
         },
         usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+        ...(declaredAttack?.effect === 'Shield' ? { lastShieldRound: encounter.round } : {}),
         // Consume Directed effect on attacker (bonus was applied client-side to accuracy pool by GM)
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
       }
@@ -149,8 +163,6 @@ export default defineEventHandler(async (event) => {
   const hit = netSuccesses >= 0
 
   // Look up attacker's digimon to get base damage and attack definition
-  const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-
   let attackBaseDamage = 0
   let armorPiercing = 0
   let npcAttackDef: any = null
@@ -201,9 +213,10 @@ export default defineEventHandler(async (event) => {
   const effectBlocked = targetQualities.some((quality: any) => quality.id === 'immunity')
     || !!(npcAttackDef?.effect && isImmuneToEffect(npcAttackDef.effect, targetQualities))
 
-  const sourceEffectPotency = ['Taunt', 'Fear'].includes(npcAttackDef?.effect)
+  const sourceEffectPotency = ['Taunt', 'Fear', 'Lifesteal', 'Shield', 'Lag'].includes(npcAttackDef?.effect)
     ? calculateEffectPotency(npcAttackDef.effect, await getDigimonDerivedStats(actor.entityId, actor), null)
     : null
+  if (npcAttackDef?.effect === 'Shield' && body.shieldComplex && sourceEffectPotency) sourceEffectPotency.potency *= 3
 
   const pendingRequests = [...(encounter.pendingRequests ?? [])]
   const cleanseCastId = npcAttackDef?.effect === 'Cleanse' && hit && !effectBlocked ? startCleanseCast(pendingRequests, {
@@ -253,9 +266,10 @@ export default defineEventHandler(async (event) => {
         appliedEffectName = npcAttackDef.effect
         const stunImmediate = npcAttackDef.effect === 'Stun' && !targetHasGone
         const stunDeferred = npcAttackDef.effect === 'Stun' && targetHasGone
+        if (newEffect.name === 'Shield' || newEffect.name === 'Haste') return applyPositiveSupportEffect(p, newEffect, houseRules, targetQualities)
         return {
           ...p,
-          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities),
+          activeEffects: applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round),
           ...(stunImmediate
             ? { actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }, stunActionReducedThisRound: true }
             : stunDeferred
@@ -409,22 +423,22 @@ export default defineEventHandler(async (event) => {
   let appliedEffectName: string | null = null
   let finalParticipants = updatedParticipants.map((p: any) => {
     // Handle attacker: reset Combat Monster bonus on hit
-    if (p.id === body.participantId && hit && attackerHasCombatMonster) {
-      return { ...p, combatMonsterBonus: 0 }
+    if (p.id === body.participantId && p.id !== body.targetId && hit) {
+      const healing = npcAttackDef?.effect === 'Lifesteal' && !effectBlocked ? lifestealHealing(damageDealt, sourceEffectPotency?.potency ?? 0, body.lifestealed) : 0
+      return { ...p, ...(attackerHasCombatMonster ? { combatMonsterBonus: 0 } : {}), currentWounds: Math.max(0, (p.currentWounds ?? 0) - healing) }
     }
 
     // Handle target: apply damage and Combat Monster accumulation
     if (p.id === body.targetId && hit) {
-      const updated = {
-        ...p,
-        currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damageDealt),
-      }
+      const updated: any = { ...p }
+      const woundDamage = Math.max(0, damageDealt - (p.currentTempWounds ?? 0))
+      applyWoundDamage(updated, damageDealt)
 
       // Accumulate Combat Monster bonus for target
       if (targetDigimon?._hasCombatMonster) {
         updated.combatMonsterBonus = Math.min(
           p.totalHealth ?? p.maxWounds,
-          (p.combatMonsterBonus ?? 0) + damageDealt
+          (p.combatMonsterBonus ?? 0) + woundDamage
         )
       }
 
@@ -444,7 +458,8 @@ export default defineEventHandler(async (event) => {
             description: '',
             ...(sourceEffectPotency ?? {}),
           }
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], newEffect, houseRules, targetQualities)
+          if (newEffect.name === 'Shield' || newEffect.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, newEffect, houseRules, targetQualities))
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, targetQualities, encounter.round)
           appliedEffectName = npcAttackDef.effect
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (npcAttackDef.effect === 'Stun' && !p.hasActed) {
@@ -554,6 +569,9 @@ export default defineEventHandler(async (event) => {
         })
 
         // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
+        if (finalParticipantsAfterDefeat.some((participant: any) => participant.lagBaseOrder !== undefined || participant.activeEffects?.some((effect: any) => effect.name === 'Lag'))) {
+          updatedTurnOrder = applyLagInitiative(finalParticipantsAfterDefeat, updatedTurnOrder, npcDefeatNextRound!, await loadParticipantDigimon(finalParticipantsAfterDefeat))
+        }
         finalParticipantsAfterDefeat = await applyRoundStartQualityTriggers(finalParticipantsAfterDefeat)
       }
 

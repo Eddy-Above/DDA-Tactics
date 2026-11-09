@@ -12,7 +12,7 @@ export interface CombatAttackOption {
 
 export type AttackOptionParticipant = Pick<CombatParticipant, 'type'> & Partial<Pick<CombatParticipant,
   | 'actionsRemaining' | 'usedAttackIds' | 'battery' | 'clash' | 'combatMonsterBonus'
-  | 'digimonBolsterCount' | 'lastHugePowerRound' | 'lastHugePowerRank2Round' | 'decimationReady'
+  | 'digimonBolsterCount' | 'lastHugePowerRound' | 'lastHugePowerRank2Round' | 'decimationReady' | 'lastShieldRound'
 >>
 
 type AttackOptionRules = Pick<EddySoulRules, 'combatMonsterAreaAttackRequiresComplex' | 'hugePowerOncePerTurn'>
@@ -32,6 +32,7 @@ export function availableCombatAttacks<T extends CombatAttackOption>(
   const usedIds = new Set(participant.usedAttackIds ?? [])
   const filtered = attacks.filter(attack => {
     if (usedIds.has(attack.id)) return false
+    if (attack.effect === 'Shield' && participant.lastShieldRound === context.round) return false
     if (!isSignatureAttack(attack)) return true
     if (context.round < signatureReadyRound(participant)) return false
     if (context.houseRules?.signatureMoveBattery && (participant.battery ?? 0) < 1) return false
@@ -43,9 +44,10 @@ export function availableCombatAttacks<T extends CombatAttackOption>(
 /** The ordinary attack gate's action cost, including the optional Combat Monster area rule. */
 export function requiredAttackActions(
   participant: AttackOptionParticipant,
-  attack: Pick<CombatAttackOption, 'tags'>,
+  attack: Pick<CombatAttackOption, 'tags' | 'effect'>,
   rules?: AttackOptionRules | null,
 ): 1 | 2 {
+  if (attack.effect === 'Haste' || attack.effect === 'Lag') return 2
   return rules?.combatMonsterAreaAttackRequiresComplex
     && (participant.combatMonsterBonus ?? 0) > 0
     && attack.tags?.some(tag => tag.startsWith('Area Attack')) ? 2 : 1
@@ -56,16 +58,28 @@ export function attackActionCost(
   participant: AttackOptionParticipant,
   attack: Pick<CombatAttackOption, 'tags' | 'effect'>,
   rules?: AttackOptionRules | null,
-  riders: { bolstered?: boolean; lifestealed?: boolean } = {},
+  riders: { bolstered?: boolean; lifestealed?: boolean; shieldComplex?: boolean } = {},
 ): 1 | 2 {
-  return riders.bolstered || riders.lifestealed || attack.effect === 'Haste'
+  return riders.bolstered || riders.lifestealed || riders.shieldComplex
     || (getAreaShape([...(attack.tags ?? [])]) === 'pass' && !attack.tags?.includes('Charge Attack'))
     ? 2 : requiredAttackActions(participant, attack, rules)
 }
 
+/** Optional effect upgrades replace Bolster; mandatory Complex effects cannot be bolstered. */
+export function effectActionError(
+  attack: Pick<CombatAttackOption, 'effect'>,
+  options: { bolstered?: boolean; lifestealed?: boolean; shieldComplex?: boolean },
+): string | null {
+  if (options.lifestealed && attack.effect !== 'Lifesteal') return 'Double Lifesteal requires a Lifesteal attack'
+  if (options.shieldComplex && attack.effect !== 'Shield') return 'Triple Shield requires a Shield attack'
+  if (options.bolstered && (options.lifestealed || options.shieldComplex)) return 'Cannot combine Bolster with a Complex effect option'
+  if ((attack.effect === 'Haste' || attack.effect === 'Lag') && options.bolstered) return `${attack.effect} already requires a Complex Action and cannot be bolstered`
+  return null
+}
+
 export function canUseCombatAttack(
   participant: AttackOptionParticipant,
-  attack: Pick<CombatAttackOption, 'tags'>,
+  attack: Pick<CombatAttackOption, 'tags' | 'effect'>,
   rules?: AttackOptionRules | null,
 ): boolean {
   return !participant.clash && (participant.actionsRemaining?.simple || 0) >= requiredAttackActions(participant, attack, rules)

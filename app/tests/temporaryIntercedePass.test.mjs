@@ -380,7 +380,7 @@ function legacyNpcAttack(state) {
     '../../../../utils/pushPull': { applyPushPullDisplacement: unexpected },
     '../../../../utils/endOfTurnGravity': { applyEndOfTurnGravity: async (_id, _map, participants) => ({ participants, logEntries: [] }) },
     '../../../../utils/roundStartQualityTriggers': { applyRoundStartQualityTriggers: identity },
-    '../../../../utils/damageOverTime': { applyRoundEndEffects: unchanged, loadStationaryBurnPositions: async () => ({}), damageOverTimeRules: () => ({}) },
+    '../../../../utils/damageOverTime': { applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage, applyRoundEndEffects: unchanged, loadStationaryBurnPositions: async () => ({}), damageOverTimeRules: () => ({}) },
     '../../../../utils/enemyKnockouts': {
       knockedOutEnemyIds: participants => participants.filter(p => p.isEnemy && p.currentWounds >= p.maxWounds).map(p => p.id),
       resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }),
@@ -914,7 +914,7 @@ function claimFixture(initial) {
     '~/server/utils/mapMovement': {},
     '~/utils/areaShapes': {},
     '~/utils/movementRules': {},
-    '~/server/utils/damageOverTime': { applyMovementBurn: unexpected, movesFromPositions: unexpected },
+    '~/server/utils/damageOverTime': { applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage, applyMovementBurn: unexpected, movesFromPositions: unexpected },
     '~/server/utils/enemyKnockouts': {
       knockedOutEnemyIds: () => [],
       resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }),

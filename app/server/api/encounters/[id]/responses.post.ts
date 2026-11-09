@@ -6,6 +6,7 @@ import { db, encounters, digimon, tamers, campaigns, maps } from '../../../db'
 import { applyPushPullDisplacement, resolveInstantSupportEffect } from '../../../utils/pushPull'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
+import { applyPositiveSupportEffect } from '../../../utils/positiveSupportEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
 import { triggerCounterattack } from '../../../utils/triggerCounterattack'
 import { resolveNpcAttack } from '../../../utils/resolveNpcAttack'
@@ -23,6 +24,7 @@ import { isRequestAnswered } from '../../../../utils/requestState'
 import { preserveEnduringSouls, getAttackOrderModifiers, consumeAttackOrders } from '../../../../utils/specialOrderCombat'
 import { queueStrikeLastCounter } from '../../../utils/strikeLast'
 import { applyFatefulPool } from '../../../../utils/fatefulIntervention'
+import { lifestealHealing } from '../../../../utils/lifesteal'
 
 interface SubmitResponseBody {
   requestId: string
@@ -389,7 +391,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         const targetDerived = dodgeTargetParticipant?.type === 'digimon'
           ? await getDigimonDerivedStats(request.data.targetEntityId, dodgeTargetParticipant) : null
         const result = calculateEffectPotency(attackDef.effect, attackerDerived, targetDerived)
-        potency = result.potency
+        potency = result.potency * (attackDef.effect === 'Shield' && request.data.shieldComplex ? 3 : 1)
         potencyStat = result.potencyStat
         // Apply Signature Move Battery SPEC bonus
         if (request.data.isSignatureMove && request.data.batteryCount) {
@@ -422,7 +424,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
               potency,
               potencyStat,
             }
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules)
+            if (effectData.name === 'Shield' || effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, effectData, houseRules, targetQualitiesForDodge))
+            else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], effectData, houseRules, undefined, encounter.round)
             appliedEffectName = attackDef.effect
             // Stun: immediately reduce actions if target hasn't taken their turn yet this round
             if (attackDef.effect === 'Stun' && !targetHasGone) {
@@ -765,7 +768,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         const tgtDerived = targetParticipant?.type === 'digimon'
           ? await getDigimonDerivedStats(request.data.targetEntityId, targetParticipant) : null
         const result = calculateEffectPotency(attackDef.effect, atkDerived, tgtDerived)
-        damageEffectPotency = result.potency
+        damageEffectPotency = result.potency * (attackDef.effect === 'Shield' && request.data.shieldComplex ? 3 : 1)
         damageEffectPotencyStat = result.potencyStat
       }
 
@@ -789,11 +792,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
           if (hit && attackerHasCombatMonster) {
             attackerUpdates.combatMonsterBonus = 0
           }
-          if (hit && attackDef?.effect === 'Lifesteal' && damageDealt >= 2) {
-            const lifestealPotency = request.data.lifestealed
-              ? damageEffectPotency * 2
-              : damageEffectPotency
-            lifestealHealAmount = Math.min(damageDealt, lifestealPotency)
+          if (hit && attackDef?.effect === 'Lifesteal' && damageDealt > 0 && !isImmuneToEffect('Lifesteal', targetQualitiesForDodge)) {
+            lifestealHealAmount = lifestealHealing(damageDealt, damageEffectPotency, request.data.lifestealed)
             attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
           }
           // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker
@@ -859,7 +859,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
                   potency: damageEffectPotency,
                   potencyStat: damageEffectPotencyStat,
                 }
-                updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules)
+                if (newEffect.name === 'Shield' || newEffect.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, newEffect, houseRules, targetQualitiesForDodge))
+                else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], newEffect, houseRules, undefined, encounter.round)
                 appliedEffectName = attackDef.effect
                 // Stun: immediately reduce actions if target hasn't taken their turn yet this round
                 if (attackDef.effect === 'Stun' && !targetHasGone) {
@@ -1079,7 +1080,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         const targetDerived = healthTargetParticipant?.type === 'digimon' && request.data.targetEntityId
           ? await getDigimonDerivedStats(request.data.targetEntityId, healthTargetParticipant) : null
         const result = calculateEffectPotency(effectName, attackerDerived, targetDerived)
-        potency = result.potency
+        potency = result.potency * (effectName === 'Shield' && request.data.shieldComplex ? 3 : 1)
         potencyStat = result.potencyStat
       }
 
@@ -1095,10 +1096,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
 
       participants = participants.map((p: any) => {
         if (p.id === request.targetParticipantId) {
-          return {
-            ...p,
-            activeEffects: applyEffectToParticipant(p.activeEffects || [], effectData, houseRules),
-          }
+          return applyPositiveSupportEffect(p, effectData, houseRules)
         }
         return p
       })

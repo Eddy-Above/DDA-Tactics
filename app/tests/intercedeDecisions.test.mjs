@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const globalNames = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError']
 const originalGlobals = new Map(globalNames.map(name => [name, globalThis[name]]))
@@ -130,7 +130,7 @@ function fixture() {
     '~/server/utils/mapMovement': {},
     '~/utils/areaShapes': {},
     '~/utils/movementRules': {},
-    '~/server/utils/damageOverTime': { applyMovementBurn: unexpected, movesFromPositions: unexpected },
+    '~/server/utils/damageOverTime': { applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage, applyMovementBurn: unexpected, movesFromPositions: unexpected },
     '~/server/utils/enemyKnockouts': {
       knockedOutEnemyIds: () => [],
       resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }),

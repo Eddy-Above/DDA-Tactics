@@ -18,6 +18,8 @@ import { hasUnusedTimeControl, knockedOutEnemyIds, resolveEnemyKnockouts, trigge
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 import { refreshGuidingLightForParticipants } from './guidingLight'
+import { lifestealHealing } from '../../utils/lifesteal'
+import { applyPositiveSupportEffect } from './positiveSupportEffect'
 
 interface ResolveNpcAttackParams {
   pendingRequests?: any[]
@@ -27,6 +29,8 @@ interface ResolveNpcAttackParams {
   attackerParticipantId: string
   targetParticipantId: string
   attackId: string
+  lifestealed?: boolean
+  shieldComplex?: boolean
   accuracySuccesses: number
   accuracyDice: number[]
   round: number
@@ -133,6 +137,7 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
 
   // Shared damage calculation (handles attacker loading, armor, and effects internally)
   const damageCalc = await computeAttackDamage({
+    shieldComplex: params.shieldComplex,
     attackerParticipant: attacker,
     targetParticipant: target,
     participants,
@@ -178,10 +183,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         }
 
         if (hit && damageCalc.effectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities)
+          if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round)
           appliedEffectName = damageCalc.appliedEffectName
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round)
           }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef.effect === 'Stun' && !targetHasGone) {
@@ -253,9 +259,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
       if (hit && attackerHasCombatMonster) {
         attackerUpdates.combatMonsterBonus = 0
       }
-      if (hit && attackDef?.effect === 'Lifesteal' && damageDealt >= 2) {
+      if (hit && attackDef?.effect === 'Lifesteal' && damageDealt > 0) {
         // effectData.potency is the attacker's CPU value (from computeAttackDamage)
-        lifestealHealAmount = Math.min(damageDealt, damageCalc.effectData?.potency ?? 0)
+        lifestealHealAmount = lifestealHealing(damageDealt, damageCalc.effectData?.potency ?? 0, params.lifestealed)
         attackerUpdates.currentWounds = Math.max(0, (p.currentWounds || 0) - lifestealHealAmount)
       }
       // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker
@@ -304,10 +310,11 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
         }
 
         if (damageCalc.effectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities)
+          if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round)
           appliedEffectName = damageCalc.appliedEffectName
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round)
           }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef?.effect === 'Stun' && !targetHasGone) {

@@ -4,6 +4,7 @@ export interface AttackRiders {
   bolster: boolean
   bolsterType: AttackBolsterType
   lifesteal: boolean
+  shieldComplex: boolean
   hugePower: boolean
   hugePowerRank2: boolean
 }
@@ -37,6 +38,7 @@ export function snapshotAttackRiders(riders: Partial<AttackRiders> = {}): Attack
     bolster: riders.bolster ?? false,
     bolsterType: riders.bolsterType ?? 'damage-accuracy',
     lifesteal: riders.lifesteal ?? false,
+    shieldComplex: riders.shieldComplex ?? false,
     hugePower: riders.hugePower ?? false,
     hugePowerRank2: riders.hugePowerRank2 ?? false,
   }

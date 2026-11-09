@@ -32,7 +32,9 @@ import { broadcastPositionPatch, getRoomPositions, getRoomSnapshot } from '~/ser
 import { recomputeGuidingLightForEncounter, refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile, getFallerProfile } from '~/server/utils/combatSpatial'
 import { resolveFall } from '~/utils/movementRules'
-import { applyMovementBurn, movesFromPositions } from '~/server/utils/damageOverTime'
+import { applyMovementBurn, movesFromPositions, applyWoundDamage } from '~/server/utils/damageOverTime'
+import { applyPositiveSupportEffect } from '../../../../utils/positiveSupportEffect'
+import { lifestealHealing } from '../../../../../utils/lifesteal'
 import { knockedOutEnemyIds, resolveEnemyKnockouts } from '~/server/utils/enemyKnockouts'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 
@@ -516,6 +518,7 @@ async function resolveIntercedeClaim(
 
   // Compute damage using shared canonical function (dodge successes = 0 for intercede)
   const damageCalc = await computeAttackDamage({
+    shieldComplex: request.data.shieldComplex || false,
     attackerParticipant: attacker,
     targetParticipant: interceptor,
     participants,
@@ -589,10 +592,11 @@ async function resolveIntercedeClaim(
 
         // Effects on activeEffects: only apply immediately for single-target intercede
         if (!isAreaAttack && damageCalc.effectData) {
-          updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
+          if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
+          else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round)
           appliedEffectName = damageCalc.attackDef?.effect ?? null
           if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules)
+            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, undefined, encounter.round)
           }
         }
 
@@ -749,11 +753,12 @@ async function resolveIntercedeClaim(
 
       // Wounds: only apply immediately for single-target intercede
       if (!isAreaAttack) {
-        updated.currentWounds = Math.min(p.maxWounds, (p.currentWounds || 0) + damageDealt)
-        if (damageCalc.targetHasCombatMonster && damageDealt > 0) {
+        const woundDamage = Math.max(0, damageDealt - (p.currentTempWounds ?? 0))
+        applyWoundDamage(updated, damageDealt)
+        if (damageCalc.targetHasCombatMonster && woundDamage > 0) {
           updated.combatMonsterBonus = Math.min(
             p.totalHealth ?? damageCalc.targetHealthStat ?? p.maxWounds,
-            (p.combatMonsterBonus ?? 0) + damageDealt
+            (p.combatMonsterBonus ?? 0) + woundDamage
           )
         }
         // Fall damage from jumping to intercede position (applied on top of attack damage)
@@ -775,10 +780,11 @@ async function resolveIntercedeClaim(
 
       // Effects on activeEffects: only apply immediately for single-target intercede
       if (!isAreaAttack && damageCalc.effectData) {
-        updated.activeEffects = applyEffectToParticipant(p.activeEffects || [], damageCalc.effectData, houseRules)
+        if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
+        else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round)
         appliedEffectName = damageCalc.attackDef?.effect ?? null
         if (damageCalc.secondaryEffectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules)
+          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, undefined, encounter.round)
         }
       }
 
@@ -792,9 +798,9 @@ async function resolveIntercedeClaim(
     if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
       return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
     }
-    // Digizoid Armor: Gold/Obsidian reflect damage back to the attacker (single-target intercede only)
-    if (!isAreaAttack && p.id === attackerId && damageCalc.reflectDamageToAttacker > 0) {
-      return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damageCalc.reflectDamageToAttacker) }
+    if (!isAreaAttack && p.id === attackerId) {
+      const healing = npcAttackDef?.effect === 'Lifesteal' ? lifestealHealing(damageDealt, damageCalc.effectData?.potency ?? 0, request.data.lifestealed) : 0
+      return { ...p, currentWounds: Math.min(p.maxWounds, Math.max(0, (p.currentWounds || 0) - healing) + damageCalc.reflectDamageToAttacker) }
     }
     return p
   })

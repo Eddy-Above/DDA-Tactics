@@ -10,6 +10,7 @@ import { isImmuneToEffect } from './damageOverTime'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 
 export interface ComputeAttackDamageParams {
+  shieldComplex?: boolean
   attackerParticipant: any
   /** The entity taking the hit — the attack target for dodge, the interceptor for intercede. */
   targetParticipant: any
@@ -313,7 +314,7 @@ export async function computeAttackDamage(
   // Naturewalk: Fire can't be [Burned]
   if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualities)) {
     const alignment = EFFECT_ALIGNMENT[attackDef.effect]
-    const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
+    const shouldApply = (attackDef.type === 'damage' ? damageDealt >= (attackDef.effect === 'Lifesteal' ? 1 : 2) : true)
       && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
     if (hit && shouldApply) {
       if (!atkDerivedCached && attackerParticipant.type === 'digimon') {
@@ -325,6 +326,7 @@ export async function computeAttackDamage(
       const { potency, potencyStat } = calculateEffectPotency(attackDef.effect, atkDerived, tgtDerived)
 
       let potencyFinal = potency
+      if (attackDef.effect === 'Shield' && params.shieldComplex) potencyFinal *= 3
       if (params.isSignatureMove && params.batteryCount) potencyFinal += params.batteryCount
 
       const effectType = alignment === 'P' ? 'buff' : alignment === 'N' ? 'debuff' : 'status'

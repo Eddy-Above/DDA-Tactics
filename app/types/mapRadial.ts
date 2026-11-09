@@ -1,6 +1,6 @@
 /** A menu choice; branches open an outer ring and leaves are returned to the map. */
 export type ChargeAttackMode = 'before' | 'after' | null
-export type AttackRadialRider = 'bolster-damage-accuracy' | 'bolster-bit-cpu' | 'huge-power' | 'huge-power-2' | 'lifesteal' | 'act-of-inspiration' | 'fateful-intervention' | 'charge-before' | 'charge-after'
+export type AttackRadialRider = 'bolster-damage-accuracy' | 'bolster-bit-cpu' | 'huge-power' | 'huge-power-2' | 'lifesteal' | 'shield-complex' | 'act-of-inspiration' | 'fateful-intervention' | 'charge-before' | 'charge-after'
 
 export interface MapRadialItem {
   id: string

@@ -139,6 +139,54 @@ function assertOneBatch(f, kind, ids) {
   assert.equal(reads[0].ids.length, new Set(ids).size, 'duplicate instances/forms must not duplicate batch IDs')
 }
 
+test('ending combat removes Shield temporary wounds while preserving wounds and Combat Monster count', async () => {
+  const participants = [unit('source', { currentWounds: 4, currentTempWounds: 9, combatMonsterBonus: 3,
+    activeEffects: [{ ...effect('Shield'), type: 'buff', duration: 0, potency: 9 }, effect('Stun')] }), unit('ally')]
+  const f = fixture({ participants, map: false })
+  const result = await f.put({ phase: 'ended' })
+  assert.equal(result.participants[0].currentTempWounds, 0)
+  assert.equal(result.participants[0].currentWounds, 4)
+  assert.equal(result.participants[0].combatMonsterBonus, 3)
+  assert.equal(result.participants[0].activeEffects.some(effect => effect.name === 'Shield'), false)
+  assert.ok(result.participants[0].activeEffects.some(effect => effect.name === 'Stun'))
+})
+
+test('server round transitions apply Lag from stored effects despite a stale countdown, then restore the original slots', async () => {
+  const participants = [unit('a', { activeEffects: [{ ...effect('Lag'), potency: 2, appliesRound: 2 }] }), unit('b'), unit('c')]
+  const f = fixture({ participants, map: false, records: ['a', 'b', 'c'].map(id => record(id)) })
+  f.rows.encounters.encounter.currentTurnIndex = 2
+  const stale = copy(participants)
+  stale[0].activeEffects = []
+  let result = await f.put({ participants: stale, currentTurnIndex: 0, round: 2 })
+  assert.deepEqual(result.turnOrder, ['b', 'c', 'a'])
+  assert.equal(result.participants.find(participant => participant.isActive).id, 'b')
+  assertOneBatch(f, 'digimon', ['a', 'b', 'c'])
+  f.reads.length = 0
+  result = await f.put({ participants: result.participants, currentTurnIndex: 0, round: 3 })
+  assert.deepEqual(result.turnOrder, ['a', 'b', 'c'])
+  assert.equal(result.participants.find(participant => participant.isActive).id, 'a')
+  assert.equal(result.participants[0].activeEffects.some(effect => effect.name === 'Lag'), false)
+  assertOneBatch(f, 'digimon', ['a', 'b', 'c'])
+})
+
+test('ordinary participant saves cannot clear the server-owned Shield round limit', async () => {
+  const participants = [unit('source', { lastShieldRound: 1 }), unit('ally')]
+  const f = fixture({ participants, map: false })
+  const stale = copy(participants)
+  delete stale[0].lastShieldRound
+  const result = await f.put({ participants: stale })
+  assert.equal(result.participants[0].lastShieldRound, 1)
+})
+
+test('a stale turn save cannot restore Lag that the server has already cleansed', async () => {
+  const participants = [unit('source', { activeEffects: [{ ...effect('Lag'), appliesRound: 2, potency: 1 }] }), unit('ally')]
+  const f = fixture({ participants, map: false })
+  f.rows.encounters.encounter.participants[0].activeEffects = []
+  const result = await f.put({ participants, currentTurnIndex: 0, round: 2 })
+  assert.deepEqual(result.turnOrder, ['source', 'ally'])
+  assert.equal(result.participants[0].activeEffects.some(effect => effect.name === 'Lag'), false)
+})
+
 test('ordinary End Turn shares one batch across map gravity and aura, preserving duplicate participant state', async () => {
   const participants = [unit('source'), unit('ally-a', { entityId: 'ally', currentWounds: 2 }),
     unit('ally-b', { entityId: 'ally', currentWounds: 7 }), unit('missing-a', { entityId: 'missing' }),

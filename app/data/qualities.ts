@@ -1427,7 +1427,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     maxRanks: 1,
     prerequisites: [],
     description: '[N/A] Heal from damage dealt.',
-    effect: `Apply [Lifesteal] tag to an attack. Recover wound boxes equal to damage dealt (after armor).`,
+    effect: `Heal Wound Boxes equal to the user's CPU, capped by damage dealt. A Complex Action doubles the CPU cap. Lifesteal has no Duration.`,
   },
   {
     id: 'effect-vigor',
@@ -1475,7 +1475,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     maxRanks: 1,
     prerequisites: [],
     description: '[P] Grant extra action.',
-    effect: `Apply [Haste] tag to a support attack. Ally gains extra simple action. Single-target: No Health roll required.`,
+    effect: `The target gains one additional Simple Action for one round. Haste has no Duration and always requires a Complex Action.`,
   },
   {
     id: 'effect-strengthen',
@@ -1608,7 +1608,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     maxRanks: 1,
     prerequisites: [],
     description: '[P] Grant temporary wound boxes.',
-    effect: `Apply [Shield] tag to a support attack. Ally gains temporary wound boxes. Single-target: No Health roll required. Cannot self-buff without [Area Attack].`,
+    effect: `Grant temporary Wound Boxes equal to the user's BIT, or BIT ×3 as a Complex Action. Shield can only be used once per round. Temporary wounds expire at combat end and do not increase Combat Monster count.`,
   },
   {
     id: 'effect-regenerate',
@@ -1631,8 +1631,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Move target to end of initiative.',
-    effect: `Apply [Lag] tag to an attack. Target moves to end of initiative order. Can break Overwrite state. Prevents Temporal InForce initiative adjustment.`,
+    description: '[N] Lower the target’s initiative position next round.',
+    effect: `On a hit, roll 1dBIT and lower the target by that many places for the next round. Multiple instances do not stack. Lag always requires a Complex Action.`,
   },
   {
     id: 'effect-burn',

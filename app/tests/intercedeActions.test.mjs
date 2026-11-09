@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const globalNames = ['ref', '$fetch', 'defineEventHandler', 'getRouterParam', 'readBody', 'createError']
 const originalGlobals = new Map(globalNames.map(name => [name, globalThis[name]]))
@@ -90,14 +90,41 @@ function legacyNpcAttack(state, rows = []) {
     '../../../../utils/pushPull': { applyPushPullDisplacement: unexpected },
     '../../../../utils/endOfTurnGravity': { applyEndOfTurnGravity: async (_id, _map, participants) => ({ participants, logEntries: [] }) },
     '../../../../utils/roundStartQualityTriggers': { applyRoundStartQualityTriggers: identity },
-    '../../../../utils/damageOverTime': { applyRoundEndEffects: unchanged, loadStationaryBurnPositions: async () => ({}), damageOverTimeRules: () => ({}) },
+    '../../../../utils/damageOverTime': { applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage, applyRoundEndEffects: unchanged, loadStationaryBurnPositions: async () => ({}), damageOverTimeRules: () => ({}) },
     '../../../../utils/enemyKnockouts': {
       knockedOutEnemyIds: participants => participants.filter(p => p.isEnemy && p.currentWounds >= p.maxWounds).map(p => p.id),
       resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }),
     },
     '../../../../utils/guidingLight': { refreshGuidingLightForParticipants: async (_id, participants) => participants },
+    '../../../../utils/combatSpatial': { loadParticipantDigimon: async () => new Map(rows.map(row => [row.id, row])) },
   }).default
 }
+
+test('real client round wraps apply Lag before choosing the next participant, then restore order next round', async () => {
+  const lag = { id: 'lag', name: 'Lag', type: 'debuff', duration: 1, source: 'caster', potency: 2, appliesRound: 2 }
+  const participants = [unit('a', { initiative: 30, activeEffects: [lag] }), unit('b', { initiative: 20 }), unit('c', { initiative: 10, isActive: true })]
+  const api = await client(encounter(participants, ['a', 'b', 'c'], 2))
+  let updated = await api.nextTurn('encounter')
+  assert.equal(updated.round, 2)
+  assert.deepEqual(updated.turnOrder, ['b', 'c', 'a'])
+  assert.equal(updated.participants.find(participant => participant.isActive).id, 'b')
+  updated = await api.nextTurn('encounter')
+  updated = await api.nextTurn('encounter')
+  updated = await api.nextTurn('encounter')
+  assert.equal(updated.round, 3)
+  assert.deepEqual(updated.turnOrder, ['a', 'b', 'c'])
+  assert.equal(updated.participants.find(participant => participant.isActive).id, 'a')
+})
+
+test('enemy removal that wraps a round applies pending Lag before starting the next turn', async () => {
+  const resolve = knockoutResolver()
+  const participants = [unit('a', { activeEffects: [{ id: 'lag', name: 'Lag', type: 'debuff', duration: 1, source: 'caster', potency: 1, appliesRound: 2 }] }),
+    unit('b'), unit('dead', { isEnemy: true, currentWounds: 5, isActive: true })]
+  const updated = await resolve({ participants, turnOrder: ['a', 'b', 'dead'], currentTurnIndex: 2, round: 1 }, ['dead'])
+  assert.equal(updated.round, 2)
+  assert.deepEqual(updated.turnOrder, ['b', 'a'])
+  assert.equal(updated.participants.find(participant => participant.isActive).id, 'b')
+})
 
 test('legacy NPC damage consumes Enduring Soul before saving or removing a defeated enemy', async () => {
   const actor = unit('attacker', { isEnemy: true })

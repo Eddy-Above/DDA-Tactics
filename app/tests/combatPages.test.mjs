@@ -11,6 +11,7 @@ const playerPage = 'pages/campaigns/[campaignId]/player/[tamerId].vue'
 const finalDice = [5, 3, 4, 5, 6]
 const initialRiders = {
   bolster: true, bolsterType: 'damage-accuracy', lifesteal: true,
+  shieldComplex: false,
   hugePower: true, hugePowerRank2: true,
 }
 
@@ -311,6 +312,37 @@ for (const area of [false, true]) {
     assert.equal(fixture.dependencies.showAccuracyReview.value, false)
     assert.equal(fixture.requests.length, 0)
     assert.equal(fixture.attackSubmissions.length, 0)
+  })
+}
+
+for (const role of ['gm', 'player']) for (const area of [false, true]) {
+  test(`${role} keeps Triple Shield through ${area ? 'area' : 'single-target'} accuracy preparation and submission`, async () => {
+    const f = createCombatPage(role)
+    f.attack.effect = 'Shield'
+    const options = { ...initialRiders, bolster: false, lifesteal: false, hugePower: false, hugePowerRank2: false,
+      shieldComplex: true, actOfInspiration: false, fatefulIntervention: false, chargeMode: null }
+    f.dependencies.selectedAttack.value.radialOptions = options
+    f.dependencies.bolsterAttackEnabled.value = false
+    f.dependencies.lifestealComplexEnabled.value = false
+    f.dependencies.hugePowerEnabled.value = false
+    f.dependencies.hugePowerRank2Enabled.value = false
+    f.dependencies.prepareRadialAttackAccuracy = async (_participant, _attack, _ids, choices) => prepareAttackAccuracy(3, choices, { random: () => 0.99 })
+    f.setDice([6, 6, 6])
+    const handlers = f.load()
+    if (area) await handlers.confirmAreaAttack([f.target])
+    else await handlers.confirmAttack(f.target)
+    if (role === 'gm') assert.equal(f.requests[0][1].body.shieldComplex, true)
+    else {
+      assert.equal(f.dependencies.accuracyReviewContext.value.shieldComplex, true)
+      const review = loadPageFunctions(playerPage, ['confirmAccuracyReview'], { ...f.dependencies,
+        inspirationSpendLoading: ref(false), confirmingAttack: ref(false), battleLogTotal: () => 0,
+        newBattleLogEntries: () => [], attackResultGroupTotals: ref({}), pendingAttacks: ref([]), getParticipantName: () => 'Target',
+        performAttack: async (...args) => { f.attackSubmissions.push(args); return f.returnedEncounter },
+      })
+      await review.confirmAccuracyReview()
+      assert.deepEqual(f.attackSubmissions[0][9], { lifestealed: false, shieldComplex: true })
+    }
+    f.assertNoErrors()
   })
 }
 

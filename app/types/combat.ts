@@ -10,6 +10,7 @@ export interface ActiveEffect {
   value?: number          // Optional numeric value (Directed bonus, etc.)
   potency?: number        // Effect strength (e.g. Immobilize uses the applier's BIT)
   potencyStat?: string    // SPEC stat driving potency ('bit', 'ram', 'cpu')
+  appliesRound?: number   // Lag's scheduled round; independent of turn-end duration ticks.
 }
 
 export interface ClashState {
@@ -67,6 +68,9 @@ export interface CombatParticipant {
   hasDirectedThisTurn?: boolean
   digimonBolsterCount?: number
   lastBitCpuBolsterRound?: number
+  lastShieldRound?: number
+  lagBaseOrder?: number
+  lagOrderRound?: number
   lastHugePowerRound?: number
   lastHugePowerRank2Round?: number
   quickReactionDiceBonus?: number  // Remaining Quick Reaction dodge pool this round

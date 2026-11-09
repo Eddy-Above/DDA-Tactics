@@ -178,6 +178,8 @@ export async function resolveIntercedeGroupIfDecided(
     houseRules,
     isSignatureMove: data.isSignatureMove || false,
     batteryCount: data.batteryCount ?? 0,
+    lifestealed: data.lifestealed || false,
+    shieldComplex: data.shieldComplex || false,
   }
   const withSupportResult = (supportResult: any): IntercedeDecisionState => ({
     participants: supportResult.participants,
@@ -253,6 +255,8 @@ export async function resolveIntercedeGroupIfDecided(
   // Damage attack — auto-resolve (roll dodge, calculate damage)
   const result = await resolveNpcAttack({
     pendingRequests, cleanseCastId: data.attackData?.cleanseCastId,
+    lifestealed: data.lifestealed || false,
+    shieldComplex: data.shieldComplex || false,
     strikeFast: !!data.attackData?.orderModifiers?.halfDodge,
     participants, battleLog,
     attackerParticipantId: data.attackerId,

@@ -13,6 +13,7 @@ import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } fro
 import { combatAttackStats } from '../../../../../utils/combatDice'
 import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
+import { effectActionError } from '../../../../../utils/combatAttackOptions'
 
 interface AttackActionBody {
   participantId: string
@@ -27,6 +28,7 @@ interface AttackActionBody {
   bolstered?: boolean
   bolsterType?: 'damage-accuracy' | 'bit-cpu'
   lifestealed?: boolean
+  shieldComplex?: boolean
   hugePowerUsed?: boolean
   hugePowerRank?: number
   hugePowerTrackAll?: boolean
@@ -234,15 +236,22 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
     })
   }
 
-  // Haste attacks require a Complex Action and cannot be combined with bolster or Lifesteal
-  let attackHasHaste = false
+  // Haste/Lag always cost a Complex Action; Shield's optional upgrade also costs two actions.
+  let attackHasComplexEffect = false
+  let attackIsShield = false
   if (actor.type === 'digimon') {
     const [actorDigimonForHaste] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
     if (actorDigimonForHaste?.attacks) {
       const hasteAttacks = actorDigimonForHaste.attacks
       const hasteAttackDef = hasteAttacks?.find((a: any) => a.id === body.attackId)
+      const optionError = effectActionError(hasteAttackDef ?? {}, body)
+      if (optionError) throw createError({ statusCode: 400, message: optionError })
+      attackIsShield = hasteAttackDef?.effect === 'Shield'
+      if (attackIsShield && actor.lastShieldRound === encounter.round) {
+        throw createError({ statusCode: 403, message: 'Shield can only be used once per round' })
+      }
+      attackHasComplexEffect = hasteAttackDef?.effect === 'Haste' || hasteAttackDef?.effect === 'Lag'
       if (hasteAttackDef?.effect === 'Haste') {
-        attackHasHaste = true
         if (body.bolstered) {
           throw createError({
             statusCode: 400,
@@ -259,8 +268,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
     }
   }
 
-  // Attacks cost 1 simple action, or 2 if bolstered, Lifesteal Complex Action, or Haste
-  let actionCostSimple = (body.bolstered || body.lifestealed || attackHasHaste) ? 2 : 1
+  let actionCostSimple = (body.bolstered || body.lifestealed || body.shieldComplex || attackHasComplexEffect) ? 2 : 1
 
   // EddySoul: Combat Monster + Area Attack requires a Complex Action (unless no bonus)
   const campaignRulesSettings = campaign?.rulesSettings || {}
@@ -337,6 +345,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
       }
       // Track bolster usage for digimon
+      if (attackIsShield) updated.lastShieldRound = encounter.round
       if (body.bolstered && p.type === 'digimon') {
         updated.digimonBolsterCount = (p.digimonBolsterCount ?? 0) + 1
         if (body.bolsterType === 'bit-cpu') {
@@ -462,6 +471,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
         bolstered: body.bolstered || false,
         bolsterType: body.bolsterType,
         lifestealed: body.lifestealed || false,
+        shieldComplex: body.shieldComplex || false,
         hugePowerUsed: body.hugePowerUsed || false,
         hugePowerAttackRange: body.hugePowerAttackRange,
         isSignatureMove,
@@ -569,6 +579,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
       bolstered: body.bolstered || false,
       bolsterType: body.bolsterType,
       lifestealed: body.lifestealed || false,
+      shieldComplex: body.shieldComplex || false,
       hugePowerUsed: body.hugePowerUsed || false,
       hugePowerAttackRange: body.hugePowerAttackRange,
       isSignatureMove,

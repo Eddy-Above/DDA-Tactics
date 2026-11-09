@@ -230,6 +230,7 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
         appliedEffectName: support ? 'Weaken' : null,
         effectData: support ? { name: 'Weaken', type: 'debuff', duration: 2, source: 'attacker', potency: 1 } : null,
         reflectDamageToAttacker: 0, targetHasCombatMonster: false,
+        ...control.damageOverrides,
       }
     } },
     '../../../../utils/resolveSupportAttack': { getDigimonDerivedStats: unexpected },
@@ -266,6 +267,7 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
     '~/server/utils/damageOverTime': {
       movesFromPositions: () => [],
       applyMovementBurn: participants => ({ participants, logEntries: [] }),
+      applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage,
     },
     '~/server/utils/enemyKnockouts': knockoutMocks,
   }).default
@@ -285,6 +287,52 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
 
 function participant(fixture, id) {
   return fixture.state().participants.find(p => p.id === id)
+}
+
+for (const area of [false, true]) {
+  test(`${area ? 'area' : 'single-target'} interceding preserves doubled Lifesteal and caps healing at actual attack damage`, async () => {
+    const f = fixture({ area, targets: ['target'] })
+    participant(f, 'attacker').currentWounds = 10
+    for (const request of f.state().pendingRequests) request.data.lifestealed = true
+    f.control.damageOverrides = { damageDealt: 4, attackDef: { id: 'attack', type: 'damage', effect: 'Lifesteal' },
+      appliedEffectName: 'Lifesteal', effectData: { name: 'Lifesteal', type: 'status', duration: 1, source: 'attacker', potency: 3 } }
+    await f.claim()
+    assert.equal(participant(f, 'attacker').currentWounds, 6)
+    assert.equal(participant(f, 'guard-a').currentWounds, 4)
+    assert.equal(participant(f, 'target').currentWounds, 0)
+    assert.equal(participant(f, 'guard-a').activeEffects.some(effect => effect.name === 'Lifesteal'), false)
+  })
+
+  test(`${area ? 'area' : 'single-target'} interceding consumes Shield first and adds only actual wounds to Combat Monster`, async () => {
+    const f = fixture({ area, targets: ['target'] })
+    const interceptor = participant(f, 'guard-a')
+    Object.assign(interceptor, { currentTempWounds: 3, combatMonsterBonus: 2, activeEffects: [{ name: 'Shield', duration: 0, potency: 3 }] })
+    f.control.damageOverrides = { damageDealt: 4, targetHasCombatMonster: true }
+    await f.claim()
+    assert.equal(participant(f, 'guard-a').currentTempWounds, 0)
+    assert.equal(participant(f, 'guard-a').currentWounds, 1)
+    assert.equal(participant(f, 'guard-a').combatMonsterBonus, 3)
+    assert.equal(participant(f, 'guard-a').activeEffects.some(effect => effect.name === 'Shield'), false)
+  })
+
+  test(`${area ? 'area' : 'single-target'} intercepted Shield grants temporary wounds while Lag schedules its rolled shift`, async t => {
+    const random = Math.random
+    t.after(() => { Math.random = random })
+    Math.random = () => 0.99
+    for (const effect of ['Shield', 'Lag']) {
+      const f = fixture({ area, support: true, targets: ['target'] })
+      for (const request of f.state().pendingRequests) request.data.shieldComplex = effect === 'Shield'
+      f.control.damageOverrides = { damageDealt: 0, attackDef: { id: 'attack', type: 'support', effect }, appliedEffectName: effect,
+        effectData: { name: effect, type: effect === 'Shield' ? 'buff' : 'debuff', duration: 3, source: 'attacker', potency: effect === 'Shield' ? 9 : 4 } }
+      await f.claim()
+      if (effect === 'Shield') assert.equal(participant(f, 'guard-a').currentTempWounds, 9)
+      else {
+        const applied = participant(f, 'guard-a').activeEffects.find(effect => effect.name === 'Lag')
+        assert.equal(applied.potency, 4)
+        assert.equal(applied.appliesRound, 2)
+      }
+    }
+  })
 }
 
 function spatialClaim({ mover = 'medium', blocker = 'medium', target = 'small', landing, budget = 7, melee = false } = {}) {

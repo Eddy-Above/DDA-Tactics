@@ -6,6 +6,7 @@ import type { AreaShapeData } from '../utils/areaShapes'
 import { applyDeferredIntercedeCost, recordTurnStart } from '../utils/intercedeActions'
 import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
 import type { CombatParticipant } from '../types/combat'
+import { applyLagInitiative } from '../utils/lagInitiative'
 
 export type { ActiveEffect, ClashState, CombatParticipant } from '../types/combat'
 
@@ -117,8 +118,8 @@ function applyRoundReset(
 function tickTurnEffects(participant: CombatParticipant) {
   participant.strikeFastReady = false
   participant.activeEffects = (participant.activeEffects || [])
-    .map((e) => PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
-    .filter((e) => e.duration > 0 || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name))
+    .map((e) => e.name === 'Lag' || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name) ? e : { ...e, duration: e.duration - 1 })
+    .filter((e) => e.name === 'Lag' || e.duration > 0 || PERMANENT_EFFECTS.has(e.name) || DAMAGE_OVER_TIME_EFFECTS.has(e.name))
 }
 
 // Starts a participant's turn: resets dodge penalty, repays deferred intercede actions,
@@ -369,7 +370,7 @@ export function useEncounters() {
     digimonMap?: Map<string, any>,
     activeParticipantId?: string | null
   ): { turnOrder: string[]; currentTurnIndex: number } {
-    const turnOrder = [...participants]
+    let turnOrder = [...participants]
       .sort((a, b) => b.initiative - a.initiative)
       .filter((p) => {
         if (p.type === 'gm') return false
@@ -377,6 +378,9 @@ export function useEncounters() {
         return !isGroupedUnderTamer(p, participants, digimonMap)
       })
       .map((p) => p.id)
+
+    const lagRound = participants.reduce((latest, participant) => Math.max(latest, participant.lagOrderRound ?? 0), 0)
+    if (lagRound) turnOrder = applyLagInitiative(participants, turnOrder, lagRound, digimonMap)
 
     const activeIndex = activeParticipantId ? turnOrder.indexOf(activeParticipantId) : -1
     return { turnOrder, currentTurnIndex: activeIndex >= 0 ? activeIndex : 0 }
@@ -424,7 +428,7 @@ export function useEncounters() {
     const participants = (encounter.participants as CombatParticipant[])
       .filter((p) => p.id !== participantId)
       .map((p) => p.clash?.opponentParticipantId === participantId ? { ...p, clash: undefined } : p)
-    const remainingTurnOrder = oldTurnOrder.filter((id) => id !== participantId)
+    let remainingTurnOrder = oldTurnOrder.filter((id) => id !== participantId)
 
     let survivingIndex = oldCurrentTurnIndex
     let round = encounter.round
@@ -442,6 +446,7 @@ export function useEncounters() {
           survivingIndex = 0
           round += 1
           applyRoundReset(participants, houseRules, digimonMap)
+          remainingTurnOrder = applyLagInitiative(participants, remainingTurnOrder, round, digimonMap)
         }
         const nextParticipant = participants.find((p) => p.id === remainingTurnOrder[survivingIndex])
         if (nextParticipant) {
@@ -484,7 +489,7 @@ export function useEncounters() {
     if (!encounter) return null
 
     const participants = encounter.participants as CombatParticipant[]
-    const turnOrder = encounter.turnOrder as string[]
+    let turnOrder = encounter.turnOrder as string[]
     if (turnOrder.length === 0) return null
     let nextIndex = (encounter.currentTurnIndex + 1) % turnOrder.length
 
@@ -507,7 +512,7 @@ export function useEncounters() {
     }
 
     // Mark current participant as having acted
-    const currentParticipantId = turnOrder[encounter.currentTurnIndex]
+    const currentParticipantId = (encounter.turnOrder as string[])[encounter.currentTurnIndex]
     const currentParticipant = participants.find((p) => p.id === currentParticipantId)
     if (currentParticipant) {
       currentParticipant.hasActed = true
@@ -564,6 +569,11 @@ export function useEncounters() {
       }
     }
 
+    if (crossedZero) {
+      turnOrder = applyLagInitiative(participants, turnOrder, newRound, digimonMap)
+      nextIndex = 0
+    }
+
     // Mark next participant as active
     const nextParticipantId = turnOrder[nextIndex]
     const nextParticipant = participants.find((p) => p.id === nextParticipantId)
@@ -571,7 +581,7 @@ export function useEncounters() {
       activateParticipant(nextParticipant, participants, digimonMap, newRound)
     }
 
-    const updatePayload: Partial<Encounter> = { participants, currentTurnIndex: nextIndex, round: newRound }
+    const updatePayload: Partial<Encounter> = { participants, turnOrder, currentTurnIndex: nextIndex, round: newRound }
     const logEntries = [...endOfTurnLogEntries]
     if (getEntityName && nextParticipant) {
       const name = getEntityName(nextParticipant)
@@ -825,8 +835,9 @@ export function useEncounters() {
       hugePowerRank?: number
       hugePowerTrackAll?: boolean
     },
-    lifestealData?: {
+    effectActionData?: {
       lifestealed: boolean
+      shieldComplex?: boolean
     },
     areaData?: {
       targetIds: string[]
@@ -855,7 +866,8 @@ export function useEncounters() {
           hugePowerAttackRange: hugePowerData?.attackRange,
           hugePowerRank: hugePowerData?.hugePowerRank,
           hugePowerTrackAll: hugePowerData?.hugePowerTrackAll,
-          lifestealed: lifestealData?.lifestealed || false,
+          lifestealed: effectActionData?.lifestealed || false,
+          ...(effectActionData?.shieldComplex ? { shieldComplex: true } : {}),
           clashNoInterceptTargetId: areaData?.clashNoInterceptTargetId,
           areaShapeData: areaData?.areaShapeData ?? null,
         },

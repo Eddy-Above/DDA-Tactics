@@ -13,6 +13,7 @@ import { loadCampaignCombatContext } from '../../utils/combatContext'
 import { clearTemporaryPasses } from '../../utils/intercedeOptOuts'
 import { readCombatRecord, withCombatRecords } from '../../utils/combatRecordCache'
 import { loadParticipantDigimon, loadTamersByIds } from '../../utils/combatSpatial'
+import { applyLagInitiative } from '../../../utils/lagInitiative'
 
 type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
@@ -100,12 +101,16 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
         // These are server-owned declarations/passives. A stale turn-save cannot restore a spent order.
         next = { ...next }
         for (const field of ['lastMovedTurnKey', 'strikeFastReady', 'strikeFastTurnKey', 'finishingTouchReady', 'decimationReady',
-          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus']) {
+          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus', 'lastShieldRound', 'lagBaseOrder', 'lagOrderRound']) {
           if (Object.prototype.hasOwnProperty.call(stored, field)) next[field] = stored[field]
           else delete next[field]
         }
         const incomingTurnKey = combatTurnKey(incomingRound, body.currentTurnIndex ?? existing.currentTurnIndex ?? 0)
         if (next.strikeFastReady && next.strikeFastTurnKey !== incomingTurnKey) next.strikeFastReady = false
+        if (isNewRound) {
+          next.activeEffects = [...(next.activeEffects ?? []).filter((effect: any) => effect.name !== 'Lag'),
+            ...(stored.activeEffects ?? []).filter((effect: any) => effect.name === 'Lag')]
+        }
       }
       return next
     })
@@ -223,6 +228,15 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
     // Round-start quality triggers: Juggernaut stacking bonus, Black/Brown Digizoid Armor resets
     if (isNewRound) {
       participants = await applyRoundStartQualityTriggers(participants)
+      if (participants.some(participant => participant.lagBaseOrder !== undefined || participant.activeEffects?.some((effect: any) => effect.name === 'Lag'))) {
+        const priorOrder = (existing.turnOrder as string[]) ?? []
+        const addedIds = ((body.turnOrder as string[] | undefined) ?? []).filter(participantId => !priorOrder.includes(participantId))
+        const lagRound = typeof updateData.round === 'number' ? updateData.round : incomingRound
+        const turnOrder = applyLagInitiative(participants, [...priorOrder, ...addedIds], lagRound, await loadParticipantDigimon(participants))
+        updateData.turnOrder = turnOrder
+        updateData.currentTurnIndex = 0
+        participants = participants.map(participant => ({ ...participant, isActive: participant.id === turnOrder[0] }))
+      }
     }
 
     updateData.participants = participants
@@ -238,7 +252,9 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
       const { campaignLevel, houseRules } = await getCampaignRules()
       // A fresh combat restarts at round 1: movement stamps from an earlier one mean nothing to Burn
       const basisParticipants = ((updateData.participants as any[] | undefined) ?? (existing.participants as any[]))
-        .map(({ lastMovedRound: _previousCombat, ...p }: any) => p)
+        .map(({ lastMovedRound: _previousCombat, lastShieldRound: _previousShieldRound, lagBaseOrder: _previousOrder, lagOrderRound: _previousLagRound, ...p }: any) => ({
+          ...p, activeEffects: (p.activeEffects ?? []).filter((effect: any) => effect.name !== 'Lag'),
+        }))
       updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)
     } else {
       const existingIds = new Set(((existing.participants as any[]) || []).map((p) => p.id))
@@ -262,6 +278,11 @@ export default defineEventHandler(async (event) => withCombatRecords(async () =>
   // auto-devolve a knocked-out source without moving it. Recompute from the final roster
   // after gravity, knockouts and encounter-start effects, then persist everything together.
   const resultingPhase = updateData.phase ?? existing.phase
+  if (resultingPhase === 'ended') {
+    updateData.participants = ((updateData.participants ?? existing.participants) as any[]).map(participant => ({
+      ...participant, currentTempWounds: 0, activeEffects: (participant.activeEffects ?? []).filter((effect: any) => effect.name !== 'Shield'),
+    }))
+  }
   if (resultingPhase === 'combat' && (isCombatStart || !!body.participants)) {
     const { campaignLevel, houseRules } = await getCampaignRules()
     const { participantPositions } = await getRoomSnapshot(id)

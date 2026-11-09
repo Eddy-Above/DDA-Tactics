@@ -14,6 +14,7 @@ interface EffectInput {
   value?: number
   potency?: number
   potencyStat?: string
+  appliesRound?: number
 }
 
 interface ActiveEffect extends EffectInput {
@@ -33,7 +34,8 @@ export function applyEffectToParticipant(
   activeEffects: ActiveEffect[],
   newEffect: EffectInput,
   houseRules?: { stunMaxDuration1?: boolean },
-  targetQualities?: Array<{ id: string }>
+  targetQualities?: Array<{ id: string }>,
+  round?: number,
 ): ActiveEffect[] {
   // Boss quality: Immunity — any effect targeting this digimon has no Duration or Potency
   if (targetQualities?.some((q) => q.id === 'immunity')) {
@@ -43,6 +45,18 @@ export function applyEffectToParticipant(
   // Don't persist instant effects
   if (INSTANT_EFFECTS.has(newEffect.name)) {
     return [...activeEffects]
+  }
+
+  if (newEffect.name === 'Lag') {
+    const bit = Math.max(0, Math.floor(newEffect.potency ?? 0))
+    if (!bit) return [...activeEffects]
+    const places = Math.floor(Math.random() * bit) + 1
+    const appliesRound = newEffect.appliesRound ?? (round === undefined ? undefined : round + 1)
+    const prior = activeEffects.find(effect => effect.name === 'Lag' && (effect.appliesRound === appliesRound || effect.appliesRound === undefined))
+    if (prior && (prior.potency ?? 0) >= places) return [...activeEffects]
+    const lag: ActiveEffect = { ...newEffect, id: prior?.id ?? `effect-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      duration: 1, potency: places, appliesRound, description: `Initiative moves down ${places} places next round (1d${bit}).` }
+    return [...activeEffects.filter(effect => effect !== prior), lag]
   }
 
   // Permanent effects: no duration, always replace any existing instance

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const globalNames = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError']
 const originalGlobals = new Map(globalNames.map(name => [name, globalThis[name]]))
@@ -130,7 +130,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
     '../../../../utils/resolveSupportAttack': mocks['../../../utils/resolveSupportAttack'],
     '../../../../utils/endOfTurnGravity': mocks['../../utils/endOfTurnGravity'],
     '../../../../utils/roundStartQualityTriggers': mocks['../../utils/roundStartQualityTriggers'],
-    '../../../../utils/damageOverTime': { ...mocks['../../utils/damageOverTime'], isImmuneToEffect: () => false },
+    '../../../../utils/damageOverTime': { ...mocks['../../utils/damageOverTime'], applyWoundDamage: loadTypeScript('server/utils/damageOverTime.ts').applyWoundDamage, isImmuneToEffect: () => false },
     '../../../../utils/enemyKnockouts': mocks['../../utils/enemyKnockouts'],
   })
   mocks['../../../../utils/guidingLight'].refreshGuidingLightForParticipants = refreshGuidingLightForParticipants

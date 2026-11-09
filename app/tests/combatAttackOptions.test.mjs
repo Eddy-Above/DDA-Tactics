@@ -70,7 +70,7 @@ test('Combat Monster area attacks require two actions only when the rule and bon
   participant.clash = { isController: true }
   assert.equal(canUseCombatAttack(participant, melee, rules), false)
   assert.equal(canUseCombatAttack(actor({ actionsRemaining: undefined }), melee), false)
-  assert.equal(requiredAttackActions(actor(), haste), 1, 'the shared ordinary gate does not change unrelated Haste action-cost behavior')
+  assert.equal(requiredAttackActions(actor(), haste), 2, 'Haste always requires a Complex Action')
 })
 
 test('Bolster shares type, action, per-round, Signature, Combat Monster and Haste gates', () => {
