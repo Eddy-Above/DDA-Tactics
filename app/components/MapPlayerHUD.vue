@@ -71,7 +71,6 @@
                 :style="{ width: woundPct(entry.currentWounds, entry.woundBoxes) + '%' }"
               />
             </div>
-            <div class="hud-wound-label" :aria-label="`${entry.actionsRemaining.simple} Simple Actions remaining`">{{ entry.actionsRemaining.simple }} Simple Action{{ entry.actionsRemaining.simple === 1 ? '' : 's' }} left</div>
           </div>
           <span
             v-if="isPlaceable(entry.id)"
@@ -79,6 +78,14 @@
             :class="placedSet.has(entry.id) ? 'placed' : 'unplaced'"
             :title="placedSet.has(entry.id) ? 'On the map' : 'Not placed yet'"
           >{{ placedSet.has(entry.id) ? '✓' : '📍' }}</span>
+          <div class="hud-actions" :title="`${entry.actionsRemaining.simple} action(s) remaining`" role="img" :aria-label="`${entry.actionsRemaining.simple} Simple Actions remaining`">
+            <span
+              v-for="i in Math.max(2, entry.actionsRemaining.simple)"
+              :key="i"
+              class="action-dot"
+              :class="i <= entry.actionsRemaining.simple ? 'unspent' : 'spent'"
+            />
+          </div>
         </div>
       </template>
     </div>
