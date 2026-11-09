@@ -193,6 +193,9 @@ const props = defineProps<{
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     movement?: number
+    baseMovement?: number
+    ram?: number
+    cpu?: number
     giganticDimensions?: { width: number; height: number; depth: number } | null
     isEnemy?: boolean
     partnerId?: string | null
@@ -677,6 +680,9 @@ function npcMoveCaps(participantId: string) {
   if (!pos) return null
   const dInfo = p.type === 'digimon' ? digimonMapForCanvas.value[p.entityId] as any : undefined
   let budget: number
+  let basicMovement = 0
+  let ram = 0
+  let cpu = 0
   let qualities: any[]
   if (p.type === 'tamer') {
     const tInfo = tamerMapForCanvas.value[p.entityId] as any
@@ -684,10 +690,14 @@ function npcMoveCaps(participantId: string) {
     qualities = []
   } else {
     const stageBonus = STAGE_CONFIG[dInfo?.stage as DigimonStage]?.stageBonus ?? 0
-    budget = applyStanceToMovement((dInfo?.movement ?? 4) + getAllStatEffectModifier(p.activeEffects ?? []), p.currentStance, stageBonus)
+    const modifier = getAllStatEffectModifier(p.activeEffects ?? [])
+    budget = applyStanceToMovement((dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus)
+    basicMovement = applyStanceToMovement((dInfo?.baseMovement ?? dInfo?.movement ?? 4) + modifier, p.currentStance, stageBonus)
+    ram = Math.max(0, (dInfo?.ram ?? 0) + modifier)
+    cpu = Math.max(0, (dInfo?.cpu ?? 0) + modifier)
     qualities = dInfo?.qualities ?? []
   }
-  const caps = movement.detectCapabilities(qualities, budget, 0, 0)
+  const caps = movement.detectCapabilities(qualities, budget, ram, cpu, p.type === 'tamer' ? 0 : undefined, basicMovement)
   // Tamers are always player-side; digimon carry isEnemy from their DB record
   const moverIsEnemy: boolean = p.type === 'digimon' && ((p as any).isEnemy === true)
   const occupied = new Map<string, { pos: Vec3; size: any; isEnemy: boolean; giganticDimensions?: { width: number; height: number; depth: number } | null }>()
@@ -947,7 +957,7 @@ watch(() => JSON.stringify([
     p.id, p.type, p.entityId, p.currentStance, p.activeEffects, p.isEnemy,
   ]).sort(([a], [b]) => String(a).localeCompare(String(b))),
   Object.entries(props.digimonMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, d]) => [
-    id, d.size, d.giganticDimensions, d.stage, d.baseStats, d.movement, d.qualities, d.isEnemy,
+    id, d.size, d.giganticDimensions, d.stage, d.baseStats, d.movement, d.baseMovement, d.ram, d.cpu, d.qualities, d.isEnemy,
   ]),
   Object.entries(props.tamerMap).sort(([a], [b]) => a.localeCompare(b)).map(([id, t]) => [id, t.speed, t.body]),
 ]), () => {

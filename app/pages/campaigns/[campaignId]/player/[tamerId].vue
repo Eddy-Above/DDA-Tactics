@@ -3,6 +3,7 @@ import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
+import { calculateSwimSpeed, calculateJumpProfile, calculateSpecialMovementSpeeds } from '~/utils/movementRules'
 import { buildCombatEvolutionOptions } from '~/utils/combatEvolutionOptions'
 import { applyFatefulPool } from '~/utils/fatefulIntervention'
 
@@ -4276,46 +4277,28 @@ function getEvolutionPath(chainId: string): Digimon[] {
 
 // Get all movement types available to a Digimon based on qualities
 function getMovementTypes(digimon: Digimon): { type: string; speed: number }[] {
-  // calcDigimonStats() already includes all movement modifiers (Speedy, Bulky, Instinct, etc.)
-  const baseMove = calcDigimonStats(digimon).movement
-
-  const halfMove = Math.floor(baseMove / 2)
-
-  // Check which Extra Movement qualities the Digimon has
-  const qualityChoices = new Set(digimon.qualities.map(q => q.choiceId).filter(Boolean))
-  const hasJumper = qualityChoices.has('jumper')
-  const hasSwimmer = qualityChoices.has('swimmer')
-  const hasDigger = qualityChoices.has('digger')
-  const hasFlight = qualityChoices.has('flight')
-  const hasWallclimber = qualityChoices.has('wallclimber')
-
-  // Check for Advanced Mobility (adds RAM to speed)
-  const hasAdvSwimmer = qualityChoices.has('adv-swimmer')
-  const hasAdvDigger = qualityChoices.has('adv-digger')
-  const hasAdvFlight = qualityChoices.has('adv-flight')
-  const hasAdvWallclimber = qualityChoices.has('adv-wallclimber')
-  const hasAdvJumper = qualityChoices.has('adv-jumper')
-
-  // RAM bonus for advanced mobility
-  const ramBonus = digimon.baseStats.armor || 0
+  const stats = calcDigimonStats(digimon)
+  const baseMove = stats.movement
+  const basicMovement = stats.baseMovement ?? baseMove
+  const jump = calculateJumpProfile(digimon.qualities, baseMove, stats.cpu, basicMovement)
+  const special = calculateSpecialMovementSpeeds(digimon.qualities, baseMove, stats.ram)
 
   const movements: { type: string; speed: number }[] = [
     { type: 'Walk', speed: baseMove },
-    // Jump: half movement by default, full with Jumper quality
-    { type: 'Jump', speed: hasJumper ? (hasAdvJumper ? baseMove + ramBonus : baseMove) : halfMove },
-    // Swim: half movement by default, full with Swimmer quality
-    { type: 'Swim', speed: hasSwimmer ? (hasAdvSwimmer ? baseMove + ramBonus : baseMove) : halfMove },
+    { type: 'Jump height', speed: jump.jumpHeight },
+    { type: 'Jump length', speed: jump.jumpRange },
+    { type: 'Swim', speed: calculateSwimSpeed(digimon.qualities, baseMove, stats.ram, basicMovement) },
   ]
 
   // Add special movement types from qualities
-  if (hasDigger) {
-    movements.push({ type: 'Burrow', speed: hasAdvDigger ? baseMove + ramBonus : baseMove })
+  if (special.digSpeed > 0) {
+    movements.push({ type: 'Burrow', speed: special.digSpeed })
   }
-  if (hasFlight) {
-    movements.push({ type: 'Fly', speed: hasAdvFlight ? baseMove + ramBonus : baseMove })
+  if (special.flySpeed > 0) {
+    movements.push({ type: 'Fly', speed: special.flySpeed })
   }
-  if (hasWallclimber) {
-    movements.push({ type: 'Climb', speed: hasAdvWallclimber ? baseMove + ramBonus : baseMove })
+  if (special.climbSpeed > 0) {
+    movements.push({ type: 'Climb', speed: special.climbSpeed })
   }
 
   return movements
@@ -4618,6 +4601,9 @@ const digimonMapForMap = computed(() => {
       baseStats: d.baseStats,
       qualities: typeof d.qualities === 'string' ? JSON.parse(d.qualities) : (d.qualities ?? []),
       movement: derived.movement ?? 4,
+      baseMovement: derived.baseMovement,
+      ram: derived.ram,
+      cpu: derived.cpu,
       giganticDimensions: (d as any).giganticDimensions ?? null,
       isEnemy: (d as any).isEnemy ?? false,
       partnerId: (d as any).partnerId ?? null,

@@ -4,8 +4,14 @@ import {
   getFootprintDimensions,
   getFootprintCells,
   getMovementOccupancy,
+  createMovementMapView,
+  getMovementCostProfile,
+  isSwimmingCell,
+  getDigTerrainMultiplier,
+  hasClimbSupport,
   isWithinMapFootprint,
   canPassThrough,
+  canLandOn,
   hasSolidVoxelSupport,
   hasSolidStairSupport,
   isPositionInAir,
@@ -15,6 +21,8 @@ import {
   detectCapabilities,
   PROJECTILE_CAPS,
 } from '../../utils/movementRules'
+import { searchReachable } from '../../utils/pathfinding'
+import { getMovementMapIndex } from '../../utils/movementMapIndex'
 
 // This module is the server's spatial/pathfinding layer. All pure map geometry (canPassThrough,
 // capabilities, fall/airborne helpers) now lives in `app/utils/movementRules.ts` — the single source
@@ -53,21 +61,12 @@ export function getReachableCells(
   blockedPositions: Set<string> = new Set(),
   moverDims: FootprintDims = { width: 1, height: 1, depth: 1 },
 ): Set<string> {
-  const visited = new Map<string, number>([[key(origin), 0]])
-  const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: origin, cost: 0 }]
-  while (queue.length > 0) {
-    const { pos, cost } = queue.shift()!
-    if (cost >= budget) continue
-    for (const nb of neighbours(pos)) {
-      const k = key(nb)
-      if (visited.has(k)) continue
-      if (blockedPositions.size && getFootprintCells(nb, moverDims).some(cell => blockedPositions.has(key(cell)))) continue
-      if (!canPassThrough(pos, nb, caps, map, destroyed)) continue
-      visited.set(k, cost + 1)
-      queue.push({ pos: nb, cost: cost + 1 })
-    }
-  }
-  return new Set(visited.keys())
+  const queryMap = createMovementMapView(map)
+  const costProfile = getMovementCostProfile(caps, budget, destroyed, origin)
+  return searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
+    if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(key(cell)))) return false
+    return canPassThrough(from, to, caps, queryMap, destroyed, origin)
+  }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined).cells
 }
 
 export function isValidLandingPosition(
@@ -75,10 +74,20 @@ export function isValidLandingPosition(
   map: GameMap,
   occupiedSet: Set<string>,
   caps?: MovementCapabilities,
+  origin?: Vec3,
 ): boolean {
   if (occupiedSet.has(key(pos))) return false
-  if ((map.groundTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
-  if ((map.spaceTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
+  if (caps && origin) return canLandOn(pos, caps, map, occupiedSet, origin)
+  if (caps) {
+    const digTerrain = getDigTerrainMultiplier(map, pos, caps)
+    if (!Number.isFinite(digTerrain)) return false
+    if (digTerrain > 0) return true
+    if (caps.canSwim && isSwimmingCell(map, pos)) return true
+    if (hasClimbSupport(map, pos, caps)) return true
+  }
+  const index = getMovementMapIndex(map)
+  if (index ? index.ground.has(key(pos)) : (map.groundTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
+  if (index ? index.space.has(key(pos)) : (map.spaceTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
   if (hasSolidVoxelSupport(map, pos)) return true
   if (hasSolidStairSupport(map, pos)) return true
   if (caps?.canFly && isWithinMapFootprint(map, pos)) return true
@@ -91,8 +100,9 @@ export function isFootprintValid(
   map: GameMap,
   occupiedSet: Set<string>,
   caps?: MovementCapabilities,
+  origin?: Vec3,
 ): boolean {
-  if (!isValidLandingPosition(center, map, occupiedSet, caps)) return false
+  if (!isValidLandingPosition(center, map, occupiedSet, caps, origin)) return false
   return getFootprintCells(center, dims).every(cell => !occupiedSet.has(key(cell)))
 }
 
@@ -108,6 +118,7 @@ export function findClosestValidDisplacementPosition(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
+  map = createMovementMapView(map)
   const visited = new Map<string, number>([[key(fromPos), 0]])
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: fromPos, cost: 0 }]
   while (queue.length > 0) {
@@ -160,12 +171,13 @@ export function findRangedIntercedPosition(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
+  map = createMovementMapView(map)
   const lineCells = getCellsOnLine(attackerPos, targetPos)
   if (lineCells.length === 0) return null
   const sorted = [...lineCells].reverse() // closest to target first
   const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
   for (const cell of sorted) {
-    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps)) return cell
+    if (reachable.has(key(cell)) && isFootprintValid(cell, interceptorDims, map, occupiedSet, caps, interceptorPos)) return cell
   }
   return null
 }
@@ -184,6 +196,7 @@ export function findThrowLandingCell(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
+  map = createMovementMapView(map)
   const reachable = getReachableCells(originPos, maxDistance, PROJECTILE_CAPS, map, destroyed, blockedPositions, targetDims)
   if (!reachable.has(key(landingPos))) return null
   if (!isFootprintValid(landingPos, targetDims, map, occupiedSet, PROJECTILE_CAPS)) return null
@@ -206,7 +219,8 @@ function footprintCenter(anchor: Vec3, dims: FootprintDims): Vec3 {
 // Solid footing = ground/voxel/stair support below, treating water & wind as non-solid
 // (they never block movement, so a unit resting on them can be pushed down through them).
 function hasSolidFootingBelow(pos: Vec3, map: GameMap): boolean {
-  const g = map.groundTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)
+  const index = getMovementMapIndex(map)
+  const g = index ? index.ground.get(key(pos)) : map.groundTiles.find(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)
   if (g && g.terrain !== 'water') return true      // water ground isn't solid footing
   if (hasSolidVoxelSupport(map, pos)) return true  // voxelBlocksMovement already excludes water/wind
   if (hasSolidStairSupport(map, pos)) return true
@@ -237,6 +251,7 @@ export function findPushPullLandingCell(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupiedSet,
 ): Vec3 | null {
+  map = createMovementMapView(map)
   const tc = footprintCenter(targetPos, targetDims)
   const ac = footprintCenter(attackerPos, attackerDims)
   let dx = Math.sign(tc.x - ac.x)
@@ -270,6 +285,7 @@ export function classifyReachability(
   map: GameMap,
   destroyed: Set<string> = new Set(),
 ): { canWalk: boolean; canJump: boolean; canFly: boolean } {
+  map = createMovementMapView(map)
   const targetKey = key(targetPos)
   const walkCaps: MovementCapabilities = { ...caps, canJump: false, canFly: false }
   if (getReachableCells(interceptorPos, budget, walkCaps, map, destroyed).has(targetKey))
@@ -334,6 +350,7 @@ export function findAreaIntercedePosition(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupied,
 ): Vec3 | null {
+  map = createMovementMapView(map)
   const footprintCells = getFootprintCells(targetPos, targetDims)
   const footprintKeys = new Set(footprintCells.map(key))
 
@@ -356,7 +373,7 @@ export function findAreaIntercedePosition(
         if (footprintKeys.has(k)) continue
         if (!areaCells.has(k)) continue
         if (!reachable.has(k)) continue
-        if (!isFootprintValid(cell, interceptorDims, map, occupied, caps)) continue
+        if (!isFootprintValid(cell, interceptorDims, map, occupied, caps, interceptorPos)) continue
         const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
         if (dist < bestDist) {
           bestDist = dist
@@ -384,6 +401,7 @@ export function hasValidThrowOutOfAreaCell(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupied,
 ): boolean {
+  map = createMovementMapView(map)
   const reachable = getReachableCells(targetPos, maxDistance, PROJECTILE_CAPS, map, destroyed, blockedPositions, targetDims)
   for (const k of reachable) {
     const [x, y, z] = k.split(',').map(Number)

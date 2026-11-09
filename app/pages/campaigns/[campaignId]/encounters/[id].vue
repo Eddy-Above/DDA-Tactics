@@ -3492,6 +3492,9 @@ const digimonMapForMap = computed(() => {
       baseStats: d.baseStats,
       qualities: parsedQualities,
       movement: derived.movement ?? 4,
+      baseMovement: derived.baseMovement,
+      ram: derived.ram,
+      cpu: derived.cpu,
       giganticDimensions: (d as any).giganticDimensions ?? null,
       partnerId: (d as any).partnerId ?? null,
     }

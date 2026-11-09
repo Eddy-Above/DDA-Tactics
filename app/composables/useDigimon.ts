@@ -242,15 +242,28 @@ export function useDigimon() {
 
     // Primary Derived Stats (always round down)
     // Size affects Body and Agility differently (page 110)
-    const brains = Math.floor(totalStats.accuracy / 2) + stageConfig.brainsBonus
-    const body = Math.max(0, Math.floor((totalStats.health + totalStats.damage + totalStats.armor) / 3) + sizeConfig.bodyBonus)
-    const agility = Math.max(0, Math.floor((totalStats.accuracy + totalStats.dodge) / 2) + sizeConfig.agilityBonus)
+    let brains = Math.floor(totalStats.accuracy / 2) + stageConfig.brainsBonus
+    let body = Math.max(0, Math.floor((totalStats.health + totalStats.damage + totalStats.armor) / 3) + sizeConfig.bodyBonus)
+    let agility = Math.max(0, Math.floor((totalStats.accuracy + totalStats.dodge) / 2) + sizeConfig.agilityBonus)
+    for (const quality of qualities.filter((q: any) => q.id === 'improved-derived-stat')) {
+      const ranks = quality.ranks || 1
+      if (quality.choiceId === 'brains') brains += ranks
+      else if (quality.choiceId === 'body') body += ranks
+      else if (quality.choiceId === 'agility') agility += ranks
+    }
 
     // Spec Values (derived from derived stats)
     let bit = Math.floor(brains / 10) + stageConfig.stageBonus
     let cpu = Math.floor(body / 10) + stageConfig.stageBonus
     let ram = Math.floor(agility / 10) + stageConfig.stageBonus
     if (dataOpt?.choiceId === 'effect-warrior') { bit += 1; cpu += 1; ram += 1 }
+    const baseBit = bit, baseCpu = cpu, baseRam = ram
+    for (const quality of qualities.filter((q: any) => q.id === 'system-boost')) {
+      const ranks = quality.ranks || 1
+      if (quality.choiceId === 'bit') bit = Math.min(bit + ranks, baseBit * 2)
+      else if (quality.choiceId === 'cpu') cpu = Math.min(cpu + ranks, baseCpu * 2)
+      else if (quality.choiceId === 'ram') ram = Math.min(ram + ranks, baseRam * 2)
+    }
 
     // Calculate movement with all modifiers
     const stageBaseMovement = stageConfig.movement
@@ -308,6 +321,7 @@ export function useDigimon() {
       bit,
       cpu,
       ram,
+      baseMovement: effectiveBase,
       movement,
       stageBonus: stageConfig.stageBonus,
       range,

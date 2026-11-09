@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 const copy = value => structuredClone(value)
-const point = x => ({ x, y: 0, z: 0 })
+const point = (x, y = 0, z = 0) => ({ x, y, z })
 const unexpected = () => { throw new Error('unexpected combat side effect') }
 const deferred = () => {
   let resolve
@@ -250,7 +250,7 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
     '~/server/utils/guidingLight': guidingLight,
     '~/server/utils/combatSpatial': {
       loadEncounterMap: async () => spatial ? spatialMap : ({ id: 'map' }),
-      getMovementProfile: () => ({ caps: spatial ? walking : {}, budget: control.movementBudget, bodyStat: control.throwRange }),
+      getMovementProfile: () => ({ caps: spatial ? control.movementCaps ?? walking : {}, budget: control.movementBudget, bodyStat: control.throwRange }),
       getFallerProfile: async () => ({}),
     },
     '~/server/utils/mapMovement': spatial ? realMovement : {
@@ -272,8 +272,38 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
     '~/server/utils/enemyKnockouts': knockoutMocks,
   }).default
   return {
-    rows, rooms, writes, commits, rollbacks, starts, effects, positionReads, areaResolutions, control,
+    rows, rooms, writes, commits, rollbacks, starts, effects, positionReads, areaResolutions, control, spatialMap,
     state: (encounterId = 'encounter') => rows.encounters.get(encounterId),
+    async offer(body) {
+      return db.transaction(async tx => {
+        await tx.select().from(tables.encounters).where({ value: 'encounter' }).for('update')
+        const roomHelpers = loadTypeScriptWithMocks('server/utils/encounterRoom.ts', {
+          '../db': dbExports, 'drizzle-orm': {},
+        })
+        const offer = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+          '../../../../db': { ...dbExports, db: tx },
+          'drizzle-orm': { eq: (_column, value) => ({ value }), inArray: (_column, values) => ({ values }) },
+          '~/server/utils/intercedeClaims': queue,
+          '~/server/utils/combatRecordCache': { withCombatRecords: callback => callback(), primeCombatRecords: () => {} },
+          '~/server/utils/resolveNpcAttack': { resolveNpcAttack: unexpected },
+          '~/server/utils/resolveSupportAttack': {
+            resolvePositiveAuto: unexpected, resolvePositiveHealth: unexpected, resolveNegativeSupportNpc: unexpected,
+            getPositiveSupportResolutionType: () => null, getDigimonDerivedStats: unexpected,
+          },
+          '~/server/utils/triggerCounterattack': { triggerCounterattack: unexpected },
+          '~/server/utils/encounterRoom': { ...roomHelpers,
+            getRoomPositions: async () => copy(rooms.get('encounter').participantPositions), broadcastPositionPatch: unexpected },
+          '~/server/utils/guidingLight': { applyGuidingLightAuras: unexpected },
+          '~/server/utils/combatSpatial': {
+            loadEncounterMap: async () => spatialMap,
+            getMovementProfile: () => ({ caps: control.movementCaps ?? walking, budget: control.movementBudget, bodyStat: control.throwRange }),
+          },
+          '~/server/utils/pushPull': { resolveInstantSupportEffect: unexpected },
+          '~/server/utils/intercedePasses': { passableOfferOwners: () => [], applyActivePasses: unexpected },
+        }).default
+        return offer({ encounterId: 'encounter', body })
+      })
+    },
     claim(interceptor = 'guard-a', { encounterId = 'encounter', target = 'target', ...body } = {}) {
       return handler({ encounterId, body: {
         requestId: interceptor === 'guard-a' ? 'offer-a' : 'offer-b',
@@ -407,6 +437,51 @@ test('a Small melee interceder still displaces the protected Medium unit rather 
   assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(5))
   assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(4))
 })
+
+test('a swimming target cannot take a longer water detour for a one-cell forced displacement', async () => {
+  const subject = spatialClaim({ mover: 'small', target: 'medium', melee: true })
+  subject.rooms.get('encounter').participantPositions['guard-a'] = point(6)
+  subject.control.movementCaps = { ...walking, canSwim: true }
+  subject.spatialMap.groundTiles = subject.spatialMap.groundTiles.map(tile => ({ ...tile, terrain: 'water' }))
+  subject.spatialMap.groundTiles.push({ ...point(4, 0, 1), terrain: 'water' }, { ...point(5, 0, 1), terrain: 'water' })
+  subject.spatialMap.walls.push({ id: 'blocked-preferred', ...point(5), face: 'west' })
+  await subject.claim()
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(5))
+  assert.deepEqual(subject.rooms.get('encounter').participantPositions.target, point(5, 0, 1),
+    'the adjacent fallback wins over the preferred cell behind a wall')
+})
+
+for (const mode of ['wall', 'ceiling', 'burrow', 'jump']) {
+  test(`a ${mode} interceptor receives and completes a real offer and claim at its legal destination`, async () => {
+    const subject = fixture({ spatial: true })
+    const qualities = mode === 'jump' ? [] : mode === 'burrow' ? [{ id: 'extra-movement', choiceId: 'digger' }]
+      : [{ id: 'extra-movement', choiceId: 'wallclimber' },
+        ...(mode === 'ceiling' ? [{ id: 'advanced-mobility', choiceId: 'adv-wallclimber' }] : [])]
+    subject.control.movementCaps = { ...realMovement.detectCapabilitiesFromQualities(qualities, 6, 1, 1),
+      ...(mode === 'jump' ? {} : { canJump: false, jumpHeight: 0, jumpRange: 0 }) }
+    subject.state().participants = subject.state().participants.filter(unit => ['attacker', 'target', 'guard-a'].includes(unit.id))
+    subject.state().participants.push(unit('owner', { type: 'tamer' }))
+    subject.state().pendingRequests = []
+    subject.rows.tamers.set('owner', { id: 'owner', name: 'Owner', attributes: { agility: 0, body: 1 }, skills: {} })
+    Object.assign(subject.rows.digimon.get('guard-a'), { partnerId: 'owner', qualities })
+    subject.rooms.get('encounter').participantPositions = { attacker: point(0, 8), target: point(6, 8), 'guard-a': point(2, 8) }
+    for (let x = 2; x <= 5; x++) {
+      if (mode === 'wall') subject.spatialMap.walls.push({ id: `wall-${x}`, ...point(x, 8), face: 'north' })
+      if (mode === 'ceiling') subject.spatialMap.ceilings.push({ id: `ceiling-${x}`, ...point(x, 8) })
+      if (mode === 'burrow') subject.spatialMap.voxels.push({ ...point(x, 8), materialId: 'earth' })
+    }
+    const offered = await subject.offer({ attackerId: 'attacker', targetId: 'target', accuracySuccesses: 2,
+      accuracyDice: [6, 6], attackId: 'attack', attackData: { range: 'ranged', type: 'damage', tags: [] }, skipActionDeduction: true })
+    const request = offered.pendingRequests.find(request => request.targetTamerId === 'owner')
+    assert.ok(request)
+    assert.deepEqual(request.data.interceptePos, point(5, 8))
+    assert.equal(request.data.requiresJump, mode === 'jump')
+    assert.equal(request.data.requiresFly, false)
+    assert.equal(request.data.fallHeight, mode === 'jump' ? 8 : 0)
+    await subject.claim('guard-a', { requestId: request.id })
+    assert.deepEqual(subject.rooms.get('encounter').participantPositions['guard-a'], point(5, mode === 'jump' ? 0 : 8))
+  })
+}
 
 for (const [mover, landing, allowed] of [
   ['medium', undefined, false], ['small', undefined, true],

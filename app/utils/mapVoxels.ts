@@ -51,6 +51,21 @@ export const MAP_VOXEL_MATERIALS: readonly MapVoxelMaterialDefinition[] = [
   elementMaterial('thunder', 'Thunder Block', ['elemental', 'electric']),
   elementMaterial('wood', 'Wood Block', ['organic']),
   elementMaterial('earth', 'Earth Block', ['solid', 'diggable']),
+  {
+    id: 'sand', label: 'Sand', color: 0xd7bf85,
+    blocksMovementDefault: true, blocksSightDefault: true,
+    tags: ['solid', 'diggable', 'sand'],
+  },
+  {
+    id: 'snow', label: 'Snow', color: 0xebf3f8,
+    blocksMovementDefault: true, blocksSightDefault: true,
+    tags: ['solid', 'diggable', 'snow'],
+  },
+  {
+    id: 'soft-metal', label: 'Soft Metal', color: 0xb4b9c6,
+    blocksMovementDefault: true, blocksSightDefault: true,
+    tags: ['solid', 'metal', 'soft-metal'],
+  },
   elementMaterial('darkness', 'Darkness Block', ['elemental', 'shadow'], {
     transparent: true,
     opacity: 0.72,
@@ -87,6 +102,15 @@ export function getMapVoxels(map: Pick<GameMap, 'voxels'> | null | undefined): M
 
 export function getVoxelMaterialId(voxel: Pick<MapVoxel, 'materialId' | 'element'>): string {
   return voxel.materialId || voxel.element || DEFAULT_VOXEL_MATERIAL_ID
+}
+
+/** Keep material names extensible while saving an existing elemental affinity. */
+export function getVoxelMaterialElement(materialId: string): ElementType {
+  if (Object.prototype.hasOwnProperty.call(ELEMENT_COLORS, materialId)) return materialId as ElementType
+  if (materialId === 'sand') return 'earth'
+  if (materialId === 'snow') return 'ice'
+  if (materialId === 'soft-metal') return 'steel'
+  return 'void'
 }
 
 export function getVoxelMaterialDefinition(voxelOrId: Pick<MapVoxel, 'materialId' | 'element'> | string | null | undefined): MapVoxelMaterialDefinition {

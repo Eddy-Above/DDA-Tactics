@@ -77,12 +77,12 @@
 </template>
 
 <script setup lang="ts">
-import type { MapTool, ElementType, WallFace } from '~/types'
+import type { MapTool, WallFace } from '~/types'
 
 const props = defineProps<{
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
-  elementBrush: ElementType
+  elementBrush: string
   rampDirection?: WallFace
   currentEditY: number
   canUndo: boolean
@@ -92,7 +92,7 @@ const props = defineProps<{
 defineEmits<{
   (e: 'select-tool', tool: MapTool): void
   (e: 'set-draw-mode', mode: 'line' | 'square' | 'cube'): void
-  (e: 'set-element', el: ElementType): void
+  (e: 'set-element', el: string): void
   (e: 'set-ramp-direction', direction: WallFace): void
   (e: 'change-y', delta: number): void
   (e: 'undo'): void
@@ -128,7 +128,7 @@ const showDrawMode = computed(() => {
   return ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'stairs', 'spawn', 'delete'].includes(props.activeTool)
 })
 
-const elements: Array<{ id: ElementType; label: string; short: string; color: string }> = [
+const elements: Array<{ id: string; label: string; short: string; color: string }> = [
   { id: 'void',      label: 'Void (Neutral)', short: 'Vd', color: '#555566' },
   { id: 'fire',      label: 'Fire',           short: 'Fr', color: '#ff4422' },
   { id: 'water',     label: 'Water',          short: 'Wt', color: '#2288ff' },
@@ -140,6 +140,9 @@ const elements: Array<{ id: ElementType; label: string; short: string; color: st
   { id: 'darkness',  label: 'Darkness',       short: 'Dk', color: '#442266' },
   { id: 'steel',     label: 'Steel',          short: 'St', color: '#99aabb' },
   { id: 'light',     label: 'Light',          short: 'Lt', color: '#ffffcc' },
+  { id: 'sand',      label: 'Sand',           short: 'Sa', color: '#d7bf85' },
+  { id: 'snow',      label: 'Snow',           short: 'Sn', color: '#ebf3f8' },
+  { id: 'soft-metal', label: 'Soft Metal',    short: 'SM', color: '#b4b9c6' },
 ]
 </script>
 

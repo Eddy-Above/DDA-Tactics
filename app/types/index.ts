@@ -495,6 +495,7 @@ export interface DigimonDerivedStats {
   cpu: number             // (Body / 10) + Stage Bonus
   ram: number             // (Agility / 10) + Stage Bonus
   // Movement
+  baseMovement?: number    // Basic Movement before Speedy
   movement: number        // Base Movement from Stage + modifiers
   // Range & Effective Limit
   range: number           // floor((Accuracy + Brains) / 2) + BIT

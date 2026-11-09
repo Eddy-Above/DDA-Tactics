@@ -1,8 +1,8 @@
 import { ref } from 'vue'
 import type { GameMap, Vec3, DigimonSize } from '~/types'
 import type { MovementCapabilities } from '~/utils/movementRules'
-import { canPassThrough, canLandOn, getMovementOccupancy, getFootprintDimensions, getFootprintCells, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
-import { searchReachable, findPath, type ReachableSearch } from '~/utils/pathfinding'
+import { canPassThrough, canLandOn, createMovementMapView, getMovementOccupancy, getFootprintDimensions, getFootprintCells, getMovementCostProfile, detectCapabilities, PROJECTILE_CAPS } from '~/utils/movementRules'
+import { searchReachable, findPath, chebyshev, type ReachableSearch } from '~/utils/pathfinding'
 import { vec3Key } from '~/utils/mapGeometry'
 
 type GiganticDims = { width: number; height: number; depth: number } | null
@@ -48,11 +48,13 @@ export function useMapMovement() {
   ) {
     const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
     const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    const queryMap = createMovementMapView(map)
+    const costProfile = getMovementCostProfile(caps, budget, destroyedStructures, origin)
 
-    const search = searchReachable(origin, budget, (from, to) => {
+    const search = searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
       if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
-      return canPassThrough(from, to, caps, map, destroyedStructures)
-    })
+      return canPassThrough(from, to, caps, queryMap, destroyedStructures, origin)
+    }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined)
 
     // Small allows passage only; Tiny allows sharing. Check the complete mover footprint.
     const landable = new Set<string>()
@@ -60,7 +62,7 @@ export function useMapMovement() {
       if (k === vec3Key(origin)) continue
       const [x, y, z] = k.split(',').map(Number)
       const pos = { x, y, z }
-      if (!canLandOn(pos, caps, map, landingBlockedPositions, origin)) continue
+      if (!canLandOn(pos, caps, queryMap, landingBlockedPositions, origin, destroyedStructures)) continue
       const overlaps = getFootprintCells(pos, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
       if (overlaps) continue
       landable.add(k)
@@ -86,6 +88,7 @@ export function useMapMovement() {
     moverIsEnemy: boolean = false,
     moverGiganticDimensions: GiganticDims = null,
   ) {
+    const costProfile = getMovementCostProfile(caps, undefined, destroyedStructures, from)
     if (cachedSearch?.map === map && cachedSearch.contextKey === searchContextKey(
       from, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions,
     )) {
@@ -98,19 +101,41 @@ export function useMapMovement() {
         activePath.value = path
         return path
       }
+      // Numeric movement profiles make the retained tree the authoritative
+      // budget, including Charge or other caller-supplied movement distances.
+      if (costProfile) {
+        activePath.value = []
+        return null
+      }
+    }
+    if (costProfile && chebyshev(from, to) > costProfile.budget + 1e-9) {
+      activePath.value = []
+      return null
     }
     const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
     const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    const queryMap = createMovementMapView(map)
     if (vec3Key(from) !== vec3Key(to) && (
       getFootprintCells(to, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))
+      || (costProfile && !canLandOn(to, caps, queryMap, landingBlockedPositions, from, destroyedStructures))
     )) {
       activePath.value = []
       return null
     }
+    // Numeric mode costs reject every edge beyond their finite movement limits,
+    // so their frontier is bounded without an arbitrary expansion cutoff.
     const path = findPath(from, to, (f, t) => {
       if (blockedPositions.size && getFootprintCells(t, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
-      return canPassThrough(f, t, caps, map, destroyedStructures)
-    })
+      return canPassThrough(f, t, caps, queryMap, destroyedStructures, from)
+    }, costProfile ? Infinity : 200, costProfile ? (f, t, spent) => costProfile.stepCost(f, t, queryMap, spent) : undefined)
+    if (path && costProfile) {
+      let cost = 0
+      for (let i = 1; i < path.length; i++) cost += costProfile.stepCost(path[i - 1], path[i], queryMap, cost)
+      if (cost > costProfile.budget + 1e-9) {
+        activePath.value = []
+        return null
+      }
+    }
     activePath.value = path ?? []
     return path
   }

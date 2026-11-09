@@ -1,6 +1,7 @@
 import { computed, ref, toRaw, type Ref } from 'vue'
-import type { GameMap, MapTool, ElementType, Vec3, WallFace } from '~/types'
+import type { GameMap, MapTool, Vec3, WallFace } from '~/types'
 import { getMapGeometryRevision, recordMapEdit, type MapGeometryCollection } from '~/utils/mapEdits'
+import { getVoxelMaterialElement } from '~/utils/mapVoxels'
 
 type DrawMode = 'line' | 'square' | 'cube'
 type GeometryEntry = GameMap[MapGeometryCollection][number]
@@ -133,7 +134,7 @@ function beginEdit(sourceMap: GameMap) {
 export function useMapEditor(currentMap: Ref<GameMap | null>) {
   const activeTool = ref<MapTool>('select')
   const drawMode = ref<DrawMode>('square')
-  const elementBrush = ref<ElementType>('void')
+  const elementBrush = ref<string>('void')
   const rampDirection = ref<WallFace>('north')
   const currentEditY = ref(0)
   const selectedStructureId = ref<string | null>(null)
@@ -202,17 +203,19 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   }
 
   function applyPaintElement(start: Vec3, end: Vec3) {
+    const element = getVoxelMaterialElement(elementBrush.value)
     return edit(t => {
       for (const cell of cellsForDraw(start, end)) {
         const ground = t.find('groundTiles', cellKey(cell), 'cell')
-        if (ground !== undefined) t.put('groundTiles', { ...t.read('groundTiles', ground), element: elementBrush.value }, ground)
+        if (ground !== undefined) t.put('groundTiles', { ...t.read('groundTiles', ground), element }, ground)
         const voxel = t.find('voxels', cellKey(cell), 'cell')
-        if (voxel !== undefined) t.put('voxels', { ...t.read('voxels', voxel), materialId: elementBrush.value, element: elementBrush.value, color: undefined }, voxel)
+        if (voxel !== undefined) t.put('voxels', { ...t.read('voxels', voxel), materialId: elementBrush.value, element, color: undefined }, voxel)
       }
     })
   }
 
   function applyVoxelDraw(start: Vec3, end: Vec3, shape: 'block' | 'ramp' = 'block') {
+    const element = getVoxelMaterialElement(elementBrush.value)
     return edit(t => {
       for (const cell of cellsForDraw(start, end)) {
         const at = t.find('voxels', cellKey(cell), 'cell')
@@ -220,7 +223,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
         t.put('voxels', { ...previous, ...cell,
           shape: shape === 'block' && previous && !previous.shape ? undefined : shape,
           rampDirection: shape === 'ramp' ? rampDirection.value : undefined,
-          materialId: elementBrush.value, element: elementBrush.value, color: undefined,
+          materialId: elementBrush.value, element, color: undefined,
         }, at)
       }
     })

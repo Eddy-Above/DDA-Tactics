@@ -429,7 +429,7 @@ async function resolveIntercedeClaim(
     // interceptor, including stored player positions, before spending the claim.
     if (!interceptorPos || !intercDePos ||
       !getReachableCells(interceptorPos, budget, caps, claimMapRecord, new Set(), blocked, interceptorDims).has(`${intercDePos.x},${intercDePos.y},${intercDePos.z}`) ||
-      !isFootprintValid(intercDePos, interceptorDims, claimMapRecord, occupied, caps)) {
+      !isFootprintValid(intercDePos, interceptorDims, claimMapRecord, occupied, caps, interceptorPos)) {
       throw createError({ statusCode: 409, message: 'No valid intercede path available — board state changed' })
     }
 
@@ -491,8 +491,11 @@ async function resolveIntercedeClaim(
               z: targetPos.z + dir.z * interceptorDims.depth,
             }
             const distance = Math.max(Math.abs(preferred.x - targetPos.x), Math.abs(preferred.y - targetPos.y), Math.abs(preferred.z - targetPos.z))
+            // Forced displacement uses physical distance, so special movement speeds cannot enlarge its path.
+            const displacementCaps = { ...targetCaps, swimSpeed: undefined, digSpeed: undefined,
+              climbSpeed: undefined, flySpeed: undefined }
             if (isFootprintValid(preferred, targetDims, claimMapRecord, claimOccupied, targetCaps) &&
-              getReachableCells(targetPos, distance, targetCaps, claimMapRecord, new Set(), claimBlocked, targetDims).has(`${preferred.x},${preferred.y},${preferred.z}`)) {
+              getReachableCells(targetPos, distance, displacementCaps, claimMapRecord, new Set(), claimBlocked, targetDims).has(`${preferred.x},${preferred.y},${preferred.z}`)) {
               displacedPos = preferred
             }
           }

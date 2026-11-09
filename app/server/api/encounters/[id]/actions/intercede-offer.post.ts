@@ -18,7 +18,7 @@ import {
   hasValidThrowOutOfAreaCell,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
-import { sizeInteraction } from '~/utils/movementRules'
+import { sizeInteraction, hasClimbSupport, getDigTerrainMultiplier } from '~/utils/movementRules'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType, getDigimonDerivedStats } from '~/server/utils/resolveSupportAttack'
@@ -26,7 +26,7 @@ import { startCleanseCast, recordCleanseOutcome } from '~/server/utils/cleanse'
 import { triggerCounterattack } from '~/server/utils/triggerCounterattack'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
 import { STAGE_CONFIG } from '~/types'
-import { getRoomPositions, broadcastPositionPatch } from '~/server/utils/encounterRoom'
+import { getRoomPositions, getDestroyedStructureIds, broadcastPositionPatch } from '~/server/utils/encounterRoom'
 import { applyGuidingLightAuras } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
@@ -1095,7 +1095,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             const reachable = getReachableCells(interceptorPos, budget, caps, mapRecord, new Set(), meleeBlocked, interceptorDims)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps)
+              isFootprintValid(meleeInterceptCell, interceptorDims, mapRecord, meleeOccupied, caps, interceptorPos)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
               const targetParticipant = participants.find((p: any) => p.id === body.targetId)
@@ -1110,7 +1110,11 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           if (!foundPos) {
             digimonSpatiallyEligible = false
           } else {
-            const inAir = isPositionInAir(foundPos, mapRecord)
+            const digTerrain = getDigTerrainMultiplier(mapRecord, foundPos, caps)
+            const supported = hasClimbSupport(mapRecord, foundPos, caps,
+              getDestroyedStructureIds(encounter.destructibleStates ?? []))
+              || (digTerrain > 0 && Number.isFinite(digTerrain))
+            const inAir = !supported && isPositionInAir(foundPos, mapRecord, caps.canSwim)
             const requiresFly = inAir && caps.canFly
             const requiresJump = inAir && !caps.canFly
             let fallHeight = 0
@@ -1159,7 +1163,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             const reachable = getReachableCells(tamerPos, tamerMovement, tamerCaps, mapRecord, new Set(), meleeBlocked)
             if (
               reachable.has(`${meleeInterceptCell.x},${meleeInterceptCell.y},${meleeInterceptCell.z}`) &&
-              isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied, tamerCaps)
+              isFootprintValid(meleeInterceptCell, { width: 1, height: 1, depth: 1 }, mapRecord, meleeOccupied, tamerCaps, tamerPos)
             ) {
               // Confirm the target can still be displaced once this interceptor occupies meleeInterceptCell
               const targetParticipant = participants.find((pp: any) => pp.id === body.targetId)
@@ -1173,7 +1177,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           tamerSpatiallyEligible = tamerFoundPos !== null
           // If digimon has no spatialEntry (e.g. it's the attacker) but tamer can intercede, store the tamer's intercede position
           if (tamerFoundPos && !spatialEntry) {
-            const inAir = isPositionInAir(tamerFoundPos, mapRecord)
+            const inAir = isPositionInAir(tamerFoundPos, mapRecord, tamerCaps.canSwim)
             const requiresFly = false  // tamers cannot fly
             const requiresJump = inAir
             let fallHeight = 0

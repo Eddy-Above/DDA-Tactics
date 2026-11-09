@@ -54,6 +54,7 @@ function harness({ records = [], lines = [evolutionLine()], roundEnd, gravity } 
     ...common,
     './partnerDevolution': devolution,
     './resolveSupportAttack': { getDigimonDerivedStats: unexpected },
+    './encounterRoom': { getRoomDestructibleStates: async () => [], getDestroyedStructureIds: () => new Set() },
     './combatSpatial': { loadParticipantDigimon: async participants => new Map(participants
       .filter(p => p.type === 'digimon' && rows.digimon.has(p.entityId))
       .map(p => [p.entityId, rows.digimon.get(p.entityId)])) },

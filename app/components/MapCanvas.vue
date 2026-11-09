@@ -2747,18 +2747,17 @@ function onCanvasWheel(event: WheelEvent) {
 function onWheel(event: WheelEvent) {
   const aim = getMoveAim()
   if (aim) {
-    if (aim.isGm) {
-      const delta = event.deltaY > 0 ? -1 : 1
-      gmMoveY.value += delta
-      // Follow the free-move plane so raising it above the camera does not put
-      // it behind the pointer ray and make the ghost disappear.
-      if (camera && controls) {
-        camera.position.y += delta
-        controls.target.y += delta
-        controls.update()
-        camera.updateMatrixWorld(true)
-      }
-    } else npcMoveY.value += event.deltaY > 0 ? -1 : 1
+    const delta = event.deltaY > 0 ? -1 : 1
+    if (aim.isGm) gmMoveY.value += delta
+    else npcMoveY.value += delta
+    // Follow the movement plane so jumps and flights above the camera remain in front of
+    // the pointer ray, with the same framing used for GM repositioning.
+    if (camera && controls) {
+      camera.position.y += delta
+      controls.target.y += delta
+      controls.update()
+      camera.updateMatrixWorld(true)
+    }
     onMouseMove(event)
     return
   }

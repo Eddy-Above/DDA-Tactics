@@ -12,6 +12,7 @@ import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { autoDevolveParticipant } from './partnerDevolution'
 import { applyLagInitiative } from '../../utils/lagInitiative'
+import { getRoomDestructibleStates, getDestroyedStructureIds } from './encounterRoom'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -48,7 +49,7 @@ export interface KnockoutContext {
    * apply; 'room' reads the room's positions and broadcasts the drops itself (applyEndOfTurnGravity).
    * Omitted: no gravity (the caller already ran it for this turn change, or has no map).
    */
-  gravity?: { map: GameMap; positions: Record<string, Vec3> } | 'room'
+  gravity?: { map: GameMap; positions: Record<string, Vec3>; destroyedStructures?: Set<string> } | 'room'
   /** For 'room' gravity; loaded from the encounter when omitted */
   mapId?: string | null
   campaignLevel?: CampaignLevel
@@ -320,13 +321,17 @@ export async function resolveEnemyKnockouts(
     return room
   }
 
+  let destroyedStructures: Set<string> | undefined
   // A true turn boundary: drop airborne non-flyers (fall damage mutates participants)
   const applyGravity = async () => {
     const gravity = ctx.gravity
     if (!gravity) return
     if (gravity !== 'room') {
       const positions = { ...gravity.positions, ...(positionPatch ?? {}) }
-      const g = await computeGravityDrops(positions, participants, gravity.map, await loadParticipantDigimon(participants), round)
+      destroyedStructures ??= gravity.destroyedStructures ?? (ctx.encounterId
+        ? getDestroyedStructureIds(await getRoomDestructibleStates(ctx.encounterId))
+        : new Set())
+      const g = await computeGravityDrops(positions, participants, gravity.map, await loadParticipantDigimon(participants), round, destroyedStructures)
       if (Object.keys(g.patch).length > 0) positionPatch = { ...(positionPatch ?? {}), ...g.patch }
       logEntries.push(...g.logEntries)
       return

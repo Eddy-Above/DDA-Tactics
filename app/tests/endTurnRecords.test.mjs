@@ -82,6 +82,8 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   const room = {
     getRoomPositions: async () => copy(positions),
     getRoomSnapshot: async () => ({ participantPositions: copy(positions), destructibleStates: [] }),
+    getRoomDestructibleStates: async () => [],
+    getDestroyedStructureIds: states => new Set(states.filter(state => state.currentWounds <= 0).map(state => state.structureId)),
     broadcastPositionPatch: async (_id, patch) => { patches.push(copy(patch)); Object.assign(positions, copy(patch)) },
     broadcast: () => assert.fail('PUT must not broadcast an independent aura write'),
   }
@@ -108,6 +110,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   })
   const knockouts = loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
     ...common, './combatSpatial': spatial, './resolveSupportAttack': support,
+    './encounterRoom': room,
     './partnerDevolution': devolution,
     './endOfTurnGravity': gravity, './roundStartQualityTriggers': roundStart,
     './damageOverTime': damageOverTime, './guidingLight': guidingLight,

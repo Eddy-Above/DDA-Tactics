@@ -58,6 +58,18 @@ test('movement previews reuse the reachable tree for several destinations and eq
   assert.equal(calls.astar, 0)
 })
 
+test('uncached numeric movement rejects destinations beyond every mode without terrain traversal', () => {
+  const { movement, calls } = harness()
+  const caps = rules.detectCapabilities([], 6, 0, 0)
+  assert.equal(movement.computePath(point(0), point(100), caps, floor(101)), null)
+  assert.equal(calls.astar, 0)
+  assert.equal(calls.pass, 0)
+  const map = floor(12)
+  movement.computeReachable(point(0), 10, caps, map)
+  assert.equal(movement.computePath(point(0), point(10), caps, map).length - 1, 10,
+    'a retained caller-supplied budget remains authoritative')
+})
+
 test('changed geometry invalidates paths, including an in-place edit signaled by the map owner', () => {
   const { movement, calls } = harness()
   const map = floor(5, 1)
@@ -230,6 +242,9 @@ test('position, participant and record changes do not serialize the unchanged ma
       () => h.props.encounter.participants.push({ id: 'mover', currentStance: 'neutral', activeEffects: [] }),
       () => { h.props.encounter.participants[0].currentStance = 'defensive' },
       () => { h.props.digimonMap.mon = { size: 'large', movement: 6 } },
+      () => { h.props.digimonMap.mon.baseMovement = 4 },
+      () => { h.props.digimonMap.mon.ram = 3 },
+      () => { h.props.digimonMap.mon.cpu = 2 },
       () => { h.props.tamerMap.tamer = { speed: 6 } },
       () => h.props.encounter.destructibleStates.push({ structureId: 'wall', currentWounds: 0 }),
     ]

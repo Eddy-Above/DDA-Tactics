@@ -1,5 +1,5 @@
 import type { Vec3, GameMap } from '../../types'
-import { getRoomPositions, broadcastPositionPatch } from './encounterRoom'
+import { getRoomSnapshot, getDestroyedStructureIds, broadcastPositionPatch } from './encounterRoom'
 import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
@@ -16,6 +16,7 @@ export async function computeGravityDrops(
   map: GameMap,
   digimonById: Map<string, any>,
   round: number,
+  destroyedStructures: Set<string> = new Set(),
 ): Promise<{ patch: Record<string, Vec3>; logEntries: any[] }> {
   const patch: Record<string, Vec3> = {}
   const logEntries: any[] = []
@@ -26,8 +27,9 @@ export async function computeGravityDrops(
     const dims = getFootprintDimsForParticipant(p, digimonById)
     if (!isFootprintAirborne(pos, dims, map)) continue
 
-    const profile = await getFallerProfile(p, digimonById)
+    const profile = { ...await getFallerProfile(p, digimonById, true), destroyedStructures }
     if (profile.canFly) continue   // flyers hover — no drop, no damage
+    if (profile.floatsOnWater && !isFootprintAirborne(pos, dims, map, true)) continue
 
     const { landingPos, fallHeight, damage } = resolveFall(pos, dims, map, profile)
     if (fallHeight <= 0) continue
@@ -70,7 +72,8 @@ export async function applyEndOfTurnGravity(
 ): Promise<{ participants: any[]; logEntries: any[] }> {
   if (!mapId) return { participants, logEntries: [] }
 
-  const positions = await getRoomPositions(encounterId)
+  const snapshot = await getRoomSnapshot(encounterId)
+  const positions = snapshot.participantPositions
   if (Object.keys(positions).length === 0) return { participants, logEntries: [] }
 
   const map = await loadEncounterMap(mapId)
@@ -78,7 +81,8 @@ export async function applyEndOfTurnGravity(
 
   const digimonById = await loadParticipantDigimon(participants)
 
-  const { patch, logEntries } = await computeGravityDrops(positions, participants, map, digimonById, round)
+  const { patch, logEntries } = await computeGravityDrops(positions, participants, map, digimonById, round,
+    getDestroyedStructureIds(snapshot.destructibleStates))
 
   if (Object.keys(patch).length > 0) {
     await broadcastPositionPatch(encounterId, patch)

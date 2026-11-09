@@ -124,6 +124,9 @@ test('the Ramp toolbar exposes draw modes, elements and a selected uphill direct
     assert.match(html, /title="Ramp"/)
     assert.match(html, /title="Line"/)
     assert.match(html, /title="Earth"/)
+    assert.match(html, /title="Sand"/)
+    assert.match(html, /title="Snow"/)
+    assert.match(html, /title="Soft Metal"/)
     assert.match(html, /Uphill/)
     assert.match(html, /<select[^>]*value="west"/)
   } finally {
@@ -131,3 +134,29 @@ test('the Ramp toolbar exposes draw modes, elements and a selected uphill direct
     else globalThis.computed = original
   }
 })
+
+for (const [material, element] of [['sand', 'earth'], ['snow', 'ice'], ['soft-metal', 'steel']]) {
+  test(`${material} block/ramp drawing and repainting preserve material identity through undo and saved JSON`, () => {
+    const { map, editor } = fixture()
+    editor.elementBrush.value = material
+    editor.applyVoxelDraw(point(), point(), 'ramp')
+    assert.equal(map.value.voxels[0].materialId, material)
+    assert.equal(map.value.voxels[0].element, element)
+    assert.equal(map.value.voxels[0].shape, 'ramp')
+    const saved = JSON.parse(JSON.stringify(map.value.voxels))
+    editor.undo()
+    assert.deepEqual(map.value.voxels, [])
+    editor.redo()
+    assert.deepEqual(JSON.parse(JSON.stringify(map.value.voxels)), saved)
+    editor.elementBrush.value = 'void'
+    editor.applyPaintElement(point(), point())
+    assert.equal(map.value.voxels[0].materialId, 'void')
+    editor.elementBrush.value = material
+    editor.applyPaintElement(point(), point())
+    assert.deepEqual(JSON.parse(JSON.stringify(map.value.voxels)), saved)
+    editor.applyVoxelDraw(point(1), point(1))
+    assert.equal(map.value.voxels[1].materialId, material)
+    assert.equal(map.value.voxels[1].element, element)
+    assert.equal(map.value.voxels[1].shape, 'block')
+  })
+}
