@@ -173,6 +173,7 @@ const emit = defineEmits<{
   (e: 'unit-moved', participantId: string, position: Vec3, path: Vec3[]): void
   (e: 'cell-clicked', cell: Vec3): void
   (e: 'cell-draw', start: Vec3, end: Vec3): void
+  (e: 'rotate-ramp', step: -1 | 1): void
   (e: 'wall-edit', wallId: string): void
   (e: 'wall-edit-at-edge', tile: Vec3, face: WallFace, mode?: string): void
   (e: 'wall-place', startTile: Vec3, endTile: Vec3, face: WallFace): void
@@ -745,20 +746,8 @@ onMounted(() => {
   canvasRef.value!.addEventListener('mouseup', onMouseUp)
   canvasRef.value!.addEventListener('mouseleave', () => setHoveredTarget(null))
   canvasRef.value!.addEventListener('contextmenu', e => e.preventDefault())
-  // Intercept wheel on canvas directly so OrbitControls never zooms during movement or blast-aim mode
-  canvasRef.value!.addEventListener('wheel', (e) => {
-    if (getMoveAim()) {
-      e.preventDefault()
-      e.stopPropagation()
-      onWheel(e)
-      return
-    }
-    if (usesVerticalAim.value) {
-      e.preventDefault()
-      e.stopPropagation()
-      adjustAimY(e.deltaY > 0 ? -1 : 1)
-    }
-  }, { passive: false, capture: true })
+  // Capture before OrbitControls so aiming and ramp rotation consume the wheel without zooming.
+  canvasRef.value!.addEventListener('wheel', onCanvasWheel, { passive: false, capture: true })
 })
 
 onUnmounted(() => {
@@ -770,6 +759,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keyup', onKeyUp)
   canvasRef.value?.removeEventListener('pointerdown', onTokenPointerDown, { capture: true })
+  canvasRef.value?.removeEventListener('wheel', onCanvasWheel, { capture: true })
   window.removeEventListener('pointermove', onTokenPointerMove)
   window.removeEventListener('pointerup', onTokenPointerUp)
   window.removeEventListener('pointercancel', onTokenPointerCancel)
@@ -2796,6 +2786,24 @@ function onCanvasClick(event: MouseEvent) {
   clickedHealthBar.value = null
   closeRadial()
   if (!pendingMovePos.value) movingParticipantId.value = null
+}
+
+function onCanvasWheel(event: WheelEvent) {
+  if (getMoveAim() || usesVerticalAim.value) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    onWheel(event)
+    return
+  }
+  if (!props.isDm || props.activeTool !== 'ramp') return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  if (event.deltaY === 0) return
+  emit('rotate-ramp', event.deltaY > 0 ? 1 : -1)
+  // The parent owns the brush direction; redraw once its updated prop reaches this canvas.
+  nextTick(() => {
+    if (props.isDm && props.activeTool === 'ramp') updateHoverGhost(event)
+  })
 }
 
 function onWheel(event: WheelEvent) {

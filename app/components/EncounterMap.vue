@@ -67,6 +67,7 @@
           @unit-dragged="onUnitDragged"
           @unit-moved="onCombatMove"
           @cell-draw="onCellDraw"
+          @rotate-ramp="editor.rotateRampDirection"
           @wall-edit="onWallEdit"
           @wall-edit-at-edge="onWallEditAtEdge"
           @wall-place="onWallPlace"

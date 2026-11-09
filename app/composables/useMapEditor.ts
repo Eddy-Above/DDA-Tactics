@@ -288,11 +288,17 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     selectedStructureId.value = null
   }
 
+  function rotateRampDirection(step: -1 | 1) {
+    const directions: WallFace[] = ['north', 'east', 'south', 'west']
+    const index = directions.indexOf(rampDirection.value)
+    rampDirection.value = directions[(index + step + directions.length) % directions.length]!
+  }
+
   return {
     activeTool, drawMode, elementBrush, rampDirection, currentEditY, selectedStructureId,
     canUndo: computed(() => undoStack.value.length > 0),
     canRedo: computed(() => redoStack.value.length > 0),
-    selectTool, undo, redo,
+    selectTool, rotateRampDirection, undo, redo,
     applyGroundDraw, applySpaceDraw, applyPaintElement, applyVoxelDraw, applySpawnToggle,
     applyWallDraw, applyWindow, applyDoor, applyVoxelWindow, applyCeilingDraw, applyStair,
     deleteAt, deleteWallAt, deleteWallFillAt,

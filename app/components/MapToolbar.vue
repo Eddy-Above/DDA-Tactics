@@ -65,6 +65,7 @@
         <option value="south">South</option>
         <option value="west">West</option>
       </select>
+      <span class="y-label">Scroll over map to rotate</span>
     </div>
 
     <!-- Undo / Redo -->
