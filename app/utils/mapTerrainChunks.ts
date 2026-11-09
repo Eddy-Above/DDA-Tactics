@@ -509,6 +509,8 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
 
   function isOccluded(raycaster: THREE.Raycaster): boolean {
     for (const state of candidates(raycaster)) for (const voxel of state.data.voxels.values()) {
+      // Portraits remain visible through translucent terrain, independently of gameplay sight rules.
+      if (getVoxelOpacity(voxel) < 1) continue
       if (intersectCell(raycaster, voxel, 'voxel').length) return true
     }
     return false

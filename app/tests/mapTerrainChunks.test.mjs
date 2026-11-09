@@ -6,6 +6,7 @@ import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScrip
 const mapEdits = loadTypeScript('utils/mapEdits.ts')
 const { createMapTerrainChunks, terrainChunkKey } = loadTypeScriptWithMocks('utils/mapTerrainChunks.ts', { '~/utils/mapEdits': mapEdits })
 const { recordMapEdit } = mapEdits
+const { voxelBlocksTargeting } = loadTypeScript('utils/mapVoxels.ts')
 const point = (x = 0, y = 0, z = 0) => ({ x, y, z })
 const voxel = (x = 0, y = 0, z = 0, materialId = 'earth', rest = {}) => ({ x, y, z, materialId, ...rest })
 const mapOf = (values = {}) => ({ id: 'map', groundTiles: [], spaceTiles: [], voxels: [], ...values })
@@ -105,12 +106,73 @@ test('clipping exposes newly cut transparent tops and excludes hidden terrain fr
   close(manager.pick(down(0.5, 0.5))[0].point.y, 2)
   manager.setClipY(0)
   close(manager.pick(down(0.5, 0.5))[0].point.y, 1)
-  assert.equal(manager.isOccluded(down(0.5, 0.5)), true)
+  assert.equal(manager.isOccluded(down(0.5, 0.5)), false, 'visible water does not conceal token portraits')
   manager.setClipY(-1)
   assert.deepEqual(manager.pick(down(0.5, 0.5)), [])
   assert.equal(manager.isOccluded(down(0.5, 0.5)), false)
   manager.setClipY(1)
   close(manager.pick(down(0.5, 0.5))[0].point.y, 2)
+  manager.dispose()
+})
+
+const transparentPortraitCases = [
+  { label: 'water', material: 'water', targeting: false },
+  { label: 'wind', material: 'wind', targeting: false },
+  { label: 'glass', material: 'glass', targeting: true },
+  { label: 'ice', material: 'ice', targeting: true },
+  { label: 'light', material: 'light', targeting: true },
+  { label: 'darkness', material: 'darkness', targeting: true },
+  { label: 'window', material: 'steel', overrides: { feature: 'window' }, targeting: true },
+  { label: 'custom partial opacity', material: 'earth', overrides: { opacity: 0.25 }, targeting: true },
+  { label: 'custom zero opacity', material: 'earth', overrides: { opacity: 0 }, targeting: true },
+]
+
+for (const shape of ['block', 'ramp']) for (const definition of transparentPortraitCases) {
+  test(`${definition.label} ${shape}s keep token portraits visible while retaining picking and targeting rules`, () => {
+    const { manager } = fixture()
+    const cell = voxel(0, 0, 0, definition.material, { shape, rampDirection: 'east', ...definition.overrides })
+    manager.sync(mapOf({ voxels: [cell] }))
+    assert.equal(manager.isOccluded(down(0.5, 0.5)), false)
+    assert.ok(manager.pick(down(0.5, 0.5)).some(hit => hit.object.userData.voxel === cell), 'transparent terrain remains selectable')
+    assert.equal(voxelBlocksTargeting(cell), definition.targeting, 'portrait visibility does not change gameplay targeting')
+    manager.dispose()
+  })
+}
+
+test('opaque cubes and ramps still conceal portraits, including opacity-one overrides on translucent materials', () => {
+  for (const shape of ['block', 'ramp']) for (const definition of [
+    { material: 'earth' }, { material: 'steel' },
+    { material: 'water', overrides: { opacity: 1 } }, { material: 'glass', overrides: { opacity: 1 } },
+  ]) {
+    const { manager } = fixture()
+    manager.sync(mapOf({ voxels: [voxel(0, 0, 0, definition.material, { shape, rampDirection: 'east', ...definition.overrides })] }))
+    assert.equal(manager.isOccluded(down(0.5, 0.5)), true, `${definition.material} ${shape} remains an opaque portrait blocker`)
+    manager.dispose()
+  }
+})
+
+test('transparent terrain in front of an opaque blocker cannot make the hidden portrait visible', () => {
+  const { manager } = fixture()
+  const transparent = voxel(0, 0, 0, 'glass'), solid = voxel(1, 0, 0, 'earth')
+  const ray = new THREE.Raycaster(new THREE.Vector3(-2, 0.5, 0.5), new THREE.Vector3(1, 0, 0))
+  manager.sync(mapOf({ voxels: [transparent, solid] }))
+  assert.equal(manager.pick(ray)[0].object.userData.voxel, transparent)
+  assert.equal(manager.isOccluded(ray), true, 'the opaque cell behind glass still conceals the portrait')
+  manager.sync(mapOf({ voxels: [transparent] }))
+  assert.equal(manager.isOccluded(ray), false)
+  manager.dispose()
+})
+
+test('Y-clipped opaque terrain does not conceal portraits through visible transparent terrain', () => {
+  const { manager } = fixture()
+  const glass = voxel(0, 0, 0, 'glass'), solid = voxel(0, 2, 0, 'steel')
+  manager.sync(mapOf({ voxels: [glass, solid] }), { clipY: 2 })
+  assert.equal(manager.isOccluded(down(0.5, 0.5)), true)
+  manager.setClipY(1)
+  assert.equal(manager.isOccluded(down(0.5, 0.5)), false)
+  assert.equal(manager.pick(down(0.5, 0.5))[0].object.userData.voxel, glass)
+  manager.setClipY(2)
+  assert.equal(manager.isOccluded(down(0.5, 0.5)), true)
   manager.dispose()
 })
 

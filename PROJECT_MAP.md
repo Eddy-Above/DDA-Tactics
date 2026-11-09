@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-09h | Pages & Components, Blast Radius, Cross-Cutting Concerns | **Keep token portraits visible through transparent voxels.** Terrain portrait occlusion skips blocks and ramps whose effective opacity is below one, including transparent materials, voxel windows and custom opacity. Fully opaque voxels still occlude, including behind translucent terrain and opacity-one material overrides. Picking, movement and gameplay targeting/LoS retain their existing rules. |
 | 2026-11-09g | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Place stairs like ramps.** Stairs draw on map cells in Line/Square/Cube modes with a three-tread ghost and scroll-wheel Uphill rotation, sharing the ramp direction brush. One atomic stair stroke supports replacement, undo/redo and queued saving. Shared closed stair geometry renders the real stairs and preview; legacy east/west face encoding is mapped explicitly so existing saved stairs keep their appearance. No saved-map schema change. |
 | 2026-11-09f | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Scale large maps without reducing graphics.** Editor strokes publish one immutable map root with indexed lookups, client-only geometry revisions and 50 delta undo commands. Terrain uses incremental 16×16 chunks, opaque instancing, shared resources and a globally sorted RGBA transparent batch; picking/occlusion checks nearby chunks. Canvas frames and pointer work run on demand with explicit preview/resource cleanup. Autosaves coalesce changed collections at 300ms/1500ms, serialize one request per map, acknowledge compactly and notify peers after commit; failures retain edits and block navigation until retry succeeds. Library editors reuse their loaded map. No migration, dependency or gameplay-rule change. |
 | 2026-11-09e | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Rotate the ramp brush with the mouse wheel.** Scrolling over the canvas while the GM Ramp tool is active cycles uphill direction clockwise/down or counterclockwise/up. The editor owns direction state, so the toolbar and placed ramps agree; hover/drag previews refresh after Vue applies the new direction. Canvas capture consumes rotation before camera zoom, with movement/attack elevation keeping priority and overlay scrolling retaining its existing behavior. |
@@ -1168,6 +1169,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 
 ## 7. Blast Radius
 
+**2026-11-09h portrait visibility:** `mapTerrainChunks.isOccluded` only treats effective opacity-one voxels as portrait occluders. `MapCanvas.updateCharacterOverlays` consequently keeps HTML token portraits visible behind translucent terrain. The manager still checks later opaque cells along the camera ray, respects clipping and leaves picking/targeting independent.
+
 **2026-11-09f large maps:** Shared GM/player rendering, picking, token overlays, movement/attack previews and map-edit persistence are affected. Atomic revisions replace deep-map JSON serialization; explicit frame invalidation must cover camera, health/stance, targeting, token/HUD drag, clipping and editing. Terrain updates preserve untouched chunk identities; doors/structures retain the existing renderer and gameplay geometry. Saved JSONB and default map PUT responses remain compatible; compact acknowledgement is opt-in. Existing single-editor save semantics remain; this does not add concurrent collaborative editing.
 
 **2026-11-09d ramps:** Changes affect GM map drawing, saved voxel metadata, and voxel mesh rendering for both roles. Older maps default to blocks. Ramp edits use the existing map save/refetch and undo/redo paths; no endpoint or migration change. Movement, support, placement and targeting continue to treat ramps as integer voxel cells. **(2026-11-09e)** Ramp wheel rotation only changes the brush until placement, leaves existing voxels intact and is captured on the canvas alone; movement and attack aiming retain wheel priority.
@@ -1372,6 +1375,8 @@ Two independent, coexisting systems as of 2026-07-12 — passwords are the origi
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Transparent portraits (2026-11-09h): 34 terrain renderer regressions cover transparent block/ramp materials, windows, custom/zero opacity, opacity-one overrides, opaque blockers behind transparent terrain and clipping. `mapTokenVisibility.test.mjs` executes the real portrait-overlay handler with the real terrain manager and confirms portraits stay visible while picking and attack visibility retain their material rules.
 
 - Stair placement (2026-11-09g): `stairEditor.test.mjs`, `stairGeometry.test.mjs` and the stair case in `rampScroll.test.mjs` cover atomic draw modes, rotation/no-op/undo, closed tread/riser geometry and all cardinal directions, saved-stair appearance compatibility, stationary/drag ghosts, cell picking and the direction saved through EncounterMap.
 
