@@ -27,7 +27,7 @@ function fixture(voxels) {
 }
 
 test('transparent terrain leaves the actual token portrait overlay visible without changing targeting rules', () => {
-  for (const materialId of ['water', 'wind', 'glass', 'ice', 'light', 'darkness']) {
+  for (const materialId of ['water', 'wind', 'glass', 'ice', 'light', 'darkness', 'flickering-light']) {
     const blocker = { x: 0, y: 0, z: 2, materialId }
     const h = fixture([blocker])
     try {

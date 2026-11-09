@@ -140,6 +140,7 @@ const elements: Array<{ id: string; label: string; short: string; color: string 
   { id: 'darkness',  label: 'Darkness',       short: 'Dk', color: '#442266' },
   { id: 'steel',     label: 'Steel',          short: 'St', color: '#99aabb' },
   { id: 'light',     label: 'Light',          short: 'Lt', color: '#ffffcc' },
+  { id: 'flickering-light', label: 'Flickering Light', short: 'FL', color: '#ffd78a' },
   { id: 'sand',      label: 'Sand',           short: 'Sa', color: '#d7bf85' },
   { id: 'snow',      label: 'Snow',           short: 'Sn', color: '#ebf3f8' },
   { id: 'soft-metal', label: 'Soft Metal',    short: 'SM', color: '#b4b9c6' },

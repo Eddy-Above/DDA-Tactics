@@ -1,6 +1,13 @@
 import type { ElementType, GameMap, MapVoxel, Vec3 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 
+export interface MapVoxelLightSourceDefinition {
+  color: number
+  intensity: number
+  distance: number
+  flicker?: boolean
+}
+
 export interface MapVoxelMaterialDefinition {
   id: string
   label: string
@@ -9,6 +16,7 @@ export interface MapVoxelMaterialDefinition {
   opacity?: number
   blocksMovementDefault?: boolean
   blocksSightDefault?: boolean
+  lightSource?: MapVoxelLightSourceDefinition
   tags?: string[]
 }
 
@@ -81,6 +89,13 @@ export const MAP_VOXEL_MATERIALS: readonly MapVoxelMaterialDefinition[] = [
     blocksSightDefault: true,
   }),
   {
+    id: 'flickering-light', label: 'Flickering Light', color: 0xffd78a,
+    transparent: true, opacity: 0.58,
+    blocksMovementDefault: false, blocksSightDefault: true,
+    lightSource: { color: 0xffd78a, intensity: 2.5, distance: 5, flicker: true },
+    tags: ['elemental', 'light', 'light-source', 'flickering'],
+  },
+  {
     id: 'glass',
     label: 'Glass',
     color: 0x88ccff,
@@ -110,6 +125,7 @@ export function getVoxelMaterialElement(materialId: string): ElementType {
   if (materialId === 'sand') return 'earth'
   if (materialId === 'snow') return 'ice'
   if (materialId === 'soft-metal') return 'steel'
+  if (materialId === 'flickering-light') return 'light'
   return 'void'
 }
 
@@ -130,6 +146,12 @@ export function parseVoxelColor(color: string | undefined): number | null {
 export function getVoxelColor(voxel: MapVoxel): number {
   if (voxel.feature === 'window') return 0x88ccff
   return parseVoxelColor(voxel.color) ?? getVoxelMaterialDefinition(voxel).color
+}
+
+export function getVoxelLightSource(voxel: MapVoxel): MapVoxelLightSourceDefinition | undefined {
+  if (voxel.feature === 'window') return undefined
+  const source = getVoxelMaterialDefinition(voxel).lightSource
+  return source ? { ...source, color: getVoxelColor(voxel) } : undefined
 }
 
 export function getVoxelOpacity(voxel: MapVoxel): number {

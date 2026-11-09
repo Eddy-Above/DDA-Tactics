@@ -1408,7 +1408,7 @@ function queueKeyDown(event: KeyboardEvent) {
   requestRender()
 }
 
-function animate() {
+function animate(timeMs = performance.now()) {
   rafId = 0
   applyKeyMovement()
   tickAzimuthTween()
@@ -1439,8 +1439,9 @@ function animate() {
     reticulesDirty = false
     updateReticules()
   }
+  const lightsAnimating = terrain?.updateAnimation(timeMs / 1000) ?? false
   renderer.render(scene, camera)
-  if (keysHeld.size || azimuthTween) requestRender()
+  if (keysHeld.size || azimuthTween || lightsAnimating) requestRender()
 }
 
 function worldToScreen2D(v: THREE.Vector3): { x: number; y: number } | null {

@@ -127,6 +127,7 @@ test('the Ramp toolbar exposes draw modes, elements and a selected uphill direct
     assert.match(html, /title="Sand"/)
     assert.match(html, /title="Snow"/)
     assert.match(html, /title="Soft Metal"/)
+    assert.match(html, /title="Flickering Light"/)
     assert.match(html, /Uphill/)
     assert.match(html, /<select[^>]*value="west"/)
   } finally {
@@ -135,7 +136,7 @@ test('the Ramp toolbar exposes draw modes, elements and a selected uphill direct
   }
 })
 
-for (const [material, element] of [['sand', 'earth'], ['snow', 'ice'], ['soft-metal', 'steel']]) {
+for (const [material, element] of [['sand', 'earth'], ['snow', 'ice'], ['soft-metal', 'steel'], ['flickering-light', 'light']]) {
   test(`${material} block/ramp drawing and repainting preserve material identity through undo and saved JSON`, () => {
     const { map, editor } = fixture()
     editor.elementBrush.value = material

@@ -3,7 +3,8 @@ import { toRaw } from 'vue'
 import type { GameMap, MapGroundTile, MapSpaceTile, MapVoxel, Vec3 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
 import { getMapEditChange, getMapGeometryRevision } from '~/utils/mapEdits'
-import { getVoxelColor, getVoxelMaterialDefinition, getVoxelMaterialId, getVoxelOpacity } from '~/utils/mapVoxels'
+import { getVoxelColor, getVoxelLightSource, getVoxelMaterialDefinition, getVoxelMaterialId, getVoxelOpacity } from '~/utils/mapVoxels'
+import { createMapVoxelLights } from '~/utils/mapVoxelLights'
 import { createVoxelGeometry, rampRotationY } from '~/utils/voxelGeometry'
 
 export const MAP_TERRAIN_CHUNK_SIZE = 16
@@ -20,10 +21,10 @@ const TERRAIN_COLLECTIONS = ['groundTiles', 'spaceTiles', 'voxels'] as const
 type TerrainCollection = typeof TERRAIN_COLLECTIONS[number]
 type TerrainCell = MapGroundTile | MapSpaceTile | MapVoxel
 type Resource<T> = { value: T; references: number }
-type Instance = { position: THREE.Vector3; color?: number; quaternion?: THREE.Quaternion; scale?: THREE.Vector3 }
+type Instance = { position: THREE.Vector3; color?: number; quaternion?: THREE.Quaternion; scale?: THREE.Vector3; lightVoxel?: MapVoxel }
 type InstanceBucket = { geometryKey: string; materialKey: string; geometry: () => THREE.BufferGeometry; material: () => THREE.Material; instances: Instance[]; castShadow: boolean; spawn: boolean }
 type ChunkData = { groundTiles: Map<string, MapGroundTile>; spaceTiles: Map<string, MapSpaceTile>; voxels: Map<string, MapVoxel> }
-type ChunkState = { group: THREE.Group; data: ChunkData; releases: Array<() => void>; transparentKeys: string[]; hasTransparent: boolean; bounds: THREE.Box3 }
+type ChunkState = { group: THREE.Group; data: ChunkData; releases: Array<() => void>; transparentKeys: string[]; opaqueSourceKeys: string[]; hasTransparent: boolean; bounds: THREE.Box3 }
 
 export interface MapTerrainOptions {
   scene: THREE.Scene | THREE.Group
@@ -71,6 +72,22 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
   let disposedGeometries = 0
   let disposedMaterials = 0
   let lastRebuiltChunkKeys: string[] = []
+  const opaqueSourceInstances = new Map<string, { mesh: THREE.InstancedMesh; index: number }>()
+  const transparentTint = new THREE.Vector4()
+  const voxelLights = createMapVoxelLights(scene, (voxel, color) => {
+    const cellKey = key(voxel)
+    const transparent = transparentInstances.get(cellKey)
+    if (transparent && transparentMesh) {
+      transparentTint.set(color.r, color.g, color.b, getVoxelOpacity(voxel))
+      transparentMesh.setColorAt(transparent.id, transparentTint)
+    }
+    const opaque = opaqueSourceInstances.get(cellKey)
+    if (opaque) {
+      opaque.mesh.setColorAt(opaque.index, color)
+      opaque.mesh.instanceColor!.needsUpdate = true
+    }
+  })
+  voxelLights.setClipY(clipY)
 
   function lease<T>(cache: Map<string, Resource<T>>, resourceKey: string, create: () => T, release: (value: T) => void, state: ChunkState): T {
     let resource = cache.get(resourceKey)
@@ -101,7 +118,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     if (!state) {
       const group = new THREE.Group()
       group.userData = { floorY: cell.y, terrainChunk: chunkKey }
-      state = { group, data: blankData(), releases: [], transparentKeys: [], hasTransparent: false,
+      state = { group, data: blankData(), releases: [], transparentKeys: [], opaqueSourceKeys: [], hasTransparent: false,
         bounds: new THREE.Box3(new THREE.Vector3(Math.floor(cell.x / 16) * 16, cell.y, Math.floor(cell.z / 16) * 16),
           new THREE.Vector3(Math.floor(cell.x / 16) * 16 + 16, cell.y + 1, Math.floor(cell.z / 16) * 16 + 16)) }
       states.set(chunkKey, state)
@@ -203,6 +220,9 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
   }
 
   function clearChunk(state: ChunkState) {
+    voxelLights.removeChunk(state.group.userData.terrainChunk)
+    for (const cellKey of state.opaqueSourceKeys) opaqueSourceInstances.delete(cellKey)
+    state.opaqueSourceKeys = []
     for (const cellKey of state.transparentKeys) {
       const entry = transparentInstances.get(cellKey)
       if (entry && transparentMesh) transparentMesh.deleteInstance(entry.id)
@@ -334,7 +354,8 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
         const materialKey = `lambert:${transparent ? 'transparent-solid' : 'opaque'}`
         add(`voxel:${geometryKey}:${materialKey}`, { geometryKey, materialKey, geometry: shapeGeometry,
           material: litMaterial(transparent), castShadow: true, spawn: false },
-        { position: new THREE.Vector3(voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5), color })
+        { position: new THREE.Vector3(voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5), color,
+          lightVoxel: getVoxelLightSource(voxel) ? voxel : undefined })
       }
       if (opacity >= 1 || voxel.shape === 'ramp') {
         addTranslatedEdges(voxelEdges, baseEdgePositions(geometryKey, shapeGeometry), voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5)
@@ -359,6 +380,11 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
         matrix.compose(instance.position, instance.quaternion ?? identity, instance.scale ?? unit)
         mesh.setMatrixAt(index, matrix)
         if (instance.color !== undefined) mesh.setColorAt(index, new THREE.Color(instance.color))
+        if (instance.lightVoxel) {
+          const cellKey = key(instance.lightVoxel)
+          opaqueSourceInstances.set(cellKey, { mesh, index })
+          state.opaqueSourceKeys.push(cellKey)
+        }
       })
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
@@ -384,6 +410,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     addLines(voxelEdges, 'edges:voxel', 0.35)
     addLines(transparentEdges, 'edges:transparent', 0.35, false)
     state.group.visible = state.group.userData.floorY <= clipY
+    voxelLights.syncChunk(chunkKey, state.data.voxels.values())
   }
 
   function removeEmptyChunk(chunkKey: string, state: ChunkState): boolean {
@@ -396,6 +423,8 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
 
   function clear() {
     for (const state of states.values()) { clearChunk(state); scene.remove(state.group) }
+    voxelLights.dispose()
+    opaqueSourceInstances.clear()
     states.clear(); chunks.clear()
     for (const collection of TERRAIN_COLLECTIONS) indices[collection].clear()
     if (transparentMesh) { scene.remove(transparentMesh); transparentMesh.dispose(); disposedGeometries++ }
@@ -418,6 +447,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     if (nextY === clipY) return
     const oldY = clipY
     clipY = nextY
+    voxelLights.setClipY(nextY)
     const dirty = new Set<string>()
     for (const [chunkKey, state] of states) {
       const y = state.group.userData.floorY as number
@@ -534,8 +564,9 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     }
     return { chunks: chunks.size, objects, drawCalls, instances, transparentInstances: transparentInstances.size,
       geometries: geometries.size + proxyGeometryCache.size + (transparentMesh ? 1 : 0), materials: materials.size + (transparentMaterial ? 1 : 0),
-      textures: blendTextures.size, builtChunks, disposedGeometries, disposedMaterials, lastRebuiltChunkKeys: [...lastRebuiltChunkKeys] }
+      textures: blendTextures.size, builtChunks, disposedGeometries, disposedMaterials, lastRebuiltChunkKeys: [...lastRebuiltChunkKeys],
+      lightSources: voxelLights.stats().lights, lightSourceCells: voxelLights.stats().cells }
   }
 
-  return { chunks, sync, setClipY, setSpawnVisible, pick, isOccluded, dispose, stats }
+  return { chunks, sync, setClipY, setSpawnVisible, pick, isOccluded, updateAnimation: voxelLights.updateAnimation, dispose, stats }
 }
