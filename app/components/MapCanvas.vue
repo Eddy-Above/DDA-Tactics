@@ -108,6 +108,7 @@ import { ELEMENT_COLORS } from '~/types'
 import { vec3Key, parseVec3Key } from '~/utils/mapGeometry'
 import { getMapVoxels, getVoxelColor, getVoxelMaterialId, getVoxelMaterialDefinition, getVoxelOpacity, mapVoxelBlocksMovement } from '~/utils/mapVoxels'
 import { buildVoxelSurface } from '~/utils/voxelSurface'
+import { createVoxelGeometry, rampRotationY } from '~/utils/voxelGeometry'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
@@ -139,6 +140,7 @@ const props = defineProps<{
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   currentEditY: number
+  rampDirection?: WallFace
   isDm: boolean
   combatActive?: boolean
   myParticipantIds: string[]  // participant IDs the current user controls
@@ -915,7 +917,8 @@ function clearTransparentVoxelOutline() {
 // each visible transparent element/material volume. Recompute at a floor cut to expose its new top.
 function refreshTransparentVoxels() {
   clearTransparentVoxelOutline()
-  const meshes = voxelMeshes.filter(mesh => mesh.userData.transparentVoxel && mesh.userData.floorY <= clipY.value)
+  const meshes = voxelMeshes.filter(mesh => mesh.userData.transparentVoxel &&
+    mesh.userData.voxel.shape !== 'ramp' && mesh.userData.floorY <= clipY.value)
   const surface = buildVoxelSurface(meshes.map(mesh => mesh.userData.voxel as MapVoxel), voxel => {
     const materialId = getVoxelMaterialId(voxel)
     return JSON.stringify([materialId, voxel.element ?? materialId])
@@ -1021,9 +1024,9 @@ function buildMap() {
     buildMeshes.push(mesh)
   }
 
-  // Voxels (full 1×1×1 terrain/cover blocks)
+  // Voxels (one-cell terrain/cover blocks and directional ramps)
   for (const voxel of map.voxels ?? []) {
-    const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+    const geo = createVoxelGeometry(voxel)
     const opacity = getVoxelOpacity(voxel)
     const def = getVoxelMaterialDefinition(voxel)
     const mat = new THREE.MeshLambertMaterial({
@@ -1041,7 +1044,7 @@ function buildMap() {
     buildMeshes.push(mesh)
     voxelMeshes.push(mesh)
 
-    if (opacity >= 1) {
+    if (opacity >= 1 || voxel.shape === 'ramp') {
       const edgesGeo = new THREE.EdgesGeometry(geo)
       const edgeMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
       const edges = new THREE.LineSegments(edgesGeo, edgeMat)
@@ -1055,8 +1058,14 @@ function buildMap() {
       const spawnGeo = new THREE.PlaneGeometry(TILE_SIZE * 0.72, TILE_SIZE * 0.72)
       const spawnMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.48, depthWrite: false })
       const spawnMesh = new THREE.Mesh(spawnGeo, spawnMat)
-      spawnMesh.rotation.x = -Math.PI / 2
-      spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + TILE_SIZE + 0.004, voxel.z + 0.5)
+      if (voxel.shape === 'ramp') {
+        spawnMesh.rotation.set(-Math.PI / 4, rampRotationY(voxel.rampDirection), 0, 'YXZ')
+        spawnMesh.scale.y = Math.SQRT2
+        spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + 0.5 + 0.004, voxel.z + 0.5)
+      } else {
+        spawnMesh.rotation.x = -Math.PI / 2
+        spawnMesh.position.set(voxel.x + 0.5, voxel.y * TILE_SIZE + TILE_SIZE + 0.004, voxel.z + 0.5)
+      }
       spawnMesh.userData = { floorY: voxel.y, type: 'voxel-spawn', voxel }
       spawnMesh.visible = props.showSpawnIndicators !== false
       scene.add(spawnMesh)
@@ -2156,7 +2165,11 @@ function makeTileGhostMesh(cell: Vec3, color: number): THREE.Mesh {
 }
 
 function makeVoxelGhostMesh(cell: Vec3, color: number): THREE.Mesh {
-  const geo = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE)
+  const voxel = props.activeTool === 'ramp'
+    ? { shape: 'ramp' as const, rampDirection: props.rampDirection ?? 'north' }
+    : props.activeTool === 'voxel' ? undefined
+      : (props.map?.voxels ?? []).find(v => v.x === cell.x && v.y === cell.y && v.z === cell.z)
+  const geo = createVoxelGeometry(voxel ?? {})
   const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45 })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.position.set(cell.x + 0.5, cell.y * TILE_SIZE + 0.5, cell.z + 0.5)
@@ -2221,9 +2234,9 @@ function updateHoverGhost(event: MouseEvent) {
   } else {
     const cell = planeCell(event)
     if (!cell) return
-    const color = tool === 'voxel' ? 0x88ccff : 0x00aaff
-    const makeGhost = tool === 'voxel' ? makeVoxelGhostMesh : makeTileGhostMesh
-    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel')) {
+    const color = tool === 'voxel' || tool === 'ramp' ? 0x88ccff : 0x00aaff
+    const makeGhost = tool === 'voxel' || tool === 'ramp' ? makeVoxelGhostMesh : makeTileGhostMesh
+    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel' || tool === 'ramp')) {
       for (const tile of tilesBetween(dragStartHit.cell, cell))
         hoverGhostGroup.add(makeGhost(tile, color))
     } else {

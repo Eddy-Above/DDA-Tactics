@@ -486,6 +486,8 @@ export const maps = pgTable('maps', {
 
   voxels: jsonb('voxels').notNull().default([]).$type<Array<{
     x: number; y: number; z: number
+    shape?: 'block' | 'ramp'
+    rampDirection?: 'north' | 'south' | 'east' | 'west'
     materialId: string
     element?: string
     color?: string

@@ -38,7 +38,7 @@
     </div>
 
     <!-- Element/material picker (paint + voxel tools) -->
-    <div v-if="activeTool === 'paint-element' || activeTool === 'voxel'" class="toolbar-section element-picker">
+    <div v-if="activeTool === 'paint-element' || activeTool === 'voxel' || activeTool === 'ramp'" class="toolbar-section element-picker">
       <button
         v-for="el in elements"
         :key="el.id"
@@ -52,6 +52,21 @@
       </button>
     </div>
 
+    <div v-if="activeTool === 'ramp'" class="toolbar-section">
+      <label for="ramp-direction" class="y-label">Uphill</label>
+      <select
+        id="ramp-direction"
+        class="mode-btn"
+        :value="rampDirection ?? 'north'"
+        @change="$emit('set-ramp-direction', ($event.target as HTMLSelectElement).value as WallFace)"
+      >
+        <option value="north">North</option>
+        <option value="east">East</option>
+        <option value="south">South</option>
+        <option value="west">West</option>
+      </select>
+    </div>
+
     <!-- Undo / Redo -->
     <div class="toolbar-section">
       <button class="tool-btn" :disabled="!canUndo" title="Undo" @click="$emit('undo')">↩</button>
@@ -61,12 +76,13 @@
 </template>
 
 <script setup lang="ts">
-import type { MapTool, ElementType } from '~/types'
+import type { MapTool, ElementType, WallFace } from '~/types'
 
 const props = defineProps<{
   activeTool: MapTool
   drawMode: 'line' | 'square' | 'cube'
   elementBrush: ElementType
+  rampDirection?: WallFace
   currentEditY: number
   canUndo: boolean
   canRedo: boolean
@@ -76,6 +92,7 @@ defineEmits<{
   (e: 'select-tool', tool: MapTool): void
   (e: 'set-draw-mode', mode: 'line' | 'square' | 'cube'): void
   (e: 'set-element', el: ElementType): void
+  (e: 'set-ramp-direction', direction: WallFace): void
   (e: 'change-y', delta: number): void
   (e: 'undo'): void
   (e: 'redo'): void
@@ -87,6 +104,7 @@ const tools: Array<{ id: MapTool; icon: string; label: string; hint?: { key: str
   { id: 'add-space',     icon: '🔲',  label: 'Add Space' },
   { id: 'paint-element', icon: '🎨',  label: 'Paint Element' },
   { id: 'voxel',         icon: '🧊',  label: 'Voxel Block' },
+  { id: 'ramp',          icon: '◢',  label: 'Ramp' },
   { id: 'wall',          icon: '🧱',  label: 'Wall' },
   { id: 'window',        icon: '🪟',  label: 'Window' },
   { id: 'door',          icon: '🚪',  label: 'Door' },
@@ -106,7 +124,7 @@ const drawModes: Array<{ id: 'line' | 'square' | 'cube'; label: string }> = [
 ]
 
 const showDrawMode = computed(() => {
-  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'spawn', 'delete'].includes(props.activeTool)
+  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'spawn', 'delete'].includes(props.activeTool)
 })
 
 const elements: Array<{ id: ElementType; label: string; short: string; color: string }> = [

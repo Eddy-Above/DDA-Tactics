@@ -9,12 +9,14 @@
       :active-tool="editor.activeTool.value"
       :draw-mode="editor.drawMode.value"
       :element-brush="editor.elementBrush.value"
+      :ramp-direction="editor.rampDirection.value"
       :current-edit-y="editor.currentEditY.value"
       :can-undo="editor.canUndo.value"
       :can-redo="editor.canRedo.value"
       @select-tool="editor.selectTool"
       @set-draw-mode="v => editor.drawMode.value = v"
       @set-element="v => editor.elementBrush.value = v"
+      @set-ramp-direction="v => editor.rampDirection.value = v"
       @change-y="d => editor.currentEditY.value += d"
       @undo="onUndo"
       @redo="onRedo"
@@ -33,6 +35,7 @@
           :digimon-map="digimonMapForCanvas"
           :active-tool="editor.activeTool.value"
           :draw-mode="editor.drawMode.value"
+          :ramp-direction="editor.rampDirection.value"
           :current-edit-y="editor.currentEditY.value"
           :is-dm="isDm"
           :combat-active="encounter.phase === 'combat'"
@@ -929,7 +932,7 @@ async function persistMap(tool: string) {
     ceilings: map.value.ceilings,
     stairs: map.value.stairs,
   } as any)
-  ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add', tileType: tool as any, data: null })
+  ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add', tileType: (tool === 'ramp' ? 'voxel' : tool) as any, data: null })
 }
 
 async function onCellDraw(start: Vec3, end: Vec3) {
@@ -939,6 +942,7 @@ async function onCellDraw(start: Vec3, end: Vec3) {
   else if (tool === 'add-space')     editor.applySpaceDraw(start, end)
   else if (tool === 'paint-element') editor.applyPaintElement(start, end)
   else if (tool === 'voxel')         editor.applyVoxelDraw(start, end)
+  else if (tool === 'ramp')          editor.applyVoxelDraw(start, end, 'ramp')
   else if (tool === 'ceiling')       editor.applyCeilingDraw(start, end)
   else if (tool === 'spawn')         editor.applySpawnToggle(start, end)
   else if (tool === 'delete')        editor.deleteAt(start, end)

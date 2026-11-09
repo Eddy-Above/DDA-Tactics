@@ -44,7 +44,7 @@ export type ElementType = 'fire' | 'water' | 'wind' | 'ice' | 'thunder' | 'wood'
 export type TerrainType = 'normal' | 'water' | 'earth' | 'climbable'
 export type SpaceType = 'air' | 'water' | 'earth'
 export type WallFace = 'north' | 'south' | 'east' | 'west'
-export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
+export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'voxel' | 'ramp' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
 export type AreaTag = 'blast' | 'burst' | 'close-blast' | 'cone' | 'line' | 'pass'
 
 export interface Vec3 {
@@ -73,6 +73,10 @@ export interface MapVoxel {
   x: number
   y: number
   z: number
+  /** Omitted on older maps, which use full blocks. Shapes share voxel grid movement rules. */
+  shape?: 'block' | 'ramp'
+  /** Direction the ramp ascends; defaults to north. */
+  rampDirection?: WallFace
   /** Material id. Existing element ids are valid material ids. */
   materialId: string
   /** Optional elemental affinity for DDA rules/UI. */

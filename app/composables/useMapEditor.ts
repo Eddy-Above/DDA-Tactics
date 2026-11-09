@@ -10,6 +10,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   const activeTool = ref<MapTool>('select')
   const drawMode = ref<DrawMode>('square')
   const elementBrush = ref<ElementType>('void')
+  const rampDirection = ref<WallFace>('north')
   const undoStack = ref<MapSnapshot[]>([])
   const redoStack = ref<MapSnapshot[]>([])
   const currentEditY = ref(0)
@@ -121,7 +122,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     }
   }
 
-  function applyVoxelDraw(start: Vec3, end: Vec3) {
+  function applyVoxelDraw(start: Vec3, end: Vec3, shape: 'block' | 'ramp' = 'block') {
     if (!currentMap.value) return
     pushUndo()
     const cells = cellsForDraw(start, end, drawMode.value)
@@ -130,11 +131,17 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     for (const cell of cells) {
       const existing = map.voxels.find(v => v.x === cell.x && v.y === cell.y && v.z === cell.z)
       if (existing) {
+        existing.shape = shape
+        existing.rampDirection = shape === 'ramp' ? rampDirection.value : undefined
         existing.materialId = elementBrush.value
         existing.element = elementBrush.value
         existing.color = undefined
       } else {
-        const voxel: MapVoxel = { x: cell.x, y: cell.y, z: cell.z, materialId: elementBrush.value, element: elementBrush.value }
+        const voxel: MapVoxel = {
+          x: cell.x, y: cell.y, z: cell.z,
+          shape, rampDirection: shape === 'ramp' ? rampDirection.value : undefined,
+          materialId: elementBrush.value, element: elementBrush.value,
+        }
         map.voxels.push(voxel)
       }
     }
@@ -282,7 +289,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   }
 
   return {
-    activeTool, drawMode, elementBrush, currentEditY, selectedStructureId,
+    activeTool, drawMode, elementBrush, rampDirection, currentEditY, selectedStructureId,
     canUndo: computed(() => undoStack.value.length > 0),
     canRedo: computed(() => redoStack.value.length > 0),
     selectTool, undo, redo,
