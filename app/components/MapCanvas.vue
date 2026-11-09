@@ -842,6 +842,7 @@ function setAzimuth(angle: number) {
   const polar = controls.getPolarAngle()
   camera.position.setFromSpherical(new THREE.Spherical(dist, polar, angle)).add(controls.target)
   controls.update()
+  camera.updateMatrixWorld(true)
 }
 
 // Right-drag rotates continuously — a full turn per viewport width, matching
@@ -1412,6 +1413,8 @@ function animate() {
   applyKeyMovement()
   tickAzimuthTween()
   controls.update()
+  // Controls can change the quaternion after updating matrices; project tokens from the final pose.
+  camera.updateMatrixWorld(true)
   if (pendingPointerEvent) {
     const event = pendingPointerEvent
     pendingPointerEvent = null
@@ -1574,7 +1577,7 @@ function updateReticules() {
       const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.5 })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.rotation.x = -Math.PI / 2
-      mesh.position.set(attackerPos.x + 0.5, attackerPos.y * TILE_SIZE + 0.05, attackerPos.z + 0.5)
+      mesh.position.set(attackerPos.x + 0.5, attackerPos.y * TILE_SIZE + TILE_H + 0.015, attackerPos.z + 0.5)
       reticuleGroup.add(mesh)
     }
     addRing(props.attackerRange, 0x00ff00)
@@ -2753,6 +2756,7 @@ function onWheel(event: WheelEvent) {
         camera.position.y += delta
         controls.target.y += delta
         controls.update()
+        camera.updateMatrixWorld(true)
       }
     } else npcMoveY.value += event.deltaY > 0 ? -1 : 1
     onMouseMove(event)
