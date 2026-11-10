@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-10b | Build & Runtime, Environment Variables, Pages, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Harden deployment and image handling.** Nuxt Security 2.7.0 adds per-response SSR script nonces and security headers without cross-origin isolation. CSP starts report-only and supports runtime enforcement after staging checks; runtime allowed origins supply WebSocket endpoints. Changed image URLs require HTTPS and invalid legacy images use a local fallback. Node 24 multi-stage container runs only production output as node; secrets/caches are excluded. Operator deployment, ingress diagnostics and credential repair are documented. |
 | 2026-11-10a | API Schema, Data Models, Pages, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Secure account-free campaign play.** Shared HTTP/WS admission, signed player credentials, runtime field/link validation, scoped reads and public/owned Workshop policy. Authoritative combat/movement/door/turn intents, atomic Charge/Pass, bounded receipts and one-use Charge-after allowances; notification authentication, expiry, Origin and rate controls. Async versioned password upgrades and offline-only verification; no migration. |
 | 2026-11-09l | Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Apply Naturewalk environments and require supported jump launches.** First Naturewalk element is free, the second costs 1 DP, with at most two distinct elements. Map elements/materials determine qualifying environments and the GM can add environments or disable automatic terrain detection in Hazards. Shared conditional bonuses cover damage, dodge, armor, movement, Armor Piercing, Poison duration, effect resistance, Fire Burn immunity and Darkness sight; Advanced Swimmer gains Water's two temporary wounds once per combat. Participant environment/grant markers and settings use existing JSONB, with authoritative refreshes after movement, terrain edits, roster/form changes and GM overrides. Jump searches retain actual launch points: dry solid support permits jumps, water requires Extra Movement: Swimmer, and unsupported air cannot launch another jump. Mixed movement retains cumulative speed costs and normal turn-end gravity. No migration. |
 | 2026-11-09k | Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Add a gently flickering light-source material.** The map picker offers Flickering Light for blocks, ramps and repainting. Its warm light varies smoothly by at most six percent and illuminates nearby terrain. Persistent local lights combine matching adjacent cells within terrain chunks; existing batches update source colors without rebuilding geometry each frame. Clipping/removal/unmount release lights and stop idle animation. The existing Light material, transparent sorting, selection and gameplay sight/movement rules remain compatible. Material IDs save in existing map JSON; no migration. |
@@ -210,7 +211,7 @@
 | Description | Tactical GM aid for Digimon Digital Adventure 1.4 TTRPG |
 | Language | TypeScript (strict mode, `strictNullChecks`, `noImplicitAny`) |
 | Framework | Nuxt 3.13 + Vue 3.5 (Nitro server, Vite build) |
-| Runtime | Node.js |
+| Runtime | Node.js 24 LTS (`engines.node: 24.x`) |
 | Database | PostgreSQL via `postgres` ^3.4.8 + Drizzle ORM ^0.33 |
 | CSS | Tailwind CSS 3 via `@nuxtjs/tailwindcss` ^6.12 |
 | Package manager | npm (package-lock.json) |
@@ -231,12 +232,12 @@ npm run db:studio    # drizzle-kit studio — visual DB browser
 ```
 
 **Key config:**
-- `nuxt.config.ts`: Tailwind module, strict TypeScript, Nitro experimental database, no devtools in prod, `runtimeConfig.dbPath` (legacy, unused — real DB via `DATABASE_URL`)
+- `nuxt.config.ts`: Tailwind and Nuxt Security 2.7.0, strict TypeScript, Nitro WebSockets. Obsolete SQLite database/dbPath configuration is removed. App-specific request limits preserve large maps; unrelated generic Nuxt Security middleware is disabled.
 - `tsconfig.json`: Extends `.nuxt/tsconfig.json`
 - `drizzle.config.ts`: Schema at `server/db/schema.ts`, migrations at `server/db/migrations/`, dialect `postgresql`
 - `tailwind.config.ts`: Custom theme — `digimon-dark` (background palette), `digimon-orange` (accents), stage colors (fresh→ultra), attribute colors (vaccine/data/virus/free), fonts Orbitron (display) + Inter (body)
 - **CORS:** No CORS policy configured — no `routeRules`, no `cors` header config in `nuxt.config.ts`. Nitro defaults apply (no CORS headers sent).
-- **Deployment:** No Procfile, `railway.toml`, or deploy scripts found. App is deployed to Railway; deploys are triggered by git push (Railway auto-detects Node/Nuxt). Requires `DATABASE_URL` in Railway environment. Build: `npm run build` → `node .output/server/index.mjs`.
+- **Deployment:** `Dockerfile` uses Node 24 Alpine in separate build/runtime stages; the final stage contains only `.output` and runs as `USER node`. `.dockerignore` excludes secrets, dependencies, tests, operator scripts and caches (retaining the verification bootstrap for the build). Railway pushes may trigger deployment. Set `APP_ALLOWED_ORIGINS` before release; see `SECURITY_DEPLOYMENT.md`. Docker was unavailable locally, so image/non-root smoke checks remain a CI/operator step.
 - **Encounter revision migration (2026-11-07e):** apply `server/db/migrations/0023_add_encounter_revision.sql` to PostgreSQL in one transaction before deploying. It adds the `revision` column and its required UPDATE trigger. The legacy Drizzle journal does not include this manual migration; `db:migrate` alone will not apply it, and `db:push` does not install the trigger.
 - **Tab icon:** `app/public/favicon.ico` (16/32/48 px, Digivice on a transparent background) is the browser-tab icon, linked via `app.head.link` (`rel="icon"`, `/favicon.ico`) in `nuxt.config.ts`. `public/` is served from the site root by Nitro and shipped by the Dockerfile build (`COPY app/ .` → `npm run build` → `.output/public`).
 - **Sprite storage:** `spriteUrl` is a plain text field in the DB (`digimon.sprite_url`, `tamers.sprite_url`). No file upload infrastructure — users paste external image URLs directly. `SpritePreview.vue` renders them as `<img :src="...">`. No CDN, no `public/` sprite folder, no server-side upload endpoint.
@@ -255,8 +256,10 @@ npm run db:studio    # drizzle-kit studio — visual DB browser
 | `APP_ALLOWED_ORIGINS` | `securityTransport.ts` | development localhost only | Production | Runtime | Comma-separated exact HTTP(S) origins, shared by HTTP/WS; production fails closed without an allowlist |
 | `CLIENT_IP_SOURCE` | `securityTransport.ts` | `socket` | No | Runtime | `socket` or operator-verified `railway` (`X-Real-IP`); arbitrary XFF is ignored |
 | `IP_DIAGNOSTIC_TOKEN` | `api/ops/ip-diagnostic.get.ts` | disabled | No | Runtime | Enables constant-time Bearer-token diagnostic without database access |
+| `SECURITY_SMOKE_CHROME` | `scripts/verify-security-browser.mjs` | Windows Chrome path | No | Verification | Optional headless Chromium executable; smoke uses an isolated profile, loopback fixtures and the offline DB guard. |
+| `DDA_CSP_REPORT_ONLY` | `server/plugins/security-csp.ts` | `true` | No | Runtime | Only literal `false` enforces CSP; stage and inspect reports first. Nonces and allowed WebSocket origins are preserved in either mode. |
 | `DDA_OFFLINE_VERIFY` | `db/index.ts`, `scripts/offline-env.mjs` | unset | Tests/build | Verification | Set to `1` by verification scripts; database access without an explicit fake scope fails |
-Security runtime variables are listed above. The Nuxt `runtimeConfig.dbPath` in `nuxt.config.ts` is a leftover from a SQLite era and is not actively used — the real connection is `DATABASE_URL`.
+Security runtime variables are listed above. The obsolete SQLite runtime config has been removed.
 
 ---
 
@@ -1003,6 +1006,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**Hardening dependencies (2026-11-10):** Nuxt -> nuxt-security 2.7.0 -> SSR nonce/header plugins; security-csp -> runtime allowed origins; Vue image bindings -> imageFallback + client error capture. These require Node 24. Container packaging includes only production output.
+
 **Security command graph (2026-11-10):** HTTP/WS -> campaignSecurity -> stored sessions/grants/credentials; entitySecurity -> runtime validation + linked scope. Encounter handlers -> encounterCommand/attackCommand -> serialized queue + databaseScope -> encounterMovement/encounterUpdate/encounterTurn/attackMovement + trusted attack/digivolution services -> persisted state -> deferred RoomState/broadcast. Clients submit typed intents; server notifications refresh snapshots. No database migration.
 
 **2026-11-09k local lighting:** `mapVoxels.ts` declares optional `MapVoxelLightSourceDefinition` metadata and `getVoxelLightSource`, honoring custom colors and excluding carved windows. `mapTerrainChunks.ts` owns `createMapVoxelLights` from `utils/mapVoxelLights.ts`, updates matching source-instance colors and synchronizes lights only when chunks change. `MapCanvas` calls the terrain manager's `updateAnimation(timeSeconds)`; no package, endpoint or stored schema changes.
@@ -1208,6 +1213,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 
 ## 7. Blast Radius
 
+**CSP/image changes (2026-11-10):** Validate hydration, HTTPS sprites, map overlays, blob/data previews, inline styles and WebSocket connections in report-only and enforced modes. Do not enable cross-origin isolation. CSP enforcement is an explicit runtime rollout step after staging verification.
+
 **Security boundary (2026-11-10):** Changes to campaignSecurity/entitySecurity affect every scoped API and navigation/WS admission; changes to attackCommand/databaseScope/encounterRoom affect transaction rollback, retries, displacement durability and publication ordering. Movement changes must preserve mixed movement, jump/fall/water/underground rules, large-map performance and GM positioning. Release HTTP and WS protection together.
 
 **2026-11-09l Naturewalk and jump launches:** `CombatParticipant.naturewalkActiveElements` and `naturewalkWaterGranted` are server-owned optional JSONB fields; stale roster saves cannot replace them. Environment refreshes update conditional stats after movement, forced displacement, terrain edits, form/roster changes and GM hazard overrides. Water's two temporary wounds require Advanced Swimmer and cannot replenish until combat restarts. Fire prevents incoming and stale Burn, Light/Thunder add Resistant duration reduction, Wood changes Poison's minimum, and conditional Ice armor applies to ordinary, reflected and Burn damage. Darkness sight bypasses only non-solid Darkness volumes. Naturewalk difficult-terrain immunity respects GM settings and never grants a missing movement capability or passage through Steel. Jump searches use actual supported launch cells across mixed movement; water launches require Extra Swimmer and airborne movement cannot reset a jump's origin. Existing forced displacement and end-of-turn falling remain active.
@@ -1404,6 +1411,16 @@ No HTTP clients, no third-party APIs, no webhooks.
 - Normal movement submits participant, destination, optional path and operation ID. Server checks mixed budgets, jump launches, placement, occupancy, terrain and landing. GM positioning retains its unrestricted distance/elevation rules. Charge-before/Pass previews remain local until final attack confirmation and commit movement, crossed doors, Burn and attack preparation together. Cancelling discards previews. Charge-after uses a one-use allowance bound to actor/form/map/turn/attack; cancelling skips only the remaining movement. Door operations patch only current `isOpen` values; geometry saves preserve existing door states.
 - State-changing HTTP requests require a configured allowed Origin. WebSocket admission precedes room joining/snapshots; messages have typed operation permissions, expiry/revocation checks, a 64 KiB limit, 30/s with burst 60, and 100 connections per trusted IP. Client-authored movement/notifications are rejected. Authentication closure clears queued writes, ends reconnect loops and returns to access verification.
 - Password failure limits apply per IP and campaign-plus-IP, without campaign-wide lockout. Principal write limits are 120/minute, map saves 300/minute, and creation/deletion 10/minute, with shared-IP headroom. Socket IPs are the default; Railway header trust requires operator verification first.
+### Security headers and images (2026-11-10)
+
+Nuxt Security **2.7.0** supplies SSR nonces, SRI and security headers. `nuxt.config.ts` permits HTTPS images, data/blob previews, required inline styles and approved application sockets. Scripts require a fresh nonce; eval and script attributes are disallowed. COEP/COOP/CORP and Origin-Agent-Cluster isolation are disabled to preserve external sprites. `server/plugins/security-csp.ts` finalizes configured WebSocket origins at runtime and selects report-only versus enforcement without rebuilding. Keep report-only until actual staging flows have been inspected; local browser verification does not replace that operator check.
+
+`utils/imageFallback.ts` validates rendered saved image URLs and supplies a local placeholder without rewriting legacy data. Dynamic image bindings use `displayImageUrl`; the image error plugin also handles failed HTTPS loads. Explicit generated previews may use local blob/raster-data URLs. HTTP and imports reject new/changed non-HTTPS sprite, scene and preset URLs. This affects forms, token overlays, HUD, evolution selectors, Workshop, scenes and campaign sheets.
+
+Verification uses an isolated Node 24 binary when the host default is older. The production container also uses Node 24. No production database access or migration is needed for hardening. `SECURITY_DEPLOYMENT.md` describes staging CSP checks, exact Origin configuration, spoofed-header diagnostics, offline credential repair and remaining operator tasks.
+
+Local browser smoke passed on Node 24.22.2 and isolated headless Chrome against production output: unique SSR nonce/header agreement, Vue hydration/form submission, cross-origin local HTTPS sprites, data/blob previews and a same-origin WebSocket handshake. Both report-only and enforcement had zero unexpected CSP violations. An injected parser script without a nonce ran only in report-only mode and was blocked by enforcement. Login/image fixtures are local; real account authentication, staging gameplay and container execution are not claimed by this smoke test.
+
 ### Error Handling
 
 - API handlers use Nuxt's `createError({statusCode, statusMessage})` / `throw createError(...)` pattern
@@ -1531,7 +1548,7 @@ No HTTP clients, no third-party APIs, no webhooks.
 
 ### CI/CD Pipeline
 
-- **No CI/CD pipeline detected** — no `.github/workflows/`, no `.gitlab-ci.yml`, no `Dockerfile`, no `docker-compose.yml`
+- **No repository CI workflow detected** — no `.github/workflows/`, no `.gitlab-ci.yml`, no `Dockerfile`, no `docker-compose.yml`
 - Deployment is manual (likely direct push to Railway based on `DATABASE_URL` pattern)
 
 ### Real-Time Map Sync (Encounter Positions/Destructibles)

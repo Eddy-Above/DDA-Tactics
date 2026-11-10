@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import { computed } from 'vue'
 import type { Digimon } from '../server/db/schema'
 import { STAGE_ORDER } from '~/data/qualities'
@@ -39,7 +40,7 @@ function childStageOffset(child: EvolutionTreeNode): number {
       <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
         <img
           v-if="node.digimon.spriteUrl"
-          :src="node.digimon.spriteUrl"
+          :src="displayImageUrl(node.digimon.spriteUrl)"
           :alt="node.digimon.name"
           class="max-w-full max-h-full object-contain"
         />
@@ -59,7 +60,7 @@ function childStageOffset(child: EvolutionTreeNode): number {
       <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
         <img
           v-if="node.digimon.spriteUrl"
-          :src="node.digimon.spriteUrl"
+          :src="displayImageUrl(node.digimon.spriteUrl)"
           :alt="node.digimon.name"
           class="max-w-full max-h-full object-contain"
         />

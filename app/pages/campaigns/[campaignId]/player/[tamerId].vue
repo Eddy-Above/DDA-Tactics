@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
@@ -5619,7 +5620,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-12 h-12 rounded-lg bg-digimon-dark-700 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="currentTurnParticipant && getParticipantImage(currentTurnParticipant)"
-                    :src="getParticipantImage(currentTurnParticipant) ?? undefined"
+                    :src="displayImageUrl(getParticipantImage(currentTurnParticipant) ?? undefined)"
                     alt="Current"
                     class="w-full h-full object-cover"
                   />
@@ -5649,7 +5650,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-14 h-14 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     alt="Your next turn"
                     class="w-full h-full object-cover"
                   />
@@ -5679,7 +5680,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     alt="Your next turn"
                     class="w-full h-full object-cover"
                   />
@@ -5700,7 +5701,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-14 h-14 rounded-lg bg-digimon-orange-500 border-2 border-digimon-orange-400 animate-pulse flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     alt="Your turn"
                     class="w-full h-full object-cover"
                   />
@@ -5730,7 +5731,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     alt="Your next turn"
                     class="w-full h-full object-cover"
                   />
@@ -5760,7 +5761,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-12 h-12 rounded-lg bg-digimon-orange-600 border-2 border-digimon-orange-500 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="tamer?.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     alt="Your next turn"
                     class="w-full h-full object-cover"
                   />
@@ -5784,7 +5785,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-20 h-20 bg-digimon-dark-700 rounded-full overflow-hidden flex items-center justify-center shrink-0">
                   <img
                     v-if="tamer.spriteUrl"
-                    :src="tamer.spriteUrl"
+                    :src="displayImageUrl(tamer.spriteUrl)"
                     :alt="tamer.name"
                     class="w-full h-full object-cover"
                     @error="($event.target as HTMLImageElement).style.display = 'none'"
@@ -6084,7 +6085,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   <div class="w-20 h-20 bg-digimon-dark-700 rounded-lg flex items-center justify-center text-4xl shrink-0 overflow-hidden">
                     <img
                       v-if="getCurrentForm(chain.chainId)!.spriteUrl"
-                      :src="getCurrentForm(chain.chainId)!.spriteUrl!"
+                      :src="displayImageUrl(getCurrentForm(chain.chainId)!.spriteUrl!)"
                       :alt="getCurrentForm(chain.chainId)!.name"
                       class="max-w-full max-h-full object-contain"
                     />
@@ -6160,7 +6161,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                           <div class="w-8 h-8 bg-digimon-dark-700 rounded flex items-center justify-center text-sm shrink-0 overflow-hidden">
                             <img
                               v-if="option.spriteUrl"
-                              :src="option.spriteUrl"
+                              :src="displayImageUrl(option.spriteUrl)"
                               :alt="option.name"
                               class="max-w-full max-h-full object-contain"
                             />
@@ -6397,7 +6398,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
             <div class="w-12 h-12 bg-digimon-dark-600 rounded-lg flex items-center justify-center flex-shrink-0">
               <img
                 v-if="digimon.spriteUrl"
-                :src="digimon.spriteUrl"
+                :src="displayImageUrl(digimon.spriteUrl)"
                 :alt="digimon.name"
                 class="max-w-full max-h-full object-contain"
               />
@@ -7612,7 +7613,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <div class="w-8 h-8 rounded bg-digimon-dark-600 flex items-center justify-center overflow-hidden">
                 <img
                   v-if="getParticipantImage(target)"
-                  :src="getParticipantImage(target)!"
+                  :src="displayImageUrl(getParticipantImage(target)!)"
                   :alt="getParticipantName(target) || 'target'"
                   class="max-w-full max-h-full object-contain"
                 />

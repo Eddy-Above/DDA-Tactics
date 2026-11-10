@@ -30,7 +30,7 @@
           <div v-else class="roll-row">
             <div class="roll-char">
               <div class="roll-avatar">
-                <img v-if="entry.spriteUrl" :src="entry.spriteUrl" :alt="entry.characterName ?? ''">
+                <img v-if="entry.spriteUrl" :src="displayImageUrl(entry.spriteUrl)" :alt="entry.characterName ?? ''">
                 <div v-else class="avatar-placeholder">{{ (entry.characterName?.[0] ?? '?').toUpperCase() }}</div>
               </div>
               <div class="roll-char-name">{{ entry.characterName }}</div>
@@ -52,6 +52,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { RollLogEntry, WebSocketMapMessage } from '~/types'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 

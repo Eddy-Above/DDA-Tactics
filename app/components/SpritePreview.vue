@@ -6,7 +6,7 @@
 
 <template>
   <div v-if="modelValue && !spriteError" class="sprite-preview">
-    <img :src="modelValue" @error="handleSpriteError" :alt="alt" class="sprite-image" />
+    <img :src="displayImageUrl(modelValue)" @error="handleSpriteError" :alt="alt" class="sprite-image" />
   </div>
   <div v-else-if="spriteError" class="sprite-error">
     <p class="text-sm text-red-400">Failed to load sprite image</p>
@@ -14,6 +14,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 const props = defineProps<{
   modelValue?: string
   alt?: string

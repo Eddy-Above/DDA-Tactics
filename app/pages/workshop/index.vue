@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 definePageMeta({
   title: 'Character Workshop',
 })
@@ -230,7 +231,7 @@ async function handleImportFile(event: Event) {
               <div class="w-16 h-16 bg-digimon-dark-700 rounded-lg overflow-hidden flex-shrink-0 flex items-center justify-center">
                 <img
                   v-if="tamer.spriteUrl"
-                  :src="tamer.spriteUrl"
+                  :src="displayImageUrl(tamer.spriteUrl)"
                   :alt="tamer.name"
                   class="w-full h-full object-cover"
                   @error="($event.target as HTMLImageElement).style.display = 'none'"
@@ -330,7 +331,7 @@ async function handleImportFile(event: Event) {
               <div class="w-14 h-14 bg-digimon-dark-700 rounded-lg overflow-hidden flex-shrink-0 flex items-center justify-center">
                 <img
                   v-if="d.spriteUrl"
-                  :src="d.spriteUrl"
+                  :src="displayImageUrl(d.spriteUrl)"
                   :alt="d.name"
                   class="w-full h-full object-contain"
                   @error="($event.target as HTMLImageElement).style.display = 'none'"

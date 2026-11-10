@@ -24,7 +24,7 @@
       <template v-if="!isDm">
         <div v-for="entry in myEntries" :key="entry.id" class="hud-card" v-bind="placementBindings(entry.id)">
           <div class="hud-sprite">
-            <img v-if="entry.spriteUrl" :src="entry.spriteUrl" :alt="entry.name" class="sprite-img" />
+            <img v-if="entry.spriteUrl" :src="displayImageUrl(entry.spriteUrl)" :alt="entry.name" class="sprite-img" />
             <div v-else class="sprite-placeholder">{{ entry.name[0] }}</div>
           </div>
           <div class="hud-info">
@@ -59,7 +59,7 @@
       <template v-else>
         <div v-for="entry in allEntries" :key="entry.id" class="hud-card compact" v-bind="placementBindings(entry.id)">
           <div class="hud-sprite small">
-            <img v-if="entry.spriteUrl" :src="entry.spriteUrl" :alt="entry.name" class="sprite-img" />
+            <img v-if="entry.spriteUrl" :src="displayImageUrl(entry.spriteUrl)" :alt="entry.name" class="sprite-img" />
             <div v-else class="sprite-placeholder small">{{ entry.name[0] }}</div>
           </div>
           <div class="hud-info">
@@ -96,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { CombatParticipant } from '~/types'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 

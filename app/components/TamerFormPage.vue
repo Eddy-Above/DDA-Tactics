@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { Tamer } from '~/server/db/schema'
 import type { TormentSeverity } from '~/types'
 import { useTamerForm } from '~/composables/useTamerForm'
@@ -1208,7 +1209,7 @@ async function handleSubmit() {
               class="w-32 h-32 bg-digimon-dark-700 rounded-lg overflow-hidden flex items-center justify-center"
             >
               <img
-                :src="form.spriteUrl"
+                :src="displayImageUrl(form.spriteUrl)"
                 :alt="form.name || 'Tamer portrait'"
                 class="max-w-full max-h-full object-contain"
                 @error="handleSpriteError"

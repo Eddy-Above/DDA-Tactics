@@ -20,7 +20,7 @@
           <div v-if="activeTab === 'tamer'" class="csp-body">
             <div class="csp-header">
               <div class="csp-avatar">
-                <img v-if="tamer.spriteUrl" :src="tamer.spriteUrl" :alt="tamer.name" @error="tamerAvatarError = true" v-show="!tamerAvatarError" />
+                <img v-if="tamer.spriteUrl" :src="displayImageUrl(tamer.spriteUrl)" :alt="tamer.name" @error="tamerAvatarError = true" v-show="!tamerAvatarError" />
                 <span v-if="!tamer.spriteUrl || tamerAvatarError">👤</span>
               </div>
               <div class="csp-header-info">
@@ -83,7 +83,7 @@
           <div v-else-if="activeDigimon" class="csp-body">
             <div class="csp-header">
               <div class="csp-avatar">
-                <img v-if="activeDigimon.spriteUrl" :src="activeDigimon.spriteUrl" :alt="activeDigimon.name" @error="digimonAvatarError = true" v-show="!digimonAvatarError" />
+                <img v-if="activeDigimon.spriteUrl" :src="displayImageUrl(activeDigimon.spriteUrl)" :alt="activeDigimon.name" @error="digimonAvatarError = true" v-show="!digimonAvatarError" />
                 <span v-if="!activeDigimon.spriteUrl || digimonAvatarError">🦖</span>
               </div>
               <div class="csp-header-info">
@@ -138,6 +138,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { Tamer, Digimon } from '../server/db/schema'
 import { useTamers } from '~/composables/useTamers'
 import { useDigimon } from '~/composables/useDigimon'

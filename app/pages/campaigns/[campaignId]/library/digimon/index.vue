@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import { STAGE_CONFIG, type DigimonStage } from '~/types'
 
 const STAGE_FILTERS = [
@@ -324,7 +325,7 @@ async function handleImportFile(event: Event) {
             >
               <img
                 v-if="digimon.spriteUrl"
-                :src="digimon.spriteUrl"
+                :src="displayImageUrl(digimon.spriteUrl)"
                 :alt="digimon.name"
                 class="max-w-full max-h-full object-contain"
                 @error="($event.target as HTMLImageElement).style.display = 'none'"

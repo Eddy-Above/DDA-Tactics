@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import { computed, watch } from 'vue'
 import type { Digimon } from '~/server/db/schema'
 import { useDigimonForm } from '~/composables/useDigimonForm'
@@ -1207,7 +1208,7 @@ async function handleCopy() {
               class="w-32 h-32 bg-digimon-dark-700 rounded-lg overflow-hidden flex items-center justify-center"
             >
               <img
-                :src="form.spriteUrl"
+                :src="displayImageUrl(form.spriteUrl)"
                 :alt="form.name || 'Digimon sprite'"
                 class="max-w-full max-h-full object-contain"
                 @error="handleSpriteError"
@@ -1304,7 +1305,7 @@ async function handleCopy() {
                 <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                   <img
                     v-if="ancestor.spriteUrl"
-                    :src="ancestor.spriteUrl"
+                    :src="displayImageUrl(ancestor.spriteUrl)"
                     :alt="ancestor.name"
                     class="max-w-full max-h-full object-contain"
                   />
@@ -1323,7 +1324,7 @@ async function handleCopy() {
               <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                 <img
                   v-if="form.spriteUrl"
-                  :src="form.spriteUrl"
+                  :src="displayImageUrl(form.spriteUrl)"
                   :alt="form.name"
                   class="max-w-full max-h-full object-contain"
                 />
@@ -1387,7 +1388,7 @@ async function handleCopy() {
                 <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                   <img
                     v-if="linkedEvolvesFrom.spriteUrl"
-                    :src="linkedEvolvesFrom.spriteUrl"
+                    :src="displayImageUrl(linkedEvolvesFrom.spriteUrl)"
                     :alt="linkedEvolvesFrom.name"
                     class="max-w-full max-h-full object-contain"
                   />
@@ -1406,7 +1407,7 @@ async function handleCopy() {
               <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
                 <img
                   v-if="form.spriteUrl"
-                  :src="form.spriteUrl"
+                  :src="displayImageUrl(form.spriteUrl)"
                   :alt="form.name"
                   class="max-w-full max-h-full object-contain"
                 />
@@ -1427,7 +1428,7 @@ async function handleCopy() {
                   class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
                 >
                   <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                    <img v-if="linkedEvolvesTo[0].spriteUrl" :src="linkedEvolvesTo[0].spriteUrl" :alt="linkedEvolvesTo[0].name" class="max-w-full max-h-full object-contain" />
+                    <img v-if="linkedEvolvesTo[0].spriteUrl" :src="displayImageUrl(linkedEvolvesTo[0].spriteUrl)" :alt="linkedEvolvesTo[0].name" class="max-w-full max-h-full object-contain" />
                     <span v-else class="text-sm">🦖</span>
                   </div>
                   <div>
@@ -1457,7 +1458,7 @@ async function handleCopy() {
                         class="flex items-center gap-2 bg-digimon-dark-700 rounded-lg px-3 py-2 hover:bg-digimon-dark-600 transition-colors"
                       >
                         <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
-                          <img v-if="evo.spriteUrl" :src="evo.spriteUrl" :alt="evo.name" class="max-w-full max-h-full object-contain" />
+                          <img v-if="evo.spriteUrl" :src="displayImageUrl(evo.spriteUrl)" :alt="evo.name" class="max-w-full max-h-full object-contain" />
                           <span v-else class="text-sm">🦖</span>
                         </div>
                         <div>

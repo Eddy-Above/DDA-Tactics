@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
@@ -4003,7 +4004,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       <div class="w-10 h-10 rounded bg-digimon-dark-700 flex items-center justify-center overflow-hidden">
                         <img
                           v-if="getEntityDetails(item.participant)?.spriteUrl"
-                          :src="getEntityDetails(item.participant)!.spriteUrl!"
+                          :src="displayImageUrl(getEntityDetails(item.participant)!.spriteUrl!)"
                           :alt="getEntityDetails(item.participant)?.name || 'participant'"
                           class="max-w-full max-h-full object-contain"
                         />
@@ -4292,7 +4293,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                     <div class="w-10 h-10 rounded-lg bg-digimon-dark-700 flex items-center justify-center overflow-hidden flex-shrink-0">
                       <img
                         v-if="getEntityDetails(item.partnerDigimon)?.spriteUrl"
-                        :src="getEntityDetails(item.partnerDigimon)?.spriteUrl ?? undefined"
+                        :src="displayImageUrl(getEntityDetails(item.partnerDigimon)?.spriteUrl ?? undefined)"
                         :alt="getEntityDetails(item.partnerDigimon)?.name"
                         class="max-w-full max-h-full object-contain"
                       />
@@ -4509,7 +4510,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-9 h-9 rounded bg-digimon-dark-700 overflow-hidden flex-shrink-0 flex items-center justify-center">
                   <img
                     v-if="getEntityDetails(p)?.spriteUrl"
-                    :src="getEntityDetails(p)!.spriteUrl!"
+                    :src="displayImageUrl(getEntityDetails(p)!.spriteUrl!)"
                     class="w-full h-full object-cover opacity-60"
                   />
                   <span v-else class="text-digimon-dark-400 text-sm font-bold">{{ getDisplayName(p)[0] }}</span>
@@ -5630,7 +5631,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   <div class="w-10 h-10 rounded bg-digimon-dark-600 flex items-center justify-center overflow-hidden">
                     <img
                       v-if="getEntityDetails(target)?.spriteUrl"
-                      :src="getEntityDetails(target)!.spriteUrl!"
+                      :src="displayImageUrl(getEntityDetails(target)!.spriteUrl!)"
                       :alt="getEntityDetails(target)?.name || 'target'"
                       class="max-w-full max-h-full object-contain"
                     />
@@ -5751,7 +5752,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 <div class="w-8 h-8 rounded bg-digimon-dark-600 flex items-center justify-center overflow-hidden">
                   <img
                     v-if="getEntityDetails(target)?.spriteUrl"
-                    :src="getEntityDetails(target)!.spriteUrl!"
+                    :src="displayImageUrl(getEntityDetails(target)!.spriteUrl!)"
                     :alt="getEntityDetails(target)?.name || 'target'"
                     class="max-w-full max-h-full object-contain"
                   />

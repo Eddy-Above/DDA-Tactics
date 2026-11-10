@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { DigimonStage } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import type { EvolutionChainEntry } from '~/composables/useEvolution'
@@ -204,7 +205,7 @@ function getLinkedDigimon(digimonId: string): Digimon | null {
         <div v-if="selectedBaseDigimon" class="mb-4 bg-digimon-dark-700 rounded-lg p-4 flex items-center gap-4">
           <div v-if="selectedBaseDigimon.spriteUrl" class="w-16 h-16 rounded-lg overflow-hidden bg-digimon-dark-600 shrink-0">
             <img
-              :src="selectedBaseDigimon.spriteUrl"
+              :src="displayImageUrl(selectedBaseDigimon.spriteUrl)"
               :alt="selectedBaseDigimon.name"
               class="w-full h-full object-contain"
             />
@@ -232,7 +233,7 @@ function getLinkedDigimon(digimonId: string): Digimon | null {
           >
             <div class="flex items-center gap-2">
               <span v-if="digimon.spriteUrl" class="w-8 h-8 bg-digimon-dark-600 rounded flex items-center justify-center shrink-0">
-                <img :src="digimon.spriteUrl" :alt="digimon.name" class="max-w-full max-h-full object-contain" />
+                <img :src="displayImageUrl(digimon.spriteUrl)" :alt="digimon.name" class="max-w-full max-h-full object-contain" />
               </span>
               <div>
                 <div class="text-white text-sm font-semibold">{{ digimon.name }}</div>
@@ -255,7 +256,7 @@ function getLinkedDigimon(digimonId: string): Digimon | null {
           >
             <div v-if="getLinkedDigimon(entry.digimonId)?.spriteUrl" class="w-12 h-12 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
               <img
-                :src="getLinkedDigimon(entry.digimonId)!.spriteUrl!"
+                :src="displayImageUrl(getLinkedDigimon(entry.digimonId)!.spriteUrl!)"
                 :alt="entry.species"
                 class="max-w-full max-h-full object-contain"
               />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { Digimon } from '../server/db/schema'
 import type { DigimonStage } from '../types'
 
@@ -118,7 +119,7 @@ onUnmounted(() => {
         <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
           <img
             v-if="selectedDigimon.spriteUrl"
-            :src="selectedDigimon.spriteUrl"
+            :src="displayImageUrl(selectedDigimon.spriteUrl)"
             :alt="selectedDigimon.name"
             class="max-w-full max-h-full object-contain"
           />
@@ -180,7 +181,7 @@ onUnmounted(() => {
           <div class="w-8 h-8 bg-digimon-dark-600 rounded overflow-hidden flex items-center justify-center shrink-0">
             <img
               v-if="d.spriteUrl"
-              :src="d.spriteUrl"
+              :src="displayImageUrl(d.spriteUrl)"
               :alt="d.name"
               class="max-w-full max-h-full object-contain"
             />

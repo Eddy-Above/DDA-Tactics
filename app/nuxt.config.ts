@@ -5,6 +5,7 @@ export default defineNuxtConfig({
 
   modules: [
     '@nuxtjs/tailwindcss',
+    'nuxt-security',
   ],
 
   typescript: {
@@ -16,17 +17,48 @@ export default defineNuxtConfig({
     configPath: 'tailwind.config.ts',
   },
 
-  // Server-side SQLite database
-  nitro: {
-    experimental: {
-      database: true,
-      websocket: true,
+  security: {
+    nonce: true,
+    contentSecurityPolicyReportOnly: true, // Enforce after staging verification with DDA_CSP_REPORT_ONLY=false.
+    // App-specific admission/Origin/rate policies preserve large JSON maps and combat text.
+    requestSizeLimiter: false,
+    rateLimiter: false,
+    xssValidator: false,
+    corsHandler: false,
+    allowedMethodsRestricter: false,
+    csrf: false,
+    removeLoggers: false,
+    headers: {
+      crossOriginEmbedderPolicy: false,
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: false,
+      originAgentCluster: false,
+      xFrameOptions: 'DENY',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [], fullscreen: ['self'] },
+      contentSecurityPolicy: {
+        'default-src': ["'self'"],
+        'base-uri': ["'none'"],
+        'object-src': ["'none'"],
+        'frame-ancestors': ["'none'"],
+        'form-action': ["'self'"],
+        'script-src': ["'self'", "'nonce-{{nonce}}'", "'strict-dynamic'"],
+        'script-src-attr': ["'none'"],
+        'style-src': ["'self'", 'https:', "'unsafe-inline'"],
+        'style-src-attr': ["'unsafe-inline'"],
+        'img-src': ["'self'", 'https:', 'data:', 'blob:'],
+        'font-src': ["'self'", 'https:', 'data:'],
+        'connect-src': ["'self'"],
+        'worker-src': ["'self'", 'blob:'],
+        'upgrade-insecure-requests': false,
+      },
     },
   },
 
-  // Runtime config for database path
-  runtimeConfig: {
-    dbPath: './data/digimon.db',
+  nitro: {
+    experimental: {
+      websocket: true,
+    },
   },
 
   app: {

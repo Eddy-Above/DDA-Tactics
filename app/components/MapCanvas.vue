@@ -48,7 +48,7 @@
     <div class="char-overlays">
       <div v-if="movementGhostOverlay && aimedMoveParticipantId" class="char-token"
         :style="{ left: movementGhostOverlay.x + 'px', top: movementGhostOverlay.y + 'px', width: movementGhostOverlay.h + 'px', height: movementGhostOverlay.h + 'px', opacity: 0.2, borderColor: movementGhostOverlay.valid ? STANCE_COLORS[movementGhostOverlay.stance] : '#ff3333', zIndex: 1000001 }">
-        <img v-if="movementGhostOverlay.spriteUrl" :src="movementGhostOverlay.spriteUrl" class="char-token-img" />
+        <img v-if="movementGhostOverlay.spriteUrl" :src="displayImageUrl(movementGhostOverlay.spriteUrl)" class="char-token-img" />
         <div v-else class="char-token-fallback">{{ movementGhostOverlay.initial }}</div>
       </div>
       <div
@@ -57,7 +57,7 @@
         class="char-token"
         :style="{ left: ov.x + 'px', top: ov.y + 'px', width: ov.w + 'px', height: ov.h + 'px', borderColor: STANCE_COLORS[ov.stance], zIndex: ov.zIndex }"
       >
-        <img v-if="ov.spriteUrl" :src="ov.spriteUrl" class="char-token-img" />
+        <img v-if="ov.spriteUrl" :src="displayImageUrl(ov.spriteUrl)" class="char-token-img" />
         <div v-else class="char-token-fallback">{{ ov.initial }}</div>
         <div v-if="ov.woundFilter" class="char-token-wound-filter" :class="ov.woundFilter" />
       </div>
@@ -98,6 +98,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 
 definePageMeta({
@@ -187,7 +188,7 @@ async function handleImportFile(event: Event) {
             <div class="w-16 h-16 bg-digimon-dark-700 rounded-full overflow-hidden flex items-center justify-center">
               <img
                 v-if="tamer.spriteUrl"
-                :src="tamer.spriteUrl"
+                :src="displayImageUrl(tamer.spriteUrl)"
                 :alt="tamer.name"
                 class="w-full h-full object-cover"
                 @error="($event.target as HTMLImageElement).style.display = 'none'"

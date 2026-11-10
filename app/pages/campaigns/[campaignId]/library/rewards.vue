@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import type { RewardResult, RewardRoster } from '~/types/rewards'
 import { useRewardGrant } from '~/composables/useRewardGrant'
 
@@ -64,7 +65,7 @@ onMounted(load)
           <div v-for="person in roster.tamers" :key="person.id" class="py-4 border-t border-digimon-dark-700">
             <label class="flex gap-3 items-center cursor-pointer">
               <input type="checkbox" :checked="selectedTamerIds.includes(person.id)" :disabled="busy" @change="toggleTamer(person.id)" />
-              <img v-if="person.spriteUrl" :src="person.spriteUrl" alt="" class="w-10 h-10 object-contain rounded" />
+              <img v-if="person.spriteUrl" :src="displayImageUrl(person.spriteUrl)" alt="" class="w-10 h-10 object-contain rounded" />
               <span><span class="block font-semibold text-white">{{ person.name }}</span>
                 <span class="text-xs text-digimon-dark-400">{{ person.xp }} available XP · {{ person.totalXp ?? 'Unrecorded' }} lifetime XP · {{ person.inspiration }} Inspiration</span>
               </span>

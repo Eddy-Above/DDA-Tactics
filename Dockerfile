@@ -1,28 +1,18 @@
-FROM node:20-alpine
-
-# Install build dependencies for better-sqlite3
-RUN apk add --no-cache python3 make g++
+FROM node:24-alpine AS build
 
 WORKDIR /app
-
-# Copy package files from app directory
 COPY app/package.json app/package-lock.json ./
-
-# Install dependencies with npm
 RUN npm ci
-
-# Copy source code from app directory
 COPY app/ .
-
-# Build the application
 RUN npm run build
 
-# Expose the port
-EXPOSE 3000
+FROM node:24-alpine AS runtime
 
-# Set environment variable for host binding
+ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
-
-# Start command
-CMD ["npm", "run", "start"]
+WORKDIR /app
+COPY --from=build --chown=node:node /app/.output ./.output
+USER node
+EXPOSE 3000
+CMD ["node", ".output/server/index.mjs"]

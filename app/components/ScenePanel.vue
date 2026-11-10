@@ -37,7 +37,7 @@
         <div class="scene-stage" :class="{ 'has-nav': showNav }">
           <img
             v-if="sceneImageUrl && !imageError"
-            :src="sceneImageUrl"
+            :src="displayImageUrl(sceneImageUrl)"
             :alt="sceneImageCaption ?? 'Scene'"
             class="scene-fs-image"
             @error="imageError = true"
@@ -107,7 +107,7 @@
               @click="pickRosterTamer(t.id)"
             >
               <div class="roster-avatar">
-                <img v-if="t.spriteUrl" :src="t.spriteUrl" :alt="t.name" />
+                <img v-if="t.spriteUrl" :src="displayImageUrl(t.spriteUrl)" :alt="t.name" />
                 <span v-else>👤</span>
               </div>
               <span class="roster-name">{{ t.name }}</span>
@@ -127,6 +127,7 @@
 </template>
 
 <script setup lang="ts">
+import { displayImageUrl } from '~/utils/imageFallback'
 import { MAX_SCENE_PRESETS, type ScenePreset, type WebSocketMapMessage } from '~/types'
 import type { Tamer } from '../server/db/schema'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
