@@ -117,7 +117,7 @@
 
       <!-- Overlay: Player HUD (bottom-left). Also the placement control: while placement is active
            its cards are clicked to arm, or dragged onto the map. -->
-      <div class="overlay overlay-bottom-left">
+      <div v-if="!editorMode" class="overlay overlay-bottom-left">
         <MapPlayerHUD
           :participants="liveParticipants"
           :tamer-map="tamerMapForCanvas"
@@ -241,8 +241,11 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let refreshInFlight = false
 let refreshAgain = false
 let mapDisposed = false
-const encounterId = computed(() => props.encounter.id)
-function reloadForAccess() { window.location.reload() }
+// The standalone Library editor uses a render-only encounter, not a persisted room.
+const encounterId = computed(() => props.editorMode ? null : props.encounter.id)
+async function reloadForAccess() {
+  if (await autosave.flush()) window.location.reload()
+}
 
 async function loadMap(mapId: string) {
   const generation = ++mapLoadGeneration
@@ -1092,12 +1095,19 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100vh;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   background: #0d0e1a;
   overflow: hidden;
 }
+.encounter-map-root > :not(.canvas-wrapper) {
+  flex-shrink: 0;
+}
 .canvas-wrapper {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   overflow: hidden;
 }

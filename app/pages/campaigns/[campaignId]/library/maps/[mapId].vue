@@ -15,7 +15,7 @@
     </div>
 
     <!-- Full-screen editor canvas -->
-    <div class="flex-1 overflow-hidden">
+    <div class="flex-1 min-h-0 min-w-0 overflow-hidden">
       <EncounterMap
         v-if="mapData && fakeEncounter"
         :encounter="fakeEncounter as any"

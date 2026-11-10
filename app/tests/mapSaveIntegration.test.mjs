@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { parse } from '@vue/compiler-sfc'
 import { baseParse } from '@vue/compiler-dom'
 import ts from 'typescript'
-import { shallowRef } from 'vue'
+import { computed, markRaw, nextTick, reactive, ref, shallowRef, watch } from 'vue'
 import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const component = 'components/EncounterMap.vue'
@@ -230,4 +230,68 @@ test('the library passes its preloaded map through and mounted EncounterMap does
   callback()
   assert.equal(map.value, initialMap)
   assert.equal(downloads, 0)
+})
+
+test('the Library editor never joins its placeholder encounter, while play connects and switches real rooms', async () => {
+  const names = ['ref', 'watch', 'onMounted', 'onUnmounted', 'WebSocket', 'window']
+  const previous = new Map(names.map(name => [name, globalThis[name]]))
+  const sockets = [], mounted = [], unmounted = []
+  class FakeSocket {
+    static OPEN = 1
+    constructor(url) { markRaw(this); this.url = url; this.readyState = 0; sockets.push(this) }
+    close() { this.readyState = 3; this.onclose?.({ code: 1000 }) }
+  }
+  try {
+    Object.assign(globalThis, { ref, watch, onMounted: callback => mounted.push(callback),
+      onUnmounted: callback => unmounted.push(callback), WebSocket: FakeSocket,
+      window: { location: { protocol: 'https:', host: 'game.example' } } })
+    const { useMapWebSocket } = loadTypeScriptWithMocks('composables/useMapWebSocket.ts', {})
+    const props = reactive({ editorMode: true, encounter: { id: 'editor' } })
+    const encounterId = initializer('encounterId', { computed, props })
+    const ws = initializer('ws', { useMapWebSocket, encounterId })
+    mounted.forEach(callback => callback())
+    await nextTick()
+    assert.equal(sockets.length, 0, 'there is no server encounter named editor to verify')
+    assert.equal(ws.accessRequired.value, false)
+    assert.equal(ws.accessError.value, null)
+
+    props.encounter.id = 'real-encounter'
+    props.editorMode = false
+    await nextTick()
+    assert.equal(sockets.length, 1)
+    assert.equal(sockets[0].url, 'wss://game.example/api/encounters/real-encounter/ws')
+    props.encounter.id = 'next-encounter'
+    await nextTick()
+    assert.equal(sockets[0].readyState, 3)
+    assert.equal(sockets[1].url, 'wss://game.example/api/encounters/next-encounter/ws')
+
+    props.editorMode = true
+    props.encounter.id = 'editor'
+    await nextTick()
+    assert.equal(sockets.length, 2)
+    assert.equal(sockets[1].readyState, 3)
+    assert.equal(ws.accessError.value, null)
+  } finally {
+    unmounted.forEach(callback => callback())
+    for (const [name, value] of previous) value === undefined ? delete globalThis[name] : globalThis[name] = value
+  }
+})
+
+test('access reload waits for saved edits and retains the editor when saving fails', async () => {
+  const pending = deferred(), events = []
+  const { reloadForAccess } = loadPageFunctions(component, ['reloadForAccess'], {
+    autosave: { flush: () => { events.push('save'); return pending.promise } },
+    window: { location: { reload: () => events.push('reload') } },
+  })
+  const reload = reloadForAccess()
+  assert.deepEqual(events, ['save'])
+  pending.resolve(true)
+  await reload
+  assert.deepEqual(events, ['save', 'reload'])
+
+  const failed = loadPageFunctions(component, ['reloadForAccess'], {
+    autosave: { flush: async () => false }, window: { location: { reload: () => events.push('lost edits') } },
+  })
+  await failed.reloadForAccess()
+  assert.deepEqual(events, ['save', 'reload'])
 })

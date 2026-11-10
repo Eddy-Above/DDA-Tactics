@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-10g | Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Stop false map-editor access failures.** The standalone Library editor's render-only encounter no longer opens a protected encounter WebSocket. Real encounter sockets and authentication remain active during play; map edits still save through the authorized map endpoint. Access Reload waits for queued saves and stays put on failure. Shared map layout fills its actual parent height, keeps controls above a shrinking canvas and omits the editor's empty participant HUD. No migration, dependency or environment changes. |
 | 2026-11-10f | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Require verified GM access throughout the Library.** A global namespace guard covers all 14 Library routes, including direct list/create/edit/fullscreen requests; page middleware does not inherit from the index. Campaign APIs separately protect granted Inspiration, daily evolution counters, GM-marked Torments and evolution unlock changes, while allowing unchanged full-form saves, ordinary player edits and public Workshop edits. Evolution update/refresh locks the stored line before preserving/comparing unlocks. Enemy Tamers require GM actor permission. Final offline regression suite: 1,516 tests pass; production build and local browser CSP/hydration checks pass. No migration, dependency or environment changes. |
 | 2026-11-10e | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade the framework and audited tooling.** Pin Nuxt 3.21.11/Vue 3.5.45, move Drizzle Kit 0.31.11 to dev dependencies, align Node/Nuxt schema typings, update Vue TSC and compatible transitives, and remove unused legacy DevTools. Explicitly disable unused server islands. Final Node 24 checks: 1,484 regressions, TypeScript, production build and both browser CSP modes pass. Online audit: 54 baseline affected package entries to 15 (13 moderate/2 low), zero critical/high; omit-dev has 11. DEPENDENCY_AUDIT.md distinguishes bundled runtime from tooling and documents remaining Nuxt 3 fixes and operator limits. |
 | 2026-11-10d | API Schema, Data Models, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Close stored-link and prompt scope gaps.** Locked combat commands validate current actors, targets, saved forms, partners and evolution chains before trusted services write. Runtime prompt/response links reject foreign recovery writes; GM roster repair and valid legacy relationship-derived scope remain supported. Explicit command field/type policies reject bypass fields and malformed rolls. Case/trailing-slash variants retain Origin/rate protection; logs accept retry metadata but derive identity from stored records. Large-map creation retains its uncapped dimensions. No migration. |
@@ -736,6 +737,8 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 ---
 
 ## 5. Pages & Components
+**2026-11-10 map editor verification:** `EncounterMap` supplies a null encounter socket ID in `editorMode`; its placeholder `editor` encounter exists only to render the map and cannot join a persisted encounter room. The Library route still verifies GM access and map saves still authorize the real map ID. Gameplay uses real encounter IDs and retains expiry/revocation behavior. Reload flushes pending autosaves before replacing the document, preserving failed saves. The root fills its host's remaining height with nonshrinking controls and a bounded flexible canvas; the standalone editor hides combat HUD/log overlays.
+
 **2026-11-10 security behavior:** Navigation gates use server-verified access during SSR/client routing. Encounter pages submit dedicated player intents and adopt returned snapshots; Charge-before/Pass remain local until confirmation, and map movement/doors use authorized HTTP operations. WebSockets deliver committed notifications. Dynamic images across forms, token overlays, HUD, scenes, Workshop and library pages use HTTPS validation/fallbacks. Earlier dated component notes below describe historical wiring; these command and admission rules supersede the old client-authored movement/boolean-cookie behavior.
 
 **2026-11-09k Flickering Light:** The material picker adds a warm Flickering Light swatch. Existing block/ramp drawing, painting, undo/redo and autosaves retain the new material ID. `MapCanvas.animate` supplies elapsed time to terrain lighting and continues animation while unclipped sources flicker, without marking unchanged portraits/highlights dirty. Ordinary maps and maps containing only the original Light material still render on demand.
@@ -1018,6 +1021,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**Standalone editor transport (2026-11-10):** Library map page -> `EncounterMap(editorMode)` -> null encounter subscription; gameplay -> real encounter ID -> `useMapWebSocket`. Authorized map HTTP autosaves and server broadcasts to actual linked encounter rooms are unchanged. Global campaign scene/roll channels keep their own authorization. No fake encounter room or authentication exception is introduced.
+
 **Library authority (2026-11-10):** `library-access.global.ts` -> `dm-access.ts` -> SSR-aware `useRequestFetch` -> `my-access` -> `campaignSecurity.ts`. Tamer create/update and evolution create/update/refresh -> `libraryGmFields.ts` -> verified `requireCampaignDm`; these API checks compare stored values independently of route/UI hints. No dependency or database schema changes.
 
 **Final dependency pins (2026-11-10):** Nuxt 3.21.11, Vue 3.5.45, Drizzle ORM 0.45.4 and Nuxt Security 2.7.0; development-only Kit 0.31.11, Vue TSC 3.3.14, Node 24 typings and Nuxt schema 3.21.11. The explicit Nuxt schema pin keeps project types aligned when newer module tooling hoists Nuxt 4 types; the CLI emits an optional peer warning, but lock-install resolution and verification pass. The disabled legacy DevTools direct dependency was removed. No forced audit fixes or migration.
@@ -1232,6 +1237,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**Editor access/layout (2026-11-10):** Verify the Library editor never opens `/api/encounters/editor/ws`, while play still switches real rooms and stops reconnecting after authentication denial. Keep failed/queued edits when Reload cannot flush. Check GM fullscreen, player header-offset and Library remaining-height containers, including an access banner and small viewports; editor-only HUD hiding must not affect play.
 
 **Library access (2026-11-10):** Test every Library descendant, including direct edit/create URLs, GM-password-only campaigns, forged UI cookies, revoked credentials and account GM grants. Ordinary player sheet edits and Workshop ownership must remain functional. Full-form API saves must echo existing GM grants/unlocks without requiring GM access, but changing them, replacing marked Torments or reparenting locked forms must not bypass it. Enemy Tamer actors follow the same GM requirement as other enemies.
 
@@ -1472,6 +1479,10 @@ Local browser smoke passed on Node 24.22.2 and isolated headless Chrome against 
 - `console.log` / `console.error` only for development debugging
 
 ### Testing Strategy
+
+- Map editor verification (2026-11-10): real `EncounterMap` initializers with the actual WebSocket composable cover editor/play transitions and placeholder exclusion. Actual Reload handlers cover pending and failed save flushes. Existing WebSocket regressions retain denial, queue clearing and reconnect behavior; geometry/save regressions still exercise the authorized map path. `node --import ./scripts/offline-env.mjs scripts/verify-map-layout.mjs` compiles real templates/scoped styles and measures editor/GM/player host geometry in isolated headless Chrome with WebGL/network stubs; it checks layout without a production database or authenticated staging session.
+
+  Validation: 1,518 regression tests, TypeScript and production build pass under the offline guard. Both local browser CSP/hydration modes pass. All six rendered layout cases pass (editor/GM/player at desktop and narrow widths), including a wrapped toolbar, the player's 56px header offset and exact canvas fill. The screenshots' horizontal alignment was not reproduced; the confirmed layout repair addresses parent-height overflow and empty editor HUDs.
 
 **Final security verification (2026-11-10):** Node 24.22.2 ran all 1,484 regression tests, TypeScript checks and the guarded production build successfully. Final built-output Chrome smoke passed hydration, SSR nonce agreement, HTTPS/data/blob image rendering, a same-origin WebSocket handshake, zero unexpected CSP violations, and a nonce-less parser-script test in report-only/enforced modes. No production database, authenticated staging campaign or Docker runtime was used. Clean-lock install resolution was also checked without scripts.
 
