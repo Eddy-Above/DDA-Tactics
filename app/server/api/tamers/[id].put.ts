@@ -5,6 +5,7 @@ import { db, tamers, type Tamer } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 import { requireCampaignDm } from '../../utils/campaignDm'
 import { reconcileTamerExperience, validTotalXp } from '../../../utils/tamerExperience'
+import { requireTamerGmFields } from '../../utils/libraryGmFields'
 
 type UpdateTamerBody = Partial<Omit<Tamer, 'id' | 'createdAt' | 'updatedAt'>>
 
@@ -34,6 +35,7 @@ export default defineEventHandler(async (event) => {
 
     await requireEntityAccess(event, 'tamer', existing, true)
     body = tableWriteBody(body, tamers, existing, [], ['publicAccess']) as UpdateTamerBody
+    await requireTamerGmFields(event, existing.campaignId, body, existing)
     if (body.totalXp !== undefined && body.totalXp !== existing.totalXp) {
       if (!existing.campaignId) throw createError({ statusCode: 403, message: 'Only a campaign GM can set the XP budget' })
       await requireCampaignDm(event, existing.campaignId)

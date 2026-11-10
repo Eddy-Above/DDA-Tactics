@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-10f | API Schema, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Require verified GM access throughout the Library.** A global namespace guard covers all 14 Library routes, including direct list/create/edit/fullscreen requests; page middleware does not inherit from the index. Campaign APIs separately protect granted Inspiration, daily evolution counters, GM-marked Torments and evolution unlock changes, while allowing unchanged full-form saves, ordinary player edits and public Workshop edits. Evolution update/refresh locks the stored line before preserving/comparing unlocks. Enemy Tamers require GM actor permission. Final offline regression suite: 1,516 tests pass; production build and local browser CSP/hydration checks pass. No migration, dependency or environment changes. |
 | 2026-11-10e | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade the framework and audited tooling.** Pin Nuxt 3.21.11/Vue 3.5.45, move Drizzle Kit 0.31.11 to dev dependencies, align Node/Nuxt schema typings, update Vue TSC and compatible transitives, and remove unused legacy DevTools. Explicitly disable unused server islands. Final Node 24 checks: 1,484 regressions, TypeScript, production build and both browser CSP modes pass. Online audit: 54 baseline affected package entries to 15 (13 moderate/2 low), zero critical/high; omit-dev has 11. DEPENDENCY_AUDIT.md distinguishes bundled runtime from tooling and documents remaining Nuxt 3 fixes and operator limits. |
 | 2026-11-10d | API Schema, Data Models, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Close stored-link and prompt scope gaps.** Locked combat commands validate current actors, targets, saved forms, partners and evolution chains before trusted services write. Runtime prompt/response links reject foreign recovery writes; GM roster repair and valid legacy relationship-derived scope remain supported. Explicit command field/type policies reject bypass fields and malformed rolls. Case/trailing-slash variants retain Origin/rate protection; logs accept retry metadata but derive identity from stored records. Large-map creation retains its uncapped dimensions. No migration. |
 | 2026-11-10c | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade Drizzle ORM to 0.45.4.** Pin the approved ORM release without changing schema or applying a migration. The isolated Node 24 verification group passed all 1,445 regression checks and TypeScript checks before the next framework upgrade. No forced audit fix. |
@@ -363,6 +364,8 @@ All routes return JSON. Campaign/entity routes use `campaignSecurity.ts` and `en
 
 ### Tamers — `server/api/tamers/`
 
+Campaign create/update operations require verified GM access when changing `grantedInspiration`, `digivolutionsUsedToday` or a Torment's `gmMarkedBoxes`. Players may echo unchanged values but cannot delete/replace a GM-marked Torment or newly lower its total `markedBoxes` below the stored GM floor. Legacy totals already below that floor may remain unchanged or improve. Normal XP refunds can reach the floor. These checks run against the locked stored Tamer before writing; public/owned Workshop editing retains its existing policy.
+
 | Method | Path | Handler File | Request Body | Response |
 |---|---|---|---|---|
 | GET | `/api/tamers` | `tamers/index.get.ts` | query: `campaignId?`, `sandbox?` (`'true'` → `campaignId IS NULL` workshop rows, takes precedence over `campaignId`; hidden records returned only to their owner via `getSessionUser`, hidden-without-owner treated as visible — 2026-07-12) | `Tamer[]` |
@@ -372,6 +375,8 @@ All routes return JSON. Campaign/entity routes use `campaignSecurity.ts` and `en
 | DELETE | `/api/tamers/[id]` | `tamers/[id].delete.ts` | path: `id` | `{success: true}`; same ownership check as PUT (2026-07-12); also deletes the tamer's `tamerAccessGrants` rows (2026-08-20) |
 
 ### Evolution Lines — `server/api/evolution-lines/`
+
+Campaign create/update/refresh operations require verified GM access for unlock changes beyond the default starting root. The shared `libraryGmFields.ts` guard compares form and parent identities, including duplicate counts, so reordering cannot promote a locked form into an unlocked root. Unchanged full-form saves, new locked forms and selection of an already-unlocked current stage remain player operations. PUT and refresh lock the stored line within the entity-write transaction before preserving/comparing unlocks; refresh cannot restore a stale lock or bypass parent-identity checks through edited Digimon links. Workshop ownership/edit policy is unchanged.
 
 | Method | Path | Handler File | Request Body | Response |
 |---|---|---|---|---|
@@ -808,6 +813,8 @@ Open-air jumps use the selected movement Y plane and reachable path, without req
 
 ### Route Tree (Nuxt file-based routing)
 
+All `/campaigns/:campaignId/library` routes also run the global `library-access.global.ts` guard, which delegates to the existing authoritative `dm-access` check unless the page already declares it. This covers all 14 Library pages, including list/create/edit and the fullscreen map editor, on SSR and client navigation. Middleware on an index page does not inherit to sibling pages. The table's Library middleware column describes the effective GM gate.
+
 | Path | Component File | Layout | Middleware | Notes |
 |---|---|---|---|---|
 | `/` | `pages/index.vue` | default | — | Campaign list; password modal; "🛠️ Character Workshop" nav button → `/workshop` |
@@ -820,16 +827,17 @@ Open-air jumps use the selected movement Y plane and reachable path, without req
 | `/campaigns/new` | `pages/campaigns/new.vue` | default | — | Create campaign form |
 | `/campaigns/[campaignId]` | `pages/campaigns/[campaignId]/index.vue` | default | campaign-access | Campaign hub |
 | `/campaigns/[campaignId]/settings` | `pages/campaigns/[campaignId]/settings.vue` | default | campaign-access, **settings-access** (was dm-access, 2026-07-12) | Campaign rules config. **Account Access** card at the top, split into two subsections (2026-08-20, redesigned from the earlier single-list version): **DM Access** — owner + a co-dm/co-owner grant list, inline-editable, "Add Account" search; **Character Access** — every campaign tamer with a "Public access" checkbox (`tamers.publicAccess`) and its own per-account grant list (`tamerAccessGrants`), each with its own "Add account" search. Both add-forms use the shared `components/AccountSearchInput.vue`. Ownerless campaigns show an explanatory note instead of either subsection. See Cross-Cutting Concerns → Auth Flow for the permission model. The EddySoul Rules card has one checkbox per `EddySoulRules` flag (2026-11-03i: "Poison: Damage at the End of the Poisoned Unit's Turn" → `poisonTicksAtTurnEnd`; 2026-11-03j: "Burn: 1 Damage per 2 Spaces Moved" → `burnPerTwoSpacesMoved`). The House Rules card gained "Burn: Standing-Still Damage Ignores Armor" → `houseRules.burnStationaryIgnoresArmor` (2026-11-03m) |
-| `/campaigns/[campaignId]/library` | `pages/campaigns/[campaignId]/library/index.vue` | default | campaign-access | Library landing |
-| `/campaigns/[campaignId]/library/digimon` | `.../library/digimon/index.vue` | default | campaign-access | Digimon list |
+| `/campaigns/[campaignId]/library` | `pages/campaigns/[campaignId]/library/index.vue` | default | dm-access | Library landing |
+| `/campaigns/[campaignId]/library/digimon` | `.../library/digimon/index.vue` | default | dm-access (global) | Digimon list |
 | `/campaigns/[campaignId]/library/digimon/new` | `.../library/digimon/new.vue` | default | dm-access | Create digimon; uses `DigimonFormPage` |
 | `/campaigns/[campaignId]/library/digimon/[id]` | `.../library/digimon/[id].vue` | default | dm-access | Edit digimon; uses `DigimonFormPage` |
-| `/campaigns/[campaignId]/library/evolution` | `.../library/evolution/index.vue` | default | campaign-access | Evolution line list |
+| `/campaigns/[campaignId]/library/evolution` | `.../library/evolution/index.vue` | default | dm-access (global) | Evolution line list |
 | `/campaigns/[campaignId]/library/evolution/new` | `.../library/evolution/new.vue` | default | dm-access | Create evolution line |
 | `/campaigns/[campaignId]/library/evolution/[id]` | `.../library/evolution/[id].vue` | default | dm-access | Edit evolution line; uses `EvolutionTreeBranch` |
-| `/campaigns/[campaignId]/library/tamers` | `.../library/tamers/index.vue` | default | campaign-access | Tamer list |
+| `/campaigns/[campaignId]/library/tamers` | `.../library/tamers/index.vue` | default | dm-access (global) | Tamer list |
 | `/campaigns/[campaignId]/library/tamers/new` | `.../library/tamers/new.vue` | default | dm-access | Create tamer; uses `TamerFormPage` |
 | `/campaigns/[campaignId]/library/tamers/[id]` | `.../library/tamers/[id].vue` | default | dm-access | Edit tamer; uses `TamerFormPage` |
+| `/campaigns/[campaignId]/library/rewards` | `.../library/rewards.vue` | default | dm-access | Grant campaign rewards |
 | `/campaigns/[campaignId]/encounters` | `.../encounters/index.vue` | default | campaign-access | Encounter list. **(2026-07-29)** Each card carries a `👁 Visible` / `🚫 Hidden` player-visibility toggle beside the phase badge, plus a hover ⧉ Duplicate button opening `DuplicateEncounterModal` |
 | `/campaigns/[campaignId]/encounters/[id]` | `.../encounters/[id].vue` | default | campaign-access | Full combat view; map toggle shows 3D map when `mapId` set. **(2026-07-29)** Header gains the same visibility toggle + a ⧉ Duplicate button. `canEngageCombat` now covers `combat` as well as `setup`, and the per-tamer card action splits on `initiative < 0`: **⚔ Engage** sends `digimon-selection` (the full pick → initiative flow — the *only* path that creates the partner digimon participant, so it's what a mid-combat joiner needs) while **🎲 Init** stays a bare re-roll for someone already set up; setup-phase tamers also get **↻ Re-setup** to re-open the picker. `hasSetupRequest()` drives the "Setup pending…" state (previously only checked `initiative-roll`). `ensureVisibleToPlayers()` offers to publish before any prompt is sent, and the setup-status panel warns when prompts are outstanding on a hidden encounter. `handleRemoveParticipant` → `clearSetupExchangeForTamer()` retires a removed tamer's prompts/responses. `processResponse` reconciles partner digimon instead of appending (fixing duplicates), discards orphaned responses, and uses the atomic `deleteResponse` endpoint throughout **(2026-07-29)** Add-Participant modal gains an "⏸ Add to reserve" checkbox; a new Reserve panel under the Turn Order list lists staged characters (`reservedParticipants`, nesting a reserved partner under its reserved tamer via `reservedPartnerFor()`) with Deploy/Remove. `handleDeployReserve()` sends a tamer back through `requestSetupForTamer()` and rolls initiative inline for a digimon/NPC. `canStartCombat`, `pendingSetupTamers` and `getAttackTargets` all exclude reserves; the dead `playerPlacementMode` computed was removed (this page hardcodes `:player-placement-mode="false"`). **(2026-11-03c)** The card-view battle-log damage breakdown shows an "incl. Clash CPU +N" row under Target Armor when `entry.clashArmorBonus` is set (outside-clash CPU armor, already included in Target Armor). **(2026-11-03d)** `handleGmDodgeRoll` rolls 0 dice when the request's `cannotDodge` flag is set or `isAttackedFromOutsideClash(attacker, target)` holds for live participants. **(2026-11-03h)** Willpower Check modal: no Cancel once rolled; a failure offers "✦ Spend Inspiration" (1 of the rolling tamer's Inspiration → re-roll), shown only when that tamer has Inspiration. **(2026-11-07b)** Pushes and action responses go through `applyEncounterUpdate` (snapshot gate, see Cross-Cutting Concerns → Encounter Snapshot Ordering), which refetches only the Digimon, evolution lines and Tamers the update touched (`planRecordRefresh`, merged into `digimonList`/`allTamers`), so a player's digivolve updates the card Digivolve/Devolve buttons and the Manage modal's force options without a refresh. |
 | `/campaigns/[campaignId]/library/maps` | `.../library/maps/index.vue` | default | dm-access | Map library list |
@@ -1009,6 +1017,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 ---
 
 ## 6. Dependency Graph
+
+**Library authority (2026-11-10):** `library-access.global.ts` -> `dm-access.ts` -> SSR-aware `useRequestFetch` -> `my-access` -> `campaignSecurity.ts`. Tamer create/update and evolution create/update/refresh -> `libraryGmFields.ts` -> verified `requireCampaignDm`; these API checks compare stored values independently of route/UI hints. No dependency or database schema changes.
 
 **Final dependency pins (2026-11-10):** Nuxt 3.21.11, Vue 3.5.45, Drizzle ORM 0.45.4 and Nuxt Security 2.7.0; development-only Kit 0.31.11, Vue TSC 3.3.14, Node 24 typings and Nuxt schema 3.21.11. The explicit Nuxt schema pin keeps project types aligned when newer module tooling hoists Nuxt 4 types; the CLI emits an optional peer warning, but lock-install resolution and verification pass. The disabled legacy DevTools direct dependency was removed. No forced audit fixes or migration.
 
@@ -1223,6 +1233,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 
 ## 7. Blast Radius
 
+**Library access (2026-11-10):** Test every Library descendant, including direct edit/create URLs, GM-password-only campaigns, forged UI cookies, revoked credentials and account GM grants. Ordinary player sheet edits and Workshop ownership must remain functional. Full-form API saves must echo existing GM grants/unlocks without requiring GM access, but changing them, replacing marked Torments or reparenting locked forms must not bypass it. Enemy Tamer actors follow the same GM requirement as other enemies.
+
 **Framework/audit (2026-11-10):** Recheck SSR hydration, CSP/SRI/nonces, WebSocket limits and large-map batching after Nuxt/Vue changes. Raw npm audit has 15 affected nodes (13 moderate, 2 low; zero critical/high), and omit-dev has 11. These are not final-container exposure counts: Nuxt includes build tools and its runtime is also bundled. See `DEPENDENCY_AUDIT.md` for primary advisories, disabled prerequisites, disputed low metadata and the remaining supported-major migration requirement.
 
 **Stored-context guards (2026-11-10):** Changes affect legacy forms, Workshop ownership, evolution/recovery, partial turn updates, GM repairs and retained response history. Check foreign links in existing JSON as well as incoming payloads; a scoped actor alone does not prove all later linked writes are authorized. Map geometry and saved formats are unchanged.
@@ -1417,6 +1429,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 **Sources:** `middleware/campaign-access.ts`, `middleware/dm-access.ts`, `middleware/settings-access.ts`, `server/utils/password.ts`, `server/utils/session.ts`, `server/utils/campaignAuth.ts`, `server/utils/ownership.ts`, `server/api/auth/*`, `server/api/campaigns/[id]/verify-password.post.ts`, `server/api/campaigns/[id]/my-access.get.ts`, `server/api/campaigns/[id]/grants/*`, `server/api/campaigns/[id]/tamer-grants/*`, `server/api/campaigns/[id]/tamers/[tamerId]/public-access.put.ts`, `nuxt.config.ts`
 
 ### Auth Flow
+
+**Library GM boundary (2026-11-10):** Every Library page uses the global namespace gate or its existing named GM middleware; a campaign URL or player admission never grants Library access. The check uses server-verified `my-access` on SSR and client navigation, fails closed on fetch errors and ignores forged UI cookies. Dedicated server checks protect GM-only Tamer fields and evolution unlocks while retaining ordinary player character editing and the intended public Workshop policy.
 
 **2026-11-10: HTTP and WebSockets share authoritative admission through `server/utils/campaignSecurity.ts`.** Public campaign listings retain their existing fields. Protected content requires a signed player/GM credential or a stored account grant. Boolean UI cookies convey no server permission. SSR middleware forwards cookies through `useRequestFetch()` and checks `my-access` before navigation. Once admitted, players remain trusted to control all campaign player characters; NPCs, enemies and GM-addressed prompts require GM access. Hidden encounters are GM-only.
 

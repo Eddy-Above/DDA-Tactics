@@ -1,8 +1,9 @@
 import { entityWrite } from '../../utils/entitySecurity'
-import { requireEntityAccess, requireLinkedEntity } from '../../utils/entitySecurity'
+import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { db, evolutionLines, type NewEvolutionLine } from '../../db'
 import { generateId } from '../../utils/id'
+import { requireEvolutionGmFields } from '../../utils/libraryGmFields'
 
 interface CreateEvolutionLineBody {
   name: string
@@ -38,6 +39,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   await requireEntityAccess(event, 'evolution-line', body, true)
+  await requireEvolutionGmFields(event, await entityCampaignId('evolution-line', body), body)
   await requireLinkedEntity(event, 'tamer', body.partnerId, body.campaignId ?? null)
   for (const entry of body.chain) await requireLinkedEntity(event, 'digimon', entry.digimonId, body.campaignId ?? null)
 

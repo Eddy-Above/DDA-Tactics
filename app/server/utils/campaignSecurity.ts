@@ -119,6 +119,7 @@ export async function requireEncounterActor(event: H3Event, encounter: any, id: 
   const access = suppliedAccess ?? await requireCampaignMember(event, encounter.campaignId)
   const participant = (encounter.participants ?? []).find((p: any) => p.id === id)
   if (!participant) throw createError({ statusCode: 404, message: 'Participant not found' })
+  if (participant.isEnemy && !access.isDm) denied(access, 'GM access is required for this participant')
   if (participant.type === 'tamer') { await assertCanControlTamer(event, participant.entityId, access); return participant }
   if (participant.type === 'digimon') {
     const [record] = await db.select().from(digimon).where(eq(digimon.id, participant.entityId))

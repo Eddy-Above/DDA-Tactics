@@ -6,6 +6,7 @@ import { generateId } from '../../utils/id'
 import { getSessionUser } from '../../utils/session'
 import { requireCampaignDm } from '../../utils/campaignDm'
 import { tamerExperience, validTotalXp } from '../../../utils/tamerExperience'
+import { requireTamerGmFields } from '../../utils/libraryGmFields'
 
 interface CreateTamerBody {
   name: string
@@ -67,6 +68,7 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<CreateTamerBody>(event)
   tableWriteBody(body, tamers, undefined, [], ['publicAccess'])
   if (body.campaignId) await requireCampaignMember(event, body.campaignId)
+  await requireTamerGmFields(event, body.campaignId, body)
   if (body.xp !== undefined && (body.xp === null || !validTotalXp(body.xp))) {
     throw createError({ statusCode: 400, message: 'Available XP must be a nonnegative whole number' })
   }

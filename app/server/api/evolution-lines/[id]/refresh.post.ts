@@ -2,6 +2,7 @@ import { entityWrite } from '../../../utils/entitySecurity'
 import { requireEntityAccess, requireLinkedEntity, filterReadableEntities, entityCampaignId } from '../../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines, digimon as digimonTable, type EvolutionLine, type Digimon } from '../../../db'
+import { requireEvolutionGmFields } from '../../../utils/libraryGmFields'
 
 type EvolutionChainEntry = EvolutionLine['chain'][number]
 
@@ -16,7 +17,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   // Get existing evolution line
-  const [existing] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
+  const [existing] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id)).for('update')
 
   if (!existing) {
     throw createError({
@@ -98,6 +99,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   buildForwardChain(rootDigimon, null)
 
+  await requireEvolutionGmFields(event, scope, { chain: newChain }, existing)
   for (const entry of newChain) await requireLinkedEntity(event, 'digimon', entry.digimonId, scope)
 
   // Update evolution line with new chain

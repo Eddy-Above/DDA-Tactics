@@ -37,7 +37,7 @@ function initializer(path, name, deps) {
 const savedTamer = () => ({ xp: 8, inspiration: 1, grantedInspiration: 4,
   attributes: { willpower: 4 }, skills: { dodge: 1 },
   xpBonuses: { attributes: { willpower: 3 }, skills: { dodge: 2 }, inspiration: 2 },
-  torments: [{ markedBoxes: 3, cpMarkedBoxes: 1, gmMarkedBoxes: 0, xpBoxCosts: [2, 3] }] })
+  torments: [{ id: 'torment', markedBoxes: 3, cpMarkedBoxes: 1, gmMarkedBoxes: 0, xpBoxCosts: [2, 3] }] })
 
 test('XP budget reconciliation excludes starting CP and GM grants when distinguishing awards from refunds', () => {
   const record = savedTamer()
@@ -232,13 +232,15 @@ async function withTamerApi(method, body, run, { gm: isGm = true, campaignId = '
     update: () => ({ set: patch => ({ where: async () => { assert.ok(locked, 'XP validation and saving hold the Tamer row lock'); stored = { ...stored, ...patch } } }) }),
     insert: () => ({ values: row => { stored = row; return { returning: async () => [stored] } } }) }
   try {
+    const gmSecurity = { requireCampaignDm: async (_event, id) => {
+      assert.equal(id, campaignId)
+      if (!isGm) throw Object.assign(new Error('GM access required'), { statusCode: 403 })
+    } }
+    const gmFields = loadTypeScriptWithMocks('server/utils/libraryGmFields.ts', { './campaignSecurity': gmSecurity })
     const handler = loadTrustedGameplayModule(method === 'PUT' ? 'server/api/tamers/[id].put.ts' : 'server/api/tamers/index.post.ts', {
       '../../db': { db, tamers: table }, '../../utils/ownership': { assertCanModifySandboxCharacter: async () => {} },
       '../../utils/session': { getSessionUser: async () => null }, '../../utils/id': { generateId: () => 'new-tamer' },
-      '../../utils/campaignDm': { requireCampaignDm: async (_event, id) => {
-        assert.equal(id, campaignId)
-        if (!isGm) throw Object.assign(new Error('GM access required'), { statusCode: 403 })
-      } },
+      '../../utils/campaignDm': gmSecurity, '../../utils/libraryGmFields': gmFields,
     }).default
     await run(handler, () => stored)
   } finally { for (const [key, value] of previous) value === undefined ? delete globalThis[key] : globalThis[key] = value }

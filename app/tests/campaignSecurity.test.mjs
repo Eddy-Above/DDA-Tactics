@@ -74,6 +74,17 @@ test('admitted players retain trusted control of player characters, while NPC an
   await assert.rejects(f.requireEncounterActor({}, encounter, 'player', access), error => error.statusCode === 400)
 })
 
+test('enemy-marked Tamer actors require GM while normal Tamers remain broadly controllable', async () => {
+  const f = fixture()
+  f.issueCampaignMemberCookie({}, f.campaign)
+  const { encounter, access } = await f.requireEncounterAccess({}, 'enc')
+  assert.equal((await f.requireEncounterActor({}, encounter, 'player', access)).id, 'player')
+  encounter.participants[0].isEnemy = true
+  await assert.rejects(f.requireEncounterActor({}, encounter, 'player', access), { statusCode: 403 })
+  f.issueCampaignDmCookie({}, f.campaign)
+  assert.equal((await f.requireEncounterActor({}, encounter, 'player')).id, 'player')
+})
+
 test('staged encounters are hidden from players, and legacy standalone encounters are read-only', async () => {
   const f = fixture(); f.issueCampaignMemberCookie({}, f.campaign)
   f.rows.encounters[0].visibleToPlayers = false

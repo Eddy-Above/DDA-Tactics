@@ -84,7 +84,9 @@ Run `npm test`, `npm run typecheck` and `npm run build` from `app/` using the gu
 Check the deployed application using separate outsider, player and GM browser sessions:
 
 - Outsiders cannot load protected campaign contents or subscribe to either protected WebSocket channel.
+- Directly opening any Library list, create or edit URL (including Digimon, Tamers, evolution lines and fullscreen maps) requires verified GM access. Test a campaign with only a GM password, a player credential and a forged boolean GM cookie. Account owner/co-owner/co-DM grants and verified GM credentials should still enter; wholly public ownerless campaigns retain their intended anonymous GM access.
 - Player guests can use Direct, Mode Change, legitimate movement and nearby doors. They cannot edit geometry, issue GM actions or change settings and grants.
+- Player sheet saves can echo unchanged GM grants and unlocks, but direct API requests cannot alter granted Inspiration, daily evolution counters, GM-marked Torments or evolution unlock states. Normal player edits, XP refunds down to the GM-marked floor and permitted Workshop editing should still work. Evolution refresh must retain a concurrent GM lock change and cannot bypass unlock protections through changed form links.
 - Valid GM sessions can perform their permitted operations. Expiry, logout, password changes and grant revocation stop live access and show the client's access/reload prompt.
 - Invalid movement paths, placements, budgets and action-cost bypass fields fail without changing resources, doors or token positions. Charge and Pass retries do not spend twice. GM movement retains its intentional unrestricted behavior.
 - Database failure sends no empty full-state and publishes no uncommitted movement or structure changes. Retry restores the stored state.

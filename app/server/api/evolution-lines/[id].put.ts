@@ -4,6 +4,7 @@ import { tableWriteBody } from '../../utils/securityValidation'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines } from '../../db'
 import type { EvolutionLine } from '../../db/schema'
+import { requireEvolutionGmFields } from '../../utils/libraryGmFields'
 
 export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
@@ -18,7 +19,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   let body = await readBody<Partial<EvolutionLine>>(event)
 
   // Check if evolution line exists
-  const [existing] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
+  const [existing] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id)).for('update')
 
   if (!existing) {
     throw createError({
@@ -30,6 +31,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   await requireEntityAccess(event, 'evolution-line', existing, true)
   body = tableWriteBody(body, evolutionLines, existing) as Partial<EvolutionLine>
   const scope = await entityCampaignId('evolution-line', existing)
+  await requireEvolutionGmFields(event, scope, body, existing)
   if (body.partnerId !== undefined) await requireLinkedEntity(event, 'tamer', body.partnerId, scope)
   for (const entry of body.chain ?? existing.chain) await requireLinkedEntity(event, 'digimon', entry.digimonId, scope)
 
