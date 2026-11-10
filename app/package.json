@@ -24,7 +24,7 @@
     "@types/three": "^0.184.0",
     "@vueuse/core": "^11.0.0",
     "drizzle-kit": "^0.24.0",
-    "drizzle-orm": "^0.33.0",
+    "drizzle-orm": "0.45.4",
     "nuxt": "^3.13.0",
     "nuxt-security": "2.7.0",
     "postgres": "^3.4.8",

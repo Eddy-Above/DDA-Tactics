@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-10c | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade Drizzle ORM to 0.45.4.** Pin the approved ORM release without changing schema or applying a migration. The isolated Node 24 verification group passed all 1,445 regression checks and TypeScript checks before the next framework upgrade. No forced audit fix. |
 | 2026-11-10b | Build & Runtime, Environment Variables, Pages, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Harden deployment and image handling.** Nuxt Security 2.7.0 adds per-response SSR script nonces and security headers without cross-origin isolation. CSP starts report-only and supports runtime enforcement after staging checks; runtime allowed origins supply WebSocket endpoints. Changed image URLs require HTTPS and invalid legacy images use a local fallback. Node 24 multi-stage container runs only production output as node; secrets/caches are excluded. Operator deployment, ingress diagnostics and credential repair are documented. |
 | 2026-11-10a | API Schema, Data Models, Pages, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Secure account-free campaign play.** Shared HTTP/WS admission, signed player credentials, runtime field/link validation, scoped reads and public/owned Workshop policy. Authoritative combat/movement/door/turn intents, atomic Charge/Pass, bounded receipts and one-use Charge-after allowances; notification authentication, expiry, Origin and rate controls. Async versioned password upgrades and offline-only verification; no migration. |
 | 2026-11-09l | Data Models & Storage, Pages & Components, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Apply Naturewalk environments and require supported jump launches.** First Naturewalk element is free, the second costs 1 DP, with at most two distinct elements. Map elements/materials determine qualifying environments and the GM can add environments or disable automatic terrain detection in Hazards. Shared conditional bonuses cover damage, dodge, armor, movement, Armor Piercing, Poison duration, effect resistance, Fire Burn immunity and Darkness sight; Advanced Swimmer gains Water's two temporary wounds once per combat. Participant environment/grant markers and settings use existing JSONB, with authoritative refreshes after movement, terrain edits, roster/form changes and GM overrides. Jump searches retain actual launch points: dry solid support permits jumps, water requires Extra Movement: Swimmer, and unsupported air cannot launch another jump. Mixed movement retains cumulative speed costs and normal turn-end gravity. No migration. |
@@ -212,7 +213,7 @@
 | Language | TypeScript (strict mode, `strictNullChecks`, `noImplicitAny`) |
 | Framework | Nuxt 3.13 + Vue 3.5 (Nitro server, Vite build) |
 | Runtime | Node.js 24 LTS (`engines.node: 24.x`) |
-| Database | PostgreSQL via `postgres` ^3.4.8 + Drizzle ORM ^0.33 |
+| Database | PostgreSQL via `postgres` ^3.4.8 + Drizzle ORM 0.45.4 |
 | CSS | Tailwind CSS 3 via `@nuxtjs/tailwindcss` ^6.12 |
 | Package manager | npm (package-lock.json) |
 | Monorepo | No — single app |
@@ -1006,6 +1007,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**ORM upgrade (2026-11-10):** `drizzle-orm` is pinned to 0.45.4. PostgreSQL schema, update-returning, transaction scopes and row locks retain their interfaces; no schema migration. Nuxt/Vue and Drizzle Kit are a later verification group.
+
 **Hardening dependencies (2026-11-10):** Nuxt -> nuxt-security 2.7.0 -> SSR nonce/header plugins; security-csp -> runtime allowed origins; Vue image bindings -> imageFallback + client error capture. These require Node 24. Container packaging includes only production output.
 
 **Security command graph (2026-11-10):** HTTP/WS -> campaignSecurity -> stored sessions/grants/credentials; entitySecurity -> runtime validation + linked scope. Encounter handlers -> encounterCommand/attackCommand -> serialized queue + databaseScope -> encounterMovement/encounterUpdate/encounterTurn/attackMovement + trusted attack/digivolution services -> persisted state -> deferred RoomState/broadcast. Clients submit typed intents; server notifications refresh snapshots. No database migration.
@@ -1212,6 +1215,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**ORM dependency (2026-11-10):** Validate runtime field metadata, database transaction proxies, SQL update-returning and locked command adapters when changing Drizzle. Offline fake-database regressions and TypeScript passed for 0.45.4; no production database was contacted.
 
 **CSP/image changes (2026-11-10):** Validate hydration, HTTPS sprites, map overlays, blob/data previews, inline styles and WebSocket connections in report-only and enforced modes. Do not enable cross-origin isolation. CSP enforcement is an explicit runtime rollout step after staging verification.
 
