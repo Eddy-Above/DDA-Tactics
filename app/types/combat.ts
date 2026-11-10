@@ -36,6 +36,12 @@ export interface CombatParticipant {
   name?: string
   isEnemy?: boolean
   inReserve?: boolean     // GM-staged: excluded from turn order, the map and targets until deployed
+  pendingChargeMove?: { castId: string; turnKey: string; entityId: string; mapId: string; attackId?: string }
+  movementReceipts?: Array<{ operationId: string; fingerprint: string; result: { success: boolean; position?: Vec3; path?: Vec3[]; defeated?: boolean } }>
+  attackReceipts?: Array<{ operationId: string; fingerprint: string }>
+  lastStanceOperationId?: string
+  lastCardMoveOperationId?: string
+  lastEndTurnOperationId?: string
 
   initiative: number
   initiativeRoll: number  // The 3d6 roll result

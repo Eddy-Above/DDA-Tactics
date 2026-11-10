@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks, loadPageFunctions } from './helpers/loadTypeScript.mjs'
@@ -89,8 +90,8 @@ function fixture() {
       broadcasts.push(args)
     } },
   }
-  const post = loadTypeScriptWithMocks('server/api/campaigns/[id]/rewards.post.ts', mocks).default
-  const get = loadTypeScriptWithMocks('server/api/campaigns/[id]/rewards.get.ts', mocks).default
+  const post = loadTrustedGameplayModule('server/api/campaigns/[id]/rewards.post.ts', mocks).default
+  const get = loadTrustedGameplayModule('server/api/campaigns/[id]/rewards.get.ts', mocks).default
   return { post: (body = request(), extra = {}) => post({ body, ...extra }), get: extra => get(extra ?? {}), broadcasts,
     get state() { return state }, get reads() { return reads }, fail: table => { failTable = table } }
 }

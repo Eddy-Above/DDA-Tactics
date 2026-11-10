@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, mock, test } from 'node:test'
@@ -513,8 +514,8 @@ function responsesHandler({ request, responses = [] }) {
     update: () => ({ set: fields => ({ where: async () => { writes.push(structuredClone(fields)); stored = { ...stored, ...structuredClone(fields) } } }) }),
   }
   const unexpected = new Proxy({}, { get: (_t, name) => () => { throw new Error(`unexpected ${String(name)}`) } })
-  const queue = loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', {
+  const queue = loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', {
     '../../../db': { db, ...tables },
     'drizzle-orm': { eq: () => ({}), inArray: () => ({}) },
     '../../../utils/pushPull': unexpected,

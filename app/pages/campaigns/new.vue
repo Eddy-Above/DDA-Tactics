@@ -96,6 +96,7 @@ async function handleSubmit() {
       <!-- Passwords -->
       <div class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700 space-y-4">
         <h3 class="font-semibold text-white">Password Protection (Optional)</h3>
+        <p class="text-xs text-digimon-dark-400">Without an account, a protected campaign also needs a GM password. A campaign created without either password is publicly editable.</p>
 
         <div>
           <label class="block text-sm text-digimon-dark-400 mb-1">Campaign Password</label>

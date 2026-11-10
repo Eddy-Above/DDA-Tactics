@@ -1,3 +1,4 @@
+import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
 import { getSessionUser } from '../../utils/session'
@@ -29,6 +30,8 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 404, message: `Digimon with ID ${id} not found` })
     }
   }
+
+  await requireEntityAccess(event, 'digimon', found)
 
   return found
 })

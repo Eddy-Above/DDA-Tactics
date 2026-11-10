@@ -40,17 +40,21 @@ function initializer(name, deps) {
 
 function fixture(t, initial = makeMap()) {
   const map = shallowRef(initial), props = { encounter: { id: 'encounter', mapId: 'map' } }
-  const editor = useMapEditor(map), writes = [], messages = [], gate = deferred()
+  const editor = useMapEditor(map), writes = [], messages = [], doorWrites = [], gate = deferred()
   const autosave = initializer('autosave', { props, useMapAutosave,
-    mapStore: { updateMapMinimal: async (mapId, patch) => { writes.push({ mapId, patch }); return await gate.promise } },
+    editorClientId: 'editor-client',
+    mapStore: { updateMapMinimal: async (mapId, patch, clientId) => { writes.push({ mapId, patch, clientId }); return await gate.promise } },
     ws: { send: message => messages.push(message) }, refreshAgain: false, mapDisposed: false, scheduleMapRefresh: () => {} })
-  const deps = { map, props, editor, autosave, ...mapEdits, lastQueuedRevision: 0, selectedStructure: shallowRef({ id: 'wall' }) }
+  const deps = { map, props, editor, autosave, ...mapEdits, lastQueuedRevision: 0, selectedStructure: shallowRef({ id: 'wall' }),
+    selectedId: shallowRef('hero'), activeParticipantId: shallowRef(null), positions: shallowRef({ hero: point() }),
+    $fetch: async (url, options) => { doorWrites.push({ url, ...options }); return { doors: map.value.doors.map(door => options.body.doorIds.includes(door.id) ? { ...door, isOpen: options.body.isOpen } : door) } },
+  }
   const handlers = loadPageFunctions(component, ['persistMap', 'onCellDraw', 'setDoorsOpen', 'onStructureSave', 'onUndo'], deps)
   t.after(() => autosave.dispose())
-  return { map, props, editor, autosave, writes, messages, gate, ...handlers, selectedStructure: deps.selectedStructure }
+  return { map, props, editor, autosave, writes, messages, doorWrites, gate, ...handlers, selectedStructure: deps.selectedStructure }
 }
 
-test('real EncounterMap drawing enqueues only changed collections and broadcasts only after acknowledgement', async t => {
+test('real EncounterMap drawing enqueues only changed collections and lets the server publish committed changes', async t => {
   const h = fixture(t)
   h.editor.selectTool('ramp')
   h.editor.rampDirection.value = 'east'
@@ -66,10 +70,11 @@ test('real EncounterMap drawing enqueues only changed collections and broadcasts
   assert.deepEqual(h.messages, [])
   h.gate.resolve({ id: 'map', updatedAt: 'ack' })
   assert.equal(await saving, true)
-  assert.deepEqual(h.messages, [{ type: 'map-edited', encounterId: 'encounter', changeType: 'add', tileType: 'voxel', data: { mapId: 'map', updatedAt: 'ack' } }])
+  assert.deepEqual(h.messages, [], 'the client must not send server-only map change notifications')
+  assert.equal(h.writes[0].clientId, 'editor-client')
 })
 
-test('door toggles use the atomic editor and save only door state through the same queue', async t => {
+test('door toggles use a typed encounter action without granting map editing or changing the save queue', async t => {
   const initial = makeMap({ walls: [{ id: 'w', ...point(), face: 'north' }], doors: [{ id: 'd', wallId: 'w', isOpen: false }] })
   const h = fixture(t, initial)
   await h.setDoorsOpen(['d'], true)
@@ -77,13 +82,9 @@ test('door toggles use the atomic editor and save only door state through the sa
   assert.equal(initial.doors[0].isOpen, false)
   assert.equal(h.map.value.doors[0].isOpen, true)
   assert.equal(h.writes.length, 0)
-  const saving = h.autosave.flush()
-  await settle()
-  assert.deepEqual(h.writes[0].patch, { doors: [{ id: 'd', wallId: 'w', isOpen: true }] })
-  h.gate.resolve({ id: 'map', updatedAt: 'doors-saved' })
-  await saving
-  assert.equal(h.messages.length, 1)
-  assert.equal(h.messages[0].tileType, 'door')
+  assert.deepEqual(h.doorWrites, [{ url: '/api/encounters/encounter/actions/doors', method: 'POST', body: { participantId: 'hero', doorIds: ['d'], isOpen: true } }])
+  assert.equal(h.autosave.hasUnsaved.value, false)
+  assert.deepEqual(h.messages, [])
 })
 
 test('a no-op stroke on a freshly loaded map does not enqueue a complete-map save', async t => {
@@ -110,7 +111,7 @@ test('structure properties share undo and queued persistence instead of broadcas
   assert.deepEqual(Object.keys(h.writes[0].patch), ['walls'])
   h.gate.resolve({ id: 'map', updatedAt: 'wall-saved' })
   await saving
-  assert.equal(h.messages.length, 1)
+  assert.equal(h.messages.length, 0, 'the committed server save owns map publication')
 })
 
 test('loadMap ignores out-of-order results, failed loads and responses overtaken by local edits', async () => {

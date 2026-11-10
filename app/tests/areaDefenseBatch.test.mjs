@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { afterEach, test } from 'node:test'
@@ -407,7 +408,7 @@ test('the batch owns its requests until it is closed', () => {
 
 test('dodge requests made after the intercede window carry the cast, NPC targets still auto-resolve', async () => {
   const npcResolutions = []
-  const area = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+  const area = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
     '../db': { db: { select: unexpected, update: unexpected }, digimon: {}, tamers: {}, evolutionLines: {} },
     'drizzle-orm': { eq: () => ({}) },
     './resolveNpcAttack': { resolveNpcAttack: async params => {
@@ -472,8 +473,8 @@ function castServer(requests) {
     update: () => ({ set: fields => ({ where: async () => { writes.push(copy(fields)); stored = { ...stored, ...copy(fields) } } }) }),
   }
   const stub = new Proxy({}, { get: (_t, name) => () => { throw new Error(`unexpected ${String(name)}`) } })
-  const queue = loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', {
+  const queue = loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', {
     '../../../db': { db, ...tables }, 'drizzle-orm': { eq: () => ({}), inArray: () => ({}) },
     '../../../utils/pushPull': stub, '../../../utils/applyEffect': stub, '../../../utils/resolveSupportAttack': stub,
     '../../../utils/triggerCounterattack': stub, '../../../utils/resolveNpcAttack': stub, '../../../utils/selectiveTargeting': stub,

@@ -1,3 +1,5 @@
+import { allowFields, boundedString } from '../../../../utils/securityValidation'
+import { invalidateCampaignPeers } from '../../../../utils/websocketSecurity'
 import { and, eq } from 'drizzle-orm'
 import { db, campaigns, users, campaignAccessGrants, type NewCampaignAccessGrantRow } from '../../../../db'
 import { generateId } from '../../../../utils/id'
@@ -27,6 +29,9 @@ export default defineEventHandler(async (event) => {
   await requireOwnerOrCoOwner(event, campaignId)
 
   const body = await readBody<GrantBody>(event)
+  allowFields(body, ['userId', 'dmRole'])
+  boundedString(body.userId, 'userId', 200, false)
+  if (body.dmRole !== undefined && body.dmRole !== null && !['co-dm', 'co-owner'].includes(body.dmRole)) throw createError({ statusCode: 400, message: 'Invalid campaign role' })
   if (!body.userId) {
     throw createError({ statusCode: 400, message: 'userId is required' })
   }
@@ -63,6 +68,8 @@ export default defineEventHandler(async (event) => {
     .select()
     .from(campaignAccessGrants)
     .where(and(eq(campaignAccessGrants.campaignId, campaignId), eq(campaignAccessGrants.userId, body.userId)))
+
+  invalidateCampaignPeers(campaignId)
 
   return { ...saved, username: grantee.username }
 })

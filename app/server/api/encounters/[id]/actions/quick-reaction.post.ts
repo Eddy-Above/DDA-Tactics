@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders } from '~/utils/specialOrders'
@@ -13,9 +15,10 @@ interface QuickReactionBody {
   targetParticipantId?: string
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<QuickReactionBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'quick-reaction')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

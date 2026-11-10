@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../db'
 import { generateId } from '../../../utils/id'
@@ -57,9 +59,10 @@ function copyOptOuts(optOuts: any, mode: 'fresh' | 'snapshot'): any {
   return copy
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const sourceId = getRouterParam(event, 'id')
   const body = await readBody<DuplicateEncounterBody>(event) ?? {}
+  await authorizeEncounterIntent(event, sourceId, body, 'duplicate')
   const mode = body.mode === 'snapshot' ? 'snapshot' : 'fresh'
 
   if (!sourceId) {

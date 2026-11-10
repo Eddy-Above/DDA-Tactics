@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '../../../../../types'
@@ -21,9 +23,10 @@ interface SpendInspirationBody {
   diceResults?: number[]
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SpendInspirationBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'spend-inspiration')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

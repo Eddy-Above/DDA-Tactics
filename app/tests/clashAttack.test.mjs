@@ -56,6 +56,7 @@ test('a normal clash attack submits the unmodified accuracy pool and refreshes a
   assert.equal(flow.clashAttackActorId.value, null)
   assert.deepEqual(calls, [
     { kind: 'submit', encounterId: 'encounter', body: {
+      operationId: calls[0].body.operationId,
       clashId: 'clash', participantId: 'controller', tamerId: undefined, actionType: 'attack',
       attackId: 'basic-melee', attackName: 'Basic Melee', accuracySuccesses: 2,
       accuracyDiceResults: [1, 4, 5, 6], accuracyDicePool: 4, endClash: false,
@@ -71,6 +72,20 @@ test('tamer attacks retain the actor tamer entity id', async () => {
   flow.startClashAttack(actor.id)
   await flow.pickClashAttack(actor, melee)
   assert.equal(calls[0].body.tamerId, 'tamer-entity')
+})
+
+test('retrying a lost Clash attack response reuses the exact command and dice', async () => {
+  const attempts = []
+  const { flow, actor } = makeFlow({ submitAttack: async (_id, body) => {
+    attempts.push(structuredClone(body))
+    if (attempts.length === 1) throw new Error('Reply lost')
+  } })
+  flow.startClashAttack(actor.id)
+  await flow.pickClashAttack(actor, melee)
+  flow.startClashAttack(actor.id)
+  await flow.pickClashAttack(actor, melee)
+  assert.equal(attempts.length, 2)
+  assert.deepEqual(attempts[1], attempts[0])
 })
 
 test('Charge waits for a choice; attack and stay keeps the clash and does not move', async () => {

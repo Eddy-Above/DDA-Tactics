@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers, campaigns } from '../../../../db'
 import { getUnlockedSkillOrders, getSkillOrderActionCost } from '../../../../../utils/skillOrders'
@@ -8,9 +10,10 @@ interface SkillOrderBody {
   orderName: string
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SkillOrderBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'skill-order')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

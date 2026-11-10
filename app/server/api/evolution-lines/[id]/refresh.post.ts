@@ -1,9 +1,11 @@
+import { entityWrite } from '../../../utils/entitySecurity'
+import { requireEntityAccess, requireLinkedEntity, filterReadableEntities, entityCampaignId } from '../../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines, digimon as digimonTable, type EvolutionLine, type Digimon } from '../../../db'
 
 type EvolutionChainEntry = EvolutionLine['chain'][number]
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
 
   if (!id) {
@@ -23,6 +25,9 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  await requireEntityAccess(event, 'evolution-line', existing, true)
+  const scope = await entityCampaignId('evolution-line', existing)
+
   const existingChain = existing.chain
 
   // Build map of existing lock states
@@ -32,7 +37,7 @@ export default defineEventHandler(async (event) => {
   })
 
   // Get all library Digimon
-  const allDigimon = await db.select().from(digimonTable)
+  const allDigimon = await filterReadableEntities(event, await db.select().from(digimonTable), 'digimon')
 
   // Find root Digimon from existing chain
   const rootEntry = existingChain.find((e: EvolutionChainEntry) => e.evolvesFromIndex === null)
@@ -93,6 +98,8 @@ export default defineEventHandler(async (event) => {
 
   buildForwardChain(rootDigimon, null)
 
+  for (const entry of newChain) await requireLinkedEntity(event, 'digimon', entry.digimonId, scope)
+
   // Update evolution line with new chain
   const updateData = {
     chain: newChain,
@@ -108,4 +115,4 @@ export default defineEventHandler(async (event) => {
     ...updated,
     chain: newChain,
   }
-})
+}))

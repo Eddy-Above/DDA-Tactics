@@ -20,7 +20,8 @@ function createCombatPage(role, responseExtras = {}) {
   const target = { id: 'target', entityId: 'goblimon', type: 'digimon' }
   const opponent = { id: 'opponent', entityId: 'ogremon', type: 'digimon' }
   const attack = { id: 'pepper-breath', name: 'Pepper Breath', range: 'ranged', tags: ['Signature Move'] }
-  const encounter = { id: 'encounter-1', round: 3, participants: [attacker, target, opponent] }
+  const mapIntent = { operationId: 'cast-1', expectedRevision: 7 }
+  const encounter = { id: 'encounter-1', revision: 7, round: 3, participants: [attacker, target, opponent] }
   const returnedEncounter = { ...encounter, round: 4, ...responseExtras }
   const stats = { accuracy: 3, damage: 7 }
   const events = []
@@ -38,7 +39,7 @@ function createCombatPage(role, responseExtras = {}) {
   const dependencies = {
     currentEncounter: shallowRef(encounter),
     activeEncounter: shallowRef(encounter),
-    selectedAttack: shallowRef({ participant: attacker, attack }),
+    selectedAttack: shallowRef({ participant: attacker, attack, mapIntent }),
     selectedTargetIds: ref([target.id]),
     showTargetSelector: ref(true),
     bolsterAttackEnabled: ref(true),
@@ -88,7 +89,7 @@ function createCombatPage(role, responseExtras = {}) {
     console: { error: (...args) => { errors.push(args) } },
   }
   return {
-    attacker, target, opponent, attack, encounter, returnedEncounter, stats,
+    attacker, target, opponent, attack, encounter, returnedEncounter, stats, mapIntent,
     dependencies, events, requests, logs, errors, alerts, accuracyCalls, spends, clashActions, attackSubmissions,
     setDice(values) { dice = values; dieIndex = 0 },
     load() {
@@ -112,12 +113,13 @@ test('the real GM single-target handler submits shared accuracy and logs the Hug
   assert.deepEqual(fixture.requests, [[
     '/api/encounters/encounter-1/actions/intercede-offer',
     { method: 'POST', body: {
+      ...fixture.mapIntent,
       attackerId: 'attacker', targetId: 'target', accuracySuccesses: 3,
       accuracyDice: finalDice, attackId: 'pepper-breath', attackName: 'Pepper Breath',
-      attackData: { dicePool: 5, attackStats: fixture.stats },
+      attackData: { dicePool: 5 },
       bolstered: true, bolsterType: 'damage-accuracy', lifestealed: true,
       hugePowerUsed: true, hugePowerAttackRange: 'ranged', hugePowerRank: 2,
-      hugePowerTrackAll: true, isSignatureMove: true, batteryCount: 2,
+      hugePowerTrackAll: true,
     } },
   ]])
   assert.equal(fixture.dependencies.currentEncounter.value, fixture.returnedEncounter)
@@ -213,13 +215,13 @@ test('the real GM area handler sends one shared roll, forces the clash opponent 
   assert.equal(request.body.clashNoInterceptTargetId, 'opponent')
   assert.deepEqual(request.body.accuracyDice, finalDice)
   assert.equal(request.body.accuracySuccesses, 3)
-  assert.deepEqual(request.body.attackData, { dicePool: 5, attackStats: fixture.stats })
-  assert.deepEqual(fixture.clashActions, [['attacker', 'end']])
+  assert.deepEqual(request.body.attackData, { dicePool: 5 })
+  assert.deepEqual(fixture.clashActions, [], 'the server ends the Pass clash in the attack transaction')
   assert.equal(fixture.dependencies.clashAreaAttack.value, null)
   assert.deepEqual(targets, [fixture.target], 'forcing the opponent must not mutate the caller target list')
   assert.equal(fixture.logs[0][1].action, 'Area Attack')
   assert.equal(fixture.logs[0][1].target, 'Ogremon', 'selectively excluded targets stay out of the log')
-  assert.deepEqual(fixture.events, ['accuracy', 'request', 'end-clash', 'log'])
+  assert.deepEqual(fixture.events, ['accuracy', 'request', 'log'])
 })
 
 test('the real GM area handler keeps an already selected clash opponent once and normalizes absent shape data', async () => {
@@ -230,7 +232,7 @@ test('the real GM area handler keeps an already selected clash opponent once and
   assert.equal(fixture.requests.length, 1)
   assert.deepEqual(fixture.requests[0][1].body.targetIds, ['target', 'opponent'])
   assert.equal(fixture.requests[0][1].body.areaShapeData, null)
-  assert.equal(fixture.clashActions.length, 1)
+  assert.equal(fixture.clashActions.length, 0)
 })
 
 test('the real player single handler spends the +5 Inspiration before dice and preserves captured riders for review', async () => {
@@ -266,7 +268,7 @@ test('the real player single handler spends the +5 Inspiration before dice and p
     dicePool: 10, rolls: [6, 5, 4, 5, 6, 5, 6, 3, 4, 5], successes: 7, successThreshold: 5, automaticSuccesses: 0,
   })
   assert.deepEqual(fixture.dependencies.accuracyReviewContext.value, {
-    participant: fixture.attacker, attack: fixture.attack, target: fixture.target, ...initialRiders,
+    participant: fixture.attacker, attack: fixture.attack, target: fixture.target, mapIntent: fixture.mapIntent, ...initialRiders,
   })
   assert.equal(fixture.dependencies.showAccuracyReview.value, true)
   assert.equal(fixture.requests.length, 0)
@@ -288,7 +290,7 @@ test('the real player area handler hands shape, shared accuracy and clash contex
     dicePool: 5, rolls: finalDice, successes: 3, successThreshold: 5, automaticSuccesses: 0,
   })
   assert.deepEqual(fixture.dependencies.accuracyReviewContext.value, {
-    participant: fixture.attacker, attack: fixture.attack, target: fixture.target,
+    participant: fixture.attacker, attack: fixture.attack, target: fixture.target, mapIntent: fixture.mapIntent,
     areaTargets: [fixture.target, fixture.opponent], areaShapeData: shape,
     ...initialRiders, clashAreaAttack: clash,
   })

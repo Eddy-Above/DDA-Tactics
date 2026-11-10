@@ -1,8 +1,10 @@
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, tamers, digimon, evolutionLines, tamerAccessGrants } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
 
   if (!id) {
@@ -22,7 +24,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  await assertCanModifySandboxCharacter(event, existing)
+  await requireEntityAccess(event, 'tamer', existing, true)
+
+  for (const child of await db.select().from(digimon).where(eq(digimon.partnerId, id))) {
+    if ((child.campaignId ?? null) !== (existing.campaignId ?? null)) throw createError({ statusCode: 400, message: 'Linked Digimon has a different campaign' })
+    await requireEntityAccess(event, 'digimon', child, true)
+  }
+  for (const line of await db.select().from(evolutionLines).where(eq(evolutionLines.partnerId, id))) await requireEntityAccess(event, 'evolution-line', line, true)
 
   // Delete all digimon associated with this tamer
   await db.delete(digimon).where(eq(digimon.partnerId, id))
@@ -37,4 +45,4 @@ export default defineEventHandler(async (event) => {
   await db.delete(tamers).where(eq(tamers.id, id))
 
   return { success: true, id }
-})
+}))

@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
@@ -13,9 +15,10 @@ interface ClashBreakBody {
   diceResults: number[]
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ClashBreakBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'clash-break')
 
   if (!encounterId) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   if (!body.clashId || !body.breakerId || !body.tamerId || body.roll === undefined || !body.diceResults) {

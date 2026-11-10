@@ -1,3 +1,5 @@
+import { filterReadableEntities } from '../../utils/entitySecurity'
+import { requireCampaignMember } from '../../utils/campaignSecurity'
 import { eq, or, inArray, and, count, isNull } from 'drizzle-orm'
 import { db, digimon, tamers } from '../../db'
 import { getSessionUser } from '../../utils/session'
@@ -12,6 +14,7 @@ export default defineEventHandler(async (event) => {
   const isEnemy = query.isEnemy === 'true'
   const stage = query.stage as DigimonStage | undefined
   const campaignId = query.campaignId as string | undefined
+  if (campaignId) await requireCampaignMember(event, campaignId)
   const ids = query.ids as string | undefined
 
   const conditions = []
@@ -66,13 +69,14 @@ export default defineEventHandler(async (event) => {
 
   const [{ value: total }] = await db.select({ value: count() }).from(digimon).where(whereClause)
 
-  const data = await db
+  const found = await db
     .select()
     .from(digimon)
     .where(whereClause)
     .limit(pageSize)
     .offset((page - 1) * pageSize)
 
+  const data = await filterReadableEntities(event, found, 'digimon')
   return {
     data,
     total: Number(total),

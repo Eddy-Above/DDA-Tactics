@@ -1,6 +1,8 @@
+import { requireCampaignDm } from '../../../utils/campaignSecurity'
 import { eq } from 'drizzle-orm'
 import { db, campaigns } from '../../../db'
 import { MAX_SCENE_PRESETS, type ScenePreset } from '../../../../types'
+import { safeUrl } from '../../../utils/securityValidation'
 
 interface UpdateScenePresetsBody {
   presets: Array<Partial<ScenePreset>>
@@ -15,13 +17,14 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody<UpdateScenePresetsBody>(event)
+  const campaignAccess = await requireCampaignDm(event, campaignId)
   if (!Array.isArray(body?.presets) || body.presets.length > MAX_SCENE_PRESETS) {
     throw createError({ statusCode: 400, message: `presets must be an array of at most ${MAX_SCENE_PRESETS} scenes` })
   }
 
   // Not trimmed: the editor autosaves while the GM is still typing.
-  const presets: ScenePreset[] = body.presets.map(p => ({
-    imageUrl: String(p?.imageUrl ?? '').slice(0, 2048),
+  const presets: ScenePreset[] = body.presets.map((p, index) => ({
+    imageUrl: p?.imageUrl === campaignAccess.campaign.scenePresets?.[index]?.imageUrl ? p.imageUrl ?? '' : safeUrl(p?.imageUrl ?? '') ?? '',
     caption: String(p?.caption ?? '').slice(0, 300),
   }))
 

@@ -2,6 +2,7 @@ import { db, users } from '../../db'
 import { generateId } from '../../utils/id'
 import { hashPassword } from '../../utils/password'
 import { createSession } from '../../utils/session'
+import { allowFields } from '../../utils/securityValidation'
 
 interface RegisterBody {
   username: string
@@ -12,6 +13,7 @@ const USERNAME_RE = /^[a-zA-Z0-9_-]{3,30}$/
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<RegisterBody>(event)
+  allowFields(body, ['username', 'password'])
 
   if (!body.username || typeof body.username !== 'string' || !USERNAME_RE.test(body.username)) {
     throw createError({
@@ -30,7 +32,7 @@ export default defineEventHandler(async (event) => {
     await db.insert(users).values({
       id,
       username: body.username,
-      passwordHash: hashPassword(body.password),
+      passwordHash: await hashPassword(body.password),
       createdAt: now,
       updatedAt: now,
     })

@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -84,7 +85,7 @@ function fixture(orderName, extra = {}) {
   globalThis.getRouterParam = () => 'enc'
   globalThis.readBody = async () => body
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/special-order.post.ts', {
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/special-order.post.ts', {
     '../../../../db': { db: database, ...tables },
     '../../../../utils/resolveSupportAttack': { getDigimonDerivedStats: async () => ({ cpu: 3 }) },
     '../../../../utils/intercedeClaims': { serializeIntercedeClaim: async (_id, run) => run() },

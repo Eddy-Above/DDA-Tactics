@@ -1,11 +1,14 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../../db'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { applyCleanseSelections, type CleanseMode, type CleanseSelection } from '../../../../../utils/cleanse'
 
-export default defineEventHandler(async event => {
+export default defineEncounterCommand(async event => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<{ requestId: string; ownerId: string; mode: CleanseMode; selections: CleanseSelection[] }>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'cleanse')
   if (!encounterId || !body.requestId || !body.ownerId) throw createError({ statusCode: 400, message: 'Encounter, request and owner are required' })
   return serializeIntercedeClaim(encounterId, async () => {
     const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))

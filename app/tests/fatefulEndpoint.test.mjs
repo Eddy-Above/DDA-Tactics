@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -27,10 +28,10 @@ function fixture() {
   globalThis.getRouterParam = () => 'enc'
   globalThis.readBody = async () => body
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const spend = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/spend-inspiration.post.ts', {
+  const spend = loadTrustedGameplayModule('server/api/encounters/[id]/actions/spend-inspiration.post.ts', {
     '../../../../db': { db, ...tables }, 'drizzle-orm': { eq },
   }).default
-  const respond = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', {
+  const respond = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', {
     '../../../db': { db, ...tables }, 'drizzle-orm': { eq },
   }).default
   const request = (id = 'request') => ({ id, type: 'dodge-roll', targetTamerId: 'tamer', targetParticipantId: 'defender-p',

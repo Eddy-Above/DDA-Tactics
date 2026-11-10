@@ -1,3 +1,5 @@
+import { requireEntityAccess } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { eq } from 'drizzle-orm'
 import { db, tamers, type Tamer } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
@@ -8,7 +10,7 @@ type UpdateTamerBody = Partial<Omit<Tamer, 'id' | 'createdAt' | 'updatedAt'>>
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
-  const body = await readBody<UpdateTamerBody>(event)
+  let body = await readBody<UpdateTamerBody>(event)
   if (body.xp !== undefined && (body.xp === null || !validTotalXp(body.xp))) {
     throw createError({ statusCode: 400, message: 'Available XP must be a nonnegative whole number' })
   }
@@ -30,7 +32,8 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 404, message: `Tamer with ID ${id} not found` })
     }
 
-    await assertCanModifySandboxCharacter(event, existing)
+    await requireEntityAccess(event, 'tamer', existing, true)
+    body = tableWriteBody(body, tamers, existing, [], ['publicAccess']) as UpdateTamerBody
     if (body.totalXp !== undefined && body.totalXp !== existing.totalXp) {
       if (!existing.campaignId) throw createError({ statusCode: 403, message: 'Only a campaign GM can set the XP budget' })
       await requireCampaignDm(event, existing.campaignId)

@@ -53,8 +53,8 @@ export function useMap() {
 
   // Autosave keeps the editor's newer immutable map root. A compact acknowledgement
   // deliberately does not replace currentMap or the map-list cache with an older snapshot.
-  async function updateMapMinimal(mapId: string, body: Partial<GameMap>) {
-    return await $fetch<Pick<GameMap, 'id' | 'updatedAt'>>(`/api/maps/${mapId}?return=minimal`, { method: 'PUT', body })
+  async function updateMapMinimal(mapId: string, body: Partial<GameMap>, clientId?: string) {
+    return await $fetch<Pick<GameMap, 'id' | 'updatedAt'>>(`/api/maps/${mapId}?return=minimal`, { method: 'PUT', body, ...(clientId ? { headers: { 'X-Map-Client-Id': clientId } } : {}) })
   }
 
   async function deleteMap(mapId: string) {

@@ -1,8 +1,11 @@
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines } from '../../db'
 import type { EvolutionLine } from '../../db/schema'
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
 
   if (!id) {
@@ -12,7 +15,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const body = await readBody<Partial<EvolutionLine>>(event)
+  let body = await readBody<Partial<EvolutionLine>>(event)
 
   // Check if evolution line exists
   const [existing] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
@@ -23,6 +26,12 @@ export default defineEventHandler(async (event) => {
       message: `Evolution line with ID ${id} not found`,
     })
   }
+
+  await requireEntityAccess(event, 'evolution-line', existing, true)
+  body = tableWriteBody(body, evolutionLines, existing) as Partial<EvolutionLine>
+  const scope = await entityCampaignId('evolution-line', existing)
+  if (body.partnerId !== undefined) await requireLinkedEntity(event, 'tamer', body.partnerId, scope)
+  for (const entry of body.chain ?? existing.chain) await requireLinkedEntity(event, 'digimon', entry.digimonId, scope)
 
   const existingChain = existing.chain
 
@@ -78,4 +87,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
 
   return updated
-})
+}))

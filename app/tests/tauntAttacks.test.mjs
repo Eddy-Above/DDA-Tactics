@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -48,14 +49,14 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
   }
   const store = { db, ...tables }
   const sql = { eq: (_column, value) => ({ value }), inArray: (_column, value) => ({ value }) }
-  const support = loadTypeScriptWithMocks('server/utils/resolveSupportAttack.ts', { '../db': store, 'drizzle-orm': sql })
-  const damage = loadTypeScriptWithMocks('server/utils/computeAttackDamage.ts', {
+  const support = loadTrustedGameplayModule('server/utils/resolveSupportAttack.ts', { '../db': store, 'drizzle-orm': sql })
+  const damage = loadTrustedGameplayModule('server/utils/computeAttackDamage.ts', {
     '../db': store, 'drizzle-orm': sql, './resolveSupportAttack': support,
     './clashArmor': { getOutsideClashArmorBonus: async () => 0 }, './damageOverTime': { isImmuneToEffect: () => false },
   })
   const unchanged = async state => ({ ...state, changed: false, logEntries: [] })
   const knockouts = { knockedOutEnemyIds: () => [], resolveEnemyKnockouts: unchanged }
-  const npc = loadTypeScriptWithMocks('server/utils/resolveNpcAttack.ts', {
+  const npc = loadTrustedGameplayModule('server/utils/resolveNpcAttack.ts', {
     '../db': store, 'drizzle-orm': sql, './computeAttackDamage': damage, './enemyKnockouts': knockouts,
     './partnerDevolution': { autoDevolveParticipant: async () => null },
   })
@@ -91,11 +92,11 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
   }
   let positions = {}
   const room = { getRoomPositions: async () => positions, broadcastPositionPatch: unexpected }
-  const area = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+  const area = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
     '../db': store, 'drizzle-orm': sql, './resolveNpcAttack': npc,
     './enemyKnockouts': knockouts, '~/server/utils/resolveSupportAttack': support,
   })
-  const decision = loadTypeScriptWithMocks('server/utils/intercedeDecision.ts', {
+  const decision = loadTrustedGameplayModule('server/utils/intercedeDecision.ts', {
     '../db': store, 'drizzle-orm': sql, '~/server/utils/resolveSupportAttack': support,
     '~/server/utils/encounterRoom': room, '~/server/utils/resolveAreaIntercedeGroup': area,
     '~/server/utils/combatSpatial': { loadEncounterMap: async () => ({ id: 'map' }) },
@@ -105,13 +106,13 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
     attack, records, participants, encounter, support, params,
     npc: overrides => npc.resolveNpcAttack({ ...params, ...overrides }),
     playerAttack: async flags => {
-      const offerHandler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+      const offerHandler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
         '../../../../db': store, 'drizzle-orm': sql, '~/server/utils/resolveSupportAttack': support,
         '~/server/utils/resolveNpcAttack': npc, '~/server/utils/encounterRoom': room,
         '~/server/utils/intercedePasses': { applyActivePasses: unexpected, passableOfferOwners: () => [] },
       }).default
       globalThis.$fetch = async (url, { body }) => { assert.ok(url.endsWith('/intercede-offer')); return offerHandler(body) }
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/attack.post.ts', mocks).default
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/attack.post.ts', mocks).default
       return handler({ participantId: participants[0].id, targetId: participants[1].id, attackId: attack.id, tamerId: 'owner',
         accuracyDicePool: 3, accuracySuccesses: 3, accuracyDiceResults: [6, 6, 6], ...flags })
     },
@@ -123,7 +124,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
       const request = encounter.pendingRequests.find(request => request.type === 'health-roll')
       assert.ok(request)
       const pool = request.data.healthDicePool
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', mocks).default
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', mocks).default
       return handler({ requestId: request.id, tamerId: 'owner', response: { type: 'health-rolled', healthDicePool: pool,
         healthSuccesses: pool, healthDiceResults: Array(pool).fill(6) } })
     },
@@ -150,7 +151,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
           findAreaIntercedePosition: () => ({ x: 3, y: 0, z: 0 }), hasValidThrowOutOfAreaCell: () => true,
         }
       }
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
         '../../../../db': store, 'drizzle-orm': sql,
         '~/server/utils/resolveSupportAttack': support,
         '~/server/utils/resolveNpcAttack': npc,
@@ -166,7 +167,7 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
           dir: { x: 1, y: 0, z: 0 }, bit: 1, ram: 1, movement: 5, attackerDims: { width: 1, height: 1, depth: 1 }, blastCenter: positions['defender-token'] } } : {}), ...bodyOverrides })
     },
     skip: async requestId => {
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-skip.post.ts', {
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-skip.post.ts', {
         '../../../../db': store, 'drizzle-orm': sql, '~/server/utils/intercedeDecision': decision,
       }).default
       return handler({ requestId })
@@ -177,11 +178,11 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
         data: { attackerParticipantId: participants[0].id, attackerEntityId: records[0].id, targetEntityId: records[1].id,
           attackerName: 'Twinmon', targetName: 'Defender', attackId: attack.id, attackData: attack, isSupportAttack: type === 'support',
           accuracySuccesses, accuracyDice: [6, 6, 6], totalTargetCount: 1, ...flags } }]
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', mocks).default
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', mocks).default
       return handler({ requestId: existing?.id ?? 'defense', tamerId: 'owner', response: { type: 'dodge-rolled', dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [] } })
     },
     legacy: async (flags = {}) => {
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', mocks).default
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/npc-attack.post.ts', mocks).default
       return handler({ participantId: participants[0].id, targetId: participants[1].id, attackId: attack.id,
         accuracyDicePool: 3, accuracySuccesses: 3, accuracyDiceResults: [6, 6, 6], dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [], ...flags })
     },

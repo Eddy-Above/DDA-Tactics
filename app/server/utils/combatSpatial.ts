@@ -24,6 +24,7 @@ export async function loadEncounterMap(mapId: string | null | undefined): Promis
     spaceTiles: (m as any).spaceTiles ?? [],
     voxels: (m as any).voxels ?? [],
     walls: m.walls ?? [],
+    windows: m.windows ?? [],
     doors: m.doors ?? [],
     ceilings: (m as any).ceilings ?? [],
     stairs: m.stairs ?? [],

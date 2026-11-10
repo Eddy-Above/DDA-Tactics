@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
@@ -231,7 +232,7 @@ async function withTamerApi(method, body, run, { gm: isGm = true, campaignId = '
     update: () => ({ set: patch => ({ where: async () => { assert.ok(locked, 'XP validation and saving hold the Tamer row lock'); stored = { ...stored, ...patch } } }) }),
     insert: () => ({ values: row => { stored = row; return { returning: async () => [stored] } } }) }
   try {
-    const handler = loadTypeScriptWithMocks(method === 'PUT' ? 'server/api/tamers/[id].put.ts' : 'server/api/tamers/index.post.ts', {
+    const handler = loadTrustedGameplayModule(method === 'PUT' ? 'server/api/tamers/[id].put.ts' : 'server/api/tamers/index.post.ts', {
       '../../db': { db, tamers: table }, '../../utils/ownership': { assertCanModifySandboxCharacter: async () => {} },
       '../../utils/session': { getSessionUser: async () => null }, '../../utils/id': { generateId: () => 'new-tamer' },
       '../../utils/campaignDm': { requireCampaignDm: async (_event, id) => {

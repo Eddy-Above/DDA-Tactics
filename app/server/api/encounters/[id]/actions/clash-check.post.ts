@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
 import { determineClashController, getClashSizeBonus } from '../../../../../data/attackConstants'
@@ -10,9 +12,10 @@ interface ClashCheckBody {
   diceResults: number[]
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ClashCheckBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'clash-check')
 
   if (!encounterId) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   if (!body.clashId || !body.participantId || body.roll === undefined || !body.diceResults) {

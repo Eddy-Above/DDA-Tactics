@@ -1,3 +1,7 @@
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireCampaignMember, requireCampaignDm } from '../../utils/campaignSecurity'
+import { requireLinkedEntity } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type NewDigimon } from '../../db'
 import { generateId } from '../../utils/id'
@@ -68,8 +72,10 @@ interface CreateDigimonBody {
   hidden?: boolean
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const body = await readBody<CreateDigimonBody>(event)
+  tableWriteBody(body, digimon, undefined, ['syncBonusDP'])
+  if (body.campaignId) await requireCampaignMember(event, body.campaignId)
 
   // Validate required fields (type is optional)
   if (!body.name || !body.stage || !body.attribute || !body.family || !body.baseStats) {
@@ -86,6 +92,10 @@ export default defineEventHandler(async (event) => {
       message: `Invalid stage: ${body.stage}`,
     })
   }
+
+  if (body.campaignId && (body.isEnemy || !body.partnerId)) await requireCampaignDm(event, body.campaignId)
+  await requireLinkedEntity(event, 'tamer', body.partnerId, body.campaignId ?? null)
+  for (const link of [body.evolvesFromId, ...(body.evolutionPathIds ?? [])]) await requireLinkedEntity(event, 'digimon', link, body.campaignId ?? null)
 
   const id = generateId()
   const now = new Date()
@@ -159,4 +169,4 @@ export default defineEventHandler(async (event) => {
   // Fetch and return the created digimon
   const [created] = await db.select().from(digimon).where(eq(digimon.id, id))
   return created
-})
+}))

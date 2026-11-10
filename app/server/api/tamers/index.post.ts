@@ -1,3 +1,6 @@
+import { requireCampaignMember } from '../../utils/campaignSecurity'
+import { requireLinkedEntity } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { db, tamers, type NewTamer } from '../../db'
 import { generateId } from '../../utils/id'
 import { getSessionUser } from '../../utils/session'
@@ -62,6 +65,8 @@ interface CreateTamerBody {
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<CreateTamerBody>(event)
+  tableWriteBody(body, tamers, undefined, [], ['publicAccess'])
+  if (body.campaignId) await requireCampaignMember(event, body.campaignId)
   if (body.xp !== undefined && (body.xp === null || !validTotalXp(body.xp))) {
     throw createError({ statusCode: 400, message: 'Available XP must be a nonnegative whole number' })
   }

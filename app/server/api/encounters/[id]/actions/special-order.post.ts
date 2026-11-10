@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq, inArray } from 'drizzle-orm'
 import { db, encounters, tamers, digimon, campaigns } from '../../../../db'
 import { getUnlockedSpecialOrders, getOrderActionCost, getOrderUsageLimit } from '../../../../../utils/specialOrders'
@@ -19,9 +21,10 @@ interface SpecialOrderBody {
   requestId?: string
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SpecialOrderBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'special-order')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

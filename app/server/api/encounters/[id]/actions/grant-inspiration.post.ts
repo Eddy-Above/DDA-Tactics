@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, tamers } from '../../../../db'
 
@@ -6,9 +8,10 @@ interface GrantInspirationBody {
   amount: number
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<GrantInspirationBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'grant-inspiration')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

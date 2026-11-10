@@ -1,8 +1,12 @@
+import { afterDatabaseCommit } from '../../utils/databaseScope'
+import { invalidateCampaignPeers } from '../../utils/websocketSecurity'
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireCampaignManager } from '../../utils/campaignSecurity'
 import { eq, inArray } from 'drizzle-orm'
-import { db, campaigns, tamers, digimon, encounters, evolutionLines, campaignAccessGrants, tamerAccessGrants } from '../../db'
+import { db, campaigns, tamers, digimon, encounters, maps, evolutionLines, campaignAccessGrants, tamerAccessGrants } from '../../db'
 import { requireOwnerOrCoOwner } from '../../utils/campaignAuth'
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
 
   if (!id) {
@@ -21,16 +25,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Only the owner/co-owner can delete an owned campaign. Ownerless
-  // campaigns keep today's fully-open behavior (DM password only).
-  if (existing.ownerId) {
-    await requireOwnerOrCoOwner(event, id)
-  }
+  // Owned campaigns require a manager; protected ownerless campaigns require verified GM access.
+  await requireCampaignManager(event, id)
 
   // Delete in child-first order for FK safety
   await db.delete(evolutionLines).where(eq(evolutionLines.campaignId, id))
   await db.delete(digimon).where(eq(digimon.campaignId, id))
   await db.delete(encounters).where(eq(encounters.campaignId, id))
+  await db.delete(maps).where(eq(maps.campaignId, id))
 
   // tamerAccessGrants has no campaignId column, so it can only be filtered
   // via tamerId — must run before the tamers themselves are deleted below.
@@ -44,5 +46,6 @@ export default defineEventHandler(async (event) => {
   await db.delete(campaignAccessGrants).where(eq(campaignAccessGrants.campaignId, id))
   await db.delete(campaigns).where(eq(campaigns.id, id))
 
+  afterDatabaseCommit(() => invalidateCampaignPeers(id))
   return { success: true, id }
-})
+}))

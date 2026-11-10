@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
@@ -382,6 +383,7 @@ const accuracyReviewContext = ref<{
   participant: CombatParticipant
   attack: any
   target: CombatParticipant
+  mapIntent?: MapAttackIntent
   areaTargets?: CombatParticipant[]
   areaShapeData?: AreaShapeData | null
   bolster: boolean
@@ -400,7 +402,7 @@ const confirmingAttack = ref(false)
 const { fetchTamer, fetchTamers, tamers: allTamersFromComposable, calculateDerivedStats: calcTamerStats } = useTamers()
 const { fetchDigimon, digimonList, calculateDerivedStats: _calcDigimonStats } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value, hasStrikeFirst.value)
-const { encounters, currentEncounter, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, spendInspiration, modeChange, error: encountersError } = useEncounters()
+const { encounters, currentEncounter, fetchEncounters, fetchEncounter, getCurrentParticipant, respondToRequest, getMyPendingRequests, performAttack, deleteResponse, cancelRequest, updateEncounter, addBattleLogEntry, nextTurn, performIntent, spendInspiration, modeChange, error: encountersError } = useEncounters()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 
 const digimonMap = computed(() => {
@@ -1915,7 +1917,7 @@ const {
   canAct: () => !!tamer.value,
   getParticipantAttacks,
   getAttackStats,
-  submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
+  submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body: { ...body, operationId: body.operationId ?? crypto.randomUUID(), ...(body.endClash ? { chargeTiming: 'after' } : {}) } }),
   // The clash-action response is not handed back; resync the encounter through the gate (it used
   // to fetch into the composable only, leaving this page's copy to the next push).
   refreshEncounter: () => resyncCombatState('clash'),
@@ -2021,56 +2023,14 @@ function getParticipantImage(participant: CombatParticipant): string | null {
 // Check if a participant can act (either their turn or their partner's turn)
 // Player combat actions (stance, movement, tamer direct)
 async function changePlayerStance(participant: CombatParticipant, stance: CombatParticipant['currentStance']) {
-  if (!activeEncounter.value || !tamer.value) return
-  if ((participant as any).clash) return
-  if ((participant.actionsRemaining?.simple || 0) < 1) return
-  if (participant.currentStance === stance) return
-
-  const participants = (activeEncounter.value.participants as CombatParticipant[])
-  const target = participants.find((p) => p.id === participant.id)
-  if (!target) return
-
-  target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
-  target.currentStance = stance
-
-  // Force Vue reactivity by reassigning activeEncounter with new object references
-  activeEncounter.value = { ...activeEncounter.value, participants: [...participants] }
-
-  await updateEncounter(activeEncounter.value.id, { participants })
-  await addBattleLogEntry(activeEncounter.value.id, {
-    round: activeEncounter.value.round,
-    actorId: target.id,
-    actorName: getParticipantName(target) || 'Unknown',
-    action: 'Changed stance',
-    target: null,
-    result: `Switched to ${stance} stance`,
-    damage: null,
-    effects: [],
-  })
+  if (!activeEncounter.value) return
+  const updated = await performIntent(activeEncounter.value.id, 'stance', { participantId: participant.id, stance, operationId: crypto.randomUUID() })
+  await applyActionResult(updated, 'stance')
 }
 
 async function usePlayerAction(participant: CombatParticipant, actionType: 'movement') {
-  if (!activeEncounter.value || !tamer.value) return
-
-  if ((participant.actionsRemaining?.simple || 0) < 1) return
-
-  const participants = (activeEncounter.value.participants as CombatParticipant[])
-  const target = participants.find((p) => p.id === participant.id)
-  if (!target) return
-
-  target.actionsRemaining.simple = Math.max(0, (target.actionsRemaining?.simple || 0) - 1)
-  await updateEncounter(activeEncounter.value.id, { participants, movementActionParticipantId: target.id } as any)
-
-  const updated = await addBattleLogEntry(activeEncounter.value.id, {
-    round: activeEncounter.value.round,
-    actorId: target.id,
-    actorName: getParticipantName(target) || 'Unknown',
-    action: 'Movement',
-    target: null,
-    result: 'Used movement action',
-    damage: null,
-    effects: [],
-  })
+  if (!activeEncounter.value) return
+  const updated = await performIntent(activeEncounter.value.id, 'card-move', { participantId: participant.id, operationId: crypto.randomUUID() })
   await applyActionResult(updated, 'move')
 }
 
@@ -2317,7 +2277,7 @@ function toggleAreaTarget(targetId: string) {
 }
 
 async function selectAttackAndShowTargets(participant: CombatParticipant, attack: any, radialOptions?: RadialAttackSelection) {
-  selectedAttack.value = { participant, attack, ...(radialOptions ? { radialOptions } : {}) }
+  selectedAttack.value = { participant, attack, mapIntent: { operationId: crypto.randomUUID(), ...(radialOptions?.chargeMode ? { chargeTiming: radialOptions.chargeMode } : {}) }, ...(radialOptions ? { radialOptions } : {}) }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
   lifestealComplexEnabled.value = false
@@ -2340,7 +2300,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
   if (!target || !selectedAttack.value || !activeEncounter.value || !tamer.value) return
 
   try {
-    const { participant, attack, radialOptions } = selectedAttack.value
+    const { participant, attack, radialOptions, mapIntent } = selectedAttack.value
 
     // Clear targeting UI immediately so the player sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -2373,6 +2333,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
     accuracyReviewContext.value = {
       participant,
       attack,
+      mapIntent,
       target,
       ...riders,
     }
@@ -2395,7 +2356,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   }
   if (!selectedAttack.value || !activeEncounter.value || !tamer.value || targets.length === 0) return
   try {
-    const { participant, attack, radialOptions } = selectedAttack.value
+    const { participant, attack, radialOptions, mapIntent } = selectedAttack.value
 
     // Clear targeting UI immediately so the player sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -2428,6 +2389,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     accuracyReviewContext.value = {
       participant,
       attack,
+      mapIntent,
       target: targets[0],
       areaTargets: targets,
       areaShapeData,
@@ -2465,7 +2427,7 @@ async function confirmAccuracyReview() {
         participant.id,
         attack.id,
         targets[0].id,
-        { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults },
+        { dicePool: accuracyPool, successes: accuracySuccesses, diceResults: accuracyDiceResults, mapIntent: ctx.mapIntent },
         tamer.value.id,
         attack.name,
         ctx.bolster ? { bolstered: true, bolsterType: ctx.bolsterType } : undefined,
@@ -2475,7 +2437,7 @@ async function confirmAccuracyReview() {
       )
 
       // Pass clash attack ends the clash once the attack is submitted.
-      if (ctx.clashAreaAttack) await executeClashAction(ctx.clashAreaAttack.controllerId, 'end')
+
 
       if (result) {
         const newEntries = newBattleLogEntries<any>(battleLogBefore, result)
@@ -2563,6 +2525,7 @@ async function confirmAccuracyReview() {
           dicePool: accuracyPool,
           successes: accuracySuccesses,
           diceResults: accuracyDiceResults,
+          mapIntent: ctx.mapIntent,
         },
         tamer.value.id,
         attack.name,
@@ -4685,7 +4648,8 @@ const mapSelectedAttackProp = computed(() => {
   return buildMapAttackDescriptor(selection, digimon ? { digimon, stats: calcDigimonStats(digimon) } : undefined)
 })
 
-function onMapTargetSelected(targetId: string) {
+function onMapTargetSelected(targetId: string, intent?: MapAttackIntent) {
+  if (selectedAttack.value && intent) selectedAttack.value.mapIntent = intent
   if (intercedeMapTargetIds.value.includes(targetId)) {
     playerIntercedeAreaChosenTarget.value = targetId
     return
@@ -4710,7 +4674,8 @@ function onMapTargetSelected(targetId: string) {
   confirmAttack(target)
 }
 
-function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
+function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null, intent?: MapAttackIntent) {
+  if (selectedAttack.value && intent) selectedAttack.value.mapIntent = intent
   if (!selectedAttack.value) return
   const participants = (activeEncounter.value?.participants as CombatParticipant[]) || []
   const targets = participants.filter(p => targetIds.includes(p.id))
@@ -4859,7 +4824,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               :eddy-soul-rules="eddySoulRules"
-              @encounter-updated="() => {}"
+              @encounter-updated="(snapshot: any) => applyActionResult(snapshot, 'move')"
               @attack-selected="onMapAttackSelected"
               @attack-rider-selected="onMapAttackRiderSelected"
               @stance-selected="onMapStanceSelected"

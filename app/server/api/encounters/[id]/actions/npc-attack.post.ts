@@ -5,7 +5,7 @@ import { getNaturewalkBonuses } from '../../../../../utils/naturewalk'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
-import { EFFECT_ALIGNMENT } from '../../../../../data/attackConstants'
+import { EFFECT_ALIGNMENT, BASIC_ATTACKS } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
 import type { DigimonStage, EddySoulRules } from '../../../../../types'
 import { applyDeferredIntercedeCost, recordTurnStart } from '../../../../../utils/intercedeActions'
@@ -24,8 +24,11 @@ import { attackActionCost, effectActionError } from '../../../../../utils/combat
 import { applyPositiveSupportEffect } from '../../../../utils/positiveSupportEffect'
 import { applyWoundDamage } from '../../../../utils/damageOverTime'
 import { lifestealHealing } from '../../../../../utils/lifesteal'
+import { runAttackCommand } from '../../../../utils/attackCommand'
+import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
+import { commitAttackMovement, grantChargeAfter, validateAttackTargets, type AttackMovementRequest } from '../../../../utils/attackMovement'
 
-interface NpcAttackBody {
+interface NpcAttackBody extends AttackMovementRequest {
   lifestealed?: boolean
   shieldComplex?: boolean
   participantId: string
@@ -59,6 +62,30 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  allowFields(body, ['participantId', 'attackId', 'targetId', 'accuracyDicePool', 'accuracySuccesses', 'accuracyDiceResults',
+    'dodgeDicePool', 'dodgeSuccesses', 'dodgeDiceResults', 'lifestealed', 'shieldComplex', 'operationId', 'expectedRevision', 'chargeTiming', 'movement', 'areaShapeData'])
+  return runAttackCommand(event, encounterId, body, 'npc-attack', async ({ encounter, access }) => {
+    validateAttackTargets(encounter, body)
+    const actor = encounter.participants.find((p: any) => p.id === body.participantId)
+    const [record] = actor?.type === 'digimon' ? await db.select().from(digimon).where(eq(digimon.id, actor.entityId)) : []
+    const attack = record?.attacks?.find((a: any) => a.id === body.attackId) ?? BASIC_ATTACKS.find(a => a.id === body.attackId)
+    if (!attack) throw createError({ statusCode: 400, message: 'Choose an attack from the current character' })
+    for (const key of ['accuracyDicePool', 'accuracySuccesses', 'dodgeDicePool', 'dodgeSuccesses'] as const) finiteNumber(body[key], key, { integer: true, min: 0, max: 10000 })
+    for (const dice of [body.accuracyDiceResults, body.dodgeDiceResults]) {
+      if (!Array.isArray(dice) || dice.length > 10000) throw createError({ statusCode: 400, message: 'Invalid dice' })
+      dice.forEach(die => finiteNumber(die, 'die', { integer: true, min: 1, max: 6 }))
+    }
+    const moved = await commitAttackMovement(encounter, body.participantId, attack, body, access)
+    if (!moved.defeated) {
+      await resolveNpcAttackBody(encounterId, body)
+      await grantChargeAfter(encounterId, body.participantId, attack, body.chargeTiming, encounter)
+    }
+    const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return fresh
+  })
+})
+
+async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
   // Fetch encounter
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
@@ -741,4 +768,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
   return updated
-})
+}

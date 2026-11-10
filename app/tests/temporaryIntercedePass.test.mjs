@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { afterEach, test } from 'node:test'
@@ -190,7 +191,7 @@ function createServer(initial) {
     resolvePositiveAuto: unexpected, resolvePositiveHealth: unexpected,
     resolveNegativeSupportNpc: unexpected, getPositiveSupportResolutionType: () => null,
   }
-  const areaModule = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+  const areaModule = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
     '../db': dbModule,
     'drizzle-orm': { eq },
     './resolveNpcAttack': { resolveNpcAttack: npcResolver },
@@ -198,7 +199,7 @@ function createServer(initial) {
     '~/server/utils/resolveSupportAttack': supportStubs,
     './guidingLight': { refreshGuidingLightForParticipants: async (_id, participants) => participants },
   })
-  const decision = loadTypeScriptWithMocks('server/utils/intercedeDecision.ts', {
+  const decision = loadTrustedGameplayModule('server/utils/intercedeDecision.ts', {
     'drizzle-orm': { eq },
     '../db': dbModule,
     '~/server/utils/encounterRoom': {
@@ -221,8 +222,8 @@ function createServer(initial) {
     '~/server/utils/resolveAreaIntercedeGroup': areaModule,
     '~/server/utils/resolveSupportAttack': supportStubs,
   })
-  const preferences = loadTypeScriptWithMocks('server/utils/intercedeOptOuts.ts', { 'drizzle-orm': { eq }, '../db': dbModule })
-  const passes = loadTypeScriptWithMocks('server/utils/intercedePasses.ts', {
+  const preferences = loadTrustedGameplayModule('server/utils/intercedeOptOuts.ts', { 'drizzle-orm': { eq }, '../db': dbModule })
+  const passes = loadTrustedGameplayModule('server/utils/intercedePasses.ts', {
     'drizzle-orm': { eq }, '../db': dbModule, './intercedeDecision': decision,
   })
   const decisionMocks = {
@@ -231,7 +232,7 @@ function createServer(initial) {
     '~/server/utils/intercedeClaims': queue,
   }
   const endpoint = (name, extra = {}) =>
-    loadTypeScriptWithMocks(`server/api/encounters/[id]/actions/${name}.post.ts`, { ...decisionMocks, ...extra }).default
+    loadTrustedGameplayModule(`server/api/encounters/[id]/actions/${name}.post.ts`, { ...decisionMocks, ...extra }).default
   const passEndpoint = endpoint('intercede-pass', { '~/server/utils/intercedePasses': passes })
   const skipEndpoint = endpoint('intercede-skip')
   const optOutEndpoint = endpoint('intercede-optouts')
@@ -331,11 +332,22 @@ test('a pass answers ordinary offers only; permanent opt-outs are a separate pre
 async function client(state) {
   let stored = copy(state)
   globalThis.ref = value => ({ value })
-  globalThis.$fetch = async (_url, options) => {
+  const { advanceEncounterTurn } = loadTypeScriptWithMocks('server/utils/encounterTurn.ts', {
+    './encounterUpdate': { updateEncounterState: async (_id, payload) => { stored = { ...stored, ...copy(payload) }; return copy(stored) } },
+  })
+  globalThis.$fetch = async (url, options) => {
     if (options?.method === 'PUT') stored = { ...stored, ...copy(options.body) }
+    if (url.endsWith('/actions/end-turn')) {
+      assert.equal(options.method, 'POST')
+      assert.equal(options.body.participantId, stored.turnOrder[stored.currentTurnIndex])
+      assert.equal(options.body.turnKey, loadTypeScript('utils/specialOrderCombat.ts').combatTurnKey(stored.round, stored.currentTurnIndex))
+      assert.equal(options.body.participants, undefined, 'the client sends an intent, never an authoritative roster')
+      assert.equal(typeof options.body.operationId, 'string')
+      await advanceEncounterTurn(copy(stored), new Map(Object.values(digimonRows).map(record => [record.id, record])))
+    }
     return copy(stored)
   }
-  const { useEncounters } = loadTypeScriptWithMocks('composables/useEncounters.ts', {})
+  const { useEncounters } = loadTrustedGameplayModule('composables/useEncounters.ts', {})
   const api = useEncounters()
   await api.fetchEncounter('encounter')
   return api
@@ -343,7 +355,7 @@ async function client(state) {
 
 function knockoutResolver() {
   const unchanged = async ({ participants }) => ({ participants, logEntries: [] })
-  return loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
+  return loadTrustedGameplayModule('server/utils/enemyKnockouts.ts', {
     '../db': { db: { select: unexpected }, digimon: {}, encounters: {}, campaigns: {} },
     './resolveSupportAttack': { getDigimonDerivedStats: unexpected },
     './combatSpatial': { loadParticipantDigimon: async () => new Map(Object.values(digimonRows).map(row => [row.id, row])) },
@@ -373,7 +385,7 @@ function legacyNpcAttack(state) {
       stored = { ...stored, ...copy(fields) }
     } }) }),
   }
-  return loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', {
+  return loadTrustedGameplayModule('server/api/encounters/[id]/actions/npc-attack.post.ts', {
     '../../../../db': { db, ...tables },
     'drizzle-orm': { eq },
     '../../../../utils/resolveSupportAttack': { getDigimonDerivedStats: unexpected, calculateEffectPotency: unexpected },
@@ -393,7 +405,7 @@ const turnState = (participants, turnOrder, currentTurnIndex = 0, round = 1) =>
   withPass(encounterRow({ participants, turnOrder, currentTurnIndex, round }))
 
 for (const wrap of [false, true]) {
-  test(`client turn advance ends the pass at its Tamer's turn${wrap ? ' after a round wrap' : ''}, and only then`, async () => {
+  test(`an end-turn intent runs the real server turn service and ends the pass at its Tamer's turn${wrap ? ' after a round wrap' : ''}, and only then`, async () => {
     const participants = wrap
       ? [tamer('tamer-p1', 'tamer-1'), digimonUnit('mon-1'), digimonUnit('foe', { isEnemy: true }), tamer('tamer-p2', 'tamer-2')]
       : [digimonUnit('foe', { isEnemy: true, isActive: true }), tamer('tamer-p1', 'tamer-1'), digimonUnit('mon-1'), tamer('tamer-p2', 'tamer-2')]
@@ -706,7 +718,7 @@ test('a pass applied while a Skip is being decided waits for it, so neither deci
 // --- offers created while passing ----------------------------------------------------------------------
 
 function loadOfferHandler(server, extra = {}) {
-  return loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+  return loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
     'drizzle-orm': { eq, inArray },
     '../../../../db': server.dbModule,
     '~/server/utils/resolveNpcAttack': { resolveNpcAttack: unexpected },
@@ -788,11 +800,11 @@ test('new offer creation waits for an automatic pass and preserves the defense i
 
 function loadPut(server) {
   const unchanged = async ({ participants }) => ({ participants, logEntries: [] })
-  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+  const spatial = loadTrustedGameplayModule('server/utils/combatSpatial.ts', {
     'drizzle-orm': { eq, inArray: (column, values) => ({ column, values }) },
     '../db': server.dbModule,
   })
-  return loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
+  return loadTrustedGameplayModule('server/api/encounters/[id].put.ts', {
     'drizzle-orm': { eq },
     '../../db': server.dbModule,
     '../../utils/combatSpatial': spatial,
@@ -851,7 +863,7 @@ test('a fresh copy starts with no passes; a snapshot keeps them (and the counter
   source.participants = source.participants.map(p => (p.id === 'tamer-p2' ? { ...p, turnsStarted: 3 } : p))
   const f = createServer(source)
   const inserted = []
-  const duplicate = loadTypeScriptWithMocks('server/api/encounters/[id]/duplicate.post.ts', {
+  const duplicate = loadTrustedGameplayModule('server/api/encounters/[id]/duplicate.post.ts', {
     'drizzle-orm': { eq },
     '../../../db': { db: { ...f.db, insert: () => ({ values: async row => { inserted.push(copy(row)) } }) }, ...f.tables },
     '../../../utils/id': { generateId: () => `copy-${inserted.length}` },
@@ -887,7 +899,7 @@ function claimFixture(initial) {
   const server = createServer(initial)
   const entered = deferred()
   const release = deferred()
-  const claim = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
+  const claim = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
     '../../../../db': server.dbModule,
     'drizzle-orm': { eq, inArray },
     '~/server/utils/intercedeClaims': queue,

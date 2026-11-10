@@ -1,3 +1,4 @@
+import { requireCampaignDm } from '../../../utils/campaignSecurity'
 import { eq } from 'drizzle-orm'
 import { db, campaigns, tamers, digimon } from '../../../db'
 import { generateId } from '../../../utils/id'
@@ -9,6 +10,8 @@ export default defineEventHandler(async (event) => {
   if (!campaignId) {
     throw createError({ statusCode: 400, message: 'Campaign ID is required' })
   }
+
+  const campaignAccess = await requireCampaignDm(event, campaignId)
 
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
   if (!campaign) {

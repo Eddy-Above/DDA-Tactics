@@ -1,3 +1,4 @@
+import { requireCampaignMember } from '../../../utils/campaignSecurity'
 import { desc, eq } from 'drizzle-orm'
 import { db, rollLog } from '../../../db'
 import { ROLL_LOG_LIMIT } from '../../../utils/rollLog'
@@ -8,6 +9,8 @@ export default defineEventHandler(async (event) => {
   if (!campaignId) {
     throw createError({ statusCode: 400, message: 'Campaign ID is required' })
   }
+
+  const campaignAccess = await requireCampaignMember(event, campaignId)
 
   const entries = await db
     .select()

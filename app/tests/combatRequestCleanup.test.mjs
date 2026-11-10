@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -51,19 +52,19 @@ function server() {
       stored = { ...stored, ...copy(fields) }
     } }) }),
   }
-  const queue = loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
+  const queue = loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
   const common = {
     'drizzle-orm': { eq: () => ({}) },
     '../../../../db': { db, ...tables },
     '../../../../utils/intercedeClaims': queue,
   }
-  const deleteRequest = loadTypeScriptWithMocks('server/api/encounters/[id]/requests/[requestId].delete.ts', common).default
-  const deleteResponse = loadTypeScriptWithMocks('server/api/encounters/[id]/responses/[responseId].delete.ts', common).default
-  const createRequest = loadTypeScriptWithMocks('server/api/encounters/[id]/requests.post.ts', {
+  const deleteRequest = loadTrustedGameplayModule('server/api/encounters/[id]/requests/[requestId].delete.ts', common).default
+  const deleteResponse = loadTrustedGameplayModule('server/api/encounters/[id]/responses/[responseId].delete.ts', common).default
+  const createRequest = loadTrustedGameplayModule('server/api/encounters/[id]/requests.post.ts', {
     'drizzle-orm': common['drizzle-orm'], '../../../db': { db, ...tables }, '../../../utils/intercedeClaims': queue,
   }).default
   const unexpected = new Proxy({}, { get: (_target, name) => () => { throw new Error(`unexpected ${String(name)}`) } })
-  const submit = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', {
+  const submit = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', {
     'drizzle-orm': { eq: () => ({}), inArray: () => ({}) },
     '../../../db': { db, ...tables },
     '../../../utils/intercedeClaims': queue,

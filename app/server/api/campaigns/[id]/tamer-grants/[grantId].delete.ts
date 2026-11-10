@@ -1,3 +1,4 @@
+import { invalidateCampaignPeers } from '../../../../utils/websocketSecurity'
 import { and, eq } from 'drizzle-orm'
 import { db, tamerAccessGrants, tamers } from '../../../../db'
 import { requireOwnerOrCoOwner } from '../../../../utils/campaignAuth'
@@ -22,6 +23,8 @@ export default defineEventHandler(async (event) => {
   }
 
   await db.delete(tamerAccessGrants).where(eq(tamerAccessGrants.id, grantId))
+
+  invalidateCampaignPeers(campaignId)
 
   return { success: true, id: grantId }
 })

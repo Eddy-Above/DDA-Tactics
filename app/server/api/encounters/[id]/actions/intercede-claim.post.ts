@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
 import { eq, inArray } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
@@ -95,9 +97,10 @@ function stripClaimantFromGroupOffers(
   return updated
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeClaimBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'intercede-claim')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

@@ -1,3 +1,6 @@
+import { defineEncounterCommand } from '../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../utils/encounterAuthorization'
+import { requireLinkedEntity } from '../../../utils/entitySecurity'
 import { autoDevolveParticipant } from '../../../utils/partnerDevolution'
 import { recordCleanseOutcome, pruneEmptyCleanseRequests } from '../../../utils/cleanse'
 import { serverDodgeDefense, recountSubmittedDodge } from '../../../utils/combatDodge'
@@ -53,9 +56,11 @@ interface SubmitResponseBody {
   }
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SubmitResponseBody>(event)
+  const responseContext = await authorizeEncounterIntent(event, encounterId, body, 'response')
+  if (body.response?.digimonId) await requireLinkedEntity(event, 'digimon', body.response.digimonId, responseContext.encounter.campaignId)
 
   if (!encounterId) {
     throw createError({

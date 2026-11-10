@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { computed, reactive } from 'vue'
@@ -25,8 +26,8 @@ function fixture() {
   }
   const spatial = { loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), loadEncounterMap: async () => null }
   const room = { getRoomSnapshot: async () => ({ participantPositions: {}, destructibleStates: [] }), getRoomPositions: async () => ({}) }
-  const helper = loadTypeScriptWithMocks('server/utils/naturewalk.ts', { './combatSpatial': spatial, './encounterRoom': room })
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
+  const helper = loadTrustedGameplayModule('server/utils/naturewalk.ts', { './combatSpatial': spatial, './encounterRoom': room })
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id].put.ts', {
     '../../db': { db, encounters: { id: 'id' } }, 'drizzle-orm': { eq: () => null },
     '../../utils/combatSpatial': spatial, '../../utils/naturewalk': helper,
     '../../utils/encounterRoom': room,
@@ -34,6 +35,11 @@ function fixture() {
     '../../utils/encounterStartTriggers': { applyEncounterStartTriggers: async participants => participants },
     '../../utils/combatContext': { loadCampaignCombatContext: async () => ({ campaignLevel: 'standard', houseRules: {} }) },
     '../../utils/enemyKnockouts': { knockedOutEnemyIds: () => [] },
+    '../../utils/campaignSecurity': { requireEncounterAccess: async () => {
+      control.gmChecks++
+      if (!control.isGm) throw Object.assign(new Error('GM required'), { statusCode: 403 })
+      return { encounter: structuredClone(encounter), access: { isDm: true } }
+    } },
     '../../utils/campaignDm': { requireCampaignDm: async () => { control.gmChecks++; if (!control.isGm) throw Object.assign(new Error('GM required'), { statusCode: 403 }) } },
   }).default
   return { control, records, state: () => encounter, save: body => handler({ body }) }

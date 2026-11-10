@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -78,7 +79,7 @@ test('a failed partner lookup propagates and can be retried in the same action',
   })
 })
 
-describe('the real action routes keep their validation errors around the shared turn guard', () => {
+describe('trusted action business services keep their validation errors around the shared turn guard', () => {
   const names = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError']
   const originalGlobals = new Map(names.map(name => [name, globalThis[name]]))
   afterEach(() => {
@@ -129,7 +130,28 @@ describe('the real action routes keep their validation errors around the shared 
       '../../../../../utils/specialOrderCombat': orders,
       '../../../../utils/enemyKnockouts': { knockedOutEnemyIds: () => [] },
     })
-    const handler = loadTypeScriptWithMocks(relativePath, mocks).default
+    // Campaign/actor admission and HTTP payload validation have dedicated security
+    // suites. These fixtures exercise the real business services after admission,
+    // preserving their turn-guard order and record-read assertions.
+    const businessName = { attack: 'prepareAttack', 'npc-attack': 'resolveNpcAttackBody', 'clash-action': 'resolveClashAction' }[action]
+    let handler
+    if (businessName) {
+      const bindings = new Map()
+      for (const declaration of source.statements.filter(ts.isImportDeclaration)) {
+        for (const element of declaration.importClause?.namedBindings?.elements ?? []) {
+          bindings.set(element.name.text, mocks[declaration.moduleSpecifier.text]?.[(element.propertyName ?? element.name).text])
+        }
+      }
+      const businessSource = source.statements.filter(ts.isFunctionDeclaration).map(node => node.getText(source)).join('\n')
+      const { outputText } = ts.transpileModule(businessSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } })
+      const business = new Function(...bindings.keys(), `${outputText}\nreturn ${businessName}`)(...bindings.values())
+      handler = event => business('encounter', event.body)
+    } else {
+      for (const specifier of Object.keys(mocks)) {
+        if (/\/(?:encounterCommand|encounterAuthorization|campaignSecurity|securityValidation)$/.test(specifier) && Object.keys(mocks[specifier]).length === 0) delete mocks[specifier]
+      }
+      handler = loadTrustedGameplayModule(relativePath, mocks).default
+    }
     const body = {
       participantId: participant.id, breakerId: participant.id, tamerId: owner.entityId,
       attackId: 'attack', targetId: 'missing-target', clashId: 'clash', actionType: 'attack',

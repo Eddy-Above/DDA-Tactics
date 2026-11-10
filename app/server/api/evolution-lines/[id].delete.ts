@@ -1,3 +1,4 @@
+import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines } from '../../db'
 
@@ -20,6 +21,8 @@ export default defineEventHandler(async (event) => {
       message: `Evolution line with ID ${id} not found`,
     })
   }
+
+  await requireEntityAccess(event, 'evolution-line', existing, true)
 
   // Delete evolution line
   await db.delete(evolutionLines).where(eq(evolutionLines.id, id))

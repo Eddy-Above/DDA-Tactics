@@ -1,3 +1,6 @@
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireEntityAccess, requireLinkedEntity } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { db, evolutionLines, type NewEvolutionLine } from '../../db'
 import { generateId } from '../../utils/id'
 
@@ -15,8 +18,9 @@ interface CreateEvolutionLineBody {
   campaignId?: string
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const body = await readBody<CreateEvolutionLineBody>(event)
+  tableWriteBody(body, evolutionLines)
 
   if (!body.name || !body.chain || body.chain.length === 0) {
     throw createError({
@@ -32,6 +36,10 @@ export default defineEventHandler(async (event) => {
       message: 'All chain entries must be linked to a Digimon',
     })
   }
+
+  await requireEntityAccess(event, 'evolution-line', body, true)
+  await requireLinkedEntity(event, 'tamer', body.partnerId, body.campaignId ?? null)
+  for (const entry of body.chain) await requireLinkedEntity(event, 'digimon', entry.digimonId, body.campaignId ?? null)
 
   const id = generateId()
   const now = new Date()
@@ -58,4 +66,4 @@ export default defineEventHandler(async (event) => {
   await db.insert(evolutionLines).values(newEvolutionLine)
 
   return newEvolutionLine
-})
+}))

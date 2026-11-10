@@ -29,7 +29,7 @@ export async function createSession(event: H3Event, userId: string): Promise<{ t
 
 // Never throws — "no session" is just another valid state, same as the
 // existing cookie-presence checks elsewhere in the app.
-export async function getSessionUser(event: H3Event): Promise<{ id: string; username: string } | null> {
+export async function getSessionUser(event: H3Event): Promise<{ id: string; username: string; expiresAt: number } | null> {
   const token = getCookie(event, SESSION_COOKIE)
   if (!token) return null
 
@@ -41,7 +41,7 @@ export async function getSessionUser(event: H3Event): Promise<{ id: string; user
 
   if (!row || row.expiresAt.getTime() <= Date.now()) return null
 
-  return { id: row.userId, username: row.username }
+  return { id: row.userId, username: row.username, expiresAt: row.expiresAt.getTime() }
 }
 
 export async function destroySession(event: H3Event): Promise<void> {

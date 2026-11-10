@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, mock, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -164,9 +165,19 @@ test('map compact saves cannot replace newer local state, and failed/stale loads
 
 function endpointFixture() {
   let row = map([voxel(0)]), writes = 0, reads = 0
-  const columns = { id: { key: 'id' }, updatedAt: { key: 'updatedAt' } }
+  const columns = { id: { key: 'id' }, updatedAt: { key: 'updatedAt' }, campaignId: { key: 'campaignId' }, doors: { key: 'doors' }, walls: { key: 'walls' } }
+  const encounters = { id: { key: 'id' }, mapId: { key: 'mapId' } }
   const db = {
-    select() { reads++; throw new Error('a full-row read is unnecessary') },
+    transaction: async work => work(db),
+    select(projection) {
+      assert.ok(projection, 'autosave must never select the full geometry row')
+      assert.ok(!Object.hasOwn(projection, 'voxels'), 'voxel geometry must not be downloaded during saving')
+      return { from: table => ({ where: () => {
+        const value = table === columns ? (row ? [row] : []) : []
+        if (table === columns) reads++
+        return { then: (yes, no) => Promise.resolve(value).then(yes, no), for: async mode => { assert.equal(mode, 'update'); return value } }
+      } }) }
+    },
     update() { return { set(patch) { return { where(condition) { return { returning: async projection => {
       writes++
       if (!row || row.id !== condition.value) return []
@@ -179,8 +190,8 @@ function endpointFixture() {
   globalThis.readBody = async event => event.body
   globalThis.getQuery = event => event.query ?? {}
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const handler = loadTypeScriptWithMocks('server/api/maps/[mapId].put.ts', {
-    '../../db': { db, maps: columns }, 'drizzle-orm': { eq: (column, value) => ({ column, value }) },
+  const handler = loadTrustedGameplayModule('server/api/maps/[mapId].put.ts', {
+    '../../db': { db, maps: columns, encounters }, 'drizzle-orm': { eq: (column, value) => ({ column, value }) },
   }).default
   return { handler, remove: () => { row = null }, get writes() { return writes }, get reads() { return reads } }
 }
@@ -192,7 +203,7 @@ test('map PUT returns only an acknowledgement when requested and uses one update
   assert.equal(result.id, 'map')
   assert.ok(result.updatedAt instanceof Date)
   assert.equal(f.writes, 1)
-  assert.equal(f.reads, 0)
+  assert.equal(f.reads, 1, 'one metadata read authorizes and locks the map without loading its geometry')
 })
 
 test('map PUT keeps the default full-map response and reports missing maps', async () => {

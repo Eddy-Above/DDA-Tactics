@@ -1,3 +1,5 @@
+import { filterReadableEntities } from '../../utils/entitySecurity'
+import { requireCampaignMember } from '../../utils/campaignSecurity'
 import { and, eq, isNull, or } from 'drizzle-orm'
 import { db, tamers } from '../../db'
 import { getSessionUser } from '../../utils/session'
@@ -5,6 +7,7 @@ import { getSessionUser } from '../../utils/session'
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const campaignId = query.campaignId as string | undefined
+  if (campaignId) await requireCampaignMember(event, campaignId)
   const sandbox = query.sandbox === 'true'
 
   let queryBuilder = db.select().from(tamers)
@@ -22,5 +25,5 @@ export default defineEventHandler(async (event) => {
     queryBuilder = queryBuilder.where(eq(tamers.campaignId, campaignId)) as typeof queryBuilder
   }
 
-  return await queryBuilder
+  return filterReadableEntities(event, await queryBuilder, 'tamer')
 })

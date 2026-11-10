@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers, maps } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
@@ -17,9 +19,10 @@ interface ClashInitiateBody {
   reachDistance?: number  // meters away if using Reach quality
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ClashInitiateBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'clash-initiate')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

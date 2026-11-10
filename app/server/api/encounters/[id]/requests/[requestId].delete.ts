@@ -1,10 +1,13 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../../db'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const requestId = getRouterParam(event, 'requestId')
+  await authorizeEncounterIntent(event, encounterId, { requestId }, 'requests-delete')
 
   if (!encounterId || !requestId) {
     throw createError({

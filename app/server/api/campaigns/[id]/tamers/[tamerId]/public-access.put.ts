@@ -1,3 +1,5 @@
+import { allowFields, boundedString } from '../../../../../utils/securityValidation'
+import { invalidateCampaignPeers } from '../../../../../utils/websocketSecurity'
 import { and, eq } from 'drizzle-orm'
 import { db, campaigns, tamers } from '../../../../../db'
 import { requireOwnerOrCoOwner } from '../../../../../utils/campaignAuth'
@@ -29,6 +31,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody<UpdateBody>(event)
+  allowFields(body, ['publicAccess'])
   if (typeof body.publicAccess !== 'boolean') {
     throw createError({ statusCode: 400, message: 'publicAccess (boolean) is required' })
   }
@@ -39,5 +42,7 @@ export default defineEventHandler(async (event) => {
     .where(eq(tamers.id, tamerId))
 
   const [updated] = await db.select().from(tamers).where(eq(tamers.id, tamerId))
+  invalidateCampaignPeers(campaignId)
+
   return updated
 })

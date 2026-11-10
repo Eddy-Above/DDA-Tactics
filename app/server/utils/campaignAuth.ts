@@ -1,3 +1,4 @@
+import { enforcePrincipalWriteLimit } from './securityTransport'
 import { and, eq } from 'drizzle-orm'
 import type { H3Event } from 'h3'
 import { db, campaigns, campaignAccessGrants, tamerAccessGrants, tamers } from '../db'
@@ -5,6 +6,7 @@ import { getSessionUser } from './session'
 
 export interface MyCampaignAccessResult {
   userId: string | null
+  sessionExpiresAt?: number
   isOwner: boolean
   isCoOwner: boolean
   isCoDm: boolean
@@ -53,6 +55,7 @@ export async function getMyCampaignAccess(event: H3Event, campaignId: string): P
 
   return {
     userId: user.id,
+    ...(user.expiresAt !== undefined ? { sessionExpiresAt: user.expiresAt } : {}),
     isOwner,
     isCoOwner,
     isCoDm,
@@ -69,5 +72,6 @@ export async function requireOwnerOrCoOwner(event: H3Event, campaignId: string):
   if (!access.isOwner && !access.isCoOwner) {
     throw createError({ statusCode: 403, message: 'Only the campaign owner or a co-owner can do this' })
   }
+  if (event.node?.req?.method) enforcePrincipalWriteLimit(event, `user:${access.userId}`)
   return access.userId as string
 }

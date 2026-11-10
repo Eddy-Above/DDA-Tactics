@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
 
@@ -7,9 +9,10 @@ interface DirectActionBody {
   bolstered: boolean
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<DirectActionBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'direct')
 
   if (!encounterId) {
     throw createError({

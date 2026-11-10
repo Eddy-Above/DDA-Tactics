@@ -397,7 +397,7 @@ test('the socket tells the page when it reopens after a drop, not on the first c
     static OPEN = 1
     constructor(url) { this.url = url; this.readyState = 1; sockets.push(this) }
     send() {}
-    close() { this.onclose?.() }
+    close() { this.onclose?.({ code: 1000 }) }
   }
   globalThis.ref = value => ({ value })
   globalThis.watch = (_source, callback) => { watchers.push(callback) }
@@ -415,7 +415,7 @@ test('the socket tells the page when it reopens after a drop, not on the first c
     sockets[0].onopen()
     assert.equal(reconnects, 0, 'the first connection is not a reconnect')
 
-    sockets[0].onclose()                 // the connection drops
+    sockets[0].onclose({ code: 1006 })   // the connection drops unexpectedly
     mock.timers.tick(1000)               // backoff elapses and the composable reconnects
     assert.equal(sockets.length, 2)
     sockets[1].onopen()

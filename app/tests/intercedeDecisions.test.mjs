@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -100,8 +101,8 @@ function fixture() {
     },
   }
   const dbExports = { db, ...tables }
-  const queue = loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
-  const claim = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
+  const queue = loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
+  const claim = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
     '../../../../db': dbExports,
     'drizzle-orm': { eq: (_column, value) => ({ value }), inArray: (_column, values) => ({ values }) },
     '~/server/utils/intercedeClaims': queue,
@@ -186,9 +187,9 @@ function fixture() {
     '~/server/utils/intercedeOptOuts': preferences,
     '~/server/utils/intercedeClaims': queue,
   }
-  const skip = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-skip.post.ts', decisionMocks).default
-  const optOuts = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-optouts.post.ts', decisionMocks).default
-  const quickReaction = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/quick-reaction.post.ts', {
+  const skip = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-skip.post.ts', decisionMocks).default
+  const optOuts = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-optouts.post.ts', decisionMocks).default
+  const quickReaction = loadTrustedGameplayModule('server/api/encounters/[id]/actions/quick-reaction.post.ts', {
     ...decisionMocks,
     '~/utils/specialOrders': { getUnlockedSpecialOrders: unexpected },
     '~/server/utils/resolveAreaIntercedeGroup': { isAreaTargetCovered: unexpected },

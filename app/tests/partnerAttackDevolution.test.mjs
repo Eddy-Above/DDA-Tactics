@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -47,7 +48,7 @@ function fixture(history, { transactionOnly = false, enemy = false } = {}) {
     } }) }),
   }
   const moduleDb = { ...tables, db: transactionOnly ? { select: unexpected, update: unexpected } : database }
-  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+  const partnerDevolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', {
     '../db': moduleDb, 'drizzle-orm': sql,
   })
   const guidingLight = { refreshGuidingLightForParticipants: async (encounterId, participants, positions) => {
@@ -75,7 +76,7 @@ function fixture(history, { transactionOnly = false, enemy = false } = {}) {
 }
 
 function attackResolver(f) {
-  return loadTypeScriptWithMocks('server/utils/resolveNpcAttack.ts', {
+  return loadTrustedGameplayModule('server/utils/resolveNpcAttack.ts', {
     '../db': f.moduleDb, 'drizzle-orm': sql,
     './partnerDevolution': f.partnerDevolution,
     './computeAttackDamage': { computeAttackDamage: async () => ({
@@ -163,7 +164,7 @@ for (const { history, parentKnockedOut } of [
   test(`area intercede ${history ? 'restores saved combat history' : parentKnockedOut ? 'restores an already-knocked-out parent once' : 'restores a history-free partner'} using the supplied transaction for all form reads and writes`, async () => {
     const f = fixture(history, { transactionOnly: true })
     if (parentKnockedOut) f.records.rookie.currentWounds = 11
-    const { resolveAreaIntercedeGroup } = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+    const { resolveAreaIntercedeGroup } = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
       '../db': f.moduleDb, 'drizzle-orm': sql,
       './partnerDevolution': f.partnerDevolution,
       './resolveNpcAttack': { resolveNpcAttack: unexpected },
@@ -257,14 +258,14 @@ function directClaimFixture(history) {
     },
   }
   const dbModule = { ...f.moduleDb, db }
-  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+  const partnerDevolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', {
     '../db': dbModule, 'drizzle-orm': sql,
   })
   globalThis.defineEventHandler = handler => handler
   globalThis.getRouterParam = () => 'encounter'
   globalThis.readBody = async body => body
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
     '../../../../db': dbModule,
     'drizzle-orm': { ...sql, inArray: (_column, value) => ({ value }) },
     '../../../../utils/partnerDevolution': partnerDevolution,

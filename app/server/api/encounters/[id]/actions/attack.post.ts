@@ -14,8 +14,13 @@ import { combatAttackStats } from '../../../../../utils/combatDice'
 import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { effectActionError } from '../../../../../utils/combatAttackOptions'
+import { runAttackCommand } from '../../../../utils/attackCommand'
+import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
+import { commitAttackMovement, grantChargeAfter, finishPassClash, validateAttackTargets, type AttackMovementRequest } from '../../../../utils/attackMovement'
+import { resolveAttackOffers } from './intercede-offer.post'
+import { BASIC_ATTACKS } from '../../../../../data/attackConstants'
 
-interface AttackActionBody {
+interface AttackActionBody extends AttackMovementRequest {
   participantId: string
   attackId: string
   targetId?: string
@@ -62,16 +67,32 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Read and persist in the same queue as defense answers and offer creation. Delegation must
-  // happen after this claim releases: intercede-offer acquires this non-reentrant queue itself.
-  const prepared = await serializeIntercedeClaim(encounterId, () => prepareAttack(encounterId, body))
-  if (prepared.type === 'intercede') {
-    return $fetch<Encounter>(`/api/encounters/${encounterId}/actions/intercede-offer`, {
-      method: 'POST',
-      body: prepared.body,
-    })
-  }
-  return prepared.encounter
+  allowFields(body, ['participantId', 'attackId', 'targetId', 'targetIds', 'accuracyDicePool', 'accuracySuccesses', 'accuracyDiceResults', 'tamerId', 'attackName',
+    'bolstered', 'bolsterType', 'lifestealed', 'shieldComplex', 'hugePowerUsed', 'hugePowerRank', 'hugePowerTrackAll', 'hugePowerAttackRange',
+    'clashNoInterceptTargetId', 'areaShapeData', 'chargeTiming', 'movement', 'operationId', 'expectedRevision'])
+  return runAttackCommand(event, encounterId, body, 'attack', async ({ encounter, access }) => {
+    validateAttackTargets(encounter, body)
+    if (!Array.isArray(body.accuracyDiceResults) || body.accuracyDiceResults.length > 10000) throw createError({ statusCode: 400, message: 'Invalid accuracy dice' })
+    body.accuracyDiceResults.forEach(die => finiteNumber(die, 'die', { integer: true, min: 1, max: 6 }))
+    finiteNumber(body.accuracyDicePool, 'accuracyDicePool', { integer: true, min: 0, max: 10000 })
+    finiteNumber(body.accuracySuccesses, 'accuracySuccesses', { integer: true, min: 0, max: 10000 })
+    const actor = encounter.participants.find((p: any) => p.id === body.participantId)
+    const [record] = actor?.type === 'digimon' ? await db.select().from(digimon).where(eq(digimon.id, actor.entityId)) : []
+    const attack = record?.attacks?.find((a: any) => a.id === body.attackId) ?? BASIC_ATTACKS.find(a => a.id === body.attackId)
+    if (!attack) throw createError({ statusCode: 400, message: 'Choose an attack from the current character' })
+    const pass = getAreaShape(attack.tags ?? []) === 'pass'
+    if (pass && actor?.clash?.isController) body.clashNoInterceptTargetId = actor.clash.opponentParticipantId
+    if (body.clashNoInterceptTargetId && (!pass || !actor?.clash?.isController || body.clashNoInterceptTargetId !== actor.clash.opponentParticipantId)) throw createError({ statusCode: 403, message: 'Invalid clash attack context' })
+    const moved = await commitAttackMovement(encounter, body.participantId, attack, body, access)
+    if (!moved.defeated) {
+      const prepared = await prepareAttack(encounterId, body)
+      if (prepared.type === 'intercede') await resolveAttackOffers(encounterId, prepared.body as any, { actionsPaid: true })
+      await finishPassClash(encounterId, body.participantId, attack)
+      await grantChargeAfter(encounterId, body.participantId, attack, body.chargeTiming, encounter)
+    }
+    const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+    return fresh
+  })
 })
 
 async function prepareAttack(encounterId: string, body: AttackActionBody): Promise<PreparedAttack> {
@@ -269,6 +290,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
   }
 
   let actionCostSimple = (body.bolstered || body.lifestealed || body.shieldComplex || attackHasComplexEffect) ? 2 : 1
+  if (actor.clash) actionCostSimple = Math.max(2, actionCostSimple)
 
   // EddySoul: Combat Monster + Area Attack requires a Complex Action (unless no bonus)
   const campaignRulesSettings = campaign?.rulesSettings || {}

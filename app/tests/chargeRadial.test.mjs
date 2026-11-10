@@ -15,12 +15,12 @@ const { descriptor } = parse(readFileSync(mapFile, 'utf8'))
 const source = ts.createSourceFile('EncounterMap.vue', descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 
 function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
-  const props = Vue.reactive({ selectedAttack: null, encounter: { id: 'encounter' } })
+  const props = Vue.reactive({ selectedAttack: null, encounter: { id: 'encounter', revision: 8, participants: [] } })
   const positions = Vue.ref({ partner: { x: 0, y: 0, z: 0 }, tamer: { x: 5, y: 0, z: 5 } })
   const calls = { reach: [], clear: 0, emitted: [], moved: [], movers: [] }
   const caps = { pos: positions.value.partner, budget: 4, caps: {}, occupied: new Map(), dInfo: { size: 'small' } }
   const dependencies = {
-    ref: Vue.ref, computed: Vue.computed, watch: Vue.watch, props, positions,
+    ref: Vue.ref, computed: Vue.computed, watch: Vue.watch, props, positions, pendingAttackIntent: null,
     map: Vue.ref({ id: 'map' }), activeParticipantId: Vue.ref('tamer'),
     getAreaShape, computePassLanding, chebyshev,
     npcMoveCaps: id => { calls.movers.push(id); return caps },
@@ -32,14 +32,14 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     ws: { send: message => calls.moved.push(message) }, postMove: saveMove,
     emit: (...args) => calls.emitted.push(args),
   }
-  const names = ['chargeMode', 'chargeAfterAttackerId', 'chargeMoveParticipantId', 'isChargeAttack']
+  const names = ['chargeMode', 'chargeAfterAttackerId', 'chargeMoveParticipantId', 'isChargeAttack', 'attackPreview']
   const declarations = source.statements.filter(ts.isVariableStatement).flatMap(statement => [...statement.declarationList.declarations])
   const variables = names.map(name => {
     const declaration = declarations.find(node => node.name.getText(source) === name)
     assert.ok(declaration, name)
     return `const ${declaration.getText(source)};`
   })
-  const handlers = ['sameVec3', 'startChargeBefore', 'onChargeTargetSelected', 'onTargetSelected', 'onAreaAttackConfirmed']
+  const handlers = ['attackIntent', 'sameVec3', 'startChargeBefore', 'onChargeTargetSelected', 'onTargetSelected', 'onAreaAttackConfirmed']
   const functions = handlers.map(name => {
     const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)
     assert.ok(node, name)
@@ -49,7 +49,8 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     && node.expression.expression.getText(source) === 'watch'
     && node.expression.arguments[0]?.getText(source) === '() => props.selectedAttack')
   assert.ok(watcher)
-  const { outputText } = ts.transpileModule([...variables, ...functions, watcher.getText(source)].join('\n'), {
+  const allowanceWatcher = source.statements.find(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === 'watch' && node.expression.arguments[0]?.getText(source).includes('pendingChargeMove'))
+  const { outputText } = ts.transpileModule([...variables, ...functions, watcher.getText(source), allowanceWatcher.getText(source)].join('\n'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   })
   const scope = Vue.effectScope()
@@ -69,28 +70,26 @@ test('a Charge attack without a movement option targets normally and never start
   assert.equal(h.chargeMode.value, null)
   assert.equal(h.calls.reach.length, 0)
   h.onTargetSelected('enemy')
-  assert.deepEqual(h.calls.emitted, [['target-selected', 'enemy']])
+  assert.deepEqual(h.calls.emitted[0].slice(0, 2), ['target-selected', 'enemy'])
   h.props.selectedAttack = null
   await Vue.nextTick()
   assert.equal(h.chargeMoveParticipantId.value, null)
   assert.equal(h.calls.reach.length, 0)
 })
 
-test('Move Before uses the partner movement context and waits for saving the move before attacking', async t => {
-  let release
-  const gate = new Promise(resolve => { release = resolve })
-  const h = chargeHarness(t, { saveMove: () => gate })
+test('Move Before uses the partner context and keeps movement local until the final attack', async t => {
+  const h = chargeHarness(t)
   await h.select('before')
   assert.equal(h.chargeMode.value, 'before')
   assert.deepEqual(h.calls.movers, ['partner'])
   assert.equal(h.calls.reach.length, 1)
-  const moving = h.onChargeTargetSelected('partner', { x: 1, y: 0, z: 0 }, 'enemy')
+  h.onChargeTargetSelected('partner', { x: 1, y: 0, z: 0 }, 'enemy')
   assert.equal(h.chargeMode.value, null)
-  assert.deepEqual(h.calls.emitted, [])
-  release({})
-  await moving
-  assert.deepEqual(h.calls.emitted, [['target-selected', 'enemy']])
-  assert.deepEqual(h.positions.value.partner, { x: 1, y: 0, z: 0 })
+  assert.deepEqual(h.calls.moved, [])
+  assert.deepEqual(h.calls.emitted[0].slice(0, 2), ['target-selected', 'enemy'])
+  assert.equal(h.calls.emitted[0][2].movement.kind, 'charge-before')
+  assert.deepEqual(h.positions.value.partner, { x: 0, y: 0, z: 0 })
+  assert.deepEqual(h.attackPreview.value.position, { x: 1, y: 0, z: 0 })
 })
 
 for (const area of [false, true]) {
@@ -101,8 +100,13 @@ for (const area of [false, true]) {
     assert.equal(h.calls.reach.length, 0)
     if (area) await h.onAreaAttackConfirmed(['enemy'], { shape: 'burst' })
     else h.onTargetSelected('enemy')
-    assert.equal(h.chargeAfterAttackerId.value, 'partner')
+    const metadata = h.calls.emitted[0].at(-1)
+    assert.equal(metadata.chargeTiming, 'after')
+    assert.equal(h.chargeAfterAttackerId.value, null)
     h.props.selectedAttack = null
+    await Vue.nextTick()
+    assert.equal(h.chargeMoveParticipantId.value, null, 'clearing targeting does not grant movement')
+    h.props.encounter.participants = [{ id: 'partner', pendingChargeMove: { castId: 'server-cast' } }]
     await Vue.nextTick()
     assert.equal(h.chargeMoveParticipantId.value, 'partner')
     assert.deepEqual(h.calls.movers, ['partner'])

@@ -1,3 +1,6 @@
+import { entityWrite } from '../../utils/entitySecurity'
+import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
+import { tableWriteBody } from '../../utils/securityValidation'
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type Digimon } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
@@ -6,9 +9,9 @@ type UpdateDigimonBody = Partial<Omit<Digimon, 'id' | 'createdAt' | 'updatedAt'>
   syncBonusDP?: boolean // Whether to sync bonusDP to all linked evolution forms
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEventHandler(async (event) => entityWrite(async () => {
   const id = getRouterParam(event, 'id')
-  const body = await readBody<UpdateDigimonBody>(event)
+  let body = await readBody<UpdateDigimonBody>(event)
 
   if (!id) {
     throw createError({
@@ -27,7 +30,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  await assertCanModifySandboxCharacter(event, existing)
+  await requireEntityAccess(event, 'digimon', existing, true)
+  body = tableWriteBody(body, digimon, existing, ['syncBonusDP']) as UpdateDigimonBody
+  const scope = await entityCampaignId('digimon', existing)
+  if (body.partnerId !== undefined) await requireLinkedEntity(event, 'tamer', body.partnerId, scope)
+  const linked = new Set([...(existing.evolutionPathIds ?? []), ...(body.evolutionPathIds ?? []), existing.evolvesFromId, body.evolvesFromId].filter(Boolean))
+  if (body.syncBonusDP) for (const linkedId of await collectAllLinkedDigimon(id, existing)) linked.add(linkedId)
+  for (const linkedId of linked) await requireLinkedEntity(event, 'digimon', linkedId, scope)
 
   // Two-way sync for evolution links
   const now = new Date()
@@ -118,7 +127,7 @@ export default defineEventHandler(async (event) => {
   // Return updated digimon
   const [updated] = await db.select().from(digimon).where(eq(digimon.id, id))
   return updated
-})
+}))
 
 // Helper to collect all linked Digimon IDs (ancestors and descendants)
 async function collectAllLinkedDigimon(currentId: string, current: Digimon): Promise<string[]> {

@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -187,11 +188,11 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
       effects.push({ type: 'aura', encounterId })
     },
   }
-  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+  const partnerDevolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', {
     '../db': dbExports,
     'drizzle-orm': { eq: (_column, value) => ({ value }) },
   })
-  const areaModule = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+  const areaModule = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
     '../db': dbExports,
     'drizzle-orm': { eq: (_column, value) => ({ value }) },
     './resolveNpcAttack': { resolveNpcAttack: unexpected },
@@ -209,8 +210,8 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
   })
   const queue = bypassQueue
     ? { serializeIntercedeClaim: (_id, callback) => callback() }
-    : loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
+    : loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-claim.post.ts', {
     '../../../../db': dbExports,
     '../../../../utils/partnerDevolution': partnerDevolution,
     'drizzle-orm': {
@@ -281,10 +282,10 @@ function fixture({ area = false, support = false, map = false, spatial = false, 
     async offer(body) {
       return db.transaction(async tx => {
         await tx.select().from(tables.encounters).where({ value: 'encounter' }).for('update')
-        const roomHelpers = loadTypeScriptWithMocks('server/utils/encounterRoom.ts', {
+        const roomHelpers = loadTrustedGameplayModule('server/utils/encounterRoom.ts', {
           '../db': dbExports, 'drizzle-orm': {},
         })
-        const offer = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+        const offer = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
           '../../../../db': { ...dbExports, db: tx },
           'drizzle-orm': { eq: (_column, value) => ({ value }), inArray: (_column, values) => ({ values }) },
           '~/server/utils/intercedeClaims': queue,
@@ -581,7 +582,7 @@ test('database row locks enforce first-claim exclusivity even when separate work
   const first = subject.claim('guard-a')
   await computing.promise
   const second = subject.claim('guard-b')
-  await Promise.resolve()
+  await new Promise(resolve => setImmediate(resolve))
   assert.equal(subject.starts.length, 2, 'both workers must have entered their transaction')
   release.resolve()
   const results = await Promise.allSettled([first, second])

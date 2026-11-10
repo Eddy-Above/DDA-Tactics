@@ -1,3 +1,5 @@
+import { allowFields, boundedString } from '../../../../utils/securityValidation'
+import { invalidateCampaignPeers } from '../../../../utils/websocketSecurity'
 import { and, eq } from 'drizzle-orm'
 import { db, campaigns, campaignAccessGrants, users } from '../../../../db'
 import { requireOwnerOrCoOwner } from '../../../../utils/campaignAuth'
@@ -29,6 +31,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const body = await readBody<UpdateGrantBody>(event)
+  allowFields(body, ['dmRole'])
+  if (body.dmRole !== undefined && body.dmRole !== null && !['co-dm', 'co-owner'].includes(body.dmRole)) throw createError({ statusCode: 400, message: 'Invalid campaign role' })
 
   const dmRole = body.dmRole !== undefined ? body.dmRole : existing.dmRole
   const now = new Date()
@@ -40,6 +44,8 @@ export default defineEventHandler(async (event) => {
 
   const [updated] = await db.select().from(campaignAccessGrants).where(eq(campaignAccessGrants.id, grantId))
   const [grantee] = await db.select({ username: users.username }).from(users).where(eq(users.id, updated.userId))
+
+  invalidateCampaignPeers(campaignId)
 
   return { ...updated, username: grantee?.username ?? null }
 })

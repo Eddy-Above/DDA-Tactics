@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -28,29 +29,29 @@ function fixture(effect = 'Knockback', type = 'damage', shape = 'Burst') {
   } }) }), update: () => ({ set: patch => ({ where: async () => { Object.assign(encounter, patch) } }) }) }
   const store = { db, ...tables }, sql = { eq: (_column, value) => ({ value }), inArray: (_column, value) => ({ value }) }
   const common = { '../db': store, 'drizzle-orm': sql }
-  const support = loadTypeScriptWithMocks('server/utils/resolveSupportAttack.ts', common)
-  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', { ...common, './resolveSupportAttack': support })
+  const support = loadTrustedGameplayModule('server/utils/resolveSupportAttack.ts', common)
+  const spatial = loadTrustedGameplayModule('server/utils/combatSpatial.ts', { ...common, './resolveSupportAttack': support })
   const knockouts = { knockedOutEnemyIds: () => [], resolveEnemyKnockouts: async state => ({ ...state, changed: false, logEntries: [] }) }
   const aura = { refreshGuidingLightForParticipants: async (_id, current) => current,
     applyGuidingLightAuras: async current => ({ changed: false, participants: current }) }
   const roomModule = { getRoomPositions: async () => ({ ...room }), broadcastPositionPatch: async (_id, patch) => {
     broadcasts.push(structuredClone(patch)); Object.assign(room, patch)
   } }
-  const pushPull = loadTypeScriptWithMocks('server/utils/pushPull.ts', {
+  const pushPull = loadTrustedGameplayModule('server/utils/pushPull.ts', {
     './combatSpatial': spatial, './resolveSupportAttack': support, './encounterRoom': roomModule,
     './enemyKnockouts': knockouts, './guidingLight': aura,
     './damageOverTime': { loadEncounterRules: async () => ({ round: 1, rules: {} }), applyMovementBurn: current => ({ participants: current, damageById: {} }) },
   })
-  const damage = loadTypeScriptWithMocks('server/utils/computeAttackDamage.ts', {
+  const damage = loadTrustedGameplayModule('server/utils/computeAttackDamage.ts', {
     ...common, './resolveSupportAttack': support, './clashArmor': { getOutsideClashArmorBonus: async () => 0 },
     './damageOverTime': { isImmuneToEffect: () => false },
   })
-  const npc = loadTypeScriptWithMocks('server/utils/resolveNpcAttack.ts', {
+  const npc = loadTrustedGameplayModule('server/utils/resolveNpcAttack.ts', {
     ...common, './computeAttackDamage': damage, './combatSpatial': spatial, './pushPull': pushPull,
     './enemyKnockouts': knockouts, './guidingLight': aura, './partnerDevolution': { autoDevolveParticipant: async () => null },
     './damageOverTime': { loadDamageOverTimeRules: async () => ({}) },
   })
-  const area = loadTypeScriptWithMocks('server/utils/resolveAreaIntercedeGroup.ts', {
+  const area = loadTrustedGameplayModule('server/utils/resolveAreaIntercedeGroup.ts', {
     ...common, './resolveNpcAttack': npc, './combatSpatial': spatial, './pushPull': pushPull,
     './enemyKnockouts': knockouts, './guidingLight': aura, '~/server/utils/resolveSupportAttack': support,
     './partnerDevolution': { autoDevolveParticipant: async () => null },
@@ -60,7 +61,7 @@ function fixture(effect = 'Knockback', type = 'damage', shape = 'Burst') {
     accuracySuccesses: 3, accuracyDice: [6, 6, 6], originalTargetIds: ['east', 'north'], npcTargetIds: ['east', 'north'], claims: [] } }
   const params = { groupState, participants, battleLog: [], pendingRequests: [groupState], turnOrder: encounter.turnOrder,
     round: 1, currentTurnIndex: 0, encounterId: encounter.id, positions, mapRecord: map, mapId: map.id, database: db }
-  const decision = loadTypeScriptWithMocks('server/utils/intercedeDecision.ts', {
+  const decision = loadTrustedGameplayModule('server/utils/intercedeDecision.ts', {
     ...common, '~/server/utils/encounterRoom': roomModule, '~/server/utils/resolveAreaIntercedeGroup': area,
   })
   return { attack, records, participants, map, positions, room, broadcasts, groupState, params, support,
@@ -76,7 +77,7 @@ function fixture(effect = 'Knockback', type = 'damage', shape = 'Burst') {
       encounter.pendingRequests = [{ id: 'dodge', type: 'dodge-roll', targetTamerId: 'owner', targetParticipantId: 'east',
         data: { attackerParticipantId: 'caster', attackerEntityId: 'caster', targetEntityId: 'east', attackerName: 'Caster', targetName: 'east',
           attackId: attack.id, attackData: attack, accuracySuccesses: 3, accuracyDice: [6, 6, 6], isSupportAttack: type === 'support', totalTargetCount: 2 } }]
-      const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', {
+      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', {
         '../../../db': store, 'drizzle-orm': sql, '../../../utils/resolveSupportAttack': support,
         '../../../utils/pushPull': pushPull, '../../../utils/enemyKnockouts': knockouts, '../../../utils/guidingLight': aura,
         '../../../utils/clashArmor': { getOutsideClashArmorBonus: async () => 0 },

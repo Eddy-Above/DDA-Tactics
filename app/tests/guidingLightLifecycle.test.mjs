@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -64,13 +65,13 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   }
   const dbModule = { db, ...tables }
   const sql = { eq: (column, value) => ({ column, value }), inArray: (column, value) => ({ column, value }) }
-  const combatContext = loadTypeScriptWithMocks('server/utils/combatContext.ts', {
+  const combatContext = loadTrustedGameplayModule('server/utils/combatContext.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
-  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+  const spatial = loadTrustedGameplayModule('server/utils/combatSpatial.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
-  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+  const partnerDevolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', {
     'drizzle-orm': sql, '../db': dbModule,
   })
   const mocks = {
@@ -136,12 +137,12 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
   mocks['../../../../utils/guidingLight'].refreshGuidingLightForParticipants = refreshGuidingLightForParticipants
   return {
     rows, room, writes, reads, auraCalls, knockoutCalls,
-    put: body => loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', mocks).default({ id: 'encounter', body }),
-    digivolve: body => loadTypeScriptWithMocks('server/api/encounters/[id]/actions/digivolve.post.ts', mocks)
+    put: body => loadTrustedGameplayModule('server/api/encounters/[id].put.ts', mocks).default({ id: 'encounter', body }),
+    digivolve: body => loadTrustedGameplayModule('server/api/encounters/[id]/actions/digivolve.post.ts', mocks)
       .default({ id: 'encounter', body }),
-    respond: body => loadTypeScriptWithMocks('server/api/encounters/[id]/responses.post.ts', mocks)
+    respond: body => loadTrustedGameplayModule('server/api/encounters/[id]/responses.post.ts', mocks)
       .default({ id: 'encounter', body }),
-    npcAttack: body => loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', mocks)
+    npcAttack: body => loadTrustedGameplayModule('server/api/encounters/[id]/actions/npc-attack.post.ts', mocks)
       .default({ id: 'encounter', body }),
   }
 }
@@ -264,10 +265,10 @@ function evolutionFixture(currentStageIndex, phase = 'combat') {
     woundsHistory: currentStageIndex ? [{ entityId: 'rookie', stageIndex: 0, maxWounds: 5, wounds: 2 }] : [],
   })
   const f = fixture({ participants: [source, unit('ally'), unit('tamer', { type: 'tamer', entityId: 'owner' })], phase })
-  f.rows.digimon.rookie = { id: 'rookie', partnerId: 'owner', stage: 'rookie', baseStats: { health: 3 }, qualities: [] }
-  f.rows.digimon.champion = { id: 'champion', partnerId: 'owner', stage: 'champion', baseStats: { health: 5 }, qualities: [] }
+  f.rows.digimon.rookie = { id: 'rookie', campaignId: 'campaign', partnerId: 'owner', stage: 'rookie', baseStats: { health: 3 }, qualities: [] }
+  f.rows.digimon.champion = { id: 'champion', campaignId: 'campaign', partnerId: 'owner', stage: 'champion', baseStats: { health: 5 }, qualities: [] }
   f.rows.evolutionLines.line = {
-    id: 'line', currentStageIndex,
+    id: 'line', campaignId: 'campaign', currentStageIndex,
     chain: [
       { digimonId: 'rookie', species: 'Agumon', evolvesFromIndex: null, isUnlocked: true },
       { digimonId: 'champion', species: 'Greymon', evolvesFromIndex: 0, isUnlocked: true },

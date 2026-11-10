@@ -3,6 +3,9 @@
     class="encounter-map-root"
     :style="bottomOverlayOffset != null ? { '--overlay-bottom': bottomOverlayOffset + 'px' } : undefined"
   >
+    <div v-if="ws.accessError.value" role="alert" class="rounded bg-red-950 p-3 text-red-100">
+      {{ ws.accessError.value }} <button type="button" class="underline" @click="reloadForAccess">Reload</button>
+    </div>
     <!-- GM Toolbar (top) -->
     <MapToolbar
       v-if="isDm && map && map.id === encounter.mapId"
@@ -35,7 +38,7 @@
           v-if="map && map.id === encounter.mapId"
           :map="map"
           :participants="liveParticipants"
-          :participant-positions="positions"
+          :participant-positions="displayPositions"
           :destructible-states="encounter.destructibleStates ?? []"
           :tamer-map="tamerMapForCanvas"
           :digimon-map="digimonMapForCanvas"
@@ -162,6 +165,7 @@ import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules, Stance,
 } from '~/types'
 import type { AreaShapeData } from '~/utils/areaShapes'
+import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import { getAreaShape, computePassLanding } from '~/utils/areaShapes'
 import { useMap } from '~/composables/useMap'
@@ -213,12 +217,12 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'target-selected', participantId: string): void
+  (e: 'target-selected', participantId: string, intent?: MapAttackIntent): void
   (e: 'encounter-updated', partial: Partial<Encounter>): void
   (e: 'npc-action', participantId: string, action: 'stance' | 'attack' | 'clash' | ClashRadialAction): void
   (e: 'gm-manage', participantId: string): void
   (e: 'player-action', participantId: string, action: 'attack' | 'direct' | 'special-order' | 'stance' | 'digivolve' | 'mode-change' | 'clash' | ClashRadialAction): void
-  (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null): void
+  (e: 'area-attack-confirmed', targetParticipantIds: string[], areaShapeData: AreaShapeData | null, intent?: MapAttackIntent): void
   (e: 'attack-cancelled'): void
   (e: 'throw-landing-selected', controllerId: string, thrownTargetId: string, landingPos: Vec3): void
   (e: 'throw-ally-landing-selected', interceptorParticipantId: string, allyParticipantId: string, landingPos: Vec3): void
@@ -238,6 +242,7 @@ let refreshInFlight = false
 let refreshAgain = false
 let mapDisposed = false
 const encounterId = computed(() => props.encounter.id)
+function reloadForAccess() { window.location.reload() }
 
 async function loadMap(mapId: string) {
   const generation = ++mapLoadGeneration
@@ -294,6 +299,7 @@ const positions = ref<Record<string, Vec3>>(toPositionsObj(props.encounter.parti
 
 // ── WebSocket ──────────────────────────────────────────────────────────────
 const ws = useMapWebSocket(encounterId)
+const editorClientId = crypto.randomUUID()
 
 // Tracks the last position version applied from the server, so out-of-order
 // or duplicate unit-moved/position-patch messages can't regress local state.
@@ -309,6 +315,7 @@ ws.onMessage((msg) => {
     lastAppliedVersion = msg.version
     positions.value = { ...positions.value, ...msg.patch }
   } else if (msg.type === 'map-edited' || msg.type === 'element-painted' || msg.type === 'door-toggled') {
+    if ('data' in msg && (msg.data as any)?.clientId === editorClientId) return
     const notifiedMapId = 'data' in msg ? (msg.data as { mapId?: string } | null)?.mapId : undefined
     if (!notifiedMapId || notifiedMapId === props.encounter.mapId) scheduleMapRefresh()
   } else if (msg.type === 'full-state') {
@@ -321,13 +328,9 @@ ws.onMessage((msg) => {
 const editor = useMapEditor(map)
 let lastQueuedRevision = 0
 const autosave = useMapAutosave({
-  save: (mapId, patch) => mapStore.updateMapMinimal(mapId, patch),
+  save: (mapId, patch) => mapStore.updateMapMinimal(mapId, patch, editorClientId),
   onSaved: (mapId, acknowledgement, notifications) => {
     if (mapDisposed || mapId !== props.encounter.mapId) return
-    const tool = notifications.at(-1) ?? 'voxel'
-    ws.send({ type: 'map-edited', encounterId: props.encounter.id, changeType: 'add',
-      tileType: (tool === 'ramp' ? 'voxel' : tool) as any,
-      data: { mapId, updatedAt: acknowledgement.updatedAt } })
     if (refreshAgain) { refreshAgain = false; scheduleMapRefresh() }
   },
 })
@@ -524,6 +527,13 @@ const draggableParticipantIds = computed(() =>
       })
 )
 
+const attackPreview = ref<{ participantId: string; position: Vec3 } | null>(null)
+const displayPositions = computed(() => attackPreview.value ? { ...positions.value, [attackPreview.value.participantId]: attackPreview.value.position } : positions.value)
+let pendingAttackIntent: MapAttackIntent | null = null
+function attackIntent(): MapAttackIntent {
+  return pendingAttackIntent ??= { operationId: crypto.randomUUID(), expectedRevision: (props.encounter as any).revision, ...(props.selectedAttack?.chargeMode ? { chargeTiming: props.selectedAttack.chargeMode } : {}) }
+}
+
 // The HUD card currently being dragged. MapCanvas needs it during `dragover`, when the browser
 // hides dataTransfer contents.
 const hudDragId = ref<string | null>(null)
@@ -542,10 +552,9 @@ function selectParticipant(id: string) {
   selectedId.value = id
 }
 
-function onCanvasPlace(participantId: string, cell: Vec3) {
-  positions.value = { ...positions.value, [participantId]: cell }
-  selectedId.value = null
-  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position: cell, path: [], version: 0 })
+async function onCanvasPlace(participantId: string, cell: Vec3) {
+  const result = await postMove(participantId, cell, [], 'placement')
+  if (result?.success) selectedId.value = null
 }
 
 // A drag finished on a valid cell: either a token moved on the canvas or a HUD card dropped on it.
@@ -560,7 +569,7 @@ function onUnitDragged(participantId: string, cell: Vec3) {
   else onCanvasPlace(participantId, cell)
 }
 
-function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
+async function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
   if (throwAimContext.value && participantId === throwAimContext.value.thrownTargetId) {
     const { controllerId, thrownTargetId } = throwAimContext.value
     throwAimContext.value = null
@@ -580,35 +589,31 @@ function onCombatMove(participantId: string, position: Vec3, path: Vec3[]) {
   }
 
   const movePath = movePathTo(participantId, position, path)
-  const distance = moveDistance(participantId, position, movePath)
-  positions.value = { ...positions.value, [participantId]: position }
-  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path, version: 0 })
-  openDoorsAlong(participantId, movePath)
-
-  if (chargeMoveParticipantId.value === participantId) {
-    chargeMoveParticipantId.value = null
-    movement.clearMovement()
-    postMove(participantId, distance, true)  // the Charge already paid for this move
-    return
-  }
-
-  if (npcMoveParticipantId.value === participantId) {
-    npcMoveParticipantId.value = null
-    movement.clearMovement()
-    postMove(participantId, distance, false)
-  }
+  const allowance = (props.encounter.participants.find(p => p.id === participantId) as any)?.pendingChargeMove
+  const result = await postMove(participantId, position, movePath, allowance ? 'charge-after' : 'normal', allowance?.castId)
+  if (!result?.success) return
+  chargeMoveParticipantId.value = null
+  npcMoveParticipantId.value = null
+  movement.clearMovement()
 }
 
 // Reports a combat move to the server: spends a simple action (unless the move is part of a
 // Charge or Pass) and applies [Burn]'s movement damage. Resolves once saved, so a Charge or Pass
 // can wait for it before its attack and the two server writes can't overwrite each other.
 // `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
-type MoveResult = { success: boolean; defeated?: boolean } | void
-function postMove(participantId: string, distance: number, noActionCost: boolean): Promise<MoveResult> {
-  return $fetch<{ success: boolean; defeated?: boolean }>(`/api/encounters/${props.encounter.id}/actions/move`, {
-    method: 'POST',
-    body: { participantId, distance, ...(noActionCost ? { noActionCost: true } : {}) },
-  }).catch((e: unknown) => console.error('move action failed', e))
+type MoveResult = { success: boolean; defeated?: boolean; encounter?: Encounter; position?: Vec3 }
+async function postMove(participantId: string, destination: Vec3, path: Vec3[], kind: 'normal' | 'placement' | 'gm' | 'charge-after', allowanceId?: string): Promise<MoveResult | void> {
+  try {
+    const result = await $fetch<MoveResult>(`/api/encounters/${props.encounter.id}/actions/move`, {
+      method: 'POST',
+      body: { participantId, destination, kind, ...(path.length ? { path } : {}), origin: positions.value[participantId], allowanceId, operationId: crypto.randomUUID(), expectedRevision: (props.encounter as any).revision },
+    })
+    if (result.encounter) emit('encounter-updated', result.encounter)
+    if (result.position) positions.value = { ...positions.value, [participantId]: result.position }
+    return result
+  } catch (error: any) {
+    alert(error?.data?.message ?? 'The movement could not be saved')
+  }
 }
 
 // GM free-move: enter reposition mode for a participant (cancels any other move mode). The GM then
@@ -621,17 +626,20 @@ function onGmMoveStart(participantId: string) {
 }
 
 // GM free-move destination chosen: reposition the character with NO action cost (no /actions/move).
-function onGmMove(participantId: string, position: Vec3) {
-  positions.value = { ...positions.value, [participantId]: position }
-  ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId, position, path: [], version: 0 })
-  gmMoveParticipantId.value = null
+async function onGmMove(participantId: string, position: Vec3) {
+  const result = await postMove(participantId, position, [], 'gm')
+  if (result?.success) gmMoveParticipantId.value = null
 }
 
 // ── Doors ──────────────────────────────────────────────────────────────────
 // Door state lives on the map record, like in-encounter map edits: update it locally (MapCanvas
 // rebuilds the scene and its line-of-sight model), save it, then tell other viewers to refetch.
 async function setDoorsOpen(doorIds: string[], isOpen: boolean) {
-  if (editor.setDoorsOpen(doorIds, isOpen)) await persistMap('door')
+  const participantId = selectedId.value ?? activeParticipantId.value ?? props.myParticipantIds?.find(id => positions.value[id])
+  try {
+    const result = await $fetch<{ doors: any[] }>(`/api/encounters/${props.encounter.id}/actions/doors`, { method: 'POST', body: { participantId, doorIds, isOpen } })
+    if (map.value) map.value = { ...map.value, doors: result.doors }
+  } catch (error: any) { alert(error?.data?.message ?? 'The door change could not be saved') }
 }
 
 // The mover's path to `destination` (for opening doors and measuring the move): the drawn path when
@@ -770,67 +778,37 @@ function startChargeBefore() {
   chargeMode.value = 'before'
 }
 
-async function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
-  let moveSaved: Promise<MoveResult> | null = null
-  if (!sameVec3(positions.value[attackerId], destination)) {
-    const movePath = movePathTo(attackerId, destination)  // the charge path isn't drawn
-    const distance = moveDistance(attackerId, destination, movePath)
-    positions.value = { ...positions.value, [attackerId]: destination }
-    ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: destination, path: [], version: 0 })
-    openDoorsAlong(attackerId, movePath)
-    moveSaved = postMove(attackerId, distance, true)
-  }
+function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
+  const origin = positions.value[attackerId]
+  if (!origin) return
+  const intent = attackIntent()
+  intent.movement = { kind: 'charge-before', origin, destination, path: movePathTo(attackerId, destination) }
+  attackPreview.value = { participantId: attackerId, position: destination }
   chargeMode.value = null
   movement.clearMovement()
-  if (targetId) {
-    const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Charge move's
-    if (moved?.defeated) {
-      // Burn on the way in knocked the attacker out: there's no attack
-      emit('attack-cancelled')
-      return
-    }
-    emit('target-selected', targetId)
-  }
+  if (targetId) emit('target-selected', targetId, intent)
 }
 
 function onTargetSelected(targetId: string) {
-  if (chargeMode.value === 'after') {
-    chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
-    chargeMode.value = null
-  }
-  emit('target-selected', targetId)
+  if (chargeMode.value === 'after') chargeMode.value = null
+  emit('target-selected', targetId, attackIntent())
 }
 
-async function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
-  let moveSaved: Promise<MoveResult> | null = null
+function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
+  const intent = attackIntent()
   if (areaShapeData?.shape === 'pass') {
-    const newPos = computePassLanding(areaShapeData.attackerPos, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
     const attackerId = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
-    if (attackerId && !sameVec3(positions.value[attackerId], newPos)) {
-      const distance = chebyshev(positions.value[attackerId] ?? areaShapeData.attackerPos, newPos)
-      positions.value = { ...positions.value, [attackerId]: newPos }
-      ws.send({ type: 'unit-moved', encounterId: props.encounter.id, participantId: attackerId, position: newPos, path: [], version: 0 })
-      // A [Pass] moves in a straight line, so it opens any closed door on that line.
-      openDoorsAlong(attackerId, segmentCells(areaShapeData.attackerPos, newPos))
-      moveSaved = postMove(attackerId, distance, true)
-    }
+    const origin = attackerId ? positions.value[attackerId] : undefined
+    if (!origin) return
+    const destination = computePassLanding(origin, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
+    intent.movement = { kind: 'pass', origin, destination, path: segmentCells(origin, destination), direction: areaShapeData.dir }
   }
-
-  if (chargeMode.value === 'after') {
-    chargeAfterAttackerId.value = props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value
-    chargeMode.value = null
-  }
-  const moved = moveSaved ? await moveSaved : undefined  // the attack's server write must not race the Pass move's
-  if (moved?.defeated) {
-    // Burn on the Pass move knocked the attacker out: no attack, and no move after it
-    chargeAfterAttackerId.value = null
-    emit('attack-cancelled')
-    return
-  }
-  emit('area-attack-confirmed', targetIds, areaShapeData)
+  chargeMode.value = null
+  emit('area-attack-confirmed', targetIds, areaShapeData, intent)
 }
 
 watch(() => props.selectedAttack, (val, previous) => {
+  if (!val || !previous || val.attackId !== previous.attackId || val.attackerParticipantId !== previous.attackerParticipantId) { pendingAttackIntent = null; attackPreview.value = null }
   if (val !== null) {
     // Record polling rebuilds the descriptor; keep the selected charge step across equivalent snapshots.
     if (previous && val.attackId === previous.attackId && val.attackerParticipantId === previous.attackerParticipantId && val.chargeMode === previous.chargeMode) return
@@ -848,16 +826,18 @@ watch(() => props.selectedAttack, (val, previous) => {
     movement.clearMovement()
   }
   chargeMode.value = null
-  if (chargeAfterAttackerId.value) {
-    const attackerId = chargeAfterAttackerId.value
-    chargeAfterAttackerId.value = null
-    const ctx = npcMoveCaps(attackerId)
-    if (ctx && map.value) {
-      movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
-      chargeMoveParticipantId.value = attackerId
-    }
-  }
+
 })
+
+watch(() => props.encounter.participants.map(p => [p.id, (p as any).pendingChargeMove?.castId]), () => {
+  const actor = props.encounter.participants.find(p => (p as any).pendingChargeMove)
+  if (!actor || !map.value) return
+  const ctx = npcMoveCaps(actor.id)
+  if (ctx) {
+    movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
+    chargeMoveParticipantId.value = actor.id
+  }
+}, { deep: true })
 
 function onNpcMove(participantId: string) {
   if (!map.value) return

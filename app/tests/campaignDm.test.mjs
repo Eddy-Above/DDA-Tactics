@@ -10,7 +10,7 @@ function fixture() {
   let access = { userId: 'player', isOwner: false, isCoOwner: false, isCoDm: false }
   const cookies = {}, written = []
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const helpers = loadTypeScriptWithMocks('server/utils/campaignDm.ts', {
+  const helpers = loadTypeScriptWithMocks('server/utils/campaignSecurity.ts', {
     '../db': { db: { select: () => ({ from: () => ({ where: async () => [campaign] }) }) }, campaigns: { id: 'id' } },
     './campaignAuth': { getMyCampaignAccess: async () => access },
     h3: { getCookie: (_event, name) => cookies[name], setCookie: (_event, name, value, options) => { cookies[name] = value; written.push({ name, value, options }) } },
@@ -56,8 +56,10 @@ test('the existing GM password endpoint issues the server credential only after 
   Object.assign(globalThis, { defineEventHandler: handler => handler, getRouterParam: () => 'campaign', readBody: async () => ({ password }) })
   const handler = loadTypeScriptWithMocks('server/api/campaigns/[id]/verify-dm-password.post.ts', {
     '../../../db': { db: { select: () => ({ from: () => ({ where: async () => [campaign] }) }) }, campaigns: { id: 'id' } },
-    '../../../utils/password': { verifyPassword: value => value === 'correct' },
-    '../../../utils/campaignDm': { issueCampaignDmCookie: (_event, value) => issued.push(value) },
+    '../../../utils/password': { verifyPassword: value => value === 'correct', needsPasswordRehash: () => false },
+    '../../../utils/securityTransport': { enforcePasswordAttemptLimit: () => {}, recordPasswordFailure: () => {} },
+    '../../../utils/websocketSecurity': { invalidateCampaignPeers: () => {} },
+    '../../../utils/campaignSecurity': { issueCampaignDmCookie: (_event, value) => issued.push(value) },
   }).default
   assert.deepEqual(await handler({}), { valid: false })
   assert.deepEqual(issued, [])

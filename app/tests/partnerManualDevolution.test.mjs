@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -35,19 +36,19 @@ function harness({ withTamer = true, actor = {}, currentRecord = {}, parentRecor
   }
   const records = {
     champion: {
-      id: 'champion', name: 'Greymon', partnerId: 'tai', isEnemy: false, stage: 'champion',
+      id: 'champion', campaignId: 'campaign', name: 'Greymon', partnerId: 'tai', isEnemy: false, stage: 'champion',
       baseStats: { health: 15 }, bonusStats: {}, qualities: [], currentWounds: 9,
       ...currentRecord,
     },
     rookie: {
-      id: 'rookie', name: 'Agumon', partnerId: 'tai', isEnemy: false, stage: 'rookie',
+      id: 'rookie', campaignId: 'campaign', name: 'Agumon', partnerId: 'tai', isEnemy: false, stage: 'rookie',
       baseStats: { health: 5 }, bonusStats: { health: 2 },
       qualities: [{ id: 'digizoid-armor', choiceId: 'red' }, { id: 'combat-monster' }], currentWounds: 4,
       ...parentRecord,
     },
   }
   let evolutionLine = {
-    id: 'line', currentStageIndex: 1,
+    id: 'line', campaignId: 'campaign', currentStageIndex: 1,
     chain: [
       { digimonId: 'rookie', species: 'Agumon', stage: 'rookie', evolvesFromIndex: null, isUnlocked: false },
       { digimonId: 'champion', species: 'Greymon', stage: 'champion', evolvesFromIndex: 0, isUnlocked: true },
@@ -75,11 +76,11 @@ function harness({ withTamer = true, actor = {}, currentRecord = {}, parentRecor
   }
   const dbModule = { db, ...tables }
   const drizzle = { eq: (_column, value) => ({ value }) }
-  const partnerDevolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', {
+  const partnerDevolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', {
     '../db': dbModule,
     'drizzle-orm': drizzle,
   })
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/digivolve.post.ts', {
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/digivolve.post.ts', {
     '../../../../db': dbModule,
     'drizzle-orm': drizzle,
     '../../../../utils/partnerDevolution': partnerDevolution,
@@ -266,7 +267,7 @@ function warpLine() {
 
 test('warp checks and its saved history start from the actual partner stage', async () => {
   const h = harness({ rules: { warpEvolution: true }, line: { currentStageIndex: 0, chain: warpLine() } })
-  h.records.mega = { id: 'mega', stage: 'mega', baseStats: { health: 20 }, qualities: [] }
+  h.records.mega = { id: 'mega', campaignId: 'campaign', stage: 'mega', baseStats: { health: 20 }, qualities: [] }
   const updated = await h.devolve({ targetChainIndex: 3, rollTotal: 17 })
   const actor = updated.participants.find(p => p.id === 'partner')
   assert.equal(actor.entityId, 'mega')
@@ -285,7 +286,7 @@ test('a stale child index cannot bypass the actual partner warp roll requirement
 })
 
 test('the pure stage resolver prefers a matching node and otherwise finds the actual entity without mutating the chain', () => {
-  const { resolveCombatEvolutionIndex } = loadTypeScriptWithMocks('utils/combatEvolutionOptions.ts', {})
+  const { resolveCombatEvolutionIndex } = loadTrustedGameplayModule('utils/combatEvolutionOptions.ts', {})
   const chain = Object.freeze([Object.freeze({ digimonId: 'rookie' }), Object.freeze({ digimonId: 'champion' }), Object.freeze({ digimonId: 'rookie' })])
   assert.equal(resolveCombatEvolutionIndex(chain, 'rookie', 2), 2)
   assert.equal(resolveCombatEvolutionIndex(chain, 'rookie', 1), 0)

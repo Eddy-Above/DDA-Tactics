@@ -1,8 +1,11 @@
+import { defineEncounterCommand } from '../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../db'
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const id = getRouterParam(event, 'id')
+  await authorizeEncounterIntent(event, id, undefined, 'delete')
 
   if (!id) {
     throw createError({

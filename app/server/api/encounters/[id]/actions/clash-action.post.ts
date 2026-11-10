@@ -22,8 +22,13 @@ import { chebyshev } from '~/server/utils/gridDistance'
 import { resolveFall } from '~/utils/movementRules'
 import { getAreaShape } from '~/utils/areaShapes'
 import type { Vec3 } from '~/types'
+import { runAttackCommand } from '../../../../utils/attackCommand'
+import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
+import { grantChargeAfter, isChargeAttack, commitAttackMovement, type AttackMovementRequest } from '../../../../utils/attackMovement'
+import { resolveAttackOffers } from './intercede-offer.post'
+import { BASIC_ATTACKS } from '../../../../../data/attackConstants'
 
-interface ClashActionBody {
+interface ClashActionBody extends AttackMovementRequest {
   clashId: string
   participantId: string
   tamerId: string
@@ -48,6 +53,34 @@ export default defineEventHandler(async (event) => {
   if (!body.clashId || !body.participantId || !body.actionType) {
     throw createError({ statusCode: 400, message: 'clashId, participantId, and actionType are required' })
   }
+
+  allowFields(body, ['clashId', 'participantId', 'tamerId', 'actionType', 'attackId', 'attackName', 'accuracySuccesses', 'accuracyDiceResults', 'accuracyDicePool',
+    'endClash', 'landingPos', 'operationId', 'expectedRevision', 'chargeTiming', 'movement', 'areaShapeData'])
+  return runAttackCommand(event, encounterId, body, 'clash-action', async ({ encounter, access }) => {
+    if (!['attack', 'end', 'pin', 'throw'].includes(body.actionType)) throw createError({ statusCode: 400, message: 'Unknown clash action' })
+    if (body.actionType === 'attack') {
+      const actor = encounter.participants.find((p: any) => p.id === body.participantId)
+      const [record] = actor?.type === 'digimon' ? await db.select().from(digimon).where(eq(digimon.id, actor.entityId)) : []
+      const attack = record?.attacks?.find((a: any) => a.id === body.attackId) ?? BASIC_ATTACKS.find(a => a.id === body.attackId)
+      if (!attack) throw createError({ statusCode: 400, message: 'Choose an attack from the current character' })
+      if (body.endClash && !isChargeAttack(attack) && getAreaShape(attack?.tags ?? []) !== 'pass') throw createError({ statusCode: 400, message: 'Only Charge or Pass attacks end a clash while attacking' })
+      if (body.chargeTiming === 'after' || body.endClash && isChargeAttack(attack)) body.chargeTiming = 'after'
+      if (body.accuracyDicePool !== undefined) finiteNumber(body.accuracyDicePool, 'accuracyDicePool', { integer: true, min: 0, max: 10000 })
+      finiteNumber(body.accuracySuccesses, 'accuracySuccesses', { integer: true, min: 0, max: 10000 })
+      if (!Array.isArray(body.accuracyDiceResults) || body.accuracyDiceResults.length > 10000) throw createError({ statusCode: 400, message: 'Invalid accuracy dice' })
+      body.accuracyDiceResults.forEach(die => finiteNumber(die, 'die', { integer: true, min: 1, max: 6 }))
+      const moved = await commitAttackMovement(encounter, body.participantId, attack, body, access)
+      if (moved.defeated) return (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
+      const value = await resolveClashAction(encounterId, body)
+      await grantChargeAfter(encounterId, body.participantId, attack, body.chargeTiming, encounter)
+      const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+      return fresh ?? value
+    }
+    return resolveClashAction(encounterId, body)
+  })
+})
+
+async function resolveClashAction(encounterId: string, body: ClashActionBody) {
 
   const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
@@ -445,7 +478,7 @@ export default defineEventHandler(async (event) => {
     if (attackDefForClash && getAreaShape(attackDefForClash.tags ?? []) === 'pass') {
       isPassAttack = true
     }
-    const shouldEndClash = !!body.endClash || isPassAttack
+    const shouldEndClash = (body.chargeTiming === 'after' && isChargeAttack(attackDefForClash)) || isPassAttack
     // Capture primitives (not `actor`) so the closure below doesn't reset narrowing of actor.clash.
     const clashOpponentId = actor.clash.opponentParticipantId
     const clashEndRound = encounter.round || 0
@@ -517,9 +550,7 @@ export default defineEventHandler(async (event) => {
     }
 
     // Delegate to intercede-offer with clashAttack: true
-    const result = await $fetch(`/api/encounters/${encounterId}/actions/intercede-offer`, {
-      method: 'POST',
-      body: {
+    const result = await resolveAttackOffers(encounterId, {
         attackerId: body.participantId,
         targetId: actor.clash.opponentParticipantId,
         accuracySuccesses: body.accuracySuccesses,
@@ -527,10 +558,7 @@ export default defineEventHandler(async (event) => {
         attackId: body.attackId,
         attackName: body.attackName,
         attackData: { dicePool: body.accuracyDicePool || 0 },
-        skipActionDeduction: true,
-        clashAttack: true,
-      },
-    })
+      }, { actionsPaid: true, clashAttack: true })
     if (shouldEndClash) return await finalizeClashEndAfterAttack()
     return result
   }
@@ -538,4 +566,4 @@ export default defineEventHandler(async (event) => {
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
   const room = await getRoomSnapshot(encounterId)
   return { ...updated, participantPositions: room.participantPositions, destructibleStates: room.destructibleStates }
-})
+}

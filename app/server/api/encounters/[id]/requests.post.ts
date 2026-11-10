@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, type Encounter } from '../../../db'
 import { serializeIntercedeClaim } from '../../../utils/intercedeClaims'
@@ -9,9 +11,10 @@ interface CreateRequestBody {
   data?: any
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<CreateRequestBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'requests-create')
 
   if (!encounterId) {
     throw createError({

@@ -11,6 +11,7 @@ export interface ClashAreaAttackContext {
 }
 
 export interface ClashAttackRequest {
+  operationId?: string
   clashId: string
   participantId: string
   tamerId?: string
@@ -37,6 +38,7 @@ export interface ClashAttackDependencies {
 
 /** Shared controller attack flow. Pages retain their map, targeting and refresh adapters. */
 export function useClashAttack(deps: ClashAttackDependencies) {
+  let pendingCommand: { key: string; operationId: string; request?: ClashAttackRequest } | null = null
   const clashAttackActorId = ref<string | null>(null)
   const clashAreaAttack = ref<ClashAreaAttackContext | null>(null)
   const clashChargeChoice = ref<{ participant: CombatParticipant; attack: Attack } | null>(null)
@@ -59,6 +61,7 @@ export function useClashAttack(deps: ClashAttackDependencies) {
   function cancelClashAttack() {
     clashAttackActorId.value = null
     clashChargeChoice.value = null
+    pendingCommand = null
   }
 
   function backToClashAttacks() {
@@ -107,7 +110,10 @@ export function useClashAttack(deps: ClashAttackDependencies) {
     })
 
     try {
-      await deps.submitAttack(encounter.id, {
+      const commandKey = JSON.stringify([actorId, attack.id, options?.endClash ?? false])
+      if (pendingCommand?.key !== commandKey) pendingCommand = { key: commandKey, operationId: crypto.randomUUID() }
+      const request: ClashAttackRequest = pendingCommand.request ?? {
+        operationId: pendingCommand.operationId,
         clashId: clash.clashId,
         participantId: actorId,
         tamerId: participant.type === 'tamer' ? participant.entityId : undefined,
@@ -118,7 +124,10 @@ export function useClashAttack(deps: ClashAttackDependencies) {
         accuracyDiceResults,
         accuracyDicePool: accuracyPool,
         endClash: options?.endClash ?? false,
-      })
+      }
+      pendingCommand.request = request
+      await deps.submitAttack(encounter.id, request)
+      pendingCommand = null
       await deps.refreshEncounter(encounter.id)
       // A Charge move starts only once the attack has resolved and the refreshed clash has ended.
       if (options?.moveAfter) await deps.beginChargeMove(actorId)

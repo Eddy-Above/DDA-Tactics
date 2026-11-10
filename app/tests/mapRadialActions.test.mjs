@@ -20,6 +20,7 @@ function createMapActions(role) {
   const encounter = shallowRef({ id: 'encounter', phase: 'combat', round: 3, participants: [actor] })
   const updates = []
   const logs = []
+  const rejected = []
   const dependencies = {
     ...attackOptions,
     ...radialAttackOptions,
@@ -53,14 +54,24 @@ function createMapActions(role) {
     tamer: shallowRef({ id: 'tamer' }),
     getEntityDetails: () => ({ name: 'Agumon' }),
     getParticipantName: () => 'Agumon',
-    updateEncounter: async (...args) => { updates.push(args) },
+    updateEncounter: async () => { throw new Error('Player stance must use a scoped intent') },
+    performIntent: async (id, action, body) => {
+      updates.push([id, action, body])
+      const current = encounter.value.participants.find(p => p.id === body.participantId)
+      if (!current || current.clash || current.actionsRemaining.simple < 1) { rejected.push(body); return null }
+      if (current.currentStance === body.stance) return encounter.value
+      encounter.value = { ...encounter.value, participants: encounter.value.participants.map(p => p.id === current.id ? { ...p, currentStance: body.stance, actionsRemaining: { simple: p.actionsRemaining.simple - 1 } } : p) }
+      return encounter.value
+    },
+    applyActionResult: async snapshot => { if (snapshot) encounter.value = snapshot },
+    alert: () => {},
     addBattleLogEntry: async (...args) => { logs.push(args) },
   }
   const handlers = loadPageFunctions(pages[role], [
     'getParticipantAttacks', 'canUseAttack', 'selectAttackAndShowTargets',
     'onMapAttackSelected', 'onMapAttackRiderSelected', 'onMapStanceSelected', role === 'gm' ? 'changeStance' : 'changePlayerStance',
   ], dependencies)
-  return { ...handlers, dependencies, actor, record, attack, areaAttack, encounter, updates, logs }
+  return { ...handlers, dependencies, actor, record, attack, areaAttack, encounter, updates, logs, rejected }
 }
 
 for (const role of Object.keys(pages)) {
@@ -151,21 +162,26 @@ for (const role of Object.keys(pages)) {
     assert.equal(page.actor.actionsRemaining.simple, 1)
   })
 
-  test(`${role} radial stance changes the selected participant once and logs the action`, async () => {
+  test(`${role} radial stance sends the actor intent and adopts the server snapshot without local cost writes`, async () => {
     const page = createMapActions(role)
     await page.onMapStanceSelected(page.actor.id, 'defensive')
-    assert.equal(page.actor.currentStance, 'defensive')
-    assert.equal(page.actor.actionsRemaining.simple, 1)
+    assert.equal(page.actor.currentStance, 'neutral', 'the earlier participant snapshot was not mutated optimistically')
+    assert.equal(page.actor.actionsRemaining.simple, 2)
+    const current = page.encounter.value.participants[0]
+    assert.equal(current.currentStance, 'defensive')
+    assert.equal(current.actionsRemaining.simple, 1)
     assert.equal(page.updates.length, 1)
-    assert.equal(page.updates[0][1].participants[0].id, page.actor.id)
-    assert.equal(page.logs.length, 1)
-    assert.equal(page.logs[0][1].actorId, page.actor.id)
+    assert.deepEqual(page.updates[0].slice(0, 2), ['encounter', 'stance'])
+    assert.equal(page.updates[0][2].participantId, page.actor.id)
+    assert.equal(page.updates[0][2].stance, 'defensive')
+    assert.equal(typeof page.updates[0][2].operationId, 'string')
+    assert.equal(page.updates[0][2].participants, undefined)
+    assert.deepEqual(page.logs, [], 'mechanical logs belong to the committed server action')
     await page.onMapStanceSelected(page.actor.id, 'defensive')
-    assert.equal(page.actor.actionsRemaining.simple, 1)
-    assert.equal(page.updates.length, 1)
+    assert.equal(page.encounter.value.participants[0].actionsRemaining.simple, 1, 'a server-confirmed no-op cannot spend another action')
   })
 
-  test(`${role} radial stance rejects missing, clashing and exhausted participants`, async () => {
+  test(`${role} radial stance ignores a removed actor and preserves state when the server rejects stale choices`, async () => {
     const page = createMapActions(role)
     await page.onMapStanceSelected('removed-participant', 'offensive')
     page.actor.clash = { isController: false }
@@ -174,8 +190,9 @@ for (const role of Object.keys(pages)) {
     page.actor.actionsRemaining.simple = 0
     await page.onMapStanceSelected(page.actor.id, 'offensive')
     assert.equal(page.actor.currentStance, 'neutral')
-    assert.equal(page.updates.length, 0)
-    assert.equal(page.logs.length, 0)
+    assert.equal(page.updates.length, 2)
+    assert.equal(page.rejected.length, 2)
+    assert.deepEqual(page.logs, [])
   })
 }
 

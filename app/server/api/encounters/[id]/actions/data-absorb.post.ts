@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon } from '../../../../db'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -7,9 +9,10 @@ interface DataAbsorbBody {
   extraActions?: number  // 0 = BIT×2, 1 = BIT×4, 2 = BIT×6
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<DataAbsorbBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'data-absorb')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

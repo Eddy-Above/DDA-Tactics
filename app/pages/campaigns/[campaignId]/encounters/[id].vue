@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
@@ -60,7 +61,7 @@ const {
   addParticipant,
   removeParticipant,
   startCombat,
-  nextTurn,
+  nextTurn, performIntent,
   endCombat,
   addBattleLogEntry,
   getCurrentParticipant,
@@ -104,7 +105,7 @@ const showDuplicateModal = ref(false)
 const togglingVisibility = ref(false)
 
 // Attack execution state
-const selectedAttack = ref<{ participant: any; attack: any; radialOptions?: RadialAttackSelection } | null>(null)
+const selectedAttack = ref<{ participant: any; attack: any; radialOptions?: RadialAttackSelection; mapIntent?: MapAttackIntent } | null>(null)
 const showTargetSelector = ref(false)
 const npcStanceParticipantId = ref<string | null>(null)
 const npcAttackParticipantId = ref<string | null>(null)
@@ -693,7 +694,7 @@ const {
   },
   getParticipantAttacks,
   getAttackStats,
-  submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body }),
+  submitAttack: (encounterId, body) => $fetch<unknown>(`/api/encounters/${encounterId}/actions/clash-action`, { method: 'POST', body: { ...body, operationId: body.operationId ?? crypto.randomUUID(), ...(body.endClash ? { chargeTiming: 'after' } : {}) } }),
   refreshEncounter: () => resyncEncounter('clash'),
   beginAreaAttack: (participant, attack) => {
     showMapView.value = true
@@ -955,7 +956,7 @@ function toggleAreaTarget(targetId: string) {
 
 // Open target selection modal
 function selectAttackAndShowTargets(participant: CombatParticipant, attack: any, radialOptions?: RadialAttackSelection) {
-  selectedAttack.value = { participant, attack, ...(radialOptions ? { radialOptions } : {}) }
+  selectedAttack.value = { participant, attack, mapIntent: { operationId: crypto.randomUUID(), ...(radialOptions?.chargeMode ? { chargeTiming: radialOptions.chargeMode } : {}) }, ...(radialOptions ? { radialOptions } : {}) }
   bolsterAttackEnabled.value = false
   bolsterAttackType.value = 'damage-accuracy'
   lifestealComplexEnabled.value = false
@@ -1015,7 +1016,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
   if (!target || !selectedAttack.value || !currentEncounter.value) return
 
   try {
-    const { participant, attack, radialOptions } = selectedAttack.value
+    const { participant, attack, radialOptions, mapIntent } = selectedAttack.value
 
     // Clear targeting UI immediately so the GM sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -1044,6 +1045,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
       const intercedResult = await $fetch(`/api/encounters/${currentEncounter.value.id}/actions/intercede-offer`, {
         method: 'POST',
         body: {
+          ...(mapIntent ?? { operationId: crypto.randomUUID(), expectedRevision: currentEncounter.value.revision }),
           attackerId: participant.id,
           targetId: target.id,
           accuracySuccesses,
@@ -1052,7 +1054,6 @@ async function confirmAttack(target: CombatParticipant | undefined) {
           attackName: attack.name,
           attackData: {
             dicePool: accuracyPool,
-            attackStats: getAttackStats(participant, attack, [target.id]),
           },
           bolstered: riders.bolster,
           bolsterType: riders.bolster ? riders.bolsterType : undefined,
@@ -1062,8 +1063,7 @@ async function confirmAttack(target: CombatParticipant | undefined) {
           hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
           hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,
           hugePowerTrackAll: riders.hugePower && !!eddySoulRules.value?.hugePowerOncePerTurn,
-          isSignatureMove: !!(houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))),
-          batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
+
         },
       })
       if (intercedResult) {
@@ -1110,7 +1110,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
   }
   if (!selectedAttack.value || !currentEncounter.value || targets.length === 0) return
   try {
-    const { participant, attack, radialOptions } = selectedAttack.value
+    const { participant, attack, radialOptions, mapIntent } = selectedAttack.value
 
     // Clear targeting UI immediately so the GM sees their click registered
     // before the server responds (map reticules/range rings react to selectedAttack)
@@ -1134,12 +1134,13 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     } = prepared
 
     const sharedBody = {
+      ...(mapIntent ?? { operationId: crypto.randomUUID(), expectedRevision: currentEncounter.value.revision }),
       attackerId: participant.id,
       accuracySuccesses,
       accuracyDice: accuracyDiceResults,
       attackId: attack.id,
       attackName: attack.name,
-      attackData: { dicePool: accuracyPool, attackStats: getAttackStats(participant, attack, targets.map(t => t.id)) },
+      attackData: { dicePool: accuracyPool },
       bolstered: riders.bolster,
       bolsterType: riders.bolster ? riders.bolsterType : undefined,
       lifestealed: riders.lifesteal || false,
@@ -1148,8 +1149,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
       hugePowerAttackRange: riders.hugePower ? attack.range : undefined,
       hugePowerRank: riders.hugePower ? (riders.hugePowerRank2 ? 2 : 1) : undefined,
       hugePowerTrackAll: riders.hugePower && !!eddySoulRules.value?.hugePowerOncePerTurn,
-      isSignatureMove: !!(houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))),
-      batteryCount: (houseRules.value?.signatureMoveBattery && attack.tags?.some((t: string) => t.toLowerCase().includes('signature'))) ? ((participant as any).battery ?? 0) : 0,
+
     }
 
     try {
@@ -1169,7 +1169,7 @@ async function confirmAreaAttack(targets: CombatParticipant[], areaShapeData?: A
     }
 
     // Pass clash attack ends the clash once the attack is submitted.
-    if (clashCtx) await executeClashAction(clashCtx.controllerId, 'end')
+
 
     const entity = getEntityDetails(participant)
     // Exclude targets the server dropped via Selective Targeting from the logged target list.
@@ -2419,65 +2419,19 @@ function onMapPlayerAction(participantId: string, action: 'attack' | 'direct' | 
 // Change stance
 async function changeStance(stance: CombatParticipant['currentStance'], participantId?: string) {
   if (!currentEncounter.value) return
-
-  const participants = currentEncounter.value.participants as CombatParticipant[]
-  const targetId = participantId || activeParticipant.value?.id
-  if (!targetId) return
-
-  const active = participants.find((p) => p.id === targetId)
-  if (!active) return
-  if ((active as any).clash) return
-
-  // Stance change costs 1 simple action
-  if ((active.actionsRemaining?.simple || 0) < 1) return
-  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
-
-  active.currentStance = stance
-  await updateEncounter(currentEncounter.value.id, { participants })
-
-  const entity = getEntityDetails(active)
-  if (entity) {
-    await addBattleLogEntry(currentEncounter.value.id, {
-      round: currentEncounter.value.round,
-      actorId: active.id,
-      actorName: entity.name,
-      action: 'Changed stance',
-      target: null,
-      result: `Switched to ${stance} stance`,
-      damage: null,
-      effects: [],
-    })
-  }
+  const participant = participantId ?? activeParticipant.value?.id
+  if (!participant) return
+  const result = await performIntent(currentEncounter.value.id, 'stance', { participantId: participant, stance, operationId: crypto.randomUUID() })
+  if (!result) alert('The stance could not be saved')
 }
 
 // Movement action (costs 1 simple action)
 async function useMovement(participantId?: string) {
   if (!currentEncounter.value) return
-
-  const participants = currentEncounter.value.participants as CombatParticipant[]
-  const targetId = participantId || activeParticipant.value?.id
-  if (!targetId) return
-
-  const active = participants.find((p) => p.id === targetId)
-  if (!active) return
-  if ((active.actionsRemaining?.simple || 0) < 1) return
-
-  active.actionsRemaining.simple = Math.max(0, (active.actionsRemaining?.simple || 0) - 1)
-  await updateEncounter(currentEncounter.value.id, { participants, movementActionParticipantId: targetId } as any)
-
-  const entity = getEntityDetails(active)
-  if (entity) {
-    await addBattleLogEntry(currentEncounter.value.id, {
-      round: currentEncounter.value.round,
-      actorId: active.id,
-      actorName: entity.name,
-      action: 'Movement',
-      target: null,
-      result: 'Used movement action',
-      damage: null,
-      effects: [],
-    })
-  }
+  const participant = participantId ?? activeParticipant.value?.id
+  if (!participant) return
+  const result = await performIntent(currentEncounter.value.id, 'card-move', { participantId: participant, operationId: crypto.randomUUID() })
+  if (!result) alert('The movement could not be saved')
 }
 
 // Tamer direct action - opens target selector
@@ -2690,9 +2644,9 @@ async function forceChangeStance(participantId: string, stance: CombatParticipan
 async function forceDigivolve(participant: CombatParticipant, targetChainIndex: number) {
   if (!currentEncounter.value) return
   try {
-    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/digivolve`, {
+    const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/gm-digivolve`, {
       method: 'POST',
-      body: { participantId: participant.id, targetChainIndex, force: true },
+      body: { participantId: participant.id, targetChainIndex },
     })
     await applyActionResult(updated, 'digivolve')
   } catch (e: any) {
@@ -3509,7 +3463,8 @@ const mapSelectedAttackProp = computed(() => {
   return buildMapAttackDescriptor(selection, digimon ? { digimon, stats: calcDigimonStats(digimon) } : undefined)
 })
 
-function onMapTargetSelected(targetId: string) {
+function onMapTargetSelected(targetId: string, intent?: MapAttackIntent) {
+  if (selectedAttack.value && intent) selectedAttack.value.mapIntent = intent
   if (mapDirectMode.value) {
     const mode = mapDirectMode.value
     const target = (currentEncounter.value?.participants as CombatParticipant[] | undefined)?.find(p => p.id === targetId)
@@ -3527,7 +3482,8 @@ function onMapTargetSelected(targetId: string) {
   confirmAttack(target)
 }
 
-function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null) {
+function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData | null, intent?: MapAttackIntent) {
+  if (selectedAttack.value && intent) selectedAttack.value.mapIntent = intent
   if (!selectedAttack.value) return
   const participants = (currentEncounter.value?.participants as CombatParticipant[]) || []
   const targets = participants.filter(p => targetIds.includes(p.id))
@@ -3663,7 +3619,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           :selectable-participant-ids="directMapTargetIds"
           :player-placement-mode="false"
           :eddy-soul-rules="eddySoulRules"
-          @encounter-updated="(partial: any) => updateEncounter(currentEncounter!.id, partial)"
+          @encounter-updated="(snapshot: any) => applyActionResult(snapshot, 'move')"
           @npc-action="onNpcAction"
           @player-action="onMapPlayerAction"
           @gm-manage="selectedParticipantId = $event"

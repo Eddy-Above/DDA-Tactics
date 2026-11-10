@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, campaigns } from '../../../../db'
 
@@ -38,9 +40,10 @@ function swapsAreEqual(a: StatSwaps, b: StatSwaps): boolean {
 const SWAP_DAMAGE_ARMOR: StatSwaps = { damage: 'armor', armor: 'damage' }
 const SWAP_ACCURACY_DODGE: StatSwaps = { accuracy: 'dodge', dodge: 'accuracy' }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ModeChangeBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'mode-change')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

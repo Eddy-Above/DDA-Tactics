@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -71,14 +72,14 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
       } }) }),
     },
   }
-  const cache = loadTypeScriptWithMocks('server/utils/combatRecordCache.ts', {})
+  const cache = loadTrustedGameplayModule('server/utils/combatRecordCache.ts', {})
   const common = { 'drizzle-orm': sql, '../db': dbModule, './combatRecordCache': cache }
-  const support = loadTypeScriptWithMocks('server/utils/resolveSupportAttack.ts', common)
-  const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+  const support = loadTrustedGameplayModule('server/utils/resolveSupportAttack.ts', common)
+  const spatial = loadTrustedGameplayModule('server/utils/combatSpatial.ts', {
     ...common, './resolveSupportAttack': support,
   })
-  const context = loadTypeScriptWithMocks('server/utils/combatContext.ts', common)
-  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', common)
+  const context = loadTrustedGameplayModule('server/utils/combatContext.ts', common)
+  const devolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', common)
   const room = {
     getRoomPositions: async () => copy(positions),
     getRoomSnapshot: async () => ({ participantPositions: copy(positions), destructibleStates: [] }),
@@ -87,7 +88,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
     broadcastPositionPatch: async (_id, patch) => { patches.push(copy(patch)); Object.assign(positions, copy(patch)) },
     broadcast: () => assert.fail('PUT must not broadcast an independent aura write'),
   }
-  const actualGuidingLight = loadTypeScriptWithMocks('server/utils/guidingLight.ts', {
+  const actualGuidingLight = loadTrustedGameplayModule('server/utils/guidingLight.ts', {
     ...common, './combatSpatial': spatial, './resolveSupportAttack': support,
     './combatContext': context, './encounterRoom': room,
     './encounterPayload': { buildEncounterPayload: () => assert.fail('unexpected standalone aura persistence') },
@@ -104,22 +105,22 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
       return actualGuidingLight.refreshGuidingLightForParticipants(...args)
     },
   }
-  const gravity = loadTypeScriptWithMocks('server/utils/endOfTurnGravity.ts', {
+  const gravity = loadTrustedGameplayModule('server/utils/endOfTurnGravity.ts', {
     './combatSpatial': spatial, './guidingLight': guidingLight, './encounterRoom': room,
   })
-  const roundStart = loadTypeScriptWithMocks('server/utils/roundStartQualityTriggers.ts', { './combatSpatial': spatial })
-  const encounterStart = loadTypeScriptWithMocks('server/utils/encounterStartTriggers.ts', { './combatSpatial': spatial })
-  const damageOverTime = loadTypeScriptWithMocks('server/utils/damageOverTime.ts', {
+  const roundStart = loadTrustedGameplayModule('server/utils/roundStartQualityTriggers.ts', { './combatSpatial': spatial })
+  const encounterStart = loadTrustedGameplayModule('server/utils/encounterStartTriggers.ts', { './combatSpatial': spatial })
+  const damageOverTime = loadTrustedGameplayModule('server/utils/damageOverTime.ts', {
     ...common, './combatSpatial': spatial, './resolveSupportAttack': support, './encounterRoom': room,
   })
-  const knockouts = loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
+  const knockouts = loadTrustedGameplayModule('server/utils/enemyKnockouts.ts', {
     ...common, './combatSpatial': spatial, './resolveSupportAttack': support,
     './encounterRoom': room,
     './partnerDevolution': devolution,
     './endOfTurnGravity': gravity, './roundStartQualityTriggers': roundStart,
     './damageOverTime': damageOverTime, './guidingLight': guidingLight,
   })
-  const put = loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
+  const put = loadTrustedGameplayModule('server/api/encounters/[id].put.ts', {
     'drizzle-orm': sql, '../../db': dbModule,
     '../../utils/combatRecordCache': cache, '../../utils/combatSpatial': spatial,
     '../../utils/partnerDevolution': devolution,

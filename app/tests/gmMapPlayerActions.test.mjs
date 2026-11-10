@@ -256,21 +256,36 @@ test('GM partner evolution checks the Tamer budget and preserves normal Mode Cha
   assert.deepEqual(h.calls, [])
 })
 
-test('GM player movement uses the paid Move endpoint, while GM Move remains free', () => {
-  const calls = [], messages = []
-  const deps = { props: { encounter: { id: 'encounter' } }, positions: ref({}),
+test('GM player movement and free GM repositioning both use validated HTTP intents without writable socket messages', async () => {
+  const calls = [], messages = [], snapshots = []
+  const origin = { x: 0, y: 0, z: 0 }, destination = { x: 3, y: 0, z: 0 }
+  const deps = { props: { encounter: { id: 'encounter', revision: 8, participants: [{ id: 'partner' }] } }, positions: ref({ partner: origin }),
     throwAimContext: ref(null), throwAllyAimContext: ref(null), chargeMoveParticipantId: ref(null),
     npcMoveParticipantId: ref('partner'), gmMoveParticipantId: ref('partner'),
-    movement: { clearMovement: () => {} }, movePathTo: (_id, _pos, path) => path, moveDistance: () => 3,
-    openDoorsAlong: () => {}, ws: { send: message => messages.push(message) },
-    $fetch: (...args) => { calls.push(args); return Promise.resolve({ success: true }) }, console,
+    movement: { clearMovement: () => {} }, movePathTo: (_id, _pos, path) => path,
+    ws: { send: message => messages.push(message) },
+    emit: (name, value) => snapshots.push([name, value]), alert: message => assert.fail(message),
+    $fetch: async (...args) => { calls.push(args); return { success: true, position: args[1].body.destination, encounter: { id: 'encounter' } } },
   }
   const handlers = loadPageFunctions('components/EncounterMap.vue', ['onCombatMove', 'postMove', 'onGmMove'], deps)
-  handlers.onCombatMove('partner', { x: 3, y: 0, z: 0 }, [])
-  assert.deepEqual(calls[0], ['/api/encounters/encounter/actions/move', { method: 'POST', body: { participantId: 'partner', distance: 3 } }])
-  handlers.onGmMove('partner', { x: 300, y: 20, z: 0 })
-  assert.equal(calls.length, 1)
-  assert.equal(messages.length, 2)
+  const path = [origin, { x: 1, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, destination]
+  await handlers.onCombatMove('partner', destination, path)
+  assert.equal(calls[0][0], '/api/encounters/encounter/actions/move')
+  const normal = calls[0][1].body
+  assert.equal(normal.kind, 'normal')
+  assert.equal(normal.participantId, 'partner')
+  assert.deepEqual(normal.destination, destination)
+  assert.deepEqual(normal.origin, origin)
+  assert.deepEqual(normal.path, path)
+  assert.equal(normal.expectedRevision, 8)
+  assert.equal(typeof normal.operationId, 'string')
+  assert.equal(normal.noActionCost, undefined)
+  await handlers.onGmMove('partner', { x: 300, y: 20, z: 0 })
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1][1].body.kind, 'gm', 'only the server grants the free GM movement mode')
+  assert.equal(calls[1][1].body.noActionCost, undefined)
+  assert.deepEqual(messages, [])
+  assert.equal(snapshots.length, 2)
 })
 
 test('GM map removes the floating Fateful payer control and connects player actions and Direct targets', () => {

@@ -1,22 +1,26 @@
 import { joinRoom, leaveRoom } from '../../../utils/encounterRoom'
 import { campaignRoomKey } from '../../../utils/rollLog'
+import { resolveCampaignAccessFromHeaders } from '../../../utils/campaignSecurity'
+import { authorizeWebSocketPeer, closeAuthorizedPeer, readWebSocketMessage, releaseAuthorizedPeer } from '../../../utils/websocketSecurity'
 
-// Campaign-level WS channel (currently: live roll-log pushes). Reuses the
-// encounterRoom peer registry under a `campaign:` key; these rooms carry no
-// map state, so there is no full-state send and no inbound message handling.
 export default defineWebSocketHandler({
   async open(peer) {
     const url = new URL(peer.request?.url ?? '', 'http://localhost')
-    const parts = url.pathname.split('/')
-    const campaignId = parts[parts.indexOf('campaigns') + 1]
-    if (!campaignId) { peer.close(1008, 'Missing campaignId'); return }
-
-    ;(peer as any)._campaignId = campaignId
-    await joinRoom(campaignRoomKey(campaignId), peer)
+    const campaignId = url.pathname.match(/^\/api\/campaigns\/([^/]+)\/ws\/?$/)?.[1]
+    if (!campaignId) { peer.close(1008, 'Missing campaign'); return }
+    const roomKey = campaignRoomKey(campaignId)
+    const access = await authorizeWebSocketPeer(peer, async () => ({
+      ...await resolveCampaignAccessFromHeaders(peer.request.headers, campaignId), campaignId,
+    }), () => leaveRoom(roomKey, peer))
+    if (!access) return
+    try {
+      await joinRoom(roomKey, peer)
+      if (!(peer as any)._securityCanReceive()) leaveRoom(roomKey, peer)
+    }
+    catch { closeAuthorizedPeer(peer, 1011, 'Unable to load campaign') }
   },
-
-  close(peer) {
-    const campaignId: string = (peer as any)._campaignId
-    if (campaignId) leaveRoom(campaignRoomKey(campaignId), peer)
+  message(peer, message) {
+    if (readWebSocketMessage(peer, message)) closeAuthorizedPeer(peer, 1008, 'Campaign channel is read-only')
   },
+  close(peer) { releaseAuthorizedPeer(peer) },
 })

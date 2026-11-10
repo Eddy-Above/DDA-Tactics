@@ -1,3 +1,5 @@
+import { allowFields, boundedString } from '../../../../utils/securityValidation'
+import { invalidateCampaignPeers } from '../../../../utils/websocketSecurity'
 import { and, eq } from 'drizzle-orm'
 import { db, campaigns, tamers, users, tamerAccessGrants, type NewTamerAccessGrantRow } from '../../../../db'
 import { generateId } from '../../../../utils/id'
@@ -27,6 +29,9 @@ export default defineEventHandler(async (event) => {
   await requireOwnerOrCoOwner(event, campaignId)
 
   const body = await readBody<GrantBody>(event)
+  allowFields(body, ['tamerId', 'userId'])
+  boundedString(body.userId, 'userId', 200, false)
+  boundedString(body.tamerId, 'tamerId', 200, false)
   if (!body.tamerId || !body.userId) {
     throw createError({ statusCode: 400, message: 'tamerId and userId are required' })
   }
@@ -59,6 +64,8 @@ export default defineEventHandler(async (event) => {
     .select()
     .from(tamerAccessGrants)
     .where(and(eq(tamerAccessGrants.tamerId, body.tamerId), eq(tamerAccessGrants.userId, body.userId)))
+
+  invalidateCampaignPeers(campaignId)
 
   return { ...saved, username: grantee.username, tamerName: tamer.name }
 })

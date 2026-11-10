@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon } from '../../../../db'
 
@@ -6,9 +8,10 @@ interface TormentorCheckBody {
   failingParticipantIds: string[]
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<TormentorCheckBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'tormentor-check')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

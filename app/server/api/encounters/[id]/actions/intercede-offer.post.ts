@@ -32,7 +32,7 @@ import { refreshGuidingLightForParticipants } from '~/server/utils/guidingLight'
 import { loadEncounterMap, getMovementProfile } from '~/server/utils/combatSpatial'
 import { getNaturewalkEnvironmentSettings } from '~/utils/naturewalk'
 import { resolveInstantSupportEffect } from '~/server/utils/pushPull'
-import { type AreaShapeData, computeAreaCellsFromData } from '~/utils/areaShapes'
+import { type AreaShapeData, computeAreaCellsFromData, getAreaShape } from '~/utils/areaShapes'
 import { getSelectiveTargetingFilter, selectiveTargetingExcludesTarget } from '~/server/utils/selectiveTargeting'
 import { getTargetOptOuts, getGmCharacterOptOuts, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
@@ -43,8 +43,12 @@ import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } fro
 import { attackActionCost, effectActionError } from '~/utils/combatAttackOptions'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
+import { runAttackCommand } from '~/server/utils/attackCommand'
+import { allowFields, finiteNumber } from '~/server/utils/securityValidation'
+import { commitAttackMovement, grantChargeAfter, finishPassClash, validateAttackTargets, canonicalizeAreaAttack, type AttackMovementRequest } from '~/server/utils/attackMovement'
+import { canActOnEncounterTurn } from '~/server/utils/participantTurn'
 
-interface IntercedeOfferBody {
+export interface IntercedeOfferBody extends AttackMovementRequest {
   attackerId: string
   targetId?: string       // Single-target attack
   targetIds?: string[]    // Area attack: multiple targets
@@ -77,18 +81,45 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   }
 
-  // Creating an offer rewrites the same pending array as answering one. Keep both creation and
-  // automatic passes in the decision queue so neither can restore a consumed offer or erase a
-  // defense that another request just added.
-  return serializeIntercedeClaim(encounterId, () => withCombatRecords(async () => {
-    const result = await createIntercedeOffers(encounterId, body)
-    if (passableOfferOwners(result).length === 0) return result
-    const answered = await applyActivePasses(encounterId)
-    if (!answered) return result
+  allowFields(body, ['attackerId', 'targetId', 'targetIds', 'accuracySuccesses', 'accuracyDice', 'attackId', 'attackName', 'attackData',
+    'bolstered', 'bolsterType', 'lifestealed', 'shieldComplex', 'hugePowerUsed', 'hugePowerAttackRange', 'hugePowerRank', 'hugePowerTrackAll',
+    'clashNoInterceptTargetId', 'areaShapeData', 'chargeTiming', 'movement', 'operationId', 'expectedRevision'])
+  return runAttackCommand(event, encounterId, body, 'intercede-offer', async ({ encounter, access }) => {
+    const dicePool = finiteNumber(body.attackData?.dicePool ?? body.accuracyDice?.length, 'dicePool', { integer: true, min: 0, max: 10000 })
+    body.attackData = { dicePool }
+    validateAttackTargets(encounter, body)
+    const actor = encounter.participants.find((p: any) => p.id === body.attackerId)
+    if (!actor) throw createError({ statusCode: 404, message: 'Attacker not found' })
+    const [record] = actor?.type === 'digimon' ? await db.select().from(digimon).where(eq(digimon.id, actor.entityId)) : []
+    const attack = record?.attacks?.find((a: any) => a.id === body.attackId) ?? BASIC_ATTACKS.find(a => a.id === body.attackId)
+    if (!attack) throw createError({ statusCode: 400, message: 'Choose an attack from the current character' })
+    if (getAreaShape(attack.tags ?? []) === 'pass' && actor.clash?.isController) body.clashNoInterceptTargetId = actor.clash.opponentParticipantId
+    if (actor.clash && !body.clashNoInterceptTargetId) throw createError({ statusCode: 403, message: 'Use a clash action while clashing' })
+    if (!await canActOnEncounterTurn(actor, { participants: encounter.participants, turnOrder: encounter.turnOrder, currentTurnIndex: encounter.currentTurnIndex, actorDigimon: record ?? null },
+      id => db.select().from(digimon).where(eq(digimon.id, id)))) throw createError({ statusCode: 403, message: 'It is not this character’s turn' })
+    if (!Array.isArray(body.accuracyDice) || body.accuracyDice.length > 10000) throw createError({ statusCode: 400, message: 'Invalid accuracy dice' })
+    body.accuracyDice.forEach(die => finiteNumber(die, 'die', { integer: true, min: 1, max: 6 }))
+    finiteNumber(body.accuracySuccesses, 'accuracySuccesses', { integer: true, min: 0, max: 10000 })
+    const moved = await commitAttackMovement(encounter, body.attackerId, attack, body, access)
+    if (!moved.defeated) {
+      await resolveAttackOffers(encounterId, body)
+      await finishPassClash(encounterId, body.attackerId, attack)
+      await grantChargeAfter(encounterId, body.attackerId, attack, body.chargeTiming, encounter)
+    }
     const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
-    return fresh ? { ...result, ...fresh } : result
-  }))
+    return fresh
+  })
 })
+
+/** Server-only entry: callers already hold the decision queue and transaction. */
+export async function resolveAttackOffers(encounterId: string, input: IntercedeOfferBody, trusted?: { actionsPaid?: boolean; clashAttack?: boolean }) {
+  const body = { ...input, skipActionDeduction: !!trusted?.actionsPaid, clashAttack: !!trusted?.clashAttack }
+  const result = await withCombatRecords(() => createIntercedeOffers(encounterId, body))
+  if (passableOfferOwners(result).length === 0) return result
+  if (!await applyActivePasses(encounterId)) return result
+  const [fresh] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  return fresh ? { ...result, ...fresh } : result
+}
 
 async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBody) {
   if (!body.attackerId || !body.attackId) {
@@ -186,13 +217,27 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   body.attackData = { ...body.attackData, orderModifiers }
   const declaredAttack: any = digimonById.get(attacker.entityId)?.attacks?.find((a: any) => a.id === body.attackId)
   const actionAttack = declaredAttack ?? body.attackData ?? {}
+  if (!declaredAttack && !BASIC_ATTACKS.some(a => a.id === body.attackId)) throw createError({ statusCode: 400, message: 'Unknown attack' })
+  for (const id of body.targetIds ?? (body.targetId ? [body.targetId] : [])) {
+    if (!participants.some((p: any) => p.id === id && !p.inReserve)) throw createError({ statusCode: 400, message: 'Target does not belong to this encounter' })
+  }
+  if (!body.skipActionDeduction) {
+    body.isSignatureMove = !!(houseRules as any)?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
+    body.batteryCount = body.isSignatureMove ? attacker.battery ?? 0 : 0
+  }
+  const basicAttack = BASIC_ATTACKS.find(a => a.id === body.attackId)
+  await canonicalizeAreaAttack(encounter, attacker, declaredAttack ?? basicAttack, body, digimonById)
+  if (body.clashNoInterceptTargetId && (getAreaShape((declaredAttack ?? basicAttack)?.tags ?? []) !== 'pass'
+    || !attacker.clash?.isController || body.clashNoInterceptTargetId !== attacker.clash.opponentParticipantId)) throw createError({ statusCode: 403, message: 'Invalid clash attack context' })
   const optionError = effectActionError(actionAttack, body)
   if (optionError) throw createError({ statusCode: 400, message: optionError })
+  const requiredActions = Math.max(attacker.clash ? 2 : 1,
+    attackActionCost(attacker, declaredAttack ?? basicAttack, eddySoulRules, body))
   if (!body.skipActionDeduction) {
     if (actionAttack.effect === 'Shield' && attacker.lastShieldRound === encounter.round) {
       throw createError({ statusCode: 403, message: 'Shield can only be used once per round' })
     }
-    if ((attacker.actionsRemaining?.simple ?? 0) < attackActionCost(attacker, actionAttack, eddySoulRules, body)) {
+    if ((attacker.actionsRemaining?.simple ?? 0) < requiredActions) {
       throw createError({ statusCode: 403, message: 'Not enough actions remaining' })
     }
   }
@@ -229,7 +274,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   if (body.targetIds && body.targetIds.length > 0) {
     // Deduct attacker actions once for the whole area attack
     if (!body.skipActionDeduction) {
-      const actionCost = attackActionCost(attacker, declaredAttack ?? body.attackData, eddySoulRules, body)
+      const actionCost = requiredActions
       participants = participants.map((p: any) => {
         if (p.id === body.attackerId) {
           const updated: any = {
@@ -796,7 +841,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
 
   // Deduct attacker actions and track used attack (skip if already done by attack.post.ts)
   if (!body.skipActionDeduction) {
-    const actionCost = attackActionCost(attacker, declaredAttack ?? body.attackData, eddySoulRules, body)
+    const actionCost = requiredActions
     participants = participants.map((p: any) => {
       if (p.id === body.attackerId) {
         const updated: any = {

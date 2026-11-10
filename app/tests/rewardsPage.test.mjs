@@ -22,6 +22,7 @@ function component(path, form) {
   const module = { exports: {} }
   new Function('require', 'module', 'exports', outputText)(name => {
     if (name === 'vue') return Vue
+    if (name === '~/utils/imageFallback') return loadTypeScript('utils/imageFallback.ts')
     if (name === '~/composables/useRewardGrant') return { useRewardGrant: () => form }
     throw new Error(`Unexpected UI import: ${name}`)
   }, module, module.exports)

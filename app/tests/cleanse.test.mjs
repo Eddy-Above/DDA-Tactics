@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { ref } from 'vue'
@@ -113,7 +114,7 @@ test('the Cleanse endpoint validates owner and selections, persists once, and pr
   globalThis.getRouterParam = () => 'encounter'
   globalThis.readBody = async body => body
   globalThis.createError = data => Object.assign(new Error(data.message), data)
-  const handler = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/cleanse.post.ts', {
+  const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/cleanse.post.ts', {
     '../../../../db': { db, ...tables }, 'drizzle-orm': { eq: () => ({}) },
   }).default
   const body = { requestId: f.id, ownerId: 'owner', mode: 'purify', selections: [{ participantId: 'ally', effectId: 'poison' }] }

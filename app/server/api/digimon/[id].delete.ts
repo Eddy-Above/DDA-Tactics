@@ -1,3 +1,4 @@
+import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
@@ -22,7 +23,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  await assertCanModifySandboxCharacter(event, existing)
+  await requireEntityAccess(event, 'digimon', existing, true)
 
   // Delete digimon
   await db.delete(digimon).where(eq(digimon.id, id))

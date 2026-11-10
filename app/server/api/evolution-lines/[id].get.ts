@@ -1,3 +1,4 @@
+import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines } from '../../db'
 
@@ -19,6 +20,8 @@ export default defineEventHandler(async (event) => {
       message: `Evolution line with ID ${id} not found`,
     })
   }
+
+  await requireEntityAccess(event, 'evolution-line', evolutionLine)
 
   return evolutionLine
 })

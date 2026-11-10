@@ -1,7 +1,9 @@
+import { authorizeEncounterIntent } from '../../utils/encounterAuthorization'
 import { buildEncounterPayload } from '../../utils/encounterPayload'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id')
+  await authorizeEncounterIntent(event, id, undefined, 'read')
 
   if (!id) {
     throw createError({

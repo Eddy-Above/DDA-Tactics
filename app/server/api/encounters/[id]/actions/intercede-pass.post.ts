@@ -1,3 +1,5 @@
+import { defineEncounterCommand } from '../../../../utils/encounterCommand'
+import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../../../db'
 import { setTemporaryPass, clearTemporaryPass } from '~/server/utils/intercedeOptOuts'
@@ -11,9 +13,10 @@ interface IntercedePassBody {
   action: 'start' | 'resume'
 }
 
-export default defineEventHandler(async (event) => {
+export default defineEncounterCommand(async (event) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedePassBody>(event)
+  await authorizeEncounterIntent(event, encounterId, body, 'intercede-pass')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

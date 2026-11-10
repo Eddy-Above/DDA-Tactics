@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -26,14 +27,28 @@ function encounter(participants, turnOrder = participants.map(p => p.id), curren
   }
 }
 
-async function client(state) {
+async function client(state, rows = []) {
   let stored = structuredClone(state)
   globalThis.ref = value => ({ value })
-  globalThis.$fetch = async (_url, options) => {
+  const { advanceEncounterTurn } = loadTypeScriptWithMocks('server/utils/encounterTurn.ts', {
+    './encounterUpdate': { updateEncounterState: async (_id, payload) => {
+      stored = { ...stored, ...structuredClone(payload) }
+      return structuredClone(stored)
+    } },
+  })
+  globalThis.$fetch = async (url, options) => {
     if (options?.method === 'PUT') stored = { ...stored, ...structuredClone(options.body) }
+    if (url.endsWith('/actions/end-turn')) {
+      assert.equal(options.method, 'POST')
+      assert.equal(options.body.participantId, stored.turnOrder[stored.currentTurnIndex])
+      assert.equal(options.body.turnKey, loadTypeScript('utils/specialOrderCombat.ts').combatTurnKey(stored.round, stored.currentTurnIndex))
+      assert.equal(options.body.participants, undefined, 'End Turn sends intent instead of a client roster')
+      assert.equal(typeof options.body.operationId, 'string')
+      await advanceEncounterTurn(structuredClone(stored), new Map(rows.map(row => [row.id, row])))
+    }
     return structuredClone(stored)
   }
-  const { useEncounters } = loadTypeScriptWithMocks('composables/useEncounters.ts', {})
+  const { useEncounters } = loadTrustedGameplayModule('composables/useEncounters.ts', {})
   const api = useEncounters()
   await api.fetchEncounter('encounter')
   return api
@@ -45,8 +60,8 @@ const identity = async participants => participants
 
 function knockoutResolver(rows = []) {
   const store = { db: { select: unexpected, update: unexpected }, digimon: {}, encounters: {}, campaigns: {}, evolutionLines: {} }
-  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', { '../db': store })
-  return loadTypeScriptWithMocks('server/utils/enemyKnockouts.ts', {
+  const devolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', { '../db': store })
+  return loadTrustedGameplayModule('server/utils/enemyKnockouts.ts', {
     '../db': store,
     './partnerDevolution': devolution,
     './resolveSupportAttack': { getDigimonDerivedStats: unexpected },
@@ -81,8 +96,8 @@ function legacyNpcAttack(state, rows = []) {
   }
   const store = { db, ...tables }
   const sql = { eq: (_column, value) => ({ value }) }
-  const devolution = loadTypeScriptWithMocks('server/utils/partnerDevolution.ts', { '../db': store, 'drizzle-orm': sql })
-  return loadTypeScriptWithMocks('server/api/encounters/[id]/actions/npc-attack.post.ts', {
+  const devolution = loadTrustedGameplayModule('server/utils/partnerDevolution.ts', { '../db': store, 'drizzle-orm': sql })
+  return loadTrustedGameplayModule('server/api/encounters/[id]/actions/npc-attack.post.ts', {
     '../../../../db': store,
     '../../../../utils/partnerDevolution': devolution,
     'drizzle-orm': sql,
@@ -257,7 +272,7 @@ for (const path of ['client', 'knockout']) {
     const state = encounter(participants, ['active', 'tamer', 'other'])
     const records = [{ id: 'partner', partnerId: 'tamer' }]
     const result = path === 'client'
-      ? await (await client(state)).nextTurn('encounter', new Map(records.map(row => [row.id, row])))
+      ? await (await client(state, records)).nextTurn('encounter')
       : await knockoutResolver(records)(state, ['active'])
     const tamer = result.participants.find(p => p.id === 'tamer')
     const partner = result.participants.find(p => p.id === 'partner')

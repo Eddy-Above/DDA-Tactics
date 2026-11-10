@@ -1,3 +1,4 @@
+import { loadTrustedGameplayModule } from './helpers/loadTrustedGameplayModule.mjs'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
@@ -90,9 +91,9 @@ function fixture({ area = false, unlockStrikeLast = true, counterattack = false 
   }
   const database = { db, ...tables }
   const orm = { eq: (_column, value) => ({ value }), inArray: (_column, values) => ({ values }) }
-  const queue = loadTypeScriptWithMocks('server/utils/intercedeClaims.ts', {})
+  const queue = loadTrustedGameplayModule('server/utils/intercedeClaims.ts', {})
   const counterattacks = []
-  const attack = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/attack.post.ts', {
+  const attack = loadTrustedGameplayModule('server/api/encounters/[id]/actions/attack.post.ts', {
     '../../../../db': database,
     'drizzle-orm': orm,
     '../../../../utils/intercedeClaims': queue,
@@ -104,17 +105,17 @@ function fixture({ area = false, unlockStrikeLast = true, counterattack = false 
       return { ...params, pendingRequests: [...params.pendingRequests, { id: 'counter', type: 'counterattack-prompt' }] }
     } },
   }).default
-  const createRequest = loadTypeScriptWithMocks('server/api/encounters/[id]/requests.post.ts', {
+  const createRequest = loadTrustedGameplayModule('server/api/encounters/[id]/requests.post.ts', {
     '../../../db': database,
     'drizzle-orm': orm,
     '../../../utils/intercedeClaims': queue,
   }).default
-  const deleteRequest = loadTypeScriptWithMocks('server/api/encounters/[id]/requests/[requestId].delete.ts', {
+  const deleteRequest = loadTrustedGameplayModule('server/api/encounters/[id]/requests/[requestId].delete.ts', {
     '../../../../db': database,
     'drizzle-orm': orm,
     '../../../../utils/intercedeClaims': queue,
   }).default
-  const intercede = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
+  const intercede = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
     '../../../../db': database,
     'drizzle-orm': orm,
     '~/server/utils/intercedeClaims': queue,

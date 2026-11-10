@@ -1,3 +1,6 @@
+import { requireCampaignManager } from '../../utils/campaignSecurity'
+import { allowFields, boundedString, objectBody } from '../../utils/securityValidation'
+import { invalidateCampaignPeers } from '../../utils/websocketSecurity'
 import { eq } from 'drizzle-orm'
 import { db, campaigns, type Campaign } from '../../db'
 import { hashPassword } from '../../utils/password'
@@ -32,12 +35,17 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  // Settings are only reserved for the owner/co-owner once a campaign has
-  // an owner. Ownerless campaigns keep today's fully-open behavior (access
-  // is governed purely by the DM password, unchanged).
-  if (existing.ownerId) {
-    await requireOwnerOrCoOwner(event, id)
-  }
+  // Owned campaigns require a manager; protected ownerless campaigns require verified GM access.
+  await requireCampaignManager(event, id)
+  allowFields(body, ['name', 'description', 'level', 'password', 'dmPassword', 'rulesSettings'])
+  if (body.name !== undefined) boundedString(body.name, 'name', 1000, false)
+  if (body.description !== undefined) boundedString(body.description, 'description', 100000)
+  if (body.level !== undefined && !['standard', 'enhanced', 'extreme'].includes(body.level)) throw createError({ statusCode: 400, message: 'Invalid campaign level' })
+  for (const password of [body.password, body.dmPassword]) if (password !== undefined && password !== null) boundedString(password, 'password', 500)
+  if (body.rulesSettings !== undefined) objectBody(body.rulesSettings)
+  const nextPlayerProtected = body.password === undefined ? !!existing.passwordHash : !!body.password
+  const nextGmProtected = body.dmPassword === undefined ? !!existing.dmPasswordHash : !!body.dmPassword
+  if (!existing.ownerId && nextPlayerProtected && !nextGmProtected) throw createError({ statusCode: 400, message: 'An ownerless protected campaign must retain a GM password.' })
 
   const updateData: Partial<Campaign> = { updatedAt: new Date() }
 
@@ -48,13 +56,14 @@ export default defineEventHandler(async (event) => {
 
   // Handle password updates: null = remove, string = set new, undefined = no change
   if (body.password !== undefined) {
-    updateData.passwordHash = body.password ? hashPassword(body.password) : null
+    updateData.passwordHash = body.password ? await hashPassword(body.password) : null
   }
   if (body.dmPassword !== undefined) {
-    updateData.dmPasswordHash = body.dmPassword ? hashPassword(body.dmPassword) : null
+    updateData.dmPasswordHash = body.dmPassword ? await hashPassword(body.dmPassword) : null
   }
 
   await db.update(campaigns).set(updateData).where(eq(campaigns.id, id))
+  if (body.password !== undefined || body.dmPassword !== undefined) invalidateCampaignPeers(id)
 
   const [updated] = await db.select().from(campaigns).where(eq(campaigns.id, id))
 

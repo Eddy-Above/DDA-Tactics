@@ -35,39 +35,18 @@ const stats = computed(() => [
 
 async function openDmSection() {
   if (!campaign.value) await loadCampaign()
-
-  if (!campaign.value?.hasDmPassword) {
-    navigateTo(`/campaigns/${campaignId.value}/library`)
-    return
-  }
-
-  const cookie = useCookie(`campaign-dm-${campaignId.value}`)
-  if (cookie.value) {
-    navigateTo(`/campaigns/${campaignId.value}/library`)
-    return
-  }
-
-  // Account-based DM access: owner, co-owner, or co-dm grant all count —
-  // mirrors the bypass condition in middleware/dm-access.ts. Checked here
-  // (rather than left to that middleware) because this hub page isn't
-  // covered by dm-access.ts, and its failure path has no way to reopen
-  // this modal.
   try {
-    const access = await $fetch<{ isOwner: boolean; isCoOwner: boolean; isCoDm: boolean }>(
-      `/api/campaigns/${campaignId.value}/my-access`,
-    )
-    if (access.isOwner || access.isCoOwner || access.isCoDm) {
+    const access = await $fetch<{ isDm: boolean }>(`/api/campaigns/${campaignId.value}/my-access`)
+    if (access.isDm) {
       useCookie(`campaign-dm-${campaignId.value}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
-      navigateTo(`/campaigns/${campaignId.value}/library`)
+      await navigateTo(`/campaigns/${campaignId.value}/library`)
       return
     }
-  } catch {
-    // ignore — fall through to the password prompt
-  }
-
+  } catch { /* The server must verify even an existing UI cookie. */ }
+  useCookie(`campaign-dm-${campaignId.value}`).value = null
   showDmPasswordModal.value = true
   dmPasswordInput.value = ''
-  dmPasswordError.value = ''
+  dmPasswordError.value = campaign.value?.hasDmPassword ? '' : 'Sign in with an account that has GM access to this campaign.'
 }
 
 async function submitDmPassword() {
@@ -168,9 +147,10 @@ async function submitDmPassword() {
     <Teleport to="body">
       <div v-if="showDmPasswordModal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
         <div class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700 p-6 w-full max-w-sm">
-          <h3 class="font-display text-lg font-semibold text-white mb-4">Enter DM Password</h3>
+          <h3 class="font-display text-lg font-semibold text-white mb-4">GM access</h3>
           <form @submit.prevent="submitDmPassword">
             <input
+              v-if="campaign?.hasDmPassword"
               v-model="dmPasswordInput"
               type="password"
               placeholder="DM Password"
@@ -187,7 +167,8 @@ async function submitDmPassword() {
               >
                 Cancel
               </button>
-              <button
+              <NuxtLink v-if="!campaign?.hasDmPassword" to="/auth/login" class="px-4 py-2 text-digimon-orange-400">Sign in</NuxtLink>
+              <button v-else
                 type="submit"
                 class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
               >

@@ -12,6 +12,7 @@ import { loadEncounterCombatContext } from './combatContext'
 import { loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 import { applyNaturewalkEnvironment } from './naturewalk'
 import { withCombatRecords } from './combatRecordCache'
+import { afterDatabaseCommit } from './databaseScope'
 
 const AURA_NAME = 'Guiding Light'
 const FOCUS_NAME = 'Guiding Light (Focus)'
@@ -184,6 +185,7 @@ const inFlight = new Map<string, Promise<boolean>>()
 const pendingRerun = new Set<string>()
 
 export function recomputeGuidingLightForEncounter(encounterId: string): Promise<boolean> {
+  if (afterDatabaseCommit(async () => { await recomputeGuidingLightForEncounter(encounterId) })) return Promise.resolve(false)
   const existing = inFlight.get(encounterId)
   if (existing) {
     pendingRerun.add(encounterId)

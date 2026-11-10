@@ -1,3 +1,5 @@
+import type { MapAttackIntent } from '../types/mapAttackIntent'
+import { combatTurnKey } from '../utils/specialOrderCombat'
 import { toRaw } from 'vue'
 import type { Encounter } from '../server/db/schema'
 import type { Digimon } from '../server/db/schema'
@@ -168,6 +170,14 @@ export function useEncounters() {
   const currentEncounter = ref<Encounter | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const pendingIntentIds = new Map<string, string>()
+  function commandId(key: string, supplied?: string): string {
+    const existing = pendingIntentIds.get(key)
+    if (existing) return existing
+    const id = supplied ?? crypto.randomUUID()
+    pendingIntentIds.set(key, id)
+    return id
+  }
 
   async function fetchEncounters(campaignId?: string, opts?: { visibleToPlayers?: boolean }) {
     loading.value = true
@@ -477,135 +487,32 @@ export function useEncounters() {
     })
   }
 
+  async function performIntent(encounterId: string, action: string, body: Record<string, unknown>): Promise<Encounter | null> {
+    error.value = null
+    const { operationId: suppliedId, ...payload } = body
+    const commandKey = JSON.stringify([encounterId, action, payload])
+    const operationId = commandId(commandKey, typeof suppliedId === 'string' ? suppliedId : undefined)
+    try {
+      const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/${action}`, { method: 'POST', body: { ...body, operationId } })
+      pendingIntentIds.delete(commandKey)
+      encounters.value = encounters.value.map(e => e.id === encounterId ? result : e)
+      if (currentEncounter.value?.id === encounterId) currentEncounter.value = result
+      return result
+    } catch (cause: any) {
+      error.value = cause?.data?.message ?? cause?.message ?? 'The action could not be saved'
+      return null
+    }
+  }
+
   async function nextTurn(
     encounterId: string,
     digimonMap?: Map<string, any>,
     houseRules?: { signatureMoveBattery?: boolean } | null,
     getEntityName?: (p: CombatParticipant) => string | null | undefined,
   ): Promise<Encounter | null> {
-    const source = currentEncounter.value?.id === encounterId
-      ? currentEncounter.value
-      : encounters.value.find((e) => e.id === encounterId)
-    const encounter = source ? structuredClone(toRaw(source)) : await fetchEncounter(encounterId)
+    const encounter = currentEncounter.value?.id === encounterId ? currentEncounter.value : encounters.value.find(e => e.id === encounterId)
     if (!encounter) return null
-
-    const participants = encounter.participants as CombatParticipant[]
-    let turnOrder = encounter.turnOrder as string[]
-    if (turnOrder.length === 0) return null
-    let nextIndex = (encounter.currentTurnIndex + 1) % turnOrder.length
-
-    // Skip any turn-order slots whose participant was removed from the encounter
-    let skipped = 0
-    let crossedZero = nextIndex === 0
-    while (!participants.find((p) => p.id === turnOrder[nextIndex]) && skipped < turnOrder.length) {
-      nextIndex = (nextIndex + 1) % turnOrder.length
-      skipped++
-      if (nextIndex === 0) crossedZero = true
-    }
-
-    let newRound = encounter.round
-    const endOfTurnLogEntries: any[] = []
-
-    // If we've wrapped around, start a new round
-    if (crossedZero) {
-      newRound += 1
-      applyRoundReset(participants, houseRules, digimonMap)
-    }
-
-    // Mark current participant as having acted
-    const currentParticipantId = (encounter.turnOrder as string[])[encounter.currentTurnIndex]
-    const currentParticipant = participants.find((p) => p.id === currentParticipantId)
-    if (currentParticipant) {
-      currentParticipant.hasActed = true
-      currentParticipant.isActive = false
-
-      // Poison/Burn damage is applied by the server when this turn/round ends ([id].put.ts → damageOverTime)
-
-      // Boss quality: Data Absorb — heal at end of this participant's turn
-      if (currentParticipant.dataAbsorbActive) {
-        // Potency is tracked via the GM's last toggle action; use base BIT as fallback
-        // The heal multiplier was logged at activation time; here we apply BIT×2 minimum
-        const dataAbsorbHeal = Math.max(0, (currentParticipant as any).dataAbsorbHealAmount ?? 0)
-        if (dataAbsorbHeal > 0) {
-          currentParticipant.currentWounds = Math.max(0, (currentParticipant.currentWounds || 0) - dataAbsorbHeal)
-        }
-        endOfTurnLogEntries.push({
-          id: `log-data-absorb-${currentParticipant.id}-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          round: encounter.round,
-          actorId: currentParticipant.id,
-          actorName: currentParticipant.id,
-          action: 'Data Absorb',
-          target: currentParticipant.id,
-          result: dataAbsorbHeal > 0 ? `Healed ${dataAbsorbHeal} wounds` : 'Data Absorb healing (server resolves BIT×2)',
-          damage: null,
-          effects: ['Data Absorb'],
-        })
-      }
-
-      // Decrement effect durations at end of this participant's turn
-      tickTurnEffects(currentParticipant)
-    }
-
-    // At tamer turn-end: mark partner digimon as having acted and open post-turn intercede window
-    if (digimonMap && currentParticipant && currentParticipant.type === 'tamer') {
-      const partnerDigi = participants.find((p) => {
-        if (p.type !== 'digimon') return false
-        const digi = digimonMap.get(p.entityId)
-        return digi?.partnerId === currentParticipant.entityId
-      })
-      if (partnerDigi) {
-        partnerDigi.hasActed = true
-        const stunEffect = (partnerDigi.activeEffects || []).find((e: any) => e.name === 'Stun')
-        partnerDigi.maxPostTurnIntercedes = stunEffect ? 1 : 2
-      }
-
-      // Partner digimon grouped under this tamer (no turn-order slot of their own) act on the
-      // tamer's turn, so their effects count down with it. After the Stun check above, so the
-      // post-turn intercede cap still sees this round's Stun.
-      for (const p of participants) {
-        if (p.type !== 'digimon' || p.inReserve || turnOrder.includes(p.id)) continue
-        if (digimonMap.get(p.entityId)?.partnerId !== currentParticipant.entityId) continue
-        tickTurnEffects(p)
-      }
-    }
-
-    if (crossedZero) {
-      turnOrder = applyLagInitiative(participants, turnOrder, newRound, digimonMap)
-      nextIndex = 0
-    }
-
-    // Mark next participant as active
-    const nextParticipantId = turnOrder[nextIndex]
-    const nextParticipant = participants.find((p) => p.id === nextParticipantId)
-    if (nextParticipant) {
-      activateParticipant(nextParticipant, participants, digimonMap, newRound)
-    }
-
-    const updatePayload: Partial<Encounter> = { participants, turnOrder, currentTurnIndex: nextIndex, round: newRound }
-    const logEntries = [...endOfTurnLogEntries]
-    if (getEntityName && nextParticipant) {
-      const name = getEntityName(nextParticipant)
-      if (name) {
-        logEntries.push({
-          id: `log-turnstart-${nextParticipant.id}-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          round: newRound,
-          actorId: nextParticipant.id,
-          actorName: name,
-          action: 'Turn started',
-          target: null,
-          result: `${name}'s turn begins`,
-          damage: null,
-          effects: [],
-        })
-      }
-    }
-    if (logEntries.length > 0) {
-      const existingLog = [...((encounter?.battleLog as any[]) || [])]
-      updatePayload.battleLog = existingLog.concat(logEntries)
-    }
-    return updateEncounter(encounterId, updatePayload)
+    return performIntent(encounterId, 'end-turn', { participantId: encounter.turnOrder[encounter.currentTurnIndex], turnKey: combatTurnKey(encounter.round, encounter.currentTurnIndex), operationId: crypto.randomUUID() })
   }
 
   async function endCombat(encounterId: string): Promise<Encounter | null> {
@@ -616,17 +523,7 @@ export function useEncounters() {
     encounterId: string,
     entry: Omit<BattleLogEntry, 'id' | 'timestamp'>
   ): Promise<Encounter | null> {
-    const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
-    if (!encounter) return null
-
-    const newEntry: BattleLogEntry = {
-      ...entry,
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-    }
-
-    const battleLog = [...((encounter.battleLog as BattleLogEntry[]) || []), newEntry]
-    return updateEncounter(encounterId, { battleLog })
+    return performIntent(encounterId, 'log', entry)
   }
 
   // Get current turn participant
@@ -823,6 +720,7 @@ export function useEncounters() {
       dicePool: number
       successes: number
       diceResults: number[]
+      mapIntent?: MapAttackIntent
     },
     tamerId: string,
     attackName?: string,
@@ -848,10 +746,14 @@ export function useEncounters() {
   ): Promise<Encounter | null> {
     loading.value = true
     error.value = null
+    const commandKey = JSON.stringify([encounterId, participantId, attackId, targetId, accuracyData, areaData])
+    const operationId = commandId(commandKey, accuracyData.mapIntent?.operationId)
     try {
       const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/attack`, {
         method: 'POST',
         body: {
+          ...accuracyData.mapIntent,
+          operationId,
           participantId,
           attackId,
           targetId: areaData ? undefined : targetId,
@@ -874,6 +776,7 @@ export function useEncounters() {
         },
       })
       // Update local state
+      pendingIntentIds.delete(commandKey)
       encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
       if (currentEncounter.value?.id === encounterId) {
         currentEncounter.value = result
@@ -906,10 +809,13 @@ export function useEncounters() {
   ): Promise<Encounter | null> {
     loading.value = true
     error.value = null
+    const commandKey = JSON.stringify([encounterId, participantId, attackId, targetId, accuracyData, dodgeData])
+    const operationId = commandId(commandKey)
     try {
       const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/npc-attack`, {
         method: 'POST',
         body: {
+          operationId,
           participantId,
           attackId,
           targetId,
@@ -922,6 +828,7 @@ export function useEncounters() {
         },
       })
       // Update local state
+      pendingIntentIds.delete(commandKey)
       encounters.value = encounters.value.map((e) => (e.id === encounterId ? result : e))
       if (currentEncounter.value?.id === encounterId) {
         currentEncounter.value = result
@@ -1029,6 +936,7 @@ export function useEncounters() {
     isGroupedUnderTamer,
     startCombat,
     nextTurn,
+    performIntent,
     endCombat,
     addBattleLogEntry,
     getCurrentParticipant,

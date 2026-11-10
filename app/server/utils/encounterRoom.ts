@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../db'
+import { afterDatabaseCommit, scopedRoomState, stageRoomState } from './databaseScope'
 
 interface Vec3 {
   x: number
@@ -20,14 +21,14 @@ interface RoomState {
   peers: Set<any>
   hydrating: Promise<void> | null
   persistTimer: ReturnType<typeof setTimeout> | null
+  persistChain: Promise<void>
 }
 
 const PERSIST_DELAY_MS = 1500
 
-// In-memory authoritative state per encounter, hydrated from the DB on first
-// access and kept current via WS messages. The DB row is a debounced
-// durability snapshot only — never read back as the live source of truth
-// while a room is active.
+// Live room views are hydrated once. Validated commands persist their position
+// and structure changes in the command transaction, then update this cache and
+// publish to peers after the transaction commits.
 const rooms = new Map<string, RoomState>()
 
 async function getOrHydrate(encounterId: string): Promise<RoomState> {
@@ -45,6 +46,7 @@ async function getOrHydrate(encounterId: string): Promise<RoomState> {
     peers: new Set(),
     hydrating: null,
     persistTimer: null,
+    persistChain: Promise.resolve(),
   }
   rooms.set(encounterId, room)
 
@@ -56,8 +58,12 @@ async function getOrHydrate(encounterId: string): Promise<RoomState> {
         target.participantPositions = enc.participantPositions ?? {}
         target.destructibleStates = enc.destructibleStates ?? []
       }
-    } catch { /* leave defaults on error */ }
-    target.hydrating = null
+    } catch (error) {
+      // An unavailable database must not turn stored units into an empty map.
+      // Remove only this failed attempt so the next request can hydrate again.
+      if (rooms.get(encounterId) === target) rooms.delete(encounterId)
+      throw error
+    } finally { target.hydrating = null }
   })()
 
   await target.hydrating
@@ -79,11 +85,23 @@ export async function flushPersist(encounterId: string): Promise<void> {
     clearTimeout(room.persistTimer)
     room.persistTimer = null
   }
-  await db.update(encounters).set({
-    participantPositions: room.participantPositions,
-    destructibleStates: room.destructibleStates,
+  const snapshot = {
+    participantPositions: { ...room.participantPositions },
+    destructibleStates: room.destructibleStates.map(state => ({ ...state })),
     updatedAt: new Date(),
-  }).where(eq(encounters.id, encounterId))
+  }
+  const write = room.persistChain.catch(() => {}).then(async () => {
+    await db.update(encounters).set(snapshot).where(eq(encounters.id, encounterId))
+  })
+  room.persistChain = write
+  await write
+}
+
+/** Drain the earlier durability snapshot before an HTTP command persists newer positions. */
+export async function prepareRoomCommit(encounterId: string): Promise<void> {
+  const room = await getOrHydrate(encounterId)
+  if (room.persistTimer) await flushPersist(encounterId)
+  else await room.persistChain
 }
 
 export async function joinRoom(encounterId: string, peer: any): Promise<RoomState> {
@@ -109,22 +127,31 @@ export function notifyEncounterUpdated(encounterId: string): void {
 }
 
 export function broadcast(encounterId: string, message: unknown, exclude?: any): void {
+  const raw = JSON.stringify(message)
+  if (afterDatabaseCommit(() => broadcastRaw(encounterId, raw, exclude))) return
+  broadcastRaw(encounterId, raw, exclude)
+}
+
+function broadcastRaw(encounterId: string, raw: string, exclude?: any): void {
   const room = rooms.get(encounterId)
   if (!room) return
-  const raw = JSON.stringify(message)
   for (const peer of room.peers) {
-    if (peer !== exclude) {
+    if (peer !== exclude && (typeof peer._securityCanReceive !== 'function' || peer._securityCanReceive())) {
       try { peer.send(raw) } catch { /* peer disconnected */ }
     }
   }
 }
 
 export async function getRoomPositions(encounterId: string): Promise<Record<string, Vec3>> {
+  const staged = scopedRoomState(encounterId)
+  if (staged) return { ...staged.participantPositions }
   const room = await getOrHydrate(encounterId)
   return { ...room.participantPositions }
 }
 
 export async function getRoomDestructibleStates(encounterId: string): Promise<DestructibleState[]> {
+  const staged = scopedRoomState(encounterId)
+  if (staged) return staged.destructibleStates.map(state => ({ ...state }))
   const room = await getOrHydrate(encounterId)
   return room.destructibleStates.map((s) => ({ ...s }))
 }
@@ -134,6 +161,8 @@ export async function getRoomSnapshot(encounterId: string): Promise<{
   destructibleStates: DestructibleState[]
   version: number
 }> {
+  const staged = scopedRoomState(encounterId)
+  if (staged) return { participantPositions: { ...staged.participantPositions }, destructibleStates: staged.destructibleStates.map(state => ({ ...state })), version: staged.version }
   const room = await getOrHydrate(encounterId)
   return {
     participantPositions: { ...room.participantPositions },
@@ -143,19 +172,39 @@ export async function getRoomSnapshot(encounterId: string): Promise<{
 }
 
 export async function applyUnitMoved(encounterId: string, participantId: string, position: Vec3): Promise<number> {
-  const room = await getOrHydrate(encounterId)
-  room.participantPositions[participantId] = position
-  room.version += 1
-  scheduleDebouncedPersist(room)
-  return room.version
+  return applyPositionPatch(encounterId, { [participantId]: position })
 }
 
 export async function applyPositionPatch(encounterId: string, patch: Record<string, Vec3>): Promise<number> {
+  const snapshot = await getRoomSnapshot(encounterId)
+  const next = { ...snapshot, participantPositions: { ...snapshot.participantPositions, ...patch }, version: snapshot.version + 1 }
+  if (stageRoomState(encounterId, next)) {
+    await db.update(encounters).set({ participantPositions: next.participantPositions, updatedAt: new Date() }).where(eq(encounters.id, encounterId))
+    afterDatabaseCommit(async () => { await applyPositionPatchLive(encounterId, patch, false) })
+    return next.version
+  }
+  return applyPositionPatchLive(encounterId, patch, true)
+}
+
+async function applyPositionPatchLive(encounterId: string, patch: Record<string, Vec3>, persist: boolean): Promise<number> {
   const room = await getOrHydrate(encounterId)
   Object.assign(room.participantPositions, patch)
   room.version += 1
-  scheduleDebouncedPersist(room)
+  if (persist) scheduleDebouncedPersist(room)
   return room.version
+}
+
+/** The caller has persisted positions with participant resources in the same transaction. */
+export async function publishCommittedPositions(encounterId: string, patch: Record<string, Vec3>): Promise<number> {
+  const snapshot = await getRoomSnapshot(encounterId)
+  const next = { ...snapshot, participantPositions: { ...snapshot.participantPositions, ...patch }, version: snapshot.version + 1 }
+  const publish = async () => {
+    const version = await applyPositionPatchLive(encounterId, patch, false)
+    broadcastRaw(encounterId, JSON.stringify({ type: 'position-patch', encounterId, patch, version }))
+  }
+  if (stageRoomState(encounterId, next)) { afterDatabaseCommit(publish); return next.version }
+  await publish()
+  return next.version
 }
 
 // Applies a position patch to the room AND broadcasts it to all viewers. The common pairing used by
@@ -173,11 +222,23 @@ export function getDestroyedStructureIds(destructibleStates: DestructibleState[]
 }
 
 export async function applyStructureDamaged(encounterId: string, structureId: string, currentWounds: number): Promise<number> {
+  const snapshot = await getRoomSnapshot(encounterId)
+  const states = snapshot.destructibleStates.filter(state => state.structureId !== structureId)
+  states.push({ structureId, currentWounds })
+  if (stageRoomState(encounterId, { ...snapshot, destructibleStates: states, version: snapshot.version + 1 })) {
+    await db.update(encounters).set({ destructibleStates: states, updatedAt: new Date() }).where(eq(encounters.id, encounterId))
+    afterDatabaseCommit(async () => { await applyStructureDamagedLive(encounterId, structureId, currentWounds, false) })
+    return snapshot.version + 1
+  }
+  return applyStructureDamagedLive(encounterId, structureId, currentWounds, true)
+}
+
+async function applyStructureDamagedLive(encounterId: string, structureId: string, currentWounds: number, persist: boolean): Promise<number> {
   const room = await getOrHydrate(encounterId)
   const idx = room.destructibleStates.findIndex((s) => s.structureId === structureId)
   if (idx >= 0) room.destructibleStates[idx] = { structureId, currentWounds }
   else room.destructibleStates.push({ structureId, currentWounds })
   room.version += 1
-  scheduleDebouncedPersist(room)
+  if (persist) scheduleDebouncedPersist(room)
   return room.version
 }

@@ -1,3 +1,4 @@
+import { resolveCampaignAccess } from '../../../utils/campaignSecurity'
 import { getMyCampaignAccess } from '../../../utils/campaignAuth'
 
 // Single source of truth for "what can the current session do on this
@@ -9,5 +10,6 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Campaign ID is required' })
   }
 
-  return await getMyCampaignAccess(event, id)
+  const [account, access] = await Promise.all([getMyCampaignAccess(event, id), resolveCampaignAccess(event, id)])
+  return { ...account, isMember: access.isMember, isDm: access.isDm, isManager: access.isManager, isGuest: access.isGuest }
 })
