@@ -43,6 +43,9 @@ function fixture() {
     '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
     './intercedeClaims': queue, './databaseScope': scopes, './combatRecordCache': records,
     './encounterRoom': { prepareRoomCommit: async () => { control.prepares++ } },
+    // This suite isolates the durable queue/transaction; stored-link authorization
+    // runs with the actual validator in encounterStoredScopeSecurity.test.mjs.
+    './encounterStateScope': { validateEncounterStateScope: async () => {} },
     './encounterAuthorization': { authorizeEncounterIntent: async () => {
       if (!control.allowed) throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
       const [encounter] = await db.select().from(table).where('enc')

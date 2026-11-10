@@ -229,7 +229,7 @@ test('round wrap shares records across Poison, stationary Burn, quality triggers
   assert.ok(result.battleLog.some(entry => entry.effects.includes('Burn')))
 })
 
-test('preload includes both rosters and every history form, reusing the restored form and negative results', async () => {
+test('preload uses the validated replacement roster and its history, reusing restored forms without loading the replaced form', async () => {
   const history = [
     { entityId: 'restored', maxWounds: 5, wounds: 1, totalHealth: 3, stageIndex: 0 },
     { entityId: 'missing', maxWounds: 5, stageIndex: 1 },
@@ -242,7 +242,7 @@ test('preload includes both rosters and every history form, reusing the restored
     partnerId: 'owner', qualities: [{ id: 'combat-monster' }],
   }), record('ally')] })
   const result = await f.put({ participants: incoming, currentTurnIndex: 1 })
-  assertOneBatch(f, 'digimon', ['old', 'evolved', 'restored', 'missing', 'ally'])
+  assertOneBatch(f, 'digimon', ['evolved', 'restored', 'missing', 'ally'])
   assertOneBatch(f, 'tamers', ['owner'])
   const restored = result.participants.find(p => p.id === 'source')
   assert.equal(restored.entityId, 'restored')

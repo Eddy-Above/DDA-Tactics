@@ -8,6 +8,8 @@ import { authorizeEncounterIntent } from './encounterAuthorization'
 import { boundedString, finiteNumber } from './securityValidation'
 import { withCombatRecords } from './combatRecordCache'
 import { prepareRoomCommit } from './encounterRoom'
+import { validateEncounterStateScope } from './encounterStateScope'
+import { validateEncounterContextScope } from './encounterContextScope'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -21,6 +23,10 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
     const result = await db.transaction(async transaction => withDatabase(transaction, () => withCombatRecords(async () => {
       await db.select().from(encounters).where(eq(encounters.id, id)).for('update')
       const context = await authorizeEncounterIntent(event, id, body, operation)
+      // Update can replace a tainted legacy roster; deletion needs no linked records.
+      // All other services may use targets, saved forms or partners beyond the actor.
+      if (operation !== 'delete' && operation !== 'update') await validateEncounterStateScope(context.encounter, { participants: context.encounter.participants })
+      if (operation === 'requests-create' || operation === 'response') await validateEncounterContextScope(context.encounter, body)
       const actorId = body.participantId ?? body.attackerId ?? (operation === 'log' ? body.actorId : undefined)
       const actor = context.encounter.participants?.find((p: any) => p.id === actorId) as any
       const prior = operationId && actor?.attackReceipts?.find((receipt: any) => receipt.operationId === operationId)

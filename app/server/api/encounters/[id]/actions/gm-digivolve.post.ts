@@ -7,6 +7,6 @@ export default defineEncounterCommand(async event => {
   const id = getRouterParam(event, 'id')
   if (!id) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   await requireEncounterAccess(event, id, 'dm')
-  const body = allowFields(await readBody(event), ['participantId', 'targetChainIndex']) as unknown as DigivolveBody
+  const body = allowFields(await readBody(event), ['participantId', 'targetChainIndex', 'operationId', 'expectedRevision']) as unknown as DigivolveBody
   return serializeIntercedeClaim(id, () => performDigivolution(id, body, true))
 })

@@ -4,6 +4,7 @@ import { db, tamers, digimon, maps, type Campaign } from '../db'
 import { getSessionUser } from './session'
 import { assertCanControlTamer, requireCampaignDm, requireCampaignMember, resolveCampaignAccess, type CampaignAccess } from './campaignSecurity'
 import { withDatabase } from './databaseScope'
+import { createEntityScopeResolver } from './entityScopeGraph'
 
 export type EntityKind = 'tamer' | 'digimon' | 'map' | 'evolution-line'
 export async function entityWrite<T>(work: () => Promise<T>): Promise<T> {
@@ -13,26 +14,11 @@ export async function entityWrite<T>(work: () => Promise<T>): Promise<T> {
   return result
 }
 export async function entityCampaignId(kind: EntityKind, record: any): Promise<string | null> {
-  if (record.campaignId) return record.campaignId
-  if ((kind === 'digimon' || kind === 'evolution-line') && record.partnerId) {
-    const [partner] = await db.select().from(tamers).where(eq(tamers.id, record.partnerId))
-    if (!partner) throw createError({ statusCode: 400, message: 'Linked Tamer does not exist' })
-    return partner.campaignId ?? null
-  }
-  if (kind === 'evolution-line') {
-    const scopes = new Set<string | null>()
-    for (const entry of record.chain ?? []) {
-      const [form] = await db.select().from(digimon).where(eq(digimon.id, entry.digimonId))
-      if (!form) throw createError({ statusCode: 400, message: 'Linked Digimon does not exist' })
-      scopes.add(await entityCampaignId('digimon', form))
-    }
-    if (scopes.size > 1) throw createError({ statusCode: 400, message: 'Evolution forms belong to different campaigns' })
-    return [...scopes][0] ?? null
-  }
-  return null
+  return createEntityScopeResolver([record], kind)(kind, record)
 }
-export async function requireEntityAccess(event: H3Event, kind: EntityKind, record: any, write = false): Promise<CampaignAccess | null> {
-  const scope = await entityCampaignId(kind, record)
+export async function requireEntityAccess(event: H3Event, kind: EntityKind, record: any, write = false,
+  resolveScope = createEntityScopeResolver([record], kind)): Promise<CampaignAccess | null> {
+  const scope = await resolveScope(kind, record)
   if (scope) {
     const access = await requireCampaignMember(event, scope)
     if (!write) return access
@@ -51,26 +37,27 @@ export async function requireEntityAccess(event: H3Event, kind: EntityKind, reco
     if (record.partnerId) {
       const [partner] = await db.select().from(tamers).where(eq(tamers.id, record.partnerId))
       if (!partner || partner.campaignId) throw createError({ statusCode: 400, message: 'Invalid standalone evolution line partner' })
-      await requireEntityAccess(event, 'tamer', partner, write)
+      await requireEntityAccess(event, 'tamer', partner, write, resolveScope)
     }
     for (const entry of record.chain ?? []) {
       const [form] = await db.select().from(digimon).where(eq(digimon.id, entry.digimonId))
       if (!form || form.campaignId) throw createError({ statusCode: 400, message: 'Invalid standalone evolution form' })
-      await requireEntityAccess(event, 'digimon', form, write)
+      await requireEntityAccess(event, 'digimon', form, write, resolveScope)
     }
   }
   return null
 }
 export async function filterReadableEntities(event: H3Event, rows: any[], kind: EntityKind) {
   const campaigns = new Map<string, boolean>()
+  const resolveScope = createEntityScopeResolver(rows, kind)
   const result = []
   for (const row of rows) {
-    const scope = await entityCampaignId(kind, row)
+    const scope = await resolveScope(kind, row)
     if (scope) {
       if (!campaigns.has(scope)) campaigns.set(scope, (await resolveCampaignAccess(event, scope)).isMember)
       if (campaigns.get(scope)) result.push(row)
     } else {
-      try { await requireEntityAccess(event, kind, row); result.push(row) } catch (error: any) { if (error.statusCode !== 404 && error.statusCode !== 403) throw error }
+      try { await requireEntityAccess(event, kind, row, false, resolveScope); result.push(row) } catch (error: any) { if (error.statusCode !== 404 && error.statusCode !== 403) throw error }
     }
   }
   return result

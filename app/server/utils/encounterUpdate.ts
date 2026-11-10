@@ -45,7 +45,7 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
   if (body.participants || isCombatStart) {
     // Later checks can restore an earlier form. Load both rosters and their form histories once
     // so gravity, round triggers and aura refreshes share the same request-local records.
-    const roster = [...((existing.participants as any[]) || []), ...((body.participants as any[]) || [])]
+    const roster = ((body.participants ?? existing.participants) as any[]) || []
     const forms = roster.flatMap(p => p.type === 'digimon' && Array.isArray(p.woundsHistory)
       ? p.woundsHistory.flatMap((state: any) => typeof state?.entityId === 'string' && state.entityId
         ? [{ type: 'digimon', entityId: state.entityId }] : [])

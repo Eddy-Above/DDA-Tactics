@@ -201,6 +201,8 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         message: 'attackId, accuracyDicePool, accuracySuccesses, and accuracyDiceResults are required for counterattack-triggered response',
       })
     }
+  } else if (body.response.type === 'recovery-rolled') {
+    if (request.type !== 'recovery-check') throw createError({ statusCode: 400, message: 'Response type does not match request type' })
   } else if (body.response.type === 'divine-protection-used' || body.response.type === 'divine-protection-declined') {
     if (request.type !== 'divine-protection-offer') {
       throw createError({

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { db, campaigns, encounters, tamers, digimon, maps, type Campaign } from '../db'
 import { getMyCampaignAccess } from './campaignAuth'
 import { enforcePrincipalWriteLimit } from './securityTransport'
+import { createEntityScopeResolver } from './entityScopeGraph'
 
 const TTL = 30 * 24 * 60 * 60 * 1000
 type CredentialCampaign = Pick<Campaign, 'id' | 'passwordHash' | 'dmPasswordHash'>
@@ -126,6 +127,7 @@ export async function requireEncounterActor(event: H3Event, encounter: any, id: 
       const [partner] = await db.select().from(tamers).where(eq(tamers.id, record.partnerId))
       scope = partner?.campaignId
     }
+    if (record && !scope && !record.partnerId) scope = await createEntityScopeResolver([record], 'digimon')('digimon', record)
     if (!record || scope !== encounter.campaignId) throw createError({ statusCode: 400, message: 'Digimon does not belong to this campaign' })
     if (access.isDm) return participant
     if (!participant.isEnemy && !record.isEnemy && record.partnerId) { await assertCanControlTamer(event, record.partnerId, access); return participant }

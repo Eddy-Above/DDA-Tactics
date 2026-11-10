@@ -8,6 +8,7 @@ import { refreshGuidingLightForParticipants } from './guidingLight'
 import { loadCampaignCombatContext } from './combatContext'
 import { buildCombatDevolutionState } from './partnerDevolution'
 import { resolveCombatEvolutionIndex } from '../../utils/combatEvolutionOptions'
+import { entityCampaignId } from './entitySecurity'
 
 export interface DigivolveBody {
   participantId: string
@@ -82,7 +83,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
 
   // Fetch evolution line
   const [evoLine] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, participant.evolutionLineId))
-  if (!evoLine || evoLine.campaignId !== encounter.campaignId) {
+  if (!evoLine || await entityCampaignId('evolution-line', evoLine) !== encounter.campaignId) {
     throw createError({ statusCode: 404, message: 'Evolution line not found' })
   }
 
@@ -193,7 +194,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
 
   // Fetch new digimon to get stats
   const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetEntry.digimonId))
-  if (!newDigimon || newDigimon.campaignId !== encounter.campaignId) {
+  if (!newDigimon || await entityCampaignId('digimon', newDigimon) !== encounter.campaignId) {
     throw createError({ statusCode: 404, message: 'Target digimon not found in library' })
   }
 

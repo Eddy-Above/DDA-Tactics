@@ -6,9 +6,14 @@ globalThis.createError = value => Object.assign(new Error(value.message), value)
 const point = { id: 'actor', entityId: 'mon', type: 'digimon' }
 function fixture(fields = {}) {
   const tables = Object.fromEntries(['digimon', 'tamers', 'evolutionLines', 'maps'].map(name => [name, { id: name }]))
-  const rows = { digimon: [{ id: 'mon', campaignId: 'camp' }, { id: 'foreign', campaignId: 'other' }], tamers: [{ id: 'tamer', campaignId: 'camp' }], evolutionLines: [{ id: 'line', campaignId: 'camp' }, { id: 'foreign-line', campaignId: 'other' }], maps: [{ id: 'map', campaignId: fields.mapCampaign ?? 'camp' }] }
-  const db = { select: () => ({ from: table => ({ where: () => Promise.resolve(rows[Object.keys(tables).find(name => tables[name] === table)]) }) }) }
-  const scope = loadTypeScriptWithMocks('server/utils/encounterStateScope.ts', { '../db': { db, ...tables } })
+  const rows = { digimon: [{ id: 'mon', campaignId: 'camp' }, { id: 'foreign', campaignId: 'other' }], tamers: [{ id: 'tamer', campaignId: 'camp' }], evolutionLines: [{ id: 'line', campaignId: 'camp', chain: [{ digimonId: 'mon' }] }, { id: 'foreign-line', campaignId: 'other', chain: [{ digimonId: 'foreign' }] }], maps: [{ id: 'map', campaignId: fields.mapCampaign ?? 'camp' }] }
+  const sql = { eq: (_column, id) => [id], inArray: (_column, ids) => ids }
+  const db = { select: () => ({ from: table => ({ where: ids => Promise.resolve(rows[Object.keys(tables).find(name => tables[name] === table)].filter(row => ids === undefined || ids.includes(row.id))) }) }) }
+  const common = { '../db': { db, ...tables }, 'drizzle-orm': sql }
+  const graph = loadTypeScriptWithMocks('server/utils/entityScopeGraph.ts', common)
+  const characters = loadTypeScriptWithMocks('server/utils/encounterCharacterScope.ts', { ...common, './entityScopeGraph': graph })
+  const contexts = loadTypeScriptWithMocks('server/utils/encounterContextScope.ts', { ...common, './encounterCharacterScope': characters })
+  const scope = loadTypeScriptWithMocks('server/utils/encounterStateScope.ts', { ...common, './encounterCharacterScope': characters, './encounterContextScope': contexts })
   return { ...scope, encounter: { campaignId: 'camp' } }
 }
 test('trusted encounter writes validate current actors, saved forms, evolution lines and maps before mutation', async () => {

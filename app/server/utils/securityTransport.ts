@@ -89,7 +89,7 @@ export function recordPasswordFailure(event: H3Event, campaignId: string): void 
 export function enforcePrincipalWriteLimit(event: H3Event, principalId: string): void {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(event.node.req.method ?? 'GET') || event.context.securityWriteLimited) return
   const path = (event.path ?? event.node.req.url ?? '').split('?')[0]!
-  const map = /^\/api\/maps\//.test(path)
+  const map = /^\/api\/maps\//i.test(path)
   const ip = getClientIp(event)
   const principal = principalId.startsWith('public:') ? `${principalId}:${ip}` : principalId
   consumeHttpLimit(event, `write:${map ? 'map' : 'normal'}:${principal}`, map ? 300 : 120)

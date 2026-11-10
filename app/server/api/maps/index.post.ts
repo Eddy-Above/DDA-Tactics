@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
   finiteNumber(body.dimensions.depth, 'depth', { integer: true, min: 1 })
   if (body.dimensions.height !== undefined) finiteNumber(body.dimensions.height, 'height', { integer: true, min: 1 })
   if (body.generateGround !== undefined && typeof body.generateGround !== 'boolean') throw createError({ statusCode: 400, message: 'generateGround must be a boolean' })
-  if (body.generateGround !== false && body.dimensions.width * body.dimensions.depth > 1000000) throw createError({ statusCode: 400, message: 'Automatic floor generation supports at most 1,000,000 cells. Use generateGround: false to create a larger empty map.' })
+  if (body.generateGround !== false) finiteNumber(body.dimensions.width * body.dimensions.depth, 'floor area', { integer: true, min: 1 })
   const now = new Date()
 
   const groundTiles: { x: number; y: number; z: number; element: string; terrain: string }[] = []

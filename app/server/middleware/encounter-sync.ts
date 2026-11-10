@@ -11,7 +11,7 @@ export default defineEventHandler((event) => {
   if (method !== 'POST' && method !== 'PUT' && method !== 'DELETE') return
 
   const path = (event.path ?? event.node.req.url ?? '').split('?')[0]
-  const match = path.match(/^\/api\/encounters\/([^/?]+)(?:\/.*)?$/)
+  const match = path.match(/^\/api\/encounters\/([^/?]+)(?:\/.*)?$/i)
   if (!match) return
 
   const encounterId = match[1]

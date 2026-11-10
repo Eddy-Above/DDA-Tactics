@@ -7,6 +7,7 @@ import { prepareRoomCommit, publishCommittedPositions, broadcast } from '../../.
 import { resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
 import { loadEncounterMap } from '../../../../utils/combatSpatial'
 import { withDatabase } from '../../../../utils/databaseScope'
+import { validateEncounterStateScope } from '../../../../utils/encounterStateScope'
 
 export default defineEventHandler(async event => {
   const id = getRouterParam(event, 'id')
@@ -20,6 +21,7 @@ export default defineEventHandler(async event => {
       const freshContext = await authorizeEncounterIntent(event, id, body, 'move')
       const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id!))
       if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
+      await validateEncounterStateScope(encounter, { participants: encounter.participants })
       const actor = encounter.participants.find(p => p.id === body.participantId)
       const fingerprint = movementFingerprint(body)
       const prior = (actor as any)?.movementReceipts?.find((r: any) => r.operationId === body.operationId)

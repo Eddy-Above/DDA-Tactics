@@ -93,13 +93,19 @@ function fixture() {
   const session = loadTypeScriptWithMocks('server/utils/session.ts', common)
   const transport = loadTypeScriptWithMocks('server/utils/securityTransport.ts', { h3 })
   const account = loadTypeScriptWithMocks('server/utils/campaignAuth.ts', { ...common, './session': session, './securityTransport': transport })
-  const security = loadTypeScriptWithMocks('server/utils/campaignSecurity.ts', { ...common, './campaignAuth': account, './securityTransport': transport })
-  const entities = loadTypeScriptWithMocks('server/utils/entitySecurity.ts', { ...common, './session': session, './campaignSecurity': security, './databaseScope': scopes })
+  const graph = loadTypeScriptWithMocks('server/utils/entityScopeGraph.ts', common)
+  const security = loadTypeScriptWithMocks('server/utils/campaignSecurity.ts', { ...common, './campaignAuth': account, './securityTransport': transport, './entityScopeGraph': graph })
+  const characters = loadTypeScriptWithMocks('server/utils/encounterCharacterScope.ts', { ...common, './entityScopeGraph': graph })
+  const contexts = loadTypeScriptWithMocks('server/utils/encounterContextScope.ts', { ...common, './encounterCharacterScope': characters })
+  const stateScope = loadTypeScriptWithMocks('server/utils/encounterStateScope.ts', { ...common, './encounterCharacterScope': characters, './encounterContextScope': contexts })
+  const entities = loadTypeScriptWithMocks('server/utils/entitySecurity.ts', { ...common, './session': session, './campaignSecurity': security, './databaseScope': scopes, './entityScopeGraph': graph })
   const authorization = loadTypeScriptWithMocks('server/utils/encounterAuthorization.ts', { './campaignSecurity': security, './entitySecurity': entities })
   const queue = loadTypeScript('server/utils/intercedeClaims.ts')
   const command = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
     ...common, './databaseScope': scopes, './encounterAuthorization': authorization,
     './intercedeClaims': queue, './encounterRoom': { prepareRoomCommit: async () => {} },
+    './encounterStateScope': stateScope,
+    './encounterContextScope': contexts,
   })
   const boundary = loadTypeScriptWithMocks('server/utils/encounterCommand.ts', { h3, './attackCommand': command })
   const routeMocks = {
@@ -139,7 +145,7 @@ function fixture() {
     if (role) add(schema.campaignAccessGrants, { id: `grant-${id}`, campaignId: 'campaign', userId: id, dmRole: role })
     return { session: token }
   }
-  return { route, event, campaign, map, encounter, credentials, login, add, writes: () => writes, rows }
+  return { route, event, campaign, map, encounter, credentials, login, add, writes: () => writes, rows, security }
 }
 
 const rejectedWithoutWrites = async (f, path, event) => {
@@ -220,4 +226,24 @@ test('real route validation rejects authority fields and cross-campaign map assi
   }
   await assert.rejects(f.route('encounters/[id].put.ts')(f.event('PUT', 'encounters', 'encounter', cookies, { mapId: 'foreign-map' })), { statusCode: 400 })
   assert.equal(f.writes(), 0)
+})
+
+test('legacy unpartnered campaign forms cannot be read, edited or deleted through Workshop routes', async () => {
+  for (const method of ['GET', 'PUT', 'DELETE']) {
+    const f = fixture()
+    f.campaign('protected')
+    f.add(schema.digimon, { id: 'legacy-form', campaignId: null, partnerId: null, ownerId: null, name: 'Private form' })
+    f.add(schema.evolutionLines, { id: 'private-line', campaignId: 'protected', partnerId: null, chain: [{ digimonId: 'legacy-form' }] })
+    await rejectedWithoutWrites(f, `digimon/[id].${method.toLowerCase()}.ts`, f.event(method, 'digimon', 'legacy-form'))
+  }
+})
+
+test('GM actor admission supports a legacy unpartnered form scoped by its owned evolution line', async () => {
+  const f = fixture(), campaign = f.campaign(), encounter = f.encounter()
+  encounter.participants = [{ id: 'legacy-actor', entityId: 'legacy-form', type: 'digimon' }]
+  f.add(schema.digimon, { id: 'legacy-form', campaignId: null, partnerId: null })
+  f.add(schema.evolutionLines, { id: 'line', campaignId: 'campaign', chain: [{ digimonId: 'legacy-form' }] })
+  const event = f.event('POST', 'encounters', 'encounter', f.credentials('dm', campaign))
+  const actor = await f.security.requireEncounterActor(event, encounter, 'legacy-actor')
+  assert.equal(actor.entityId, 'legacy-form')
 })
