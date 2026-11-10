@@ -1,6 +1,7 @@
 ## Changelog
 | Date | Sections Updated | Summary |
 |------|-----------------|---------|
+| 2026-11-10e | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade the framework and audited tooling.** Pin Nuxt 3.21.11/Vue 3.5.45, move Drizzle Kit 0.31.11 to dev dependencies, align Node/Nuxt schema typings, update Vue TSC and compatible transitives, and remove unused legacy DevTools. Explicitly disable unused server islands. Final Node 24 checks: 1,484 regressions, TypeScript, production build and both browser CSP modes pass. Online audit: 54 baseline affected package entries to 15 (13 moderate/2 low), zero critical/high; omit-dev has 11. DEPENDENCY_AUDIT.md distinguishes bundled runtime from tooling and documents remaining Nuxt 3 fixes and operator limits. |
 | 2026-11-10d | API Schema, Data Models, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Close stored-link and prompt scope gaps.** Locked combat commands validate current actors, targets, saved forms, partners and evolution chains before trusted services write. Runtime prompt/response links reject foreign recovery writes; GM roster repair and valid legacy relationship-derived scope remain supported. Explicit command field/type policies reject bypass fields and malformed rolls. Case/trailing-slash variants retain Origin/rate protection; logs accept retry metadata but derive identity from stored records. Large-map creation retains its uncapped dimensions. No migration. |
 | 2026-11-10c | Build & Runtime, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Upgrade Drizzle ORM to 0.45.4.** Pin the approved ORM release without changing schema or applying a migration. The isolated Node 24 verification group passed all 1,445 regression checks and TypeScript checks before the next framework upgrade. No forced audit fix. |
 | 2026-11-10b | Build & Runtime, Environment Variables, Pages, Dependency Graph, Blast Radius, Cross-Cutting Concerns | **Harden deployment and image handling.** Nuxt Security 2.7.0 adds per-response SSR script nonces and security headers without cross-origin isolation. CSP starts report-only and supports runtime enforcement after staging checks; runtime allowed origins supply WebSocket endpoints. Changed image URLs require HTTPS and invalid legacy images use a local fallback. Node 24 multi-stage container runs only production output as node; secrets/caches are excluded. Operator deployment, ingress diagnostics and credential repair are documented. |
@@ -212,7 +213,7 @@
 | Project name | `dda-tactics` v0.1.0 |
 | Description | Tactical GM aid for Digimon Digital Adventure 1.4 TTRPG |
 | Language | TypeScript (strict mode, `strictNullChecks`, `noImplicitAny`) |
-| Framework | Nuxt 3.13 + Vue 3.5 (Nitro server, Vite build) |
+| Framework | Nuxt 3.21.11 + Vue 3.5.45 (Nitro 2.13.6, Vite 7.3.8) |
 | Runtime | Node.js 24 LTS (`engines.node: 24.x`) |
 | Database | PostgreSQL via `postgres` ^3.4.8 + Drizzle ORM 0.45.4 |
 | CSS | Tailwind CSS 3 via `@nuxtjs/tailwindcss` ^6.12 |
@@ -730,6 +731,7 @@ Append-only; pruned to the newest 50 rows per campaign on every insert by `serve
 ---
 
 ## 5. Pages & Components
+**2026-11-10 security behavior:** Navigation gates use server-verified access during SSR/client routing. Encounter pages submit dedicated player intents and adopt returned snapshots; Charge-before/Pass remain local until confirmation, and map movement/doors use authorized HTTP operations. WebSockets deliver committed notifications. Dynamic images across forms, token overlays, HUD, scenes, Workshop and library pages use HTTPS validation/fallbacks. Earlier dated component notes below describe historical wiring; these command and admission rules supersede the old client-authored movement/boolean-cookie behavior.
 
 **2026-11-09k Flickering Light:** The material picker adds a warm Flickering Light swatch. Existing block/ramp drawing, painting, undo/redo and autosaves retain the new material ID. `MapCanvas.animate` supplies elapsed time to terrain lighting and continues animation while unclipped sources flicker, without marking unchanged portraits/highlights dirty. Ordinary maps and maps containing only the original Light material still render on demand.
 
@@ -1008,6 +1010,8 @@ No Pinia or Vuex. All reactive state lives in **composables** (Vue 3 `ref`/`comp
 
 ## 6. Dependency Graph
 
+**Final dependency pins (2026-11-10):** Nuxt 3.21.11, Vue 3.5.45, Drizzle ORM 0.45.4 and Nuxt Security 2.7.0; development-only Kit 0.31.11, Vue TSC 3.3.14, Node 24 typings and Nuxt schema 3.21.11. The explicit Nuxt schema pin keeps project types aligned when newer module tooling hoists Nuxt 4 types; the CLI emits an optional peer warning, but lock-install resolution and verification pass. The disabled legacy DevTools direct dependency was removed. No forced audit fixes or migration.
+
 **Stored-scope graph (2026-11-10):** locked commands/movement -> encounterStateScope -> encounterCharacterScope + encounterContextScope -> entityScopeGraph + batch record cache. Direct/list entity access uses the same relationship resolver. Command wrappers validate operation fields before authorization/work; trusted services retain atomic database/room publication.
 
 **ORM upgrade (2026-11-10):** `drizzle-orm` is pinned to 0.45.4. PostgreSQL schema, update-returning, transaction scopes and row locks retain their interfaces; no schema migration. Nuxt/Vue and Drizzle Kit are a later verification group.
@@ -1218,6 +1222,8 @@ No HTTP clients, no third-party APIs, no webhooks.
 ---
 
 ## 7. Blast Radius
+
+**Framework/audit (2026-11-10):** Recheck SSR hydration, CSP/SRI/nonces, WebSocket limits and large-map batching after Nuxt/Vue changes. Raw npm audit has 15 affected nodes (13 moderate, 2 low; zero critical/high), and omit-dev has 11. These are not final-container exposure counts: Nuxt includes build tools and its runtime is also bundled. See `DEPENDENCY_AUDIT.md` for primary advisories, disabled prerequisites, disputed low metadata and the remaining supported-major migration requirement.
 
 **Stored-context guards (2026-11-10):** Changes affect legacy forms, Workshop ownership, evolution/recovery, partial turn updates, GM repairs and retained response history. Check foreign links in existing JSON as well as incoming payloads; a scoped actor alone does not prove all later linked writes are authorized. Map geometry and saved formats are unchanged.
 
@@ -1453,6 +1459,8 @@ Local browser smoke passed on Node 24.22.2 and isolated headless Chrome against 
 
 ### Testing Strategy
 
+**Final security verification (2026-11-10):** Node 24.22.2 ran all 1,484 regression tests, TypeScript checks and the guarded production build successfully. Final built-output Chrome smoke passed hydration, SSR nonce agreement, HTTPS/data/blob image rendering, a same-origin WebSocket handshake, zero unexpected CSP violations, and a nonce-less parser-script test in report-only/enforced modes. No production database, authenticated staging campaign or Docker runtime was used. Clean-lock install resolution was also checked without scripts.
+
 **Offline verification is mandatory (2026-11-10).** `npm test`, `npm run typecheck` and `npm run build` preload `scripts/offline-env.mjs`, replace any production URL with an inert localhost endpoint, and reject unexpected DB access. Fake DB/peer and Vue harnesses cover admission, linked writes, real route boundaries, command rollback/replay, movement, expiry, flooding and reconnect. Legacy business fixtures explicitly use a trusted admission adapter; security suites exercise actual guards. Never run verification against production.
 
 - Naturewalk/jump launches (2026-11-09l): `naturewalkRules`, `naturewalkCombat`, `naturewalkEncounter` and `naturewalkMovementEnvironment` cover free/paid element selection, environment detection/GM overrides, movement and combat bonuses, resistance, darkness blockers, stale-save protection and Water's once-per-combat wounds. `jumpLaunch` checks solid footing, water launches with/without Swimmer, mixed paths and client/server agreement. Existing movement/intercede tests retain valid grounded launch fixtures and continue to check gravity, barriers, occupancy and effect resources. All 1,309 regression tests and Nuxt TypeScript checks pass. Synthetic innate-jumper reachability takes 167 ms on a 10,000-cell floor and 127 ms on a 50,000-cell floor (7 walking, 519 reachable cells each); these are local query measurements, not Kamo River frame timings.
@@ -1565,8 +1573,8 @@ Local browser smoke passed on Node 24.22.2 and isolated headless Chrome against 
 
 ### CI/CD Pipeline
 
-- **No repository CI workflow detected** — no `.github/workflows/`, no `.gitlab-ci.yml`, no `Dockerfile`, no `docker-compose.yml`
-- Deployment is manual (likely direct push to Railway based on `DATABASE_URL` pattern)
+- **No repository CI workflow detected:** no GitHub/GitLab workflow was found. A multi-stage non-root Node 24 `Dockerfile` and `.dockerignore` are present; actual Docker execution remains an operator/CI check.
+- Railway deployment may be triggered by Git push. Configure required production `APP_ALLOWED_ORIGINS` before pushing this release; HTTP, WebSocket and client changes deploy together.
 
 ### Real-Time Map Sync (Encounter Positions/Destructibles)
 
@@ -1706,14 +1714,7 @@ the same `participants` array as everyone else.
   placement becomes active**, so a reserve deployment needs no digging, and its minimised icon
   carries the count of characters still to place.
 
-> **Player visibility is client-side redaction.** A player's own reserves are shown greyed
-> ("⏸ Waiting to join"); enemy reserves are filtered out of every player-side view. But the WS
-> room has no per-peer identity (`ws.ts`'s `joinRoom(encounterId, peer)`) and
-> `encounter-sync.ts` broadcasts a single `buildEncounterPayload()` result to every peer, so a
-> staged enemy **is** present in the payload the player's browser holds — it is simply never
-> rendered. Same trade-off `MapBattleLog.vue` already makes redacting NPC dice, and consistent
-> with the all-client-side model documented under Auth Flow. Enforcing it for real needs peer
-> identification at WS join plus per-role payloads.
+> **Reserve/NPC display redaction remains client-side inside an admitted encounter.** WebSocket peers now have verified campaign identity and permissions, but accepted encounter snapshots still share the roster/log payload with admitted players. The UI hides enemy reserves and selected NPC dice. Entire hidden encounters are GM-only on HTTP and WebSockets; per-role reserve/log secrecy is a separate feature.
 
 ### Campaign-Wide Roll History (`roll-logged` WS push)
 
@@ -1727,7 +1728,7 @@ the same `participants` array as everyone else.
 - **(2026-08-19)** A GM-set image (+ optional caption) shown to everyone in a campaign as a roleplay visual aid — deliberately unrelated to, and independent of, the 3D combat map (`maps` table/`MapCanvas.vue`). Reuses the same `campaign:{id}` WS room `RollLogPanel.vue` already established (no new room/channel), since this needed the identical "push a small live update to every page in this campaign" shape.
 - Storage is two nullable columns directly on `campaigns` (`sceneImageUrl`/`sceneImageCaption`, migration `0019_add_scene_image.sql`) rather than a new table — there is only ever one active scene per campaign (no history, no per-scene CRUD), so no `roll_log`-style append-only table was needed.
 - `PUT /api/campaigns/[id]/scene` is the single write path: updates the `campaigns` row, then `broadcast(campaignRoomKey(campaignId), {type: 'scene-updated', campaignId, sceneImageUrl, sceneImageCaption})`. `imageUrl: null` clears both fields (used for "Clear").
-- **No server-side DM check** — same "client/page-level enforcement only" model as the ~40 existing combat/GM-action endpoints (see Auth Flow). Deliberately **not** routed through `campaigns/[id].put.ts`, since that endpoint requires owner/co-owner once a campaign has an owner (`requireOwnerOrCoOwner`), which would wrongly exclude co-DMs and DM-password-only GMs from setting a scene.
+- **2026-11-10:** Scene reads require campaign membership; scene and preset writes require server-verified GM access. Owner/co-owner restrictions remain specific to owned campaign settings/deletion/grants, so co-DMs and GM-password credentials can still control scenes.
 - Client: `ScenePanel.vue` (mounted globally in `app.vue`, alongside `RollLogPanel`) opens its own `useMapWebSocket(campaignId, 'campaigns')` connection — a second, independent socket to the same room RollLogPanel already holds open, matching the existing precedent of multiple independent WS connections per room (e.g. an encounter page and its `MapCanvas` both connect to the same encounter room) rather than a shared/deduped connection. `isDm` is the same client-side `campaign-dm-{id}` cookie check `encounters/[id].vue` uses for its own `isDm` computed.
 - **(2026-11-03) Prepared scene tabs.** Up to 10 GM-prepared scenes live in `campaigns.scenePresets` (jsonb, migration `0022_add_scene_presets.sql`), written only by `PUT /api/campaigns/[id]/scene-presets`. Unlike the live scene they are **never broadcast** and not returned by `GET /scene`, because the `campaign:{id}` room includes players. GMs fetch them on campaign load and each time the scene is opened, which picks up a co-GM's or another device's edits; concurrent edits are last-write-wins on the whole array. Showing a tab, from the editor or the GM's ◀ ▶ arrows, still goes through `PUT /scene`, so players only ever receive the one live scene via `scene-updated`.
 
