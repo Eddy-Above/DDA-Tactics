@@ -63,6 +63,7 @@ const {
   updateEncounter,
   createParticipant,
   addParticipant,
+  addParticipants,
   removeParticipant,
   startCombat,
   nextTurn, performIntent,
@@ -89,7 +90,7 @@ const {
 
 const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats, error: digimonRosterError, warnings: digimonRosterWarnings } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
-const { tamers, fetchTamers, calculateDerivedStats: calcTamerStats } = useTamers()
+const { tamers, fetchTamers, calculateDerivedStats: calcTamerStats, error: tamerRosterError } = useTamers()
 const { fetchEvolutionLines, evolutionLines, getCurrentStage, getEvolutionOptions, updateEvolutionLine, error: evolutionLoadError } = useEvolution()
 
 // Special Orders state
@@ -1401,19 +1402,28 @@ async function handleSaveGmIntercedeOptOuts() {
   }
 }
 
-async function openAddParticipant() {
+function openAddParticipant() {
   showAddParticipant.value = true
+}
+
+async function refreshParticipantRoster() {
+  if (participantRosterLoading.value) return
   participantRosterLoading.value = true
   participantRosterError.value = ''
   try {
     await recordRefreshQueue.run(async () => {
       await Promise.all([
-        fetchEvolutionLines(),
-        digimonRosterError.value ? fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }) : Promise.resolve(),
+        fetchEvolutionLines(undefined, campaignId.value),
+        fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+        fetchTamers(campaignId.value),
       ])
       if (digimonRosterError.value) throw new Error(digimonRosterError.value)
+      if (tamerRosterError.value) throw new Error(tamerRosterError.value)
       if (evolutionLoadError.value) throw new Error(evolutionLoadError.value)
       await syncCurrentPartnerForms()
+      const validIds = new Set(participantOptions.value.map((option: { value: string }) => option.value))
+      if (selectedEntityType.value === 'tamer') selectedTamerIds.value = selectedTamerIds.value.filter(id => validIds.has(id))
+      else if (!validIds.has(selectedEntityId.value)) { selectedEntityId.value = ''; selectedNpcEvoLineId.value = '' }
     })
   } catch (cause) {
     participantRosterError.value = requestErrorMessage(cause, 'Could not refresh partner forms. Please try again.')
@@ -1433,7 +1443,7 @@ async function handleAddParticipant() {
     // For tamers, add as a placeholder participant (initiative -1 = pending setup)
     // Digimon selection requests are sent later via "Engage Combat"
     if (selectedEntityType.value === 'tamer') {
-      for (const id of [...new Set(selectedTamerIds.value)]) {
+      const additions = [...new Set(selectedTamerIds.value)].map(id => {
         const tamer = tamers.value.find(t => t.id === id)
         if (!tamer) throw new Error('A selected Tamer is no longer available. Refresh the encounter and try again.')
         const derived = tamer ? calcTamerStats(tamer, eddySoulRules.value) : null
@@ -1444,10 +1454,11 @@ async function handleAddParticipant() {
           : 1
         const participant = createParticipant('tamer', id, -1, 0, maxWounds, undefined, undefined, initialWounds, undefined, initialInspiration)
         if (addToReserve.value) (participant as any).inReserve = true
-        const added = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
-        if (!added) throw new Error(error.value || `Could not add ${tamer.name}. Please try again.`)
-        selectedTamerIds.value = selectedTamerIds.value.filter(value => value !== id)
-      }
+        return participant
+      })
+      const added = await addParticipants(currentEncounter.value.id, additions, digimonMap.value)
+      if (!added) throw new Error(error.value || 'Could not add the selected Tamers. Please try again.')
+      selectedTamerIds.value = []
       showAddParticipant.value = false
       selectedEntityId.value = ''
       addQuantity.value = 1
@@ -1456,7 +1467,8 @@ async function handleAddParticipant() {
     }
 
     // For digimon/enemies, add directly with rolled initiative
-    const quantity = addQuantity.value || 1
+    const quantity = Math.max(1, Math.min(20, Math.floor(addQuantity.value || 1)))
+    const additions: CombatParticipant[] = []
 
     for (let i = 0; i < quantity; i++) {
       let initiative = 0
@@ -1521,8 +1533,10 @@ async function handleAddParticipant() {
 
       if (addToReserve.value) (participant as any).inReserve = true
 
-      await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
+      additions.push(participant)
     }
+    const added = await addParticipants(currentEncounter.value.id, additions, digimonMap.value)
+    if (!added) throw new Error(error.value || 'Could not add the selected Digimon. Please try again.')
 
     showAddParticipant.value = false
     selectedEntityId.value = ''
@@ -2038,7 +2052,7 @@ async function executeEndCombatSequence(skipDevolve = false) {
 
   if (!skipDevolve) {
     // Refresh evolution lines and devolve all partner digimon to rookie
-    await recordRefreshQueue.run(() => fetchEvolutionLines())
+    await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
     for (const p of participants) {
       if (p.type === 'digimon' && p.evolutionLineId) {
         const evoLine = evolutionLines.value.find(l => l.id === p.evolutionLineId)
@@ -2107,7 +2121,7 @@ async function handleRequestRecoveryChecks() {
   showEndCombatModal.value = false
 
   const encounterId = currentEncounter.value.id
-  await recordRefreshQueue.run(() => fetchEvolutionLines())
+  await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
 
   // Devolve all partner digimon to rookie
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
@@ -2126,7 +2140,7 @@ async function handleRequestRecoveryChecks() {
   }
 
   // Reload evolution lines so we have fresh rookieDigimonId data
-  await recordRefreshQueue.run(() => fetchEvolutionLines())
+  await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
 
   // Send one recovery-check request per non-enemy tamer participant
   for (const p of participants) {
@@ -2943,7 +2957,7 @@ async function refreshRecords(plan: RecordRefreshPlan) {
       }
     })())
   }
-  if (plan.evolutionLines) jobs.push(fetchEvolutionLines())
+  if (plan.evolutionLines) jobs.push(fetchEvolutionLines(undefined, campaignId.value))
   if (plan.tamerIds.length > 0) jobs.push(fetchTamers(campaignId.value))
   await Promise.all(jobs)
 }
@@ -3044,29 +3058,35 @@ async function syncEncounterDigimon() {
 }
 
 onMounted(async () => {
-  let initialEncounter: Encounter | null = null
-  await recordRefreshQueue.run(async () => {
-    const results = await Promise.all([
-      loadCampaign(),
-      $fetch<Encounter>(`/api/encounters/${route.params.id}`).catch(() => null),
-      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
-      fetchTamers(campaignId.value),
-      fetchEvolutionLines(),
-    ])
-    initialEncounter = results[1]
-  })
+  participantRosterLoading.value = true
+  try {
+    let initialEncounter: Encounter | null = null
+    await recordRefreshQueue.run(async () => {
+      const results = await Promise.all([
+        loadCampaign(),
+        $fetch<Encounter>(`/api/encounters/${route.params.id}`).catch(() => null),
+        fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+        fetchTamers(campaignId.value),
+        fetchEvolutionLines(undefined, campaignId.value),
+      ])
+      initialEncounter = results[1]
+    })
 
-  if (initialEncounter) await applyEncounterUpdate(initialEncounter, 'fetch')
+    if (initialEncounter) await applyEncounterUpdate(initialEncounter, 'fetch')
 
-  // Auto-open map view when refreshing during active combat
-  if ((currentEncounter.value as any)?.mapId && currentEncounter.value?.phase === 'combat') {
-    showMapView.value = true
+    // Auto-open map view when refreshing during active combat
+    if ((currentEncounter.value as any)?.mapId && currentEncounter.value?.phase === 'combat') {
+      showMapView.value = true
+    }
+
+    await recordRefreshQueue.run(async () => {
+      await syncEncounterDigimon()
+      await syncCurrentPartnerForms()
+    })
+    participantRosterError.value ||= digimonRosterError.value || tamerRosterError.value || evolutionLoadError.value || ''
+  } finally {
+    participantRosterLoading.value = false
   }
-
-  await recordRefreshQueue.run(async () => {
-    await syncEncounterDigimon()
-    await syncCurrentPartnerForms()
-  })
 
   // Auto-refresh encounter as a low-frequency fallback; the WebSocket above
   // handles near-instant updates while connected.
@@ -3083,7 +3103,7 @@ onUnmounted(() => {
 async function syncCurrentPartnerForms() {
   try {
     const known = new Set(digimonList.value.map(form => form.id))
-    const missing = currentPartnerFormIds(evolutionLines.value).filter(id => !known.has(id))
+    const missing = currentPartnerFormIds(evolutionLines.value, campaignId.value, tamers.value.map(tamer => tamer.id)).filter(id => !known.has(id))
     for (let index = 0; index < missing.length; index += 500) {
       const ids = missing.slice(index, index + 500)
       const result = await $fetch<{ data: Digimon[] }>('/api/digimon', { query: { ids: ids.join(',') } })
@@ -3096,7 +3116,7 @@ async function syncCurrentPartnerForms() {
   }
 }
 
-const availableDigimon = computed(() => encounterPartnerForms(digimonList.value, evolutionLines.value))
+const availableDigimon = computed(() => encounterPartnerForms(digimonList.value, evolutionLines.value, campaignId.value, tamers.value.map((tamer: Tamer) => tamer.id)))
 
 const availableEnemyDigimon = computed(() => {
   return digimonList.value.filter((digimon) => digimon.isEnemy)
@@ -5226,7 +5246,13 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           @click.self="!addingParticipants && (showAddParticipant = false, addToReserve = false)"
         >
           <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
-            <h2 class="font-display text-xl font-semibold text-white mb-4">Add Participant</h2>
+            <div class="flex justify-between items-center gap-3 mb-4">
+              <h2 class="font-display text-xl font-semibold text-white">Add Participant</h2>
+              <button type="button" class="text-sm text-digimon-dark-300 hover:text-white underline disabled:opacity-50"
+                :disabled="participantRosterLoading || addingParticipants" @click="refreshParticipantRoster">
+                {{ participantRosterLoading ? 'Refreshing…' : 'Refresh roster' }}
+              </button>
+            </div>
 
             <div class="mb-4">
               <label class="block text-sm text-digimon-dark-400 mb-2">Type</label>
@@ -5279,7 +5305,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 :label="selectedEntityType === 'tamer' ? 'Tamers' : selectedEntityType === 'enemy' ? 'Enemy Digimon' : 'Partner Digimon'" />
               <p v-if="participantRosterLoading" role="status" class="mt-2 text-sm text-digimon-dark-400">Refreshing participants…</p>
               <p v-if="selectedEntityType === 'tamer'" class="mt-2 text-xs text-digimon-dark-400">Select one or more Tamers. Each queues for Digimon selection before initiative.</p>
-              <p v-if="participantRosterError" role="alert" class="mt-2 text-sm text-red-300">{{ participantRosterError }} <button type="button" class="underline" @click="openAddParticipant">Retry</button></p>
+              <p v-if="participantRosterError" role="alert" class="mt-2 text-sm text-red-300">{{ participantRosterError }} <button type="button" class="underline" @click="refreshParticipantRoster">Retry</button></p>
               <p v-for="message in digimonRosterWarnings" v-show="selectedEntityType !== 'tamer'" :key="message" role="status" class="mt-2 text-sm text-yellow-300">{{ message }}</p>
             </div>
 

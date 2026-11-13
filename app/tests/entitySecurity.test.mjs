@@ -174,3 +174,37 @@ test('the real Digimon GET accepts pageSize 500 and returns valid campaign rows 
     for (const [key, value] of previous) value === undefined ? delete globalThis[key] : globalThis[key] = value
   }
 })
+
+test('campaign-filtered evolution lines include inherited legacy scope and exclude other readable campaigns', async () => {
+  const f = fixture()
+  f.set({ admitted: true }) // The viewer can read both campaigns; scope must still stay exact.
+  f.rows.tamers.push({ id: 'other-tamer', campaignId: 'other' })
+  f.rows.digimon.push({ id: 'legacy-own-form', campaignId: 'private' })
+  const lines = [
+    { id: 'explicit', campaignId: 'private', chain: [] },
+    { id: 'legacy-partner', campaignId: null, partnerId: 'private-tamer', chain: [] },
+    { id: 'legacy-form', campaignId: null, chain: [{ digimonId: 'legacy-own-form' }] },
+    { id: 'foreign', campaignId: 'other', chain: [] },
+    { id: 'foreign-legacy', campaignId: null, partnerId: 'other-tamer', chain: [] },
+    { id: 'workshop', campaignId: null, chain: [] },
+  ]
+  f.rows.evolutionLines.push(...lines)
+  const previous = new Map(['defineEventHandler', 'getQuery'].map(key => [key, globalThis[key]]))
+  globalThis.defineEventHandler = handler => handler
+  globalThis.getQuery = () => ({ campaignId: 'private' })
+  let where, verified = false
+  const query = { from: () => query, where: value => { where = value; return query }, then: (yes, no) => Promise.resolve(lines).then(yes, no) }
+  try {
+    const handler = loadTypeScriptWithMocks('server/api/evolution-lines/index.get.ts', {
+      '../../db': { ...f.store, db: { select: () => query } }, '../../utils/entitySecurity': f,
+      '../../utils/campaignSecurity': { requireCampaignMember: async (_event, id) => { assert.equal(id, 'private'); verified = true } },
+      'drizzle-orm': Object.fromEntries(['eq', 'or', 'and', 'isNull'].map(name => [name, (...args) => ({ name, args })])),
+    }).default
+    assert.deepEqual((await handler({})).map(line => line.id), ['explicit', 'legacy-partner', 'legacy-form'])
+    assert.equal(verified, true)
+    assert.equal(where.name, 'and')
+    assert.equal(where.args[0].name, 'or')
+  } finally {
+    for (const [key, value] of previous) value === undefined ? delete globalThis[key] : globalThis[key] = value
+  }
+})

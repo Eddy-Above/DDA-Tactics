@@ -402,17 +402,27 @@ export function useEncounters() {
     participant: CombatParticipant,
     digimonMap?: Map<string, any>,  // Optional: for hierarchical filtering of partner digimon
   ): Promise<Encounter | null> {
+    return addParticipants(encounterId, [participant], digimonMap)
+  }
+
+  async function addParticipants(
+    encounterId: string,
+    additions: CombatParticipant[],
+    digimonMap?: Map<string, any>,
+  ): Promise<Encounter | null> {
     const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
     if (!encounter) return null
 
-    // Assign a stable seq number: highest existing seq for this entityId + 1
+    if (!additions.length) return encounter
+    // Assign stable sequences across the entire batch before one atomic save.
     const existing = (encounter.participants as any[]) || []
-    const maxSeq = existing
-      .filter((p: any) => p.entityId === participant.entityId)
-      .reduce((max: number, p: any) => Math.max(max, p.seq ?? 0), 0)
-    const participantWithSeq = { ...participant, seq: maxSeq + 1 }
-
-    const participants = [...existing, participantWithSeq]
+    const sequences = new Map<string, number>()
+    for (const participant of existing) sequences.set(participant.entityId, Math.max(sequences.get(participant.entityId) ?? 0, participant.seq ?? 0))
+    const participants = [...existing.map(participant => ({ ...participant })), ...additions.map(participant => {
+      const seq = (sequences.get(participant.entityId) ?? 0) + 1
+      sequences.set(participant.entityId, seq)
+      return { ...participant, seq }
+    })]
 
     // Keep the active participant active across the re-sort — otherwise adding a
     // late-joining tamer mid-combat moves the turn to someone else.
@@ -931,6 +941,7 @@ export function useEncounters() {
     // Combat management
     createParticipant,
     addParticipant,
+    addParticipants,
     removeParticipant,
     rebuildTurnOrder,
     isGroupedUnderTamer,

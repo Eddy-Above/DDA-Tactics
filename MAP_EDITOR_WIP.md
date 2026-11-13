@@ -24,7 +24,7 @@ The campaign map list now uses keyed `useAsyncData` and `useRequestFetch`. The s
 
 ## Verification
 
-- Full application suite including fog, navigation, participant and roster-read follow-ups: **1,593 tests passing**, no failures. Final linked-record isolation checks also pass (49 focused authorization/participant tests).
+- Full application suite including fog, navigation, participant batching and campaign roster filtering: **1,603 tests passing**, no failures. Focused tests cover late partner joins, a single save for 20 additions, retained turn state, campaign isolation, cached picker opening and explicit roster refresh.
 - Fog-zoom follow-up: **51 camera, fog, scheduling and terrain tests pass**. Chrome checks zoom the GM/player canvas into a 12,500-cell map, verify normal density, compare actual terrain pixels with/without fog and return to the fitted overview. Fitted density rises from 0.00536 to 0.04 at encounter zoom; no fixed world boundaries are introduced.
 - Production Nuxt build: passes; final Vue components and server bundle compile.
 - Actual-component Chrome checks: toolbar bindings in both directions, floor/voxel/shape tools, brushes, rooms, upper wall openings, selections/stamps, paint/sampling, spawn/erase, history, camera views, focus behaviour, Space pan, cancellation, narrow layouts, shaders, fog, and map switching.

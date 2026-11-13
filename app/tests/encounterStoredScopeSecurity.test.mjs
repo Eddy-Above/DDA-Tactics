@@ -10,13 +10,13 @@ const cache = loadTypeScript('server/utils/combatRecordCache.ts')
 const queue = loadTypeScript('server/utils/intercedeClaims.ts')
 const participant = (id, extra = {}) => ({ id, entityId: id, type: 'digimon', currentWounds: 0, maxWounds: 5, actionsRemaining: { simple: 2 }, ...extra })
 
-function fixture({ roster = [participant('actor')], forms = [], lines = [], owners = [], requests = [], responses = [], isDm = false } = {}) {
+function fixture({ roster = [participant('actor')], forms = [], lines = [], owners = [], requests = [], responses = [], isDm = false, phase = 'setup' } = {}) {
   globalThis.createError = data => Object.assign(new Error(data.message), data)
   globalThis.defineEventHandler = work => work
   globalThis.getRouterParam = () => 'encounter'
   globalThis.readBody = async body => body
   const tables = Object.fromEntries(['encounters', 'digimon', 'tamers', 'evolutionLines', 'maps'].map(name => [name, { name, id: name + '.id' }]))
-  let encounter = { id: 'encounter', campaignId: 'own', mapId: null, phase: 'setup', round: 1, currentTurnIndex: 0,
+  let encounter = { id: 'encounter', campaignId: 'own', mapId: null, phase, round: 1, currentTurnIndex: 0,
     turnOrder: roster.map(p => p.id), participants: clone(roster), pendingRequests: clone(requests), requestResponses: clone(responses), battleLog: [] }
   const rows = {
     digimon: new Map([{ id: 'actor', campaignId: 'own' }, ...forms].map(row => [row.id, row])),
@@ -79,6 +79,8 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
     './encounterStartTriggers': { applyEncounterStartTriggers: unexpectedEffect },
     './enemyKnockouts': { knockedOutEnemyIds: () => [], resolveEnemyKnockouts: unexpectedEffect },
     './naturewalk': { applyNaturewalkEnvironment: async (_encounter, participants) => ({ participants, changed: false }) },
+    './combatContext': { loadCampaignCombatContext: async () => ({ campaignLevel: 'standard', houseRules: {} }) },
+    './guidingLight': { applyGuidingLightAuras: async participants => ({ participants, changed: false }) },
     './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: {}, destructibleStates: [] }) },
   })
   const move = loadTypeScriptWithMocks('server/api/encounters/[id]/actions/move.post.ts', {
@@ -95,7 +97,15 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
     './encounterRoom': { getRoomPositions: async () => ({}) },
     './guidingLight': { refreshGuidingLightForParticipants: async (_id, participants) => participants },
   })
-  return { calls, run, move, update: update.updateEncounterState, digivolve: evolution.performDigivolution, stateScope, encounter: () => clone(encounter) }
+  const put = loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
+    '../../db': store,
+    '../../utils/encounterCommand': { defineEncounterCommand: work => event => run('update', () => work(event)) },
+    '../../utils/campaignSecurity': { requireEncounterAccess: async () => ({ encounter: clone(encounter) }) },
+    '../../utils/securityValidation': { tableWriteBody: body => body },
+    '../../utils/entitySecurity': { requireLinkedEntity: async () => { throw Error('roster validation must use bulk scope checks') } },
+    '../../utils/encounterUpdate': update, '../../utils/intercedeClaims': queue,
+  }).default
+  return { calls, run, move, put, update: update.updateEncounterState, digivolve: evolution.performDigivolution, stateScope, encounter: () => clone(encounter) }
 }
 
 for (const [name, settings] of [
@@ -163,6 +173,32 @@ test('GM replacement updates can repair a tainted roster without loading foreign
   assert.deepEqual(result.participants.map(p => p.id), ['actor'])
   assert.equal(f.calls.writes, 1)
   assert.equal(f.calls.reads.some(read => read.table === 'digimon' && read.ids.includes('bad')), false)
+})
+
+test('a 20-participant addition uses one save and one scope graph snapshot, rather than individual link checks', async () => {
+  const forms = Array.from({ length: 20 }, (_, index) => ({ id: `new-${index}`, campaignId: 'own' }))
+  const f = fixture({ isDm: true, forms })
+  const roster = [participant('actor'), ...forms.map(form => participant(form.id))]
+  const result = await f.put({ participants: roster, turnOrder: roster.map(p => p.id), currentTurnIndex: 0 })
+  assert.equal(result.participants.length, 21)
+  assert.equal(f.calls.writes, 1)
+  assert.equal(f.calls.reads.filter(read => read.table === 'evolutionLines').length, 1)
+  assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1)
+})
+
+test('the optimized update still rejects a foreign addition before saving anything', async () => {
+  const f = fixture({ isDm: true, forms: [{ id: 'foreign', campaignId: 'other' }] })
+  await assert.rejects(f.put({ participants: [participant('actor'), participant('foreign')], turnOrder: ['actor', 'foreign'] }), { statusCode: 400 })
+  assert.equal(f.calls.writes, 0)
+})
+
+test('a roster reorder that preserves the active participant does not run turn-end gravity', async () => {
+  const roster = [participant('actor', { isActive: true }), participant('other')]
+  const f = fixture({ isDm: true, phase: 'combat', roster, forms: [{ id: 'other', campaignId: 'own' }] })
+  const result = await f.put({ participants: roster, turnOrder: ['other', 'actor'], currentTurnIndex: 1 })
+  assert.equal(result.turnOrder[result.currentTurnIndex], 'actor')
+  assert.equal(f.calls.effects, 0)
+  assert.equal(f.calls.writes, 1)
 })
 
 test('the separate movement transaction rejects foreign saved forms before path preparation', async () => {

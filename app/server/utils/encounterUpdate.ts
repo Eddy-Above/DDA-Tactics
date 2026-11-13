@@ -138,8 +138,11 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
 
     // End-of-turn gravity: on a real turn advance (a new participant becomes active, or a new round),
     // drop airborne non-flyers and apply fall damage BEFORE the KO/auto-devolve checks below.
+    const previousActiveId = existing.turnOrder?.[existing.currentTurnIndex ?? 0]
+    const nextActiveId = (body.turnOrder ?? existing.turnOrder)?.[body.currentTurnIndex ?? existing.currentTurnIndex ?? 0]
+    const sameActiveTurn = !!previousActiveId && previousActiveId === nextActiveId && !isNewRound
     const isTurnAdvance = typeof body.currentTurnIndex === 'number'
-      && (body.currentTurnIndex !== existing.currentTurnIndex || incomingRound > existingRound)
+      && (body.currentTurnIndex !== existing.currentTurnIndex || incomingRound > existingRound) && !sameActiveTurn
     if (isTurnAdvance) {
       const { campaignLevel, houseRules } = await getCampaignRules()
       const gravity = await applyEndOfTurnGravity(id, (existing as any).mapId, participants, incomingRound, campaignLevel, houseRules)

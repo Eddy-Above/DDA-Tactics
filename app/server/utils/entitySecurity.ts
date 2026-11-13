@@ -43,13 +43,14 @@ export async function requireEntityAccess(event: H3Event, kind: EntityKind, reco
   }
   return null
 }
-export async function filterReadableEntities(event: H3Event, rows: any[], kind: EntityKind, onInvalidScope?: () => void) {
+export async function filterReadableEntities(event: H3Event, rows: any[], kind: EntityKind, onInvalidScope?: () => void, campaignId?: string) {
   const campaigns = new Map<string, boolean>()
   const resolveScope = createEntityScopeResolver(rows, kind)
   const result = []
   for (const row of rows) {
     try {
       const scope = await resolveScope(kind, row)
+      if (campaignId !== undefined && scope !== campaignId) continue
       if (scope) {
         if (!campaigns.has(scope)) campaigns.set(scope, (await resolveCampaignAccess(event, scope)).isMember)
         if (campaigns.get(scope)) result.push(row)
