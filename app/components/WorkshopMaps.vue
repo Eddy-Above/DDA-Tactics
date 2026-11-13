@@ -1,6 +1,6 @@
 <template>
   <section class="mb-10">
-    <div class="flex justify-between items-center mb-6">
+    <div class="flex justify-between items-center mb-4">
       <div>
         <h2 class="font-display text-2xl font-semibold text-white">Maps</h2>
       </div>
@@ -8,7 +8,7 @@
         <input ref="importFileInput" type="file" accept=".json" class="hidden" @change="handleImport">
         <button
           v-if="visibleMaps.length > 0"
-          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-1 rounded text-sm transition-colors"
           @click="exportMaps(visibleMaps)"
         >
           Export All
@@ -17,7 +17,6 @@
       </div>
     </div>
 
-    <p class="text-digimon-dark-400 mb-4">Build and share maps with everyone. Export a map to import it into a campaign library or make your own copy.</p>
     <p v-if="error || actionError" role="alert" class="text-red-400 mb-4">{{ error || actionError }}</p>
     <!-- Import result feedback -->
     <div v-if="importResult" class="mb-4 p-4 rounded-lg" :class="importResult.failed > 0 ? 'bg-red-900/30 border border-red-700' : 'bg-green-900/30 border border-green-700'">
@@ -32,61 +31,34 @@
       <button class="mt-2 text-xs text-digimon-dark-400 hover:text-white" @click="importResult = null">Dismiss</button>
     </div>
 
-    <div v-if="loading" class="text-center py-12 text-digimon-dark-400">Loading maps...</div>
-
-    <div v-else-if="visibleMaps.length === 0" class="text-center py-16">
-      <div class="text-5xl mb-4">🗺</div>
-      <p class="text-digimon-dark-400">No maps yet. Create your first map!</p>
+    <div v-if="visibleMaps.length === 0" class="bg-digimon-dark-800/50 border border-digimon-dark-700 rounded-xl p-8 text-center">
+      <div class="text-4xl mb-2">&#128506;</div>
+      <p class="text-digimon-dark-400">
+        {{ onlyMine ? "You don't own any workshop maps yet." : 'No workshop maps yet - create one to start building.' }}
+      </p>
     </div>
-
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <div
-        v-for="map in visibleMaps"
-        :key="map.id"
-        class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700 p-5 hover:border-digimon-dark-500 transition-colors"
-      >
-        <div class="flex justify-between items-start mb-3">
-          <div>
-            <h3 class="font-semibold text-white text-lg">{{ map.name }} <span v-if="map.hidden" class="text-xs text-purple-300">Hidden</span></h3>
-            <p v-if="map.description" class="text-digimon-dark-400 text-sm mt-1">{{ map.description }}</p>
+    <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div v-for="map in visibleMaps" :key="map.id" class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-dark-700 hover:border-digimon-dark-600 transition-colors">
+        <div class="flex justify-between items-start gap-4">
+          <div class="w-14 h-14 bg-digimon-dark-700 rounded-lg flex-shrink-0 flex items-center justify-center">
+            <span aria-hidden="true" class="text-2xl text-digimon-dark-500">&#128506;</span>
           </div>
-          <span class="text-xs text-digimon-dark-500 bg-digimon-dark-700 px-2 py-1 rounded">
-            {{ mapContentSizeLabel(map) }}
-          </span>
-        </div>
-
-        <div class="text-xs text-digimon-dark-500 mb-4">
-          {{ map.groundTiles.length }} ground tiles · {{ map.walls.length }} walls
-        </div>
-
-        <div class="flex gap-2 flex-wrap">
-          <NuxtLink
-            v-if="canModify(map)"
-            :to="`/workshop/maps/${map.id}`"
-            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
-          >
-            ✏ Edit
-          </NuxtLink>
-          <button
-            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
-            @click="toggleHidden(map)"
-            v-if="isMine(map)"
-          >
-            {{ map.hidden ? 'Unhide' : 'Hide' }}
-          </button>
-          <button
-            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
-            @click="exportMap(map)"
-          >
-            ↓ Export
-          </button>
-          <button
-            class="bg-red-900/30 hover:bg-red-900/60 text-red-400 px-3 py-1.5 rounded text-sm transition-colors"
-            v-if="canModify(map)"
-            @click="confirmDelete(map.id, map.name)"
-          >
-            🗑 Delete
-          </button>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="font-display text-lg font-semibold text-white truncate">{{ map.name }}</h3>
+              <span v-if="map.hidden" title="Only you can see this map" class="text-xs px-1.5 py-0.5 rounded bg-purple-900/40 border border-purple-500/50 text-purple-300">Hidden</span>
+            </div>
+            <p v-if="map.description" class="text-sm text-digimon-dark-400 break-words">{{ map.description }}</p>
+            <p class="text-xs text-digimon-dark-500">{{ mapContentSizeLabel(map) }}</p>
+            <p class="text-xs text-digimon-dark-500">{{ map.groundTiles.length }} ground tiles &middot; {{ map.walls.length }} walls</p>
+          </div>
+          <div class="flex flex-col gap-1.5 items-stretch">
+            <NuxtLink v-if="canModify(map)" :to="`/workshop/maps/${map.id}`" class="px-3 py-1 text-sm text-center bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white rounded transition-colors">Edit</NuxtLink>
+            <span v-else title="Owned by another account - you can't edit this map" class="px-3 py-1 text-sm text-center bg-digimon-dark-800 text-digimon-dark-500 rounded cursor-not-allowed">Edit</span>
+            <button class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white rounded transition-colors" @click="exportMap(map)">Export</button>
+            <button v-if="isMine(map)" :title="map.hidden ? 'Make visible to everyone' : 'Hide from other users'" class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white rounded transition-colors" @click="toggleHidden(map)">{{ map.hidden ? 'Unhide' : 'Hide' }}</button>
+            <button :disabled="!canModify(map)" :title="!canModify(map) ? 'Owned by another account' : ''" class="px-3 py-1 text-sm bg-red-900/30 hover:bg-red-900/50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-900/30 text-red-400 rounded transition-colors" @click="confirmDelete(map.id, map.name)">Delete</button>
+          </div>
         </div>
       </div>
     </div>
@@ -109,23 +81,18 @@
 
 <script setup lang="ts">
 import { mapContentSizeLabel } from '~/utils/mapContentBounds'
-import { useMap } from '~/composables/useMap'
+import type { useMap } from '~/composables/useMap'
 import { useLibraryImportExport } from '~/composables/useLibraryImportExport'
 import type { GameMap } from '~/types'
 
-const props = defineProps<{ onlyMine: boolean }>()
-const { user, initialized, fetchMe } = useAuth()
+const props = defineProps<{ onlyMine: boolean; store: ReturnType<typeof useMap> }>()
+const { user } = useAuth()
 function isMine(map: GameMap) { return !!user.value && map.ownerId === user.value.id }
 function canModify(map: GameMap) { return !map.ownerId || isMine(map) }
 const visibleMaps = computed(() => props.onlyMine ? maps.value.filter(isMine) : maps.value)
 
-const { maps, loading, error, fetchMaps, updateMap, deleteMap } = useMap()
+const { maps, error, fetchMaps, updateMap, deleteMap } = props.store
 const { exportMap, exportMaps, importMaps } = useLibraryImportExport()
-
-onMounted(async () => {
-  if (!initialized.value) await fetchMe()
-  await fetchMaps()
-})
 
 const actionError = ref('')
 const importing = ref(false)

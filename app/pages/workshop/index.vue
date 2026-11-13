@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMap } from '~/composables/useMap'
 import { displayImageUrl } from '~/utils/imageFallback'
 definePageMeta({
   title: 'Workshop',
@@ -6,6 +7,8 @@ definePageMeta({
 
 const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, updateTamer, calculateDerivedStats } = useTamers()
 const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon, updateDigimon } = useDigimon()
+const mapStore = useMap()
+const initialLoading = ref(true)
 const { exportCharacterBundle, exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
 const { user: currentUser, fetchMe, initialized } = useAuth()
 
@@ -28,7 +31,7 @@ function handleMenuFocusOut(event: FocusEvent) {
 const importFeedback = ref<{ tone: 'success' | 'warning' | 'error'; message: string; errors: string[] } | null>(null)
 const showOnlyMine = ref(false)
 
-const loading = computed(() => tamersLoading.value || digimonLoading.value)
+const loading = computed(() => initialLoading.value || tamersLoading.value || digimonLoading.value || mapStore.loading.value)
 
 const tamerNameById = computed(() => {
   const map: Record<string, string> = {}
@@ -53,12 +56,17 @@ async function loadAll() {
   await Promise.all([
     fetchTamers(undefined, { sandbox: true }),
     fetchDigimon({ sandbox: true, pageSize: 500 }),
+    mapStore.fetchMaps(),
   ])
 }
 
 onMounted(async () => {
-  if (!initialized.value) await fetchMe()
-  await loadAll()
+  try {
+    if (!initialized.value) await fetchMe()
+    await loadAll()
+  } finally {
+    initialLoading.value = false
+  }
 })
 
 function levelLabel(rules?: { level?: string } | null) {
@@ -220,9 +228,9 @@ async function handleImportFile(event: Event) {
       </ul>
     </div>
 
-    <WorkshopMaps ref="workshopMaps" :only-mine="showOnlyMine" />
+    <WorkshopMaps v-show="!loading" ref="workshopMaps" :only-mine="showOnlyMine" :store="mapStore" />
 
-    <div v-if="loading && tamers.length === 0 && digimonList.length === 0" class="text-center py-12">
+    <div v-if="loading" class="text-center py-12">
       <div class="text-digimon-dark-400">Loading workshop...</div>
     </div>
 
