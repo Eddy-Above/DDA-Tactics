@@ -1,231 +1,86 @@
 <template>
-  <div class="map-toolbar">
-    <!-- Tool buttons -->
-    <div class="toolbar-section">
-      <div v-for="tool in tools" :key="tool.id" class="tool-wrapper">
-        <button
-          class="tool-btn"
-          :class="{ active: activeTool === tool.id }"
-          :title="tool.hint ? undefined : tool.label"
-          @click="$emit('select-tool', tool.id)"
-        >
-          {{ tool.icon }}
-        </button>
-        <div v-if="tool.hint" class="tool-tooltip">
-          <strong>{{ tool.label }}</strong>
-          <span v-for="line in tool.hint" :key="line.key"><kbd>{{ line.key }}</kbd> {{ line.desc }}</span>
+  <div class="map-toolbar" aria-label="Map editor tools">
+    <div class="tool-groups">
+      <div v-for="group in groups" :key="group.name" class="tool-group">
+        <span class="group-label">{{ group.name }}</span>
+        <div class="tool-row">
+          <button v-for="tool in group.tools" :key="tool.id" type="button" :class="{ active: e.activeTool.value === tool.id }" :aria-pressed="e.activeTool.value === tool.id" @click="e.selectTool(tool.id)">{{ tool.label }}</button>
         </div>
       </div>
+      <details class="tool-group advanced">
+        <summary>Volumes</summary>
+        <div class="tool-row">
+          <button type="button" :class="{active:e.activeTool.value==='add-space'}" @click="e.selectTool('add-space')">Volume</button>
+          <select v-model="e.spaceType.value" aria-label="Volume type"><option value="water">Water</option><option value="earth">Earth</option><option value="air">Air (legacy)</option></select>
+        </div>
+      </details>
+      <div class="tool-group history">
+        <span class="group-label">History</span>
+        <div class="tool-row"><button type="button" :disabled="!e.canUndo.value" title="Undo (Ctrl/Cmd+Z)" @click="$emit('action','undo')">Undo</button><button type="button" :disabled="!e.canRedo.value" title="Redo (Ctrl/Cmd+Shift+Z)" @click="$emit('action','redo')">Redo</button></div>
+      </div>
     </div>
-
-    <!-- Draw mode (when applicable) -->
-    <div v-if="showDrawMode" class="toolbar-section">
-      <button
-        v-for="mode in drawModes"
-        :key="mode.id"
-        class="mode-btn"
-        :class="{ active: drawMode === mode.id }"
-        :title="mode.label"
-        @click="$emit('set-draw-mode', mode.id)"
-      >{{ mode.label }}</button>
+    <div class="tool-options">
+      <strong>{{ activeLabel }}</strong>
+      <label v-if="shapeTool">Shape <select v-model="e.drawMode.value"><option value="line">Line</option><option value="square">Rectangle</option><option value="circle">Circle</option><option value="cube">Box</option><option v-if="e.activeTool.value!=='spawn'" value="brush">Brush</option></select></label>
+      <template v-if="shapeTool && e.drawMode.value==='brush'">
+        <label>Size <input v-model.number="e.brushSize.value" type="number" min="1" max="32" /></label>
+        <label><input v-model="e.roundBrush.value" type="checkbox" /> Round brush</label>
+      </template>
+      <label v-if="materialTool">Material <select v-model="e.elementBrush.value"><option v-for="material in materials" :key="material.id" :value="material.id">{{ material.label }}</option></select><span class="swatch" :style="{background: materialColor}" /></label>
+      <label>Level Y <input v-model.number="e.currentEditY.value" type="number" step="1" /></label>
+      <label v-if="['voxel','ramp','add-ground','ceiling','stairs','stamp'].includes(e.activeTool.value)"><input v-model="e.planeLock.value" type="checkbox" /> Lock to Y plane</label>
+      <label v-if="['ramp','stairs'].includes(e.activeTool.value)">Uphill <select v-model="e.rampDirection.value"><option value="north">North</option><option value="east">East</option><option value="south">South</option><option value="west">West</option></select></label>
+      <span v-if="['ramp','stairs'].includes(e.activeTool.value)" class="hint">Scroll over map to rotate</span>
+      <template v-if="e.activeTool.value==='room'">
+        <label>Wall height <input v-model.number="e.roomHeight.value" type="number" min="1" max="64" /></label>
+        <label><input v-model="e.roomFloor.value" type="checkbox" /> Include floor</label>
+        <span class="hint">Drag a room; use Door or Window on its edges.</span>
+      </template>
+      <label v-if="e.activeTool.value==='area-select'"><input v-model="e.selectionAllHeights.value" type="checkbox" /> Select all heights</label>
+      <span class="hint">Hold Space + drag to pan &middot; Q/E rotate &middot; Esc cancel</span>
     </div>
-
-    <!-- Y-level indicator -->
-    <div class="toolbar-section y-level">
-      <button class="mode-btn" @click="$emit('change-y', -1)">▼</button>
-      <span class="y-label">↕ Y: {{ currentEditY }}</span>
-      <button class="mode-btn" @click="$emit('change-y', 1)">▲</button>
+    <div v-if="e.selection.value" class="tool-options selection-options">
+      <strong>Selection</strong>
+      <label v-for="axis in axes" :key="axis">Move {{ axis.toUpperCase() }} <input v-model.number="e.selectionOffset.value[axis]" type="number" step="1" /></label>
+      <label>Rotate <select v-model.number="e.selectionTurns.value"><option :value="0">0?</option><option :value="1">90?</option><option :value="2">180?</option><option :value="3">270?</option></select></label>
+      <button type="button" @click="$emit('action','move')">Move / rotate</button>
+      <button type="button" @click="$emit('action','duplicate')">Duplicate</button>
+      <button type="button" @click="$emit('action','focus')">Focus</button>
+      <button type="button" class="danger" @click="$emit('action','delete-selection')">Delete selection</button>
+      <button type="button" @click="e.selection.value=null">Clear</button>
+      <label>Stamp name <input v-model="e.stampName.value" class="stamp-name" placeholder="e.g. Forest tree" maxlength="80" /></label>
+      <button type="button" @click="e.saveStamp()">Save stamp</button>
     </div>
-
-    <!-- Element/material picker (paint + voxel tools) -->
-    <div v-if="activeTool === 'paint-element' || activeTool === 'voxel' || activeTool === 'ramp'" class="toolbar-section element-picker">
-      <button
-        v-for="el in elements"
-        :key="el.id"
-        class="element-btn"
-        :class="{ active: elementBrush === el.id }"
-        :style="{ background: el.color }"
-        :title="el.label"
-        @click="$emit('set-element', el.id)"
-      >
-        <span class="element-label">{{ el.short }}</span>
-      </button>
+    <div v-if="e.activeTool.value==='stamp'" class="tool-options">
+      <label>Stamp <select v-model="e.activeStampId.value"><option value="">Choose a stamp</option><option v-for="stamp in e.stamps.value" :key="stamp.id" :value="stamp.id">{{ stamp.name }}</option></select></label>
+      <label>Rotation <select v-model.number="e.stampTurns.value"><option :value="0">0?</option><option :value="1">90?</option><option :value="2">180?</option><option :value="3">270?</option></select></label>
+      <button type="button" :disabled="!e.activeStamp.value" @click="e.deleteStamp()">Remove stamp</button>
+      <span class="hint">Select content and save a stamp to reuse it across maps in this browser.</span>
     </div>
-
-    <div v-if="activeTool === 'ramp' || activeTool === 'stairs'" class="toolbar-section">
-      <label for="ramp-direction" class="y-label">Uphill</label>
-      <select
-        id="ramp-direction"
-        class="mode-btn"
-        :value="rampDirection ?? 'north'"
-        @change="$emit('set-ramp-direction', ($event.target as HTMLSelectElement).value as WallFace)"
-      >
-        <option value="north">North</option>
-        <option value="east">East</option>
-        <option value="south">South</option>
-        <option value="west">West</option>
-      </select>
-      <span class="y-label">Scroll over map to rotate</span>
-    </div>
-
-    <!-- Undo / Redo -->
-    <div class="toolbar-section">
-      <button class="tool-btn" :disabled="!canUndo" title="Undo" @click="$emit('undo')">↩</button>
-      <button class="tool-btn" :disabled="!canRedo" title="Redo" @click="$emit('redo')">↪</button>
-    </div>
+    <p v-if="e.feedback.value" class="editor-feedback" role="status">{{ e.feedback.value }}</p>
   </div>
 </template>
-
 <script setup lang="ts">
-import type { MapTool, WallFace } from '~/types'
-
-const props = defineProps<{
-  activeTool: MapTool
-  drawMode: 'line' | 'square' | 'cube'
-  elementBrush: string
-  rampDirection?: WallFace
-  currentEditY: number
-  canUndo: boolean
-  canRedo: boolean
-}>()
-
-defineEmits<{
-  (e: 'select-tool', tool: MapTool): void
-  (e: 'set-draw-mode', mode: 'line' | 'square' | 'cube'): void
-  (e: 'set-element', el: string): void
-  (e: 'set-ramp-direction', direction: WallFace): void
-  (e: 'change-y', delta: number): void
-  (e: 'undo'): void
-  (e: 'redo'): void
-}>()
-
-const tools: Array<{ id: MapTool; icon: string; label: string; hint?: { key: string; desc: string }[] }> = [
-  { id: 'select',        icon: '↖',  label: 'Select' },
-  { id: 'add-ground',    icon: '⬛',  label: 'Add Ground' },
-  { id: 'add-space',     icon: '🔲',  label: 'Add Space' },
-  { id: 'paint-element', icon: '🎨',  label: 'Paint Element' },
-  { id: 'voxel',         icon: '🧊',  label: 'Voxel Block' },
-  { id: 'ramp',          icon: '◢',  label: 'Ramp' },
-  { id: 'wall',          icon: '🧱',  label: 'Wall' },
-  { id: 'window',        icon: '🪟',  label: 'Window' },
-  { id: 'door',          icon: '🚪',  label: 'Door' },
-  { id: 'stairs',        icon: '🪜',  label: 'Stairs' },
-  { id: 'spawn',  icon: '🟢', label: 'Spawn Point' },
-  { id: 'delete', icon: '🗑', label: 'Delete', hint: [
-    { key: 'Click',       desc: '— delete tile' },
-    { key: 'Shift+click', desc: '— delete wall' },
-    { key: 'Ctrl+click',  desc: '— remove window / door' },
-  ]},
+import type { useMapEditor } from '~/composables/useMapEditor'
+import type { MapTool } from '~/types'
+import { MAP_VOXEL_MATERIALS, getVoxelMaterialDefinition } from '~/utils/mapVoxels'
+const props=defineProps<{editor:ReturnType<typeof useMapEditor>}>()
+const e=props.editor
+const materials=MAP_VOXEL_MATERIALS
+const axes=['x','y','z'] as const
+defineEmits<{(event:'action',action:string):void}>()
+const groups:Array<{name:string;tools:Array<{id:MapTool;label:string}>}>=[
+  {name:'Navigate & select',tools:[{id:'select',label:'Pan'},{id:'area-select',label:'Select area'},{id:'stamp',label:'Stamps'}]},
+  {name:'Build',tools:[{id:'add-ground',label:'Floor'},{id:'voxel',label:'Block'},{id:'ramp',label:'Ramp'},{id:'stairs',label:'Stairs'},{id:'room',label:'Room'},{id:'wall',label:'Wall'},{id:'ceiling',label:'Ceiling'},{id:'door',label:'Door'},{id:'window',label:'Window'}]},
+  {name:'Finish',tools:[{id:'paint-element',label:'Paint'},{id:'eyedropper',label:'Eyedropper'},{id:'spawn',label:'Spawn'},{id:'delete',label:'Erase'}]},
 ]
-
-const drawModes: Array<{ id: 'line' | 'square' | 'cube'; label: string }> = [
-  { id: 'line',   label: 'Line' },
-  { id: 'square', label: 'Square' },
-  { id: 'cube',   label: 'Cube' },
-]
-
-const showDrawMode = computed(() => {
-  return ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'stairs', 'spawn', 'delete'].includes(props.activeTool)
-})
-
-const elements: Array<{ id: string; label: string; short: string; color: string }> = [
-  { id: 'void',      label: 'Void (Neutral)', short: 'Vd', color: '#555566' },
-  { id: 'fire',      label: 'Fire',           short: 'Fr', color: '#ff4422' },
-  { id: 'water',     label: 'Water',          short: 'Wt', color: '#2288ff' },
-  { id: 'wind',      label: 'Wind',           short: 'Wn', color: '#88ddaa' },
-  { id: 'ice',       label: 'Ice',            short: 'Ic', color: '#aaddff' },
-  { id: 'thunder',   label: 'Thunder',        short: 'Th', color: '#ffdd00' },
-  { id: 'wood',      label: 'Wood',           short: 'Wd', color: '#44aa44' },
-  { id: 'earth',     label: 'Earth',          short: 'Ea', color: '#886644' },
-  { id: 'darkness',  label: 'Darkness',       short: 'Dk', color: '#442266' },
-  { id: 'steel',     label: 'Steel',          short: 'St', color: '#99aabb' },
-  { id: 'light',     label: 'Light',          short: 'Lt', color: '#ffffcc' },
-  { id: 'flickering-light', label: 'Flickering Light', short: 'FL', color: '#ffd78a' },
-  { id: 'sand',      label: 'Sand',           short: 'Sa', color: '#d7bf85' },
-  { id: 'snow',      label: 'Snow',           short: 'Sn', color: '#ebf3f8' },
-  { id: 'soft-metal', label: 'Soft Metal',    short: 'SM', color: '#b4b9c6' },
-]
+const activeLabel=computed(()=>groups.flatMap(group=>group.tools).find(tool=>tool.id===e.activeTool.value)?.label??'Volume')
+const shapeTool=computed(()=>['add-ground','add-space','paint-element','voxel','ramp','stairs','ceiling','spawn','delete'].includes(e.activeTool.value))
+const materialTool=computed(()=>['add-ground','paint-element','voxel','ramp'].includes(e.activeTool.value)||(e.activeTool.value==='room'&&e.roomFloor.value))
+const materialColor=computed(()=> '#'+getVoxelMaterialDefinition(e.elementBrush.value).color.toString(16).padStart(6,'0'))
 </script>
-
 <style scoped>
-.map-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  background: rgba(15, 15, 30, 0.88);
-  border-bottom: 1px solid #334;
-  padding: 6px 10px;
-}
-.toolbar-section {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-right: 1px solid #334;
-  padding-right: 8px;
-}
-.toolbar-section:last-child { border-right: none; }
-.tool-btn, .mode-btn {
-  background: #223;
-  border: 1px solid #445;
-  color: #aabbcc;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.tool-btn:hover, .mode-btn:hover { background: #334; }
-.tool-btn.active, .mode-btn.active { background: #2255aa; border-color: #4488ff; color: #fff; }
-.tool-btn:disabled, .mode-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.y-level { gap: 6px; }
-.y-label { font-size: 12px; color: #8899aa; min-width: 48px; text-align: center; }
-.element-picker { flex-wrap: wrap; max-width: 220px; }
-.element-btn {
-  width: 28px; height: 28px;
-  border-radius: 4px;
-  border: 2px solid transparent;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-}
-.element-btn.active { border-color: #fff; }
-.element-label { font-size: 9px; color: rgba(255,255,255,0.8); font-weight: 700; }
-.tool-wrapper {
-  position: relative;
-}
-.tool-tooltip {
-  display: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(10, 12, 25, 0.95);
-  border: 1px solid #445;
-  border-radius: 6px;
-  padding: 7px 10px;
-  flex-direction: column;
-  gap: 4px;
-  white-space: nowrap;
-  z-index: 100;
-  pointer-events: none;
-}
-.tool-wrapper:hover .tool-tooltip { display: flex; }
-.tool-tooltip strong {
-  font-size: 11px;
-  color: #ccd;
-  margin-bottom: 2px;
-}
-.tool-tooltip span {
-  font-size: 11px;
-  color: #8899aa;
-}
-.tool-tooltip kbd {
-  background: #2a2e45;
-  border: 1px solid #556;
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-size: 10px;
-  color: #cce;
-  font-family: inherit;
-}
+.map-toolbar{flex-shrink:0;max-height:38vh;overflow:auto;background:#131724;border-bottom:1px solid #343d52;padding:10px 12px;color:#d4dce9;font-size:12px}
+.tool-groups,.tool-row,.tool-options{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.tool-groups{align-items:flex-start;gap:14px}.tool-group{display:flex;flex-direction:column;gap:5px}.group-label,summary{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#96a6bf}.history{margin-left:auto}.tool-options{padding-top:9px;margin-top:9px;border-top:1px solid #2c3447;gap:10px}.tool-options label{display:flex;align-items:center;gap:5px}.tool-options strong{color:#ffa94d;min-width:50px}.hint{color:#96a6bf;font-size:11px}.advanced{min-width:75px}.advanced summary{cursor:pointer;margin-bottom:5px}
+button,select,input{background:#222c40;color:#e5ecf7;border:1px solid #42506a;border-radius:6px;padding:5px 8px;font:inherit}button{cursor:pointer}button:hover{background:#344664}button.active{background:#9a4616;border-color:#ff9f43;color:white}button:disabled{opacity:.4;cursor:not-allowed}button.danger{color:#ffb0b0}input[type=number]{width:64px}input[type=checkbox]{accent-color:#ef8b35}select{max-width:180px}.stamp-name{width:140px}.swatch{width:17px;height:17px;border-radius:4px;border:1px solid #a2afc2}.editor-feedback{margin:9px 0 0;color:#ffd493}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #ffa94d;outline-offset:2px}
 </style>

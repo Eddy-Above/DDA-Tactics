@@ -478,6 +478,7 @@ export const maps = pgTable('maps', {
   }>(),
 
   groundTiles: jsonb('ground_tiles').notNull().default([]).$type<Array<{
+    materialId?: string
     x: number; y: number; z: number
     element: string
     terrain: string

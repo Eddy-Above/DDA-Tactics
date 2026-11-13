@@ -3,7 +3,8 @@ import type { GameMap, MapTool, Vec3, WallFace } from '~/types'
 import { getMapGeometryRevision, recordMapEdit, type MapGeometryCollection } from '~/utils/mapEdits'
 import { getVoxelMaterialElement } from '~/utils/mapVoxels'
 
-type DrawMode = 'line' | 'square' | 'cube'
+import { drawCells, selectionBox, fragmentFromSelection, fragmentBounds, transformFragment, fragmentCollision, type DrawMode, type SelectionBox, type MapFragment, type MapStamp } from '~/utils/mapBuilder'
+import { MAP_GEOMETRY_COLLECTIONS } from '~/utils/mapEdits'
 type GeometryEntry = GameMap[MapGeometryCollection][number]
 type EntryPatch = {
   collection: MapGeometryCollection
@@ -134,6 +135,22 @@ function beginEdit(sourceMap: GameMap) {
 export function useMapEditor(currentMap: Ref<GameMap | null>) {
   const activeTool = ref<MapTool>('select')
   const drawMode = ref<DrawMode>('square')
+  const brushSize = ref(1)
+  const roundBrush = ref(false)
+  const planeLock = ref(false)
+  const selection = ref<SelectionBox | null>(null)
+  const selectionAllHeights = ref(true)
+  const selectionOffset = ref<Vec3>({x:0,y:0,z:0})
+  const selectionTurns = ref(0)
+  const roomHeight = ref(3)
+  const roomFloor = ref(false)
+  const spaceType = ref<'air'|'water'|'earth'>('water')
+  const feedback = ref('')
+  const stamps = ref<MapStamp[]>([])
+  const stampName = ref('')
+  const activeStampId = ref('')
+  const stampTurns = ref(0)
+  const activeStamp = computed(() => stamps.value.find(stamp=>stamp.id===activeStampId.value) ?? null)
   const elementBrush = ref<string>('void')
   const rampDirection = ref<WallFace>('north')
   const currentEditY = ref(0)
@@ -170,35 +187,20 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
   }
 
   function cellsForDraw(start: Vec3, end: Vec3): Vec3[] {
-    const cells: Vec3[] = []
-    const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x)
-    const minY = Math.min(start.y, end.y), maxY = Math.max(start.y, end.y)
-    const minZ = Math.min(start.z, end.z), maxZ = Math.max(start.z, end.z)
-    if (drawMode.value === 'line') {
-      if (Math.abs(end.x - start.x) >= Math.abs(end.z - start.z)) {
-        for (let x = minX; x <= maxX; x++) cells.push({ x, y: start.y, z: start.z })
-      } else {
-        for (let z = minZ; z <= maxZ; z++) cells.push({ x: start.x, y: start.y, z })
-      }
-    } else {
-      for (let x = minX; x <= maxX; x++)
-        for (let y = drawMode.value === 'cube' ? minY : start.y; y <= (drawMode.value === 'cube' ? maxY : start.y); y++)
-          for (let z = minZ; z <= maxZ; z++) cells.push({ x, y, z })
-    }
-    return cells
+    return drawCells(start, end, drawMode.value, brushSize.value, roundBrush.value)
   }
 
   function applyGroundDraw(start: Vec3, end: Vec3) {
     return edit(t => {
       for (const cell of cellsForDraw(start, end)) if (t.find('groundTiles', cellKey(cell), 'cell') === undefined)
-        t.put('groundTiles', { ...cell, element: 'void', terrain: 'normal' })
+        t.put('groundTiles', { ...cell, element: getVoxelMaterialElement(elementBrush.value), materialId: elementBrush.value, terrain: 'normal' })
     })
   }
 
   function applySpaceDraw(start: Vec3, end: Vec3) {
     return edit(t => {
       for (const cell of cellsForDraw(start, end)) if (t.find('spaceTiles', cellKey(cell), 'cell') === undefined)
-        t.put('spaceTiles', { ...cell, spaceType: 'air' })
+        t.put('spaceTiles', { ...cell, spaceType: spaceType.value })
     })
   }
 
@@ -207,7 +209,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     return edit(t => {
       for (const cell of cellsForDraw(start, end)) {
         const ground = t.find('groundTiles', cellKey(cell), 'cell')
-        if (ground !== undefined) t.put('groundTiles', { ...t.read('groundTiles', ground), element }, ground)
+        if (ground !== undefined) t.put('groundTiles', { ...t.read('groundTiles', ground), element, materialId: elementBrush.value }, ground)
         const voxel = t.find('voxels', cellKey(cell), 'cell')
         if (voxel !== undefined) t.put('voxels', { ...t.read('voxels', voxel), materialId: elementBrush.value, element, color: undefined }, voxel)
       }
@@ -231,7 +233,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
 
   function applyWallDraw(start: Vec3, end: Vec3, face: WallFace, woundBoxes?: number) {
     return edit(t => {
-      for (const cell of cellsForDraw(start, end)) if (t.find('walls', `${cellKey(cell)}:${face}`, 'face') === undefined)
+      for (const cell of drawCells(start, end, 'line')) if (t.find('walls', `${cellKey(cell)}:${face}`, 'face') === undefined)
         t.put('walls', { id: generateId(), ...cell, face, woundBoxes })
     })
   }
@@ -400,6 +402,7 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
 
   function selectTool(tool: MapTool) {
     activeTool.value = tool
+    if(tool==='spawn'&&drawMode.value==='brush')drawMode.value='square'
     selectedStructureId.value = null
   }
 
@@ -408,7 +411,122 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     rampDirection.value = directions[(directions.indexOf(rampDirection.value) + step + directions.length) % directions.length]!
   }
 
+  function setSelection(start: Vec3, end: Vec3) {
+    const box = selectionBox(start,end)
+    if(selectionAllHeights.value && currentMap.value) {
+      const bounds=fragmentBounds(currentMap.value)
+      if(bounds){box.min.y=bounds.min.y;box.max.y=bounds.max.y}
+    }
+    selection.value=box
+    selectionOffset.value={x:0,y:0,z:0};selectionTurns.value=0;feedback.value=''
+  }
+  function selectedContent() { return currentMap.value&&selection.value ? fragmentFromSelection(currentMap.value,selection.value) : null }
+  function removeFragment(t:ReturnType<typeof beginEdit>, fragment:MapFragment) {
+    for(const collection of MAP_GEOMETRY_COLLECTIONS) {
+      const keys=new Set(fragment[collection].map(entry=>'id' in entry?entry.id:cellKey(entry)))
+      t.remove(collection,entry=>keys.has('id' in entry?entry.id:cellKey(entry)))
+    }
+  }
+  function putFragment(t:ReturnType<typeof beginEdit>, fragment:MapFragment) {
+    for(const collection of MAP_GEOMETRY_COLLECTIONS) for(const entry of fragment[collection]) t.put(collection,entry as never)
+  }
+  function deleteSelection() {
+    const content=selectedContent();if(!content)return false
+    const changed=edit(t=>removeFragment(t,content));if(changed)selection.value=null
+    return changed
+  }
+  function transformSelection(duplicate=false) {
+    const content=selectedContent(),bounds=content&&fragmentBounds(content)
+    if(!content||!bounds||!currentMap.value){feedback.value='Select some map content first.';return false}
+    const target={x:bounds.min.x+selectionOffset.value.x,y:bounds.min.y+selectionOffset.value.y,z:bounds.min.z+selectionOffset.value.z}
+    const transformed=transformFragment(content,target,selectionTurns.value,generateId)
+    const collision=fragmentCollision(currentMap.value,transformed,duplicate?undefined:content)
+    if(collision){feedback.value=collision;return false}
+    const changed=edit(t=>{if(!duplicate)removeFragment(t,content);putFragment(t,transformed)})
+    if(changed){selection.value=fragmentBounds(transformed);selectionOffset.value={x:0,y:0,z:0};selectionTurns.value=0;feedback.value=''}
+    return changed
+  }
+  function loadStamps() {
+    if(typeof localStorage==='undefined')return
+    try {
+      const saved=JSON.parse(localStorage.getItem('dda-map-stamps-v1')??'[]')
+      if(Array.isArray(saved)) stamps.value=saved.filter(stamp=>typeof stamp?.id==='string'&&typeof stamp?.name==='string'&&MAP_GEOMETRY_COLLECTIONS.every(key=>Array.isArray(stamp.content?.[key])))
+    } catch { feedback.value='Saved stamps could not be loaded.' }
+  }
+  function persistStamps() {
+    try { localStorage.setItem('dda-map-stamps-v1',JSON.stringify(stamps.value)) }
+    catch { feedback.value='Your stamp is available this session, but browser storage could not save the stamp library.' }
+  }
+  function saveStamp() {
+    const content=selectedContent()
+    if(!content||!fragmentBounds(content)){feedback.value='Select some map content to save as a stamp.';return}
+    const stamp={id:generateId(),name:stampName.value.trim()||'Untitled stamp',content}
+    stamps.value.push(stamp);activeStampId.value=stamp.id;stampName.value='';feedback.value='Stamp saved in this browser.';persistStamps()
+  }
+  function deleteStamp() {
+    stamps.value=stamps.value.filter(stamp=>stamp.id!==activeStampId.value)
+    activeStampId.value='';persistStamps()
+  }
+  function placeStamp(cell:Vec3) {
+    if(!currentMap.value||!activeStamp.value){feedback.value='Choose a saved stamp first.';return false}
+    const content=transformFragment(activeStamp.value.content,cell,stampTurns.value,generateId)
+    const collision=fragmentCollision(currentMap.value,content)
+    if(collision){feedback.value=collision;return false}
+    feedback.value='';return edit(t=>putFragment(t,content))
+  }
+  function pickMaterial(material:string) {
+    elementBrush.value=material
+    activeTool.value='paint-element'
+    feedback.value='Picked '+material+'. Choose Floor or Block to build with this material.'
+  }
+  function applyRoom(start:Vec3,end:Vec3) {
+    const box=selectionBox(start,end),height=Math.max(1,Math.min(64,Math.round(roomHeight.value)))
+    return edit(t=>{
+      for(let y=box.min.y;y<box.min.y+height;y++) {
+        const wall=(x:number,z:number,face:WallFace)=>{
+          const cell={x,y,z}
+          if(t.find('walls',cellKey(cell)+':'+face,'face')===undefined)t.put('walls',{id:generateId(),...cell,face})
+        }
+        for(let x=box.min.x;x<=box.max.x;x++){wall(x,box.min.z,'north');wall(x,box.max.z,'south')}
+        for(let z=box.min.z;z<=box.max.z;z++){wall(box.min.x,z,'west');wall(box.max.x,z,'east')}
+      }
+      if(roomFloor.value)for(const cell of drawCells({...box.min,y:start.y},{...box.max,y:start.y},'square')) {
+        if(t.find('groundTiles',cellKey(cell),'cell')===undefined)t.put('groundTiles',{...cell,terrain:'normal',element:getVoxelMaterialElement(elementBrush.value),materialId:elementBrush.value})
+      }
+    })
+  }
+  function applyBrushStroke(points:Vec3[]) {
+    const cells=new Map<string,Vec3>()
+    for(let i=0;i<points.length;i++)for(const cell of drawCells(points[Math.max(0,i-1)]!,points[i]!,'brush',brushSize.value,roundBrush.value))cells.set(cellKey(cell),cell)
+    const element=getVoxelMaterialElement(elementBrush.value),tool=activeTool.value
+    return edit(t=>{
+      if(tool==='delete') {
+        for(const key of ['groundTiles','spaceTiles','voxels','ceilings','stairs'] as const)t.remove(key,entry=>'x' in entry&&cells.has(cellKey(entry)))
+        return
+      }
+      for(const cell of cells.values()) {
+        const key=cellKey(cell)
+        if(tool==='add-ground') { if(t.find('groundTiles',key,'cell')===undefined)t.put('groundTiles',{...cell,element,materialId:elementBrush.value,terrain:'normal'}) }
+        else if(tool==='add-space'){if(t.find('spaceTiles',key,'cell')===undefined)t.put('spaceTiles',{...cell,spaceType:spaceType.value})}
+        else if(tool==='paint-element') {
+          const ground=t.find('groundTiles',key,'cell'),voxel=t.find('voxels',key,'cell')
+          if(ground!==undefined)t.put('groundTiles',{...t.read('groundTiles',ground),element,materialId:elementBrush.value},ground)
+          if(voxel!==undefined)t.put('voxels',{...t.read('voxels',voxel),element,materialId:elementBrush.value,color:undefined},voxel)
+        } else if(tool==='voxel'||tool==='ramp') {
+          const at=t.find('voxels',key,'cell'),previous=at===undefined?{}:t.read('voxels',at)
+          t.put('voxels',{...previous,...cell,materialId:elementBrush.value,element,shape:tool==='ramp'?'ramp':'block',rampDirection:tool==='ramp'?rampDirection.value:undefined},at)
+        } else if(tool==='stairs') {
+          const at=t.find('stairs',key,'cell')
+          t.put('stairs',{id:at===undefined?generateId():t.read('stairs',at).id,...cell,face:rampDirection.value==='east'?'west':rampDirection.value==='west'?'east':rampDirection.value},at)
+        } else if(tool==='ceiling'&&t.find('ceilings',key,'cell')===undefined)t.put('ceilings',{id:generateId(),...cell})
+      }
+    })
+  }
+
+
   return {
+    brushSize, roundBrush, planeLock, selection, selectionAllHeights, selectionOffset, selectionTurns, roomHeight, roomFloor, spaceType, feedback, stamps, stampName, activeStampId, activeStamp, stampTurns,
+    setSelection, selectedContent, deleteSelection, transformSelection, loadStamps, saveStamp, deleteStamp, placeStamp, pickMaterial, applyRoom, applyBrushStroke,
     activeTool, drawMode, elementBrush, rampDirection, currentEditY, selectedStructureId,
     canUndo: computed(() => { historyVersion.value; return historyMatches() && undoStack.length > 0 }),
     canRedo: computed(() => { historyVersion.value; return historyMatches() && redoStack.length > 0 }),

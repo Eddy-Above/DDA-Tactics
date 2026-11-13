@@ -33,7 +33,7 @@ function fixture({ direction = 'north', tool = 'ramp', isDm = true, dragging = f
   // Parent refs update synchronously on emits; child props follow on Vue's next render flush.
   scope.run(() => watch(editor.rampDirection, value => { props.rampDirection = value }))
   const events = [], delegated = []
-  const deps = { THREE, createVoxelGeometry, createStairGeometry, props, nextTick, TILE_SIZE: 1,
+  const deps = { ...loadTypeScript('utils/mapBuilder.ts'), spacePanning:ref(false), editorHint:ref(null), containerRef:ref(null), strokePoints:[], editorCell:()=>dragging?point(2):point(), THREE, createVoxelGeometry, createStairGeometry, props, nextTick, TILE_SIZE: 1,
     hoverGhostGroup: new THREE.Group(),
     dragStartHit: dragging ? { type: 'cell', cell: point() } : null,
     planeCell: () => dragging ? point(2) : point(),

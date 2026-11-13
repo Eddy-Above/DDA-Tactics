@@ -101,14 +101,15 @@ test('the stair toolbar shows drawing modes, selected uphill direction and scrol
   const previous = globalThis.computed
   globalThis.computed = computed
   try {
-    const html = await renderToString(createSSRApp(toolbar, { activeTool: 'stairs', drawMode: 'square',
-      elementBrush: 'earth', rampDirection: 'west', currentEditY: 0, canUndo: false, canRedo: false }))
-    assert.match(html, /title="Stairs"/)
-    assert.match(html, /title="Line"/)
-    assert.match(html, /title="Square"/)
-    assert.match(html, /title="Cube"/)
+    const { editor } = fixture()
+    editor.selectTool('stairs'); editor.rampDirection.value = 'west'
+    const html = await renderToString(createSSRApp(toolbar, { editor }))
+    assert.match(html, /Stairs/)
+    assert.match(html, /<option value="line">Line/)
+    assert.match(html, /<option value="square" selected>Rectangle|<option value="square">Rectangle/)
+    assert.match(html, /<option value="cube">Box/)
     assert.match(html, /Uphill/)
-    assert.match(html, /<select[^>]*value="west"/)
+    assert.match(html, /<option value="west" selected/)
     assert.match(html, /Scroll over map to rotate/)
     assert.doesNotMatch(html, /class="toolbar-section element-picker"/)
   } finally {

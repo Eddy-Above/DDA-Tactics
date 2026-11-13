@@ -64,6 +64,7 @@ function harness(t, isDm = false) {
     reticuleTargetFromHits: () => deps.reticuleParticipantIds.value[0] ?? null,
     evaluatePlacementAt: () => ({ valid: true, cell: point(2) }),
     highlightDoor: () => {}, setHoveredTarget: id => hovered.push(id), updateTargetHover: () => {},
+    spacePanning: ref(false), panGesture: false, strokePoints: [], dragStartHit: null, editorHint: ref(null),
     rightDragActive: false, rightDragLastX: 0, suppressNextClick: false,
     tokenDrag: { isPressed: () => false, abort: () => false },
     areaHighlightCells: ref([]), getAreaShape: () => null, usesVerticalAim: ref(false),

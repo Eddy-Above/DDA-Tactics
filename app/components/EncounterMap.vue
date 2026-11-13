@@ -7,23 +7,7 @@
       {{ ws.accessError.value }} <button type="button" class="underline" @click="reloadForAccess">Reload</button>
     </div>
     <!-- GM Toolbar (top) -->
-    <MapToolbar
-      v-if="isDm && map && map.id === encounter.mapId"
-      :active-tool="editor.activeTool.value"
-      :draw-mode="editor.drawMode.value"
-      :element-brush="editor.elementBrush.value"
-      :ramp-direction="editor.rampDirection.value"
-      :current-edit-y="editor.currentEditY.value"
-      :can-undo="editor.canUndo.value"
-      :can-redo="editor.canRedo.value"
-      @select-tool="editor.selectTool"
-      @set-draw-mode="v => editor.drawMode.value = v"
-      @set-element="v => editor.elementBrush.value = v"
-      @set-ramp-direction="v => editor.rampDirection.value = v"
-      @change-y="d => editor.currentEditY.value += d"
-      @undo="onUndo"
-      @redo="onRedo"
-    />
+    <MapToolbar v-if="isDm && map && map.id === encounter.mapId" :editor="editor" @action="onEditorAction" />
 
     <div v-if="isDm && map" class="map-save-status" role="status" aria-live="polite">
       <span>{{ saveStatus }}</span>
@@ -35,6 +19,7 @@
     <div class="canvas-wrapper">
       <ClientOnly>
         <MapCanvas
+          ref="builderCanvas"
           v-if="map && map.id === encounter.mapId"
           :map="map"
           :participants="liveParticipants"
@@ -43,6 +28,18 @@
           :tamer-map="tamerMapForCanvas"
           :digimon-map="digimonMapForCanvas"
           :active-tool="editor.activeTool.value"
+          :brush-size="editor.brushSize.value"
+          :round-brush="editor.roundBrush.value"
+          :plane-lock="editor.planeLock.value"
+          :selection="editor.selection.value"
+          :stamp="editor.activeStamp.value"
+          :stamp-turns="editor.stampTurns.value"
+          :room-height="editor.roomHeight.value"
+          :room-floor="editor.roomFloor.value"
+          @area-selected="editor.setSelection"
+          @material-picked="editor.pickMaterial"
+          @brush-stroke="onBrushStroke"
+          @editor-action="onEditorAction"
           :draw-mode="editor.drawMode.value"
           :ramp-direction="editor.rampDirection.value"
           :current-edit-y="editor.currentEditY.value"
@@ -329,6 +326,8 @@ ws.onMessage((msg) => {
 
 // ── Editor ─────────────────────────────────────────────────────────────────
 const editor = useMapEditor(map)
+const builderCanvas = ref<{ cameraAction: (action: string) => void } | null>(null)
+onMounted(() => editor.loadStamps())
 let lastQueuedRevision = 0
 const autosave = useMapAutosave({
   save: (mapId, patch) => mapStore.updateMapMinimal(mapId, patch, editorClientId),
@@ -1016,8 +1015,27 @@ async function onCellDraw(start: Vec3, end: Vec3) {
   else if (tool === 'ceiling')       editor.applyCeilingDraw(start, end)
   else if (tool === 'spawn')         editor.applySpawnToggle(start, end)
   else if (tool === 'delete')        editor.deleteAt(start, end)
+  else if (tool === 'room')          editor.applyRoom(start, end)
+  else if (tool === 'stamp')         editor.placeStamp(end)
   else return
   await persistMap(tool)
+}
+
+async function onBrushStroke(points: Vec3[]) {
+  if (!props.isDm || !map.value) return
+  editor.applyBrushStroke(points)
+  await persistMap('brush')
+}
+
+async function onEditorAction(action: string) {
+  if (!props.isDm) return
+  if (action === 'undo') { await onUndo(); return }
+  if (action === 'redo') { await onRedo(); return }
+  if (action === 'move') editor.transformSelection(false)
+  else if (action === 'duplicate') editor.transformSelection(true)
+  else if (action === 'delete-selection') editor.deleteSelection()
+  else { builderCanvas.value?.cameraAction(action); return }
+  await persistMap(action)
 }
 
 async function onWallEdit(wallId: string) {

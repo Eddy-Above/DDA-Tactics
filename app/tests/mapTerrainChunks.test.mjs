@@ -202,27 +202,28 @@ for (const [direction, axis, sign] of [['north', 'z', -1], ['east', 'x', 1], ['s
   })
 }
 
-test('ground blends use global neighbours and release unused textures and shared resources', () => {
-  let textures = 0, released = 0
-  const { scene, manager } = fixture({
-    makeBlendTexture: () => { textures++; return new THREE.Texture() },
-    releaseBlendTexture: texture => { released++; texture.dispose() },
-  })
+test('natural ground blends use global neighbours, keep instancing, and release palettes after edits', () => {
+  const { scene, manager } = fixture()
   const groundTiles = [{ ...point(15), element: 'earth', terrain: 'normal' }, { ...point(16), element: 'wood', terrain: 'normal' }]
   const map = mapOf({ groundTiles })
   manager.sync(map)
-  assert.equal(textures, 2)
   assert.equal(manager.stats().textures, 2)
-  assert.equal(objects(manager).filter(object => object.material?.map).length, 2)
+  const mixed = objects(manager).filter(object => object.isInstancedMesh)
+  assert.equal(mixed.length, 2)
+  let released = 0
+  for (const mesh of mixed) {
+    const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader }
+    mesh.material.onBeforeCompile(shader, {})
+    shader.uniforms.terrainBlendPalette.value.addEventListener('dispose', () => released++)
+    assert.equal(mesh.material.isMeshLambertMaterial, true)
+    assert.equal(mesh.material.emissive.getHex(), 0)
+    assert.ok(!mesh.material.map, 'no unlit overlay plane is added')
+  }
   const next = recordMapEdit(map, { ...map, groundTiles: groundTiles.map(tile => ({ ...tile, element: 'wood' })) }, ['groundTiles'], [point(15)])
   manager.sync(next)
   assert.equal(released, 2)
   assert.equal(manager.stats().textures, 0)
-  let disposed = 0
-  const shared = new Set(objects(manager).map(object => object.geometry))
-  for (const geometry of shared) geometry.addEventListener('dispose', () => disposed++)
   manager.dispose()
-  assert.equal(disposed, shared.size)
   assert.equal(scene.children.length, 0)
 })
 

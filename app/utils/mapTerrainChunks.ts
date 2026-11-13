@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { attachTerrainMaterialBlend } from './terrainMaterialBlend'
 import { toRaw } from 'vue'
 import type { GameMap, MapGroundTile, MapSpaceTile, MapVoxel, Vec3 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
@@ -21,7 +22,7 @@ const TERRAIN_COLLECTIONS = ['groundTiles', 'spaceTiles', 'voxels'] as const
 type TerrainCollection = typeof TERRAIN_COLLECTIONS[number]
 type TerrainCell = MapGroundTile | MapSpaceTile | MapVoxel
 type Resource<T> = { value: T; references: number }
-type Instance = { position: THREE.Vector3; color?: number; quaternion?: THREE.Quaternion; scale?: THREE.Vector3; lightVoxel?: MapVoxel }
+type Instance = { position: THREE.Vector3; color?: number; neighbours?: Array<number | undefined>; quaternion?: THREE.Quaternion; scale?: THREE.Vector3; lightVoxel?: MapVoxel }
 type InstanceBucket = { geometryKey: string; materialKey: string; geometry: () => THREE.BufferGeometry; material: () => THREE.Material; instances: Instance[]; castShadow: boolean; spawn: boolean }
 type ChunkData = { groundTiles: Map<string, MapGroundTile>; spaceTiles: Map<string, MapSpaceTile>; voxels: Map<string, MapVoxel> }
 type ChunkState = { group: THREE.Group; data: ChunkData; releases: Array<() => void>; transparentKeys: string[]; opaqueSourceKeys: string[]; hasTransparent: boolean; bounds: THREE.Box3 }
@@ -29,9 +30,6 @@ type ChunkState = { group: THREE.Group; data: ChunkData; releases: Array<() => v
 export interface MapTerrainOptions {
   scene: THREE.Scene | THREE.Group
   tileHeight: number
-  makeBlendTexture?: (center: number, north?: number, south?: number, east?: number, west?: number) => THREE.Texture
-  /** Releases an external texture cache entry as well as its GPU resource. */
-  releaseBlendTexture?: (texture: THREE.Texture) => void
 }
 
 export interface MapTerrainView {
@@ -54,7 +52,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
   }
   const geometries = new Map<string, Resource<THREE.BufferGeometry>>()
   const materials = new Map<string, Resource<THREE.Material>>()
-  const blendTextures = new Map<string, Resource<THREE.Texture>>()
+  const blendTextures = new Set<THREE.Texture>()
   const transparentInstances = new Map<string, { id: number; voxel: MapVoxel; geometryKey: string }>()
   const transparentGeometryIds = new Map<string, number>()
   const proxyGeometryCache = new Map<string, THREE.BufferGeometry>()
@@ -307,30 +305,20 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     const litMaterial = (transparent = false, depthWrite = true) => () => new THREE.MeshLambertMaterial({ color: 0xffffff, transparent, depthWrite })
     const planeQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
 
+    const neighbourPalette=(cell:Vec3,colour:number,kind:'ground'|'voxel')=>FACE_OFFSETS.map(([dx,dy,dz])=>{
+      if(kind==='ground'&&dy!==0)return undefined
+      const other=kind==='ground'?indices.groundTiles.get(key({x:cell.x+dx!,y:cell.y+dy!,z:cell.z+dz!})):indices.voxels.get(key({x:cell.x+dx!,y:cell.y+dy!,z:cell.z+dz!}))
+      if(!other)return undefined
+      if(kind==='voxel'&&getVoxelOpacity(other as MapVoxel)<1)return undefined
+      const next=kind==='voxel'?getVoxelColor(other as MapVoxel):other.materialId?getVoxelMaterialDefinition(other.materialId).color:ELEMENT_COLORS[(other as MapGroundTile).element]
+      return next!==colour?next:undefined
+    })
     for (const tile of state.data.groundTiles.values()) {
-      const color = ELEMENT_COLORS[tile.element] ?? 0x888888
+      const color = tile.materialId ? getVoxelMaterialDefinition(tile.materialId).color : ELEMENT_COLORS[tile.element] ?? 0x888888
       add('ground', { geometryKey: 'ground', materialKey: 'lambert:opaque', geometry: groundGeo, material: litMaterial(), castShadow: false, spawn: false },
-        { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5), color })
+        { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5), color, neighbours:neighbourPalette(tile,color,'ground') })
       addTranslatedEdges(groundEdges, groundBaseEdges(), tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5)
 
-      if (tile.element !== 'void' && options.makeBlendTexture) {
-        const neighborColor = (x: number, z: number) => {
-          const neighbor = indices.groundTiles.get(`${x},${tile.y},${z}`)
-          return neighbor && neighbor.element !== 'void' ? ELEMENT_COLORS[neighbor.element] : undefined
-        }
-        const n = neighborColor(tile.x, tile.z - 1), s = neighborColor(tile.x, tile.z + 1)
-        const e = neighborColor(tile.x + 1, tile.z), w = neighborColor(tile.x - 1, tile.z)
-        if ([n, s, e, w].some(value => value && value !== color)) {
-          const blendKey = `${color}:${n}:${s}:${e}:${w}`
-          const texture = lease(blendTextures, blendKey, () => options.makeBlendTexture!(color, n, s, e, w), value => {
-            if (options.releaseBlendTexture) options.releaseBlendTexture(value)
-            else value.dispose()
-          }, state)
-          add(`blend:${blendKey}`, { geometryKey: 'plane', materialKey: `blend:${texture.uuid}`, geometry: () => new THREE.PlaneGeometry(1, 1),
-            material: () => new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }), castShadow: false, spawn: false },
-          { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H + 0.001, tile.z + 0.5), quaternion: planeQuaternion })
-        }
-      }
       if (tile.isSpawnPoint) add('ground-spawn', { geometryKey: 'ground-spawn', materialKey: 'spawn:ground', geometry: () => new THREE.PlaneGeometry(0.7, 0.7),
         material: () => new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.4, depthWrite: false }), castShadow: false, spawn: true },
       { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H + 0.003, tile.z + 0.5), quaternion: planeQuaternion })
@@ -355,7 +343,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
         add(`voxel:${geometryKey}:${materialKey}`, { geometryKey, materialKey, geometry: shapeGeometry,
           material: litMaterial(transparent), castShadow: true, spawn: false },
         { position: new THREE.Vector3(voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5), color,
-          lightVoxel: getVoxelLightSource(voxel) ? voxel : undefined })
+          lightVoxel: getVoxelLightSource(voxel) ? voxel : undefined, neighbours:neighbourPalette(voxel,color,'voxel') })
       }
       if (opacity >= 1 || voxel.shape === 'ramp') {
         addTranslatedEdges(voxelEdges, baseEdgePositions(geometryKey, shapeGeometry), voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5)
@@ -386,6 +374,11 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
           state.opaqueSourceKeys.push(cellKey)
         }
       })
+      const blend=attachTerrainMaterialBlend(mesh,bucket.instances.map(instance=>instance.neighbours??[]))
+      if(blend){
+        blendTextures.add(blend.texture)
+        state.releases.push(()=>{freeGeometry(blend.geometry);freeMaterial(blend.material);blend.texture.dispose();blendTextures.delete(blend.texture)})
+      }
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
       mesh.castShadow = bucket.castShadow

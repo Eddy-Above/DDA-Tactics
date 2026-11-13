@@ -44,7 +44,7 @@ export type ElementType = 'fire' | 'water' | 'wind' | 'ice' | 'thunder' | 'wood'
 export type TerrainType = 'normal' | 'water' | 'earth' | 'climbable'
 export type SpaceType = 'air' | 'water' | 'earth'
 export type WallFace = 'north' | 'south' | 'east' | 'west'
-export type MapTool = 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'voxel' | 'ramp' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
+export type MapTool = 'area-select' | 'stamp' | 'eyedropper' | 'room' | 'select' | 'add-space' | 'add-ground' | 'paint-element' | 'voxel' | 'ramp' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs' | 'delete' | 'spawn'
 export type AreaTag = 'blast' | 'burst' | 'close-blast' | 'cone' | 'line' | 'pass'
 
 export interface Vec3 {
@@ -54,6 +54,7 @@ export interface Vec3 {
 }
 
 export interface MapGroundTile {
+  materialId?: string
   x: number
   y: number
   z: number

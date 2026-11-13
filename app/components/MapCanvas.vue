@@ -7,12 +7,15 @@
     @dragleave="onExternalDragLeave"
     @drop="onExternalDrop"
   >
-    <canvas ref="canvasRef" class="map-canvas" />
+    <canvas ref="canvasRef" class="map-canvas" :class="{ 'pan-cursor': spacePanning }" />
+    <div v-if="editorHint && isDm && !spacePanning" class="builder-cursor-hint" :class="{invalid:editorHint.invalid}" :style="{left:editorHint.x+'px',top:editorHint.y+'px'}">{{ editorHint.text }}</div>
     <!-- Y-clip + ghost walls controls -->
     <div class="map-view-controls">
+      <div class="map-view-row"><button @click="cameraAction('fit')">Fit map</button><button v-if="isDm" :disabled="!selection" @click="cameraAction('focus')">Focus selection</button><button @click="cameraAction('top')">Top down</button></div>
+      <div class="map-view-row"><span>Isometric</span><button v-for="corner in [0,1,2,3]" :key="corner" :title="'Isometric corner '+(corner+1)" @click="cameraAction('corner-'+corner)">{{ corner+1 }}</button></div>
       <div class="map-view-row">
         <span>Y-clip</span>
-        <input type="number" v-model.number="clipY" min="-5" max="20" step="1" class="clip-input" />
+        <input type="number" v-model.number="clipY" step="1" class="clip-input" />
       </div>
       <button :class="{ active: ghostWalls }" @click="ghostWalls = !ghostWalls">Ghost Walls</button>
       <div v-if="aimedMoveParticipantId" class="map-view-row" title="Scroll to change movement height">
@@ -98,7 +101,8 @@
 </template>
 
 <script setup lang="ts">
-import { mapContentView } from '~/utils/mapContentBounds'
+import { mapContentView, updateMapContentBounds } from '~/utils/mapContentBounds'
+import { drawCells, selectionBox, transformFragment, fragmentCollision, fragmentBounds, type DrawMode, type SelectionBox, type MapStamp } from '~/utils/mapBuilder'
 import { displayImageUrl } from '~/utils/imageFallback'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -142,7 +146,15 @@ const props = defineProps<{
   tamerMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number }>
   digimonMap: Record<string, { name: string; spriteUrl?: string | null; currentWounds: number; woundBoxes: number; size: DigimonSize; giganticDimensions?: { width: number; height: number; depth: number } | null; partnerId?: string | null; qualities?: any[]; isEnemy?: boolean }>
   activeTool: MapTool
-  drawMode: 'line' | 'square' | 'cube'
+  drawMode: DrawMode
+  brushSize?: number
+  roundBrush?: boolean
+  planeLock?: boolean
+  selection?: SelectionBox | null
+  stamp?: MapStamp | null
+  stampTurns?: number
+  roomHeight?: number
+  roomFloor?: boolean
   currentEditY: number
   rampDirection?: WallFace
   isDm: boolean
@@ -177,6 +189,10 @@ const emit = defineEmits<{
   (e: 'unit-moved', participantId: string, position: Vec3, path: Vec3[]): void
   (e: 'cell-clicked', cell: Vec3): void
   (e: 'cell-draw', start: Vec3, end: Vec3): void
+  (e: 'area-selected', start: Vec3, end: Vec3): void
+  (e: 'brush-stroke', points: Vec3[]): void
+  (e: 'material-picked', material: string): void
+  (e: 'editor-action', action: string): void
   (e: 'rotate-ramp', step: -1 | 1): void
   (e: 'wall-edit', wallId: string): void
   (e: 'wall-edit-at-edge', tile: Vec3, face: WallFace, mode?: string): void
@@ -601,7 +617,6 @@ let highlightsDirty = true
 let reticulesDirty = true
 let pendingPointerEvent: MouseEvent | null = null
 let structureSources: unknown[] = []
-let blendTextureCache: Map<string, THREE.CanvasTexture> = new Map()
 let occludeRaycaster: THREE.Raycaster
 let spriteGroups: Map<string, THREE.Group>  // participantId → group
 const borderMaterials = new Map<string, THREE.LineBasicMaterial>()  // participantId → volume-outline material
@@ -625,13 +640,37 @@ type EditHit =
   | { type: 'wall-edge'; tile: Vec3; face: WallFace }
   | { type: 'voxel'; cell: Vec3 }
 let dragStartHit: EditHit | null = null
+const spacePanning = ref(false)
+let panGesture = false
+let strokePoints: Vec3[] = []
+const editorHint = ref<{x:number;y:number;text:string;invalid:boolean}|null>(null)
+let selectionOutline: THREE.Box3Helper | null = null
+let topDown = false
+let isoCorner = 0
+function cancelEditorGesture() {
+  dragStartHit=null;strokePoints=[];panGesture=false;rightDragActive=false
+  editorHint.value=null
+  if(hoverGhostGroup)clearMapGroup(hoverGhostGroup)
+}
+function syncEditorCameraControls() {
+  if(!controls)return
+  controls.enabled=true
+  controls.mouseButtons.LEFT=(spacePanning.value||props.activeTool==='select'?THREE.MOUSE.PAN:undefined) as any
+}
+function resetEditorInput() {
+  keysHeld.clear();spacePanning.value=false;cancelEditorGesture()
+  syncEditorCameraControls()
+  requestRender()
+}
+function editorWindowMouseUp(event:MouseEvent) { if(dragStartHit || panGesture || rightDragActive) onMouseUp(event) }
+
 let rightDragActive = false
 let rightDragLastX = 0
 let azimuthTween: { from: number; to: number; start: number; duration: number } | null = null
 const AZIMUTH_STEP = Math.PI / 4      // Q/E turn size
 const AZIMUTH_TWEEN_MS = 220
 const keysHeld = new Set<string>()
-const clipY = ref(20)
+const clipY = ref(Math.max(20,...Object.values(props.map?.contentBounds?.collections??{}).map(bounds=>bounds?.maxY??20)))
 const ghostWalls = ref(false)
 const TILE_SIZE = 1
 // Shared with the line-of-sight model (utils/lineOfSight.ts) so targeting matches what's drawn.
@@ -734,13 +773,17 @@ function renderPassLandingMarker(anchor: Vec3, dims: FootprintDims, valid: boole
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
   initScene()
+  syncEditorCameraControls()
   buildMap()
+  updateSelectionOutline()
   buildSprites()
   requestRender()
 
   window.addEventListener('resize', onResize)
   window.addEventListener('keydown', queueKeyDown)
   window.addEventListener('keyup', onKeyUp)
+  window.addEventListener('blur', resetEditorInput)
+  window.addEventListener('mouseup', editorWindowMouseUp)
   // Capture phase: must run before OrbitControls' own (bubble-phase) pointerdown so a token press
   // can switch the camera controls off before they start panning.
   canvasRef.value!.addEventListener('pointerdown', onTokenPointerDown, { capture: true })
@@ -772,14 +815,15 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   window.removeEventListener('keydown', queueKeyDown)
   window.removeEventListener('keyup', onKeyUp)
+  window.removeEventListener('blur', resetEditorInput)
+  window.removeEventListener('mouseup', editorWindowMouseUp)
+  if(selectionOutline){ scene.remove(selectionOutline);selectionOutline.geometry.dispose();(selectionOutline.material as THREE.Material).dispose() }
   canvasRef.value?.removeEventListener('pointerdown', onTokenPointerDown, { capture: true })
   canvasRef.value?.removeEventListener('wheel', queueCanvasWheel, { capture: true })
   window.removeEventListener('pointermove', onTokenPointerMove)
   window.removeEventListener('pointerup', onTokenPointerUp)
   window.removeEventListener('pointercancel', onTokenPointerCancel)
   tokenDrag.dispose()
-  for (const tex of blendTextureCache.values()) tex.dispose()
-  blendTextureCache.clear()
 })
 
 // ── Scene init ─────────────────────────────────────────────────────────────
@@ -877,46 +921,6 @@ function tickAzimuthTween() {
 }
 
 // ── Element blend texture ──────────────────────────────────────────────────
-function makeBlendTexture(center: number, n?: number, s?: number, e?: number, w?: number): THREE.CanvasTexture {
-  const key = `${center}:${n}:${s}:${e}:${w}`
-  if (blendTextureCache.has(key)) return blendTextureCache.get(key)!
-
-  const SIZE = 128
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = SIZE
-  const ctx = canvas.getContext('2d')!
-  const toCSS = (hex: number) => `#${hex.toString(16).padStart(6, '0')}`
-
-  // Start fully transparent — only edge strips are painted
-  ctx.clearRect(0, 0, SIZE, SIZE)
-
-  const B = SIZE * 0.2  // blend zone: 20% of tile width from each edge
-  const edges = [
-    { color: n, x1: 0,    y1: 0,    x2: 0,        y2: B,        rx: 0,        ry: 0,        rw: SIZE, rh: B },
-    { color: s, x1: 0,    y1: SIZE, x2: 0,        y2: SIZE - B, rx: 0,        ry: SIZE - B, rw: SIZE, rh: B },
-    { color: w, x1: 0,    y1: 0,    x2: B,        y2: 0,        rx: 0,        ry: 0,        rw: B,    rh: SIZE },
-    { color: e, x1: SIZE, y1: 0,    x2: SIZE - B, y2: 0,        rx: SIZE - B, ry: 0,        rw: B,    rh: SIZE },
-  ]
-  for (const edge of edges) {
-    if (!edge.color || edge.color === center) continue
-    const grad = ctx.createLinearGradient(edge.x1, edge.y1, edge.x2, edge.y2)
-    grad.addColorStop(0, toCSS(edge.color) + '60')
-    grad.addColorStop(1, toCSS(edge.color) + '00')
-    ctx.fillStyle = grad
-    ctx.fillRect(edge.rx, edge.ry, edge.rw, edge.rh)
-  }
-
-  const tex = new THREE.CanvasTexture(canvas)
-  blendTextureCache.set(key, tex)
-  return tex
-}
-
-// ── Map building ───────────────────────────────────────────────────────────
-function releaseBlendTexture(texture: THREE.Texture) {
-  for (const [key, cached] of blendTextureCache) if (cached === texture) blendTextureCache.delete(key)
-  texture.dispose()
-}
-
 function buildMap() {
   losIndex = null
   if (!props.map) {
@@ -930,7 +934,7 @@ function buildMap() {
   const map = props.map
   const destroyedIds = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
 
-  if (!terrain) terrain = createMapTerrainChunks({ scene, tileHeight: TILE_H, makeBlendTexture, releaseBlendTexture })
+  if (!terrain) terrain = createMapTerrainChunks({ scene, tileHeight: TILE_H })
   terrain.sync(map, { clipY: clipY.value, showSpawnIndicators: props.showSpawnIndicators !== false })
   const sources = [map.walls, map.windows, map.doors, map.ceilings, map.stairs, JSON.stringify(props.destructibleStates)]
   if (sources.every((source, i) => source === structureSources[i])) {
@@ -1357,6 +1361,17 @@ function applyKeyMovement() {
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
+  const target=e.target as HTMLElement|null
+  if(target?.closest?.('input,textarea,select,[contenteditable="true"]')) return
+  if(props.isDm && e.code==='Space') {
+    e.preventDefault()
+    if(!spacePanning.value){cancelEditorGesture();spacePanning.value=true;syncEditorCameraControls()}
+    return
+  }
+  if(props.isDm && (e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z') {e.preventDefault();emit('editor-action',e.shiftKey?'redo':'undo');return}
+  if(props.isDm && (e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='y') {e.preventDefault();emit('editor-action','redo');return}
+  if(props.isDm && e.key==='Escape' && dragStartHit){cancelEditorGesture();return}
+
   if (e.key === 'Escape') {
     if (tokenDrag.abort()) return   // Esc ends a token drag in progress
     if (radialParticipantId.value || participantChoice.value) { closeRadial(); return }
@@ -1370,6 +1385,7 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function onKeyUp(e: KeyboardEvent) {
+  if(e.code==='Space'){spacePanning.value=false;syncEditorCameraControls();if(panGesture)swallowNextClick()}
   keysHeld.delete(e.key)
 }
 
@@ -1391,6 +1407,7 @@ function queueMouseMove(event: MouseEvent) {
 }
 
 function onCanvasLeave() {
+  editorHint.value=null
   pendingPointerEvent = null
   setHoveredTarget(null)
   if (!tokenDrag.isPressed()) {
@@ -1988,16 +2005,35 @@ function setMouseFromEvent(event: MouseEvent) {
   raycaster.setFromCamera(mouse, camera)
 }
 
-function planeCell(event: MouseEvent): Vec3 | null {
+function planeCell(event: MouseEvent, level = props.currentEditY): Vec3 | null {
   setMouseFromEvent(event)
-  const groundY = props.currentEditY * TILE_SIZE + TILE_H
+  const groundY = level * TILE_SIZE + TILE_H
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY)
   const target = new THREE.Vector3()
   if (!raycaster.ray.intersectPlane(plane, target)) return null
-  return { x: Math.floor(target.x), y: props.currentEditY, z: Math.floor(target.z) }
+  return { x: Math.floor(target.x), y: level, z: Math.floor(target.z) }
+}
+
+function editorCell(event:MouseEvent):Vec3|null {
+  if(props.planeLock||!['voxel','ramp','stairs','add-ground','ceiling','stamp','paint-element','eyedropper'].includes(props.activeTool)) return planeCell(event)
+  const hit=getIntersection(event).find(h=>['voxel','ground'].includes(h.object.userData.type))
+  if(!hit)return planeCell(event,dragStartHit&&'cell' in dragStartHit?dragStartHit.cell.y:props.currentEditY)
+  const cell=hit.object.userData.voxel??hit.object.userData.tile
+  if(!cell)return planeCell(event)
+  if(props.activeTool==='paint-element'||props.activeTool==='eyedropper')return {x:cell.x,y:cell.y,z:cell.z}
+  if(hit.object.userData.type==='ground')return {x:cell.x,y:cell.y,z:cell.z}
+  const normal=hit.face?.normal.clone().transformDirection(hit.object.matrixWorld)
+  if(!normal)return planeCell(event)
+  const axis=Math.abs(normal.y)>=Math.abs(normal.x)&&Math.abs(normal.y)>=Math.abs(normal.z)?'y':Math.abs(normal.x)>=Math.abs(normal.z)?'x':'z'
+  return {x:cell.x+(axis==='x'?Math.sign(normal.x):0),y:cell.y+(axis==='y'?Math.sign(normal.y):0),z:cell.z+(axis==='z'?Math.sign(normal.z):0)}
 }
 
 function wallEdgeFromEvent(event: MouseEvent): { tile: Vec3; face: WallFace } | null {
+  const wallHit=getIntersection(event).find(h=>h.object.userData.type==='wall'||h.object.userData.type==='door')
+  const id=wallHit?.object.userData.id
+  const door=props.map?.doors.find(d=>d.id===id)
+  const wall=props.map?.walls.find(w=>w.id===(door?.wallId??id))
+  if(wall)return {tile:{x:wall.x,y:wall.y,z:wall.z},face:wall.face}
   setMouseFromEvent(event)
   const groundY = props.currentEditY * TILE_SIZE + TILE_H
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY)
@@ -2051,27 +2087,13 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
     if (!cell) return null
     return { type: 'cell', cell }
   }
-  const cell = planeCell(event)
+  const cell = editorCell(event)
   if (!cell) return null
   return { type: 'cell', cell }
 }
 
 function tilesBetween(start: Vec3, end: Vec3): Vec3[] {
-  const cells: Vec3[] = []
-  const minX = Math.min(start.x, end.x), maxX = Math.max(start.x, end.x)
-  const minZ = Math.min(start.z, end.z), maxZ = Math.max(start.z, end.z)
-  if (props.drawMode === 'line') {
-    if (Math.abs(end.x - start.x) >= Math.abs(end.z - start.z)) {
-      for (let x = minX; x <= maxX; x++) cells.push({ x, y: start.y, z: start.z })
-    } else {
-      for (let z = minZ; z <= maxZ; z++) cells.push({ x: start.x, y: start.y, z })
-    }
-  } else {
-    for (let x = minX; x <= maxX; x++)
-      for (let z = minZ; z <= maxZ; z++)
-        cells.push({ x, y: start.y, z })
-  }
-  return cells
+  return drawCells(start,end,props.drawMode,props.brushSize??1,props.roundBrush??false)
 }
 
 function makeWallGhostMesh(tile: Vec3, face: WallFace, color: number): THREE.Mesh {
@@ -2114,80 +2136,106 @@ function makeStairGhostMesh(cell: Vec3, color: number): THREE.Mesh {
 }
 
 function updateHoverGhost(event: MouseEvent) {
-  const hit = ['voxel', 'ramp', 'stairs', 'add-ground', 'add-space', 'paint-element', 'ceiling'].includes(props.activeTool)
-    ? planeCell(event) : [event.clientX, event.clientY, event.shiftKey, event.ctrlKey]
-  const key = JSON.stringify([props.activeTool, props.drawMode, props.currentEditY, props.rampDirection, hit, dragStartHit, getMapGeometryRevision(props.map)])
-  if (!mapPreviewChanged(hoverGhostGroup, key)) return
-  clearMapGroup(hoverGhostGroup)
-  if (props.activeTool === 'select' || !props.isDm) return
-  const tool = props.activeTool
-
-  if (tool === 'wall' || tool === 'window' || tool === 'door') {
-    const color = tool === 'window' ? 0x88ccff : tool === 'door' ? 0x886644 : 0x00aaff
-    if (tool === 'window') {
-      const voxel = voxelCellFromEvent(event)
-      if (voxel) {
-        hoverGhostGroup.add(makeVoxelGhostMesh(voxel, color))
-        return
-      }
-    }
-    const we = wallEdgeFromEvent(event)
-    if (!we) return
-    if (dragStartHit?.type === 'wall-edge' && tool === 'wall') {
-      for (const tile of tilesBetween(dragStartHit.tile, we.tile))
-        hoverGhostGroup.add(makeWallGhostMesh(tile, dragStartHit.face, color))
-    } else {
-      hoverGhostGroup.add(makeWallGhostMesh(we.tile, we.face, color))
-    }
-  } else if (tool === 'spawn') {
-    const voxel = voxelCellFromEvent(event)
-    if (voxel) {
-      hoverGhostGroup.add(makeVoxelGhostMesh(voxel, 0x00ff88))
-      return
-    }
-    const cell = planeCell(event)
-    if (!cell) return
-    if (dragStartHit?.type === 'cell') {
-      for (const tile of tilesBetween(dragStartHit.cell, cell))
-        hoverGhostGroup.add(makeTileGhostMesh(tile, 0x00ff88))
-    } else {
-      hoverGhostGroup.add(makeTileGhostMesh(cell, 0x00ff88))
-    }
-  } else if (tool === 'delete') {
-    if (event.shiftKey || event.ctrlKey) {
-      const we = wallEdgeFromEvent(event)
-      if (we) hoverGhostGroup.add(makeWallGhostMesh(we.tile, we.face, 0xff3333))
-    } else {
-      const voxel = voxelCellFromEvent(event)
-      if (voxel) {
-        hoverGhostGroup.add(makeVoxelGhostMesh(voxel, 0xff3333))
-        return
-      }
-      const cell = planeCell(event)
-      if (!cell) return
-      if (dragStartHit?.type === 'cell') {
-        for (const tile of tilesBetween(dragStartHit.cell, cell))
-          hoverGhostGroup.add(makeTileGhostMesh(tile, 0xff3333))
-      } else {
-        hoverGhostGroup.add(makeTileGhostMesh(cell, 0xff3333))
-      }
-    }
-  } else {
-    const cell = planeCell(event)
-    if (!cell) return
-    const color = tool === 'voxel' || tool === 'ramp' || tool === 'stairs' ? 0x88ccff : 0x00aaff
-    const makeGhost = tool === 'stairs' ? makeStairGhostMesh
-      : tool === 'voxel' || tool === 'ramp' ? makeVoxelGhostMesh : makeTileGhostMesh
-    if (dragStartHit?.type === 'cell' && (tool === 'add-ground' || tool === 'add-space' || tool === 'ceiling' || tool === 'paint-element' || tool === 'voxel' || tool === 'ramp' || tool === 'stairs')) {
-      for (const tile of tilesBetween(dragStartHit.cell, cell))
-        hoverGhostGroup.add(makeGhost(tile, color))
-    } else {
-      hoverGhostGroup.add(makeGhost(cell, color))
-    }
+  if(!props.isDm || props.activeTool==='select' || spacePanning.value)return
+  const hit=getHoveredHit(event)
+  const cell=hit?('cell' in hit?hit.cell:hit.tile):null
+  const rect=containerRef.value?.getBoundingClientRect()
+  const start=dragStartHit&&'cell' in dragStartHit?dragStartHit.cell:cell
+  const tool=props.activeTool
+  let message=tool.replaceAll('-',' '),invalid=false
+  if(cell) {
+    message+=' ('+[cell.x,cell.y,cell.z].join(', ')+')'
+    if(start&&dragStartHit)message+=' | '+[Math.abs(cell.x-start.x)+1,Math.abs(cell.y-start.y)+1,Math.abs(cell.z-start.z)+1].join(' x ')
+  } else {message+=': point at the editing plane or a visible surface.';invalid=true}
+  if((tool==='door'||tool==='window')&&hit?.type==='wall-edge'&&!props.map?.walls.some(w=>w.x===hit.tile.x&&w.y===hit.tile.y&&w.z===hit.tile.z&&w.face===hit.face)){
+    message='Place a wall first, then click its edge to add a '+tool+'.';invalid=true
   }
+  let stampContent: ReturnType<typeof transformFragment>|null=null
+  if(tool==='stamp') {
+    if(!props.stamp){message='Choose a saved stamp in the toolbar.';invalid=true}
+    else if(cell&&props.map){stampContent=transformFragment(props.stamp.content,cell,props.stampTurns??0,()=> 'preview');const collision=fragmentCollision(props.map,stampContent);if(collision){message=collision;invalid=true}}
+  }
+  if(tool==='eyedropper'&&cell)message='Pick material at ('+[cell.x,cell.y,cell.z].join(', ')+')'
+  editorHint.value={x:Math.max(8,Math.min(event.clientX-(rect?.left??0)+18,(rect?.width??600)-270)),y:Math.max(8,Math.min(event.clientY-(rect?.top??0)+20,(rect?.height??600)-65)),text:message,invalid}
+  const key=JSON.stringify([tool,props.drawMode,props.brushSize,props.roundBrush,props.currentEditY,props.planeLock,props.roomHeight,props.roomFloor,props.stamp?.id,props.stampTurns,props.rampDirection,cell,hit&&'face' in hit?hit.face:null,dragStartHit,strokePoints,getMapGeometryRevision(props.map)])
+  if(!mapPreviewChanged(hoverGhostGroup,key))return
+  clearMapGroup(hoverGhostGroup)
+  if(!cell||!hit)return
+  const color=invalid?0xff5544:tool==='delete'?0xff5544:tool==='area-select'?0xffc766:0x77ccff
+  if(tool==='area-select') {
+    if(start)hoverGhostGroup.add(previewBox(selectionBox(start,cell),color))
+    return
+  }
+  if(stampContent) {
+    const bounds=fragmentBounds(stampContent)
+    if(bounds)hoverGhostGroup.add(previewBox(bounds,color))
+    let count=0
+    for(const p of stampContent.voxels){if(count++>=1000)break;hoverGhostGroup.add(makeVoxelGhostMesh(p,color))}
+    for(const p of stampContent.walls){if(count++>=1000)break;hoverGhostGroup.add(makeWallGhostMesh(p,p.face,color))}
+    for(const p of stampContent.groundTiles){if(count++>=1000)break;hoverGhostGroup.add(makeTileGhostMesh(p,color))}
+    return
+  }
+  if(tool==='room'&&start) {
+    const box=selectionBox(start,cell),height=Math.max(1,Math.min(64,props.roomHeight??3))
+    hoverGhostGroup.add(previewBox({min:box.min,max:{...box.max,y:box.min.y+height-1}},color))
+    let count=0
+    for(let y=box.min.y;y<box.min.y+height&&count<1000;y++){
+      for(let x=box.min.x;x<=box.max.x&&count<1000;x++,count+=2){hoverGhostGroup.add(makeWallGhostMesh({x,y,z:box.min.z},'north',color));hoverGhostGroup.add(makeWallGhostMesh({x,y,z:box.max.z},'south',color))}
+      for(let z=box.min.z;z<=box.max.z&&count<1000;z++,count+=2){hoverGhostGroup.add(makeWallGhostMesh({x:box.min.x,y,z},'west',color));hoverGhostGroup.add(makeWallGhostMesh({x:box.max.x,y,z},'east',color))}
+    }
+    return
+  }
+  if(hit.type==='wall-edge') {
+    const begin=dragStartHit?.type==='wall-edge'?dragStartHit.tile:hit.tile
+    const face=dragStartHit?.type==='wall-edge'?dragStartHit.face:hit.face
+    for(const p of drawCells(begin,cell,'line').slice(0,1000))hoverGhostGroup.add(makeWallGhostMesh(p,face,color))
+    return
+  }
+  const cells=props.drawMode==='brush'&&strokePoints.length
+    ? [...new Map(strokePoints.flatMap((p,i)=>drawCells(strokePoints[Math.max(0,i-1)]!,p,'brush',props.brushSize??1,props.roundBrush)).map(p=>[vec3Key(p),p])).values()]
+    : dragStartHit ? tilesBetween(start??cell,cell) : drawCells(cell,cell,props.drawMode,props.brushSize??1,props.roundBrush)
+  const ghost=tool==='voxel'||tool==='ramp'||hit.type==='voxel'?makeVoxelGhostMesh:tool==='stairs'?makeStairGhostMesh:makeTileGhostMesh
+  for(const p of cells.slice(0,1000))hoverGhostGroup.add(ghost(p,color))
+  if(cells.length>1000){const box=fragmentBounds({groundTiles:cells as any});if(box)hoverGhostGroup.add(previewBox(box,color))}
+}
+
+function previewBox(box:SelectionBox,color:number) {
+  return new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(box.min.x,box.min.y,box.min.z),new THREE.Vector3(box.max.x+1,box.max.y+1,box.max.z+1)),color)
+}
+
+function updateSelectionOutline() {
+  if(selectionOutline){scene.remove(selectionOutline);selectionOutline.geometry.dispose();(selectionOutline.material as THREE.Material).dispose();selectionOutline=null}
+  if(props.selection&&props.isDm){selectionOutline=previewBox(props.selection,0xffc766);scene.add(selectionOutline)}
+  requestRender()
+}
+
+function cameraAction(action:string) {
+  if(!camera||!controls)return
+  if(action==='top')topDown=true
+  else if(action.startsWith('corner-')){topDown=false;isoCorner=Number(action.slice(7))%4}
+  const focus=action==='focus'?props.selection:null
+  if(action==='focus'&&!focus)return
+  const bounds=focus?updateMapContentBounds(null,{voxels:[focus.min,focus.max] as any}):updateMapContentBounds(null,props.map??{})
+  const view=mapContentView(bounds,camera.aspect,camera.fov)
+  const target=new THREE.Vector3(view.target.x,view.target.y,view.target.z)
+  const distance=new THREE.Vector3(view.position.x,view.position.y,view.position.z).distanceTo(target)
+  const polar=topDown?0.0001:Math.acos(1/Math.sqrt(3))
+  controls.minPolarAngle=controls.maxPolarAngle=polar
+  controls.target.copy(target)
+  camera.position.setFromSpherical(new THREE.Spherical(distance,polar,Math.PI/4+isoCorner*Math.PI/2)).add(target)
+  camera.far=view.far;camera.updateProjectionMatrix();scene.fog=new THREE.FogExp2(0x1a1a2e,view.fogDensity)
+  azimuthTween=null;controls.update();camera.updateMatrixWorld(true);invalidateFrame()
 }
 
 function onMouseMove(event: MouseEvent) {
+  if(spacePanning.value||panGesture){editorHint.value=null;return}
+  if(props.isDm && dragStartHit && props.drawMode==='brush') {
+    const hit=getHoveredHit(event)
+    if(hit && 'cell' in hit) {
+      const previous=strokePoints[strokePoints.length-1]
+      if(!previous||vec3Key(previous)!==vec3Key(hit.cell))strokePoints.push(hit.cell)
+    }
+  }
   if (rightDragActive) {
     applyRightDragRotation(event.clientX - rightDragLastX)
     rightDragLastX = event.clientX
@@ -2251,6 +2299,15 @@ function onMouseMove(event: MouseEvent) {
 }
 
 function onMouseDown(event: MouseEvent) {
+  if(event.button===0&&spacePanning.value){panGesture=true;swallowNextClick();return}
+  if(event.button!==0 && event.button!==2)return
+  if(event.button===0&&props.isDm&&props.activeTool==='eyedropper') {
+    const hit=getIntersection(event).find(h=>['voxel','ground'].includes(h.object.userData.type))
+    const cell=hit?.object.userData.voxel??hit?.object.userData.tile
+    if(cell)emit('material-picked',cell.materialId??cell.element??'void')
+    else editorHint.value={x:12,y:70,text:'Point at a floor tile or block to pick its material.',invalid:true}
+    return
+  }
   if (event.button === 2) {
     // Right click cancels movement mode or AOE targeting
     if (getMoveAim()) {
@@ -2269,13 +2326,25 @@ function onMouseDown(event: MouseEvent) {
   }
   if (!props.isDm || props.activeTool === 'select') return
   dragStartHit = getHoveredHit(event)
+  strokePoints=dragStartHit&&'cell' in dragStartHit?[dragStartHit.cell]:[]
 }
 
 function onMouseUp(event: MouseEvent) {
+  if(panGesture||spacePanning.value){panGesture=false;dragStartHit=null;strokePoints=[];swallowNextClick();return}
   if (event.button === 2) { rightDragActive = false; return }
   if (!props.isDm || props.activeTool === 'select' || !dragStartHit) return
   const endHit = getHoveredHit(event)
   const tool = props.activeTool
+  if(tool==='area-select') {
+    const start='cell' in dragStartHit?dragStartHit.cell:null
+    const end=endHit&&'cell' in endHit?endHit.cell:start
+    if(start&&end)emit('area-selected',start,end)
+    dragStartHit=null;return
+  }
+  if(props.drawMode==='brush'&&['voxel','ramp','stairs','add-ground','add-space','paint-element','ceiling','delete'].includes(tool)) {
+    if(endHit&&'cell' in endHit)strokePoints.push(endHit.cell)
+    emit('brush-stroke',strokePoints);strokePoints=[];dragStartHit=null;return
+  }
   if (dragStartHit.type === 'voxel') {
     if (tool === 'window' || tool === 'spawn') {
       emit('voxel-edit', dragStartHit.cell, tool)
@@ -2487,7 +2556,7 @@ const tokenDrag = createTokenDragController<PointerEvent>({
   commit: (participantId, cell) => emit('unit-dragged', participantId, cell),
   clearPreview: () => { if (hoverGhostGroup) clearMapGroup(hoverGhostGroup); requestRender() },
   lockCamera: () => { if (controls) controls.enabled = false },
-  unlockCamera: () => { if (controls) controls.enabled = props.activeTool === 'select' },
+  unlockCamera: () => { syncEditorCameraControls() },
   setCursor: (cursor) => { if (canvasRef.value) canvasRef.value.style.cursor = cursor },
   begin: () => { closeRadial(); clickedHealthBar.value = null; setHoveredTarget(null) },
   swallowNextClick,
@@ -2495,7 +2564,7 @@ const tokenDrag = createTokenDragController<PointerEvent>({
 
 // Window-level so a drag keeps tracking when the pointer leaves the canvas; the controller ignores
 // anything that isn't part of a gesture it started.
-const onTokenPointerDown = (e: PointerEvent) => tokenDrag.pointerDown(e)
+const onTokenPointerDown = (e: PointerEvent) => { if(!spacePanning.value)tokenDrag.pointerDown(e) }
 const onTokenPointerMove = (e: PointerEvent) => tokenDrag.pointerMove(e)
 const onTokenPointerUp = (e: PointerEvent) => tokenDrag.pointerUp(e)
 const onTokenPointerCancel = () => tokenDrag.pointerCancel()
@@ -2601,6 +2670,7 @@ function selectMapParticipant(participantId: string, point: THREE.Vector3) {
 }
 
 function onCanvasClick(event: MouseEvent) {
+  if(spacePanning.value||panGesture)return
   if (suppressNextClick) { suppressNextClick = false; return }
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
@@ -2821,6 +2891,7 @@ watch([
   () => props.secondaryActiveParticipantId, () => props.attackerRange, () => props.attackerEffectiveLimit,
   () => props.attackerMeleeRange, () => props.activePath, () => props.reachableCells,
   () => props.activeTool, () => props.rampDirection, () => props.currentEditY,
+  () => props.drawMode, () => props.brushSize, () => props.roundBrush, () => props.planeLock, () => props.stampTurns, () => props.stamp,
   () => props.chargeMode, () => props.chargeMoveParticipantId, () => props.npcMoveParticipantId,
   () => props.gmMoveParticipantId,
   movingParticipantId, pendingMovePos, npcMoveY, gmMoveY, areaHighlightCells, radialParticipantId, participantChoice,
@@ -2883,7 +2954,8 @@ watch(() => props.attackerCaps?.naturewalkElements?.includes('darkness') ?? fals
 
 watch(() => props.activeTool, (tool) => {
   if (tool !== 'select') closeRadial()
-  if (controls) controls.enabled = (tool === 'select')
+  syncEditorCameraControls()
+  cancelEditorGesture()
 }, { immediate: true })
 
 // A HUD drag that ends anywhere but a valid cell (dropped off the map, or Esc) leaves its preview
@@ -2975,6 +3047,8 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
   }
 }, { immediate: false })
 
+watch(() => props.selection, () => { if(scene)updateSelectionOutline() }, {deep:true})
+
 watch(clipY, (y) => {
   for (const obj of buildMeshes) {
     const fY = (obj as any).userData?.floorY
@@ -3011,10 +3085,12 @@ function healthBarClass(pct: number) {
 }
 
 // Expose for parent use
-defineExpose({ movingParticipantId })
+defineExpose({ movingParticipantId, cameraAction })
 </script>
 
 <style scoped>
+.builder-cursor-hint{position:absolute;z-index:30;pointer-events:none;max-width:250px;padding:7px 10px;border:1px solid #5481a8;border-radius:7px;background:rgba(12,20,34,.94);color:#d6eaff;font-size:12px;box-shadow:0 3px 12px #0006}.builder-cursor-hint.invalid{border-color:#ed7767;color:#ffc3bb}.pan-cursor{cursor:grab!important}.pan-cursor:active{cursor:grabbing!important}
+
 .map-canvas-container {
   position: relative;
   width: 100%;

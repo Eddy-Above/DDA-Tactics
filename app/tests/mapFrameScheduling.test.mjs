@@ -67,7 +67,7 @@ test('leaving the canvas cancels a queued hover and redraws the cleared preview'
   const group = new THREE.Group()
   group.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()))
   const changes = []
-  const deps = { ...h, pendingPointerEvent: null, hoverGhostGroup: group,
+  const deps = { ...h, editorHint: ref(null), pendingPointerEvent: null, hoverGhostGroup: group,
     setHoveredTarget: value => changes.push(value), tokenDrag: { isPressed: () => false },
     movementGhost: ref({}), movementGhostOverlay: ref({}), movementGapLabel: ref({}), hoveredMoveScreen: ref({}) }
   const handlers = loadPageFunctions('components/MapCanvas.vue', ['queueMouseMove', 'onCanvasLeave', 'animate'], deps)
