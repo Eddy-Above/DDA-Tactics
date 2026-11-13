@@ -46,6 +46,8 @@
 
     <div v-if="loading" class="text-center py-12 text-digimon-dark-400">Loading maps...</div>
 
+    <div v-else-if="initialLoadError" role="alert" class="text-red-300 py-8">Maps could not be loaded. Reload this page to try again.</div>
+
     <div v-else-if="maps.length === 0" class="text-center py-16">
       <div class="text-5xl mb-4">🗺</div>
       <p class="text-digimon-dark-400">No maps yet. Create your first map!</p>
@@ -117,6 +119,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import { mapContentSizeLabel } from '~/utils/mapContentBounds'
 import { useMap } from '~/composables/useMap'
 import { useLibraryImportExport } from '~/composables/useLibraryImportExport'
@@ -129,7 +132,15 @@ const campaignId = computed(() => route.params.campaignId as string)
 const { maps, loading, fetchMaps, createMap, deleteMap } = useMap()
 const { exportMap, exportMaps, importMaps } = useLibraryImportExport()
 
-await fetchMaps(campaignId.value)
+// Forward the viewer's cookies during SSR and hydrate from that same result.
+// A setup-only $fetch ran twice, so a failed unauthenticated SSR request could
+// render the empty state while the browser hydrated a populated grid.
+const requestFetch = useRequestFetch()
+const { data: initialMaps, error: initialLoadError } = await useAsyncData(
+  () => `campaign-maps:${campaignId.value}`,
+  () => requestFetch<GameMap[]>('/api/maps', { query: { campaignId: campaignId.value } }),
+)
+watch(initialMaps, value => { maps.value = value ?? [] }, { immediate: true })
 
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)

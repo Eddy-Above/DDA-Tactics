@@ -10,6 +10,7 @@ function fixture(canvasDisposed = false) {
   const frames = [], pointers = []
   const calls = { render: 0, overlays: 0, highlights: 0, paths: 0, reticules: 0 }
   const deps = {
+    props: { isDm: false },
     rafId: 0, canvasDisposed, renderer: { render: () => calls.render++ }, camera: new THREE.PerspectiveCamera(), scene: {}, terrain: null,
     requestAnimationFrame: callback => { frames.push(callback); return frames.length },
     controls: { update: () => {} }, keysHeld: new Set(), azimuthTween: null,

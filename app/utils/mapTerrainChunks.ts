@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { attachTerrainMaterialBlend } from './terrainMaterialBlend'
+import { attachTerrainMaterialBlend, attachBatchedTerrainMaterialBlend, type TerrainNeighbours } from './terrainMaterialBlend'
 import { toRaw } from 'vue'
 import type { GameMap, MapGroundTile, MapSpaceTile, MapVoxel, Vec3 } from '~/types'
 import { ELEMENT_COLORS } from '~/types'
@@ -15,7 +15,7 @@ export function terrainChunkKey(cell: Vec3): string {
 }
 
 const key = (cell: Vec3) => `${cell.x},${cell.y},${cell.z}`
-const noRaycast = () => {}
+const noRaycast = () => { }
 const FACE_OFFSETS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
 const TERRAIN_COLLECTIONS = ['groundTiles', 'spaceTiles', 'voxels'] as const
 
@@ -62,6 +62,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
   pickProxy.geometry.dispose()
   let transparentMesh: THREE.BatchedMesh | null = null
   let transparentMaterial: THREE.MeshLambertMaterial | null = null
+  let transparentBlend: ReturnType<typeof attachBatchedTerrainMaterialBlend> | null = null
   let mapId: string | null = null
   let revision = 0
   let clipY = 20
@@ -116,9 +117,11 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     if (!state) {
       const group = new THREE.Group()
       group.userData = { floorY: cell.y, terrainChunk: chunkKey }
-      state = { group, data: blankData(), releases: [], transparentKeys: [], opaqueSourceKeys: [], hasTransparent: false,
+      state = {
+        group, data: blankData(), releases: [], transparentKeys: [], opaqueSourceKeys: [], hasTransparent: false,
         bounds: new THREE.Box3(new THREE.Vector3(Math.floor(cell.x / 16) * 16, cell.y, Math.floor(cell.z / 16) * 16),
-          new THREE.Vector3(Math.floor(cell.x / 16) * 16 + 16, cell.y + 1, Math.floor(cell.z / 16) * 16 + 16)) }
+          new THREE.Vector3(Math.floor(cell.x / 16) * 16 + 16, cell.y + 1, Math.floor(cell.z / 16) * 16 + 16))
+      }
       states.set(chunkKey, state)
       chunks.set(chunkKey, group)
       scene.add(group)
@@ -189,6 +192,7 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
       transparentMesh.perObjectFrustumCulled = true
       transparentMesh.userData = { terrainTransparentBatch: true }
       transparentMesh.raycast = noRaycast
+      transparentBlend = attachBatchedTerrainMaterialBlend(transparentMesh)
       scene.add(transparentMesh)
     }
     return transparentMesh
@@ -253,6 +257,32 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     for (let i = 0; i < base.length; i += 3) positions.push(base[i] + x, base[i + 1] + y, base[i + 2] + z)
   }
 
+  function canBlendVoxel(voxel: MapVoxel): boolean {
+    // Windows, glass and light sources are crisp gameplay features. Natural
+    // translucent terrain may mix RGB while retaining its own alpha and sorting.
+    const material = getVoxelMaterialDefinition(voxel)
+    return !voxel.feature && material.id !== 'glass' && material.id !== 'light' && !getVoxelLightSource(voxel)
+  }
+
+  function neighbourPalette(cell: Vec3, colour: number, kind: 'ground' | 'voxel'): TerrainNeighbours {
+    if (kind === 'voxel' && !canBlendVoxel(cell as MapVoxel)) return []
+    return FACE_OFFSETS.map(([dx, dy, dz]) => {
+      if (kind === 'ground' && dy !== 0) return undefined
+      const position = { x: cell.x + dx!, y: cell.y + dy!, z: cell.z + dz! }
+      if (kind === 'ground') {
+        const other = indices.groundTiles.get(key(position))
+        if (!other) return undefined
+        const next = other.materialId ? getVoxelMaterialDefinition(other.materialId).color : ELEMENT_COLORS[other.element]
+        return next !== colour ? next : undefined
+      }
+      const other = indices.voxels.get(key(position))
+      if (!other || !canBlendVoxel(other) || (getVoxelOpacity(other) < 1) !== (getVoxelOpacity(cell as MapVoxel) < 1)) return undefined
+      if (getVoxelOpacity(other) < 1 && other.y > clipY) return undefined
+      const next = getVoxelColor(other)
+      return next !== colour ? next : undefined
+    })
+  }
+
   function addTransparentOutline(voxel: MapVoxel, chunkKey: string, positions: number[], visited: Set<string>) {
     // Check all four quadrants around each edge against the global voxel index.
     // This removes flat seams at chunk boundaries and gives each crease one owner.
@@ -305,28 +335,24 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     const litMaterial = (transparent = false, depthWrite = true) => () => new THREE.MeshLambertMaterial({ color: 0xffffff, transparent, depthWrite })
     const planeQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
 
-    const neighbourPalette=(cell:Vec3,colour:number,kind:'ground'|'voxel')=>FACE_OFFSETS.map(([dx,dy,dz])=>{
-      if(kind==='ground'&&dy!==0)return undefined
-      const other=kind==='ground'?indices.groundTiles.get(key({x:cell.x+dx!,y:cell.y+dy!,z:cell.z+dz!})):indices.voxels.get(key({x:cell.x+dx!,y:cell.y+dy!,z:cell.z+dz!}))
-      if(!other)return undefined
-      if(kind==='voxel'&&getVoxelOpacity(other as MapVoxel)<1)return undefined
-      const next=kind==='voxel'?getVoxelColor(other as MapVoxel):other.materialId?getVoxelMaterialDefinition(other.materialId).color:ELEMENT_COLORS[(other as MapGroundTile).element]
-      return next!==colour?next:undefined
-    })
     for (const tile of state.data.groundTiles.values()) {
       const color = tile.materialId ? getVoxelMaterialDefinition(tile.materialId).color : ELEMENT_COLORS[tile.element] ?? 0x888888
       add('ground', { geometryKey: 'ground', materialKey: 'lambert:opaque', geometry: groundGeo, material: litMaterial(), castShadow: false, spawn: false },
-        { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5), color, neighbours:neighbourPalette(tile,color,'ground') })
+        { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5), color, neighbours: neighbourPalette(tile, color, 'ground') })
       addTranslatedEdges(groundEdges, groundBaseEdges(), tile.x + 0.5, tile.y + TILE_H / 2, tile.z + 0.5)
 
-      if (tile.isSpawnPoint) add('ground-spawn', { geometryKey: 'ground-spawn', materialKey: 'spawn:ground', geometry: () => new THREE.PlaneGeometry(0.7, 0.7),
-        material: () => new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.4, depthWrite: false }), castShadow: false, spawn: true },
-      { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H + 0.003, tile.z + 0.5), quaternion: planeQuaternion })
+      if (tile.isSpawnPoint) add('ground-spawn', {
+        geometryKey: 'ground-spawn', materialKey: 'spawn:ground', geometry: () => new THREE.PlaneGeometry(0.7, 0.7),
+        material: () => new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.4, depthWrite: false }), castShadow: false, spawn: true
+      },
+        { position: new THREE.Vector3(tile.x + 0.5, tile.y + TILE_H + 0.003, tile.z + 0.5), quaternion: planeQuaternion })
     }
 
-    for (const tile of state.data.spaceTiles.values()) add('space', { geometryKey: 'cube:63', materialKey: 'space', geometry: () => new THREE.BoxGeometry(1, 1, 1),
-      material: () => new THREE.MeshBasicMaterial({ color: 0x334455, wireframe: true, opacity: 0.25, transparent: true }), castShadow: false, spawn: false },
-    { position: new THREE.Vector3(tile.x + 0.5, tile.y + 0.5, tile.z + 0.5) })
+    for (const tile of state.data.spaceTiles.values()) add('space', {
+      geometryKey: 'cube:63', materialKey: 'space', geometry: () => new THREE.BoxGeometry(1, 1, 1),
+      material: () => new THREE.MeshBasicMaterial({ color: 0x334455, wireframe: true, opacity: 0.25, transparent: true }), castShadow: false, spawn: false
+    },
+      { position: new THREE.Vector3(tile.x + 0.5, tile.y + 0.5, tile.z + 0.5) })
 
     for (const voxel of state.data.voxels.values()) {
       const opacity = getVoxelOpacity(voxel)
@@ -340,10 +366,14 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
       } else {
         const transparent = Boolean(getVoxelMaterialDefinition(voxel).transparent)
         const materialKey = `lambert:${transparent ? 'transparent-solid' : 'opaque'}`
-        add(`voxel:${geometryKey}:${materialKey}`, { geometryKey, materialKey, geometry: shapeGeometry,
-          material: litMaterial(transparent), castShadow: true, spawn: false },
-        { position: new THREE.Vector3(voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5), color,
-          lightVoxel: getVoxelLightSource(voxel) ? voxel : undefined, neighbours:neighbourPalette(voxel,color,'voxel') })
+        add(`voxel:${geometryKey}:${materialKey}`, {
+          geometryKey, materialKey, geometry: shapeGeometry,
+          material: litMaterial(transparent), castShadow: true, spawn: false
+        },
+          {
+            position: new THREE.Vector3(voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5), color,
+            lightVoxel: getVoxelLightSource(voxel) ? voxel : undefined, neighbours: neighbourPalette(voxel, color, 'voxel')
+          })
       }
       if (opacity >= 1 || voxel.shape === 'ramp') {
         addTranslatedEdges(voxelEdges, baseEdgePositions(geometryKey, shapeGeometry), voxel.x + 0.5, voxel.y + 0.5, voxel.z + 0.5)
@@ -352,10 +382,14 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
         const isRamp = voxel.shape === 'ramp'
         const quaternion = isRamp
           ? new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 4, rampRotationY(voxel.rampDirection), 0, 'YXZ')) : planeQuaternion
-        add('voxel-spawn', { geometryKey: 'voxel-spawn', materialKey: 'spawn:voxel', geometry: () => new THREE.PlaneGeometry(0.72, 0.72),
-          material: () => new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.48, depthWrite: false }), castShadow: false, spawn: true },
-        { position: new THREE.Vector3(voxel.x + 0.5, voxel.y + (isRamp ? 0.5 : 1) + 0.004, voxel.z + 0.5), quaternion,
-          scale: isRamp ? new THREE.Vector3(1, Math.SQRT2, 1) : undefined })
+        add('voxel-spawn', {
+          geometryKey: 'voxel-spawn', materialKey: 'spawn:voxel', geometry: () => new THREE.PlaneGeometry(0.72, 0.72),
+          material: () => new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.48, depthWrite: false }), castShadow: false, spawn: true
+        },
+          {
+            position: new THREE.Vector3(voxel.x + 0.5, voxel.y + (isRamp ? 0.5 : 1) + 0.004, voxel.z + 0.5), quaternion,
+            scale: isRamp ? new THREE.Vector3(1, Math.SQRT2, 1) : undefined
+          })
       }
     }
 
@@ -374,10 +408,10 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
           state.opaqueSourceKeys.push(cellKey)
         }
       })
-      const blend=attachTerrainMaterialBlend(mesh,bucket.instances.map(instance=>instance.neighbours??[]))
-      if(blend){
+      const blend = attachTerrainMaterialBlend(mesh, bucket.instances.map(instance => instance.neighbours ?? []))
+      if (blend) {
         blendTextures.add(blend.texture)
-        state.releases.push(()=>{freeGeometry(blend.geometry);freeMaterial(blend.material);blend.texture.dispose();blendTextures.delete(blend.texture)})
+        state.releases.push(() => { freeGeometry(blend.geometry); freeMaterial(blend.material); blend.texture.dispose(); blendTextures.delete(blend.texture) })
       }
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
@@ -422,6 +456,8 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     for (const collection of TERRAIN_COLLECTIONS) indices[collection].clear()
     if (transparentMesh) { scene.remove(transparentMesh); transparentMesh.dispose(); disposedGeometries++ }
     if (transparentMaterial) freeMaterial(transparentMaterial)
+    transparentBlend?.dispose()
+    transparentBlend = null
     transparentMesh = null; transparentMaterial = null
     transparentInstances.clear(); transparentGeometryIds.clear()
   }
@@ -433,6 +469,11 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
       if (!state) continue
       if (!removeEmptyChunk(chunkKey, state)) buildChunk(chunkKey, state)
       lastRebuiltChunkKeys.push(chunkKey)
+    }
+    if (transparentBlend) {
+      const rows = new Map<number, TerrainNeighbours>()
+      for (const { id, voxel } of transparentInstances.values()) rows.set(id, neighbourPalette(voxel, getVoxelColor(voxel), 'voxel'))
+      transparentBlend.update(rows)
     }
   }
 
@@ -468,15 +509,15 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
     if (!incremental) {
       clear()
       for (const collection of TERRAIN_COLLECTIONS) for (const cell of map[collection] ?? []) {
-        ;(indices[collection] as Map<string, TerrainCell>).set(key(cell), cell)
-        ;(ensureState(cell).data[collection] as Map<string, TerrainCell>).set(key(cell), cell)
+        ; (indices[collection] as Map<string, TerrainCell>).set(key(cell), cell)
+          ; (ensureState(cell).data[collection] as Map<string, TerrainCell>).set(key(cell), cell)
       }
       rebuildDirty(new Set(states.keys()))
     } else {
       const changed = TERRAIN_COLLECTIONS.filter(collection => change.collections.includes(collection))
       if (changed.length) {
         for (const collection of changed) {
-          ;(indices[collection] as Map<string, TerrainCell>) = new Map((map[collection] ?? []).map(cell => [key(cell), cell]))
+          ; (indices[collection] as Map<string, TerrainCell>) = new Map((map[collection] ?? []).map(cell => [key(cell), cell]))
         }
         const dirty = new Set<string>()
         for (const cell of change.cells) {
@@ -555,10 +596,12 @@ export function createMapTerrainChunks(options: MapTerrainOptions) {
       if (state.group.visible && child.visible) drawCalls++
       if (child instanceof THREE.InstancedMesh) instances += child.count
     }
-    return { chunks: chunks.size, objects, drawCalls, instances, transparentInstances: transparentInstances.size,
+    return {
+      chunks: chunks.size, objects, drawCalls, instances, transparentInstances: transparentInstances.size,
       geometries: geometries.size + proxyGeometryCache.size + (transparentMesh ? 1 : 0), materials: materials.size + (transparentMaterial ? 1 : 0),
-      textures: blendTextures.size, builtChunks, disposedGeometries, disposedMaterials, lastRebuiltChunkKeys: [...lastRebuiltChunkKeys],
-      lightSources: voxelLights.stats().lights, lightSourceCells: voxelLights.stats().cells }
+      textures: blendTextures.size + (transparentBlend ? 1 : 0), builtChunks, disposedGeometries, disposedMaterials, lastRebuiltChunkKeys: [...lastRebuiltChunkKeys],
+      lightSources: voxelLights.stats().lights, lightSourceCells: voxelLights.stats().cells
+    }
   }
 
   return { chunks, sync, setClipY, setSpawnVisible, pick, isOccluded, updateAnimation: voxelLights.updateAnimation, dispose, stats }

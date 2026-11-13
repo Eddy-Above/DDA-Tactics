@@ -41,7 +41,7 @@ export function loadTypeScriptWithMocks(relativePath, mocks) {
 }
 
 /** Compile an SFC in memory for rendering with Vue's installed SSR renderer. */
-export function loadVueComponent(relativePath) {
+export function loadVueComponent(relativePath, options = {}) {
   const filename = resolve(appDirectory, relativePath)
   const { descriptor, errors } = parse(readFileSync(filename, 'utf8'), { filename })
   if (errors.length) throw errors[0]
@@ -49,6 +49,7 @@ export function loadVueComponent(relativePath) {
   const compiled = compileScript(descriptor, {
     id: relativePath.replaceAll('\\', '/'),
     inlineTemplate: true,
+    ...options,
   })
 
   return jiti.evalModule(compiled.content, {

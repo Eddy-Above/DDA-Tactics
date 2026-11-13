@@ -119,17 +119,14 @@ test('the Ramp toolbar exposes draw modes, elements and a selected uphill direct
   const original = globalThis.computed
   globalThis.computed = computed
   try {
-    const html = await renderToString(createSSRApp(toolbar, { activeTool: 'ramp', drawMode: 'square',
-      elementBrush: 'earth', rampDirection: 'west', currentEditY: 0, canUndo: false, canRedo: false }))
-    assert.match(html, /title="Ramp"/)
-    assert.match(html, /title="Line"/)
-    assert.match(html, /title="Earth"/)
-    assert.match(html, /title="Sand"/)
-    assert.match(html, /title="Snow"/)
-    assert.match(html, /title="Soft Metal"/)
-    assert.match(html, /title="Flickering Light"/)
+    const { editor } = fixture()
+    editor.selectTool('ramp'); editor.elementBrush.value='earth'; editor.rampDirection.value='west'
+    const html = await renderToString(createSSRApp(toolbar, { editor }))
+    assert.match(html, /aria-pressed="true">Ramp/)
+    assert.match(html, /<option value="line">Line/)
+    for (const material of ['earth','sand','snow','soft-metal','flickering-light']) assert.ok(html.includes(`value="${material}"`))
     assert.match(html, /Uphill/)
-    assert.match(html, /<select[^>]*value="west"/)
+    assert.match(html, /<option value="west" selected/)
   } finally {
     if (original === undefined) delete globalThis.computed
     else globalThis.computed = original

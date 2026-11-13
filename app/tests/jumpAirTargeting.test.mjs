@@ -29,6 +29,7 @@ function fixture(isDm) {
   const events = []
   const movingParticipantId = ref('partner')
   const deps = {
+    spacePanning: ref(false), panGesture: false, editorHint: ref(null),
     props, THREE, camera, controls, movement,
     canvasRef: ref({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 1000 }) }),
     containerRef: ref({ clientWidth: 1000, clientHeight: 1000 }),

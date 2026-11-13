@@ -5,7 +5,9 @@ import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 const original = new Map(['getCookie', 'createError'].map(name => [name, globalThis[name]]))
 afterEach(() => { for (const [name, value] of original) value === undefined ? delete globalThis[name] : globalThis[name] = value })
 
-test('account session expiry travels through campaign access to the private WebSocket deadline', async () => {
+test('account session expiry travels through campaign access to the private WebSocket deadline', async t => {
+  // Module compilation under a busy full-suite run must not expire the fixture.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   globalThis.getCookie = () => 'session'
   globalThis.createError = options => Object.assign(new Error(options.message), options)
   const expiresAt = Date.now() + 1000

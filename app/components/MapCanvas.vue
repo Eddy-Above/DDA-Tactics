@@ -101,8 +101,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import MapRadialMenu from './MapRadialMenu.vue'
 import { mapContentView, updateMapContentBounds } from '~/utils/mapContentBounds'
-import { drawCells, selectionBox, transformFragment, fragmentCollision, fragmentBounds, type DrawMode, type SelectionBox, type MapStamp } from '~/utils/mapBuilder'
+import { drawCells, selectionBox, transformFragment, fragmentCollision, fragmentBounds, isQuarterTurns, MAX_DRAW_CELLS, type DrawMode, type SelectionBox, type MapStamp, type MapFragment } from '~/utils/mapBuilder'
 import { displayImageUrl } from '~/utils/imageFallback'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -151,6 +153,7 @@ const props = defineProps<{
   roundBrush?: boolean
   planeLock?: boolean
   selection?: SelectionBox | null
+  selectionPreview?: { content: MapFragment | null; changed?: boolean; moveError: string | null; duplicateError: string | null } | null
   stamp?: MapStamp | null
   stampTurns?: number
   roomHeight?: number
@@ -307,8 +310,7 @@ const radialPlayerOutOfActions = computed(() => {
 function clashRadialButtons(p: CombatParticipant | null):
   | { action: ClashRadialAction, label: string, disabled: boolean }[]
   | 'controlled'
-  | null
-{
+  | null {
   const clash = p?.clash
   if (!clash) return null
   if (clash.clashCheckNeeded) {
@@ -442,9 +444,11 @@ const radialItems = computed<MapRadialItem[]>(() => {
     }
     items.push({ id: 'clash', label: 'Clash', icon: 'clash', disabled: outOfActions })
     const doors = isNpc ? npcDoorButtons.value : playerDoorButtons.value
-    if (doors.length) items.push({ id: 'doors', label: 'Doors', icon: 'door', children: doors.map(door => ({
-      id: `door:${door.id}`, label: door.label, icon: 'door', description: 'Free action',
-    })) })
+    if (doors.length) items.push({
+      id: 'doors', label: 'Doors', icon: 'door', children: doors.map(door => ({
+        id: `door:${door.id}`, label: door.label, icon: 'door', description: 'Free action',
+      }))
+    })
   }
   if (!isNpc && playerRadialParticipantType.value === 'digimon') {
     items.push(radialChoiceGroup('digivolve', digivolveDisabled.value))
@@ -643,26 +647,30 @@ let dragStartHit: EditHit | null = null
 const spacePanning = ref(false)
 let panGesture = false
 let strokePoints: Vec3[] = []
-const editorHint = ref<{x:number;y:number;text:string;invalid:boolean}|null>(null)
+const brushPreview = { cells: new Map<string, Vec3>(), bounds: null as SelectionBox | null, invalid: false }
+const editorHint = ref<{ x: number; y: number; text: string; invalid: boolean } | null>(null)
 let selectionOutline: THREE.Box3Helper | null = null
+let selectionPreviewGroup: THREE.Group | null = null
 let topDown = false
 let isoCorner = 0
 function cancelEditorGesture() {
-  dragStartHit=null;strokePoints=[];panGesture=false;rightDragActive=false
-  editorHint.value=null
-  if(hoverGhostGroup)clearMapGroup(hoverGhostGroup)
+  dragStartHit = null; strokePoints = []; panGesture = false; rightDragActive = false
+  brushPreview.cells.clear(); brushPreview.bounds = null; brushPreview.invalid = false
+  editorHint.value = null
+  if (hoverGhostGroup) clearMapGroup(hoverGhostGroup)
 }
 function syncEditorCameraControls() {
-  if(!controls)return
-  controls.enabled=true
-  controls.mouseButtons.LEFT=(spacePanning.value||props.activeTool==='select'?THREE.MOUSE.PAN:undefined) as any
+  if (!controls) return
+  controls.enabled = true
+  controls.mouseButtons.LEFT = (spacePanning.value || props.activeTool === 'select' ? THREE.MOUSE.PAN : undefined) as any
 }
 function resetEditorInput() {
-  keysHeld.clear();spacePanning.value=false;cancelEditorGesture()
+  keysHeld.clear(); spacePanning.value = false; cancelEditorGesture()
+  tokenDrag.pointerCancel()
   syncEditorCameraControls()
   requestRender()
 }
-function editorWindowMouseUp(event:MouseEvent) { if(dragStartHit || panGesture || rightDragActive) onMouseUp(event) }
+function editorWindowMouseUp(event: MouseEvent) { if (dragStartHit || panGesture || rightDragActive) onMouseUp(event) }
 
 let rightDragActive = false
 let rightDragLastX = 0
@@ -670,7 +678,7 @@ let azimuthTween: { from: number; to: number; start: number; duration: number } 
 const AZIMUTH_STEP = Math.PI / 4      // Q/E turn size
 const AZIMUTH_TWEEN_MS = 220
 const keysHeld = new Set<string>()
-const clipY = ref(Math.max(20,...Object.values(props.map?.contentBounds?.collections??{}).map(bounds=>bounds?.maxY??20)))
+const clipY = ref(Math.max(20, ...Object.values(props.map?.contentBounds?.collections ?? {}).map(bounds => bounds?.maxY ?? 20)))
 const ghostWalls = ref(false)
 const TILE_SIZE = 1
 // Shared with the line-of-sight model (utils/lineOfSight.ts) so targeting matches what's drawn.
@@ -679,12 +687,12 @@ const { TILE_H, WALL_H, WINDOW_H, WINDOW_FRAME } = MAP_GEOMETRY
 // imageScale = visual portrait size in world units (tiny/small/medium share 1-tile space but smaller images)
 function getSizeParams(size: DigimonSize, gig?: { width: number; height: number; depth: number } | null) {
   switch (size) {
-    case 'tiny':     return { tileCount: 1, imageScale: 0.5 }
-    case 'small':    return { tileCount: 1, imageScale: 0.7 }
-    case 'large':    return { tileCount: 2, imageScale: 2.0 }
-    case 'huge':     return { tileCount: 3, imageScale: 3.0 }
+    case 'tiny': return { tileCount: 1, imageScale: 0.5 }
+    case 'small': return { tileCount: 1, imageScale: 0.7 }
+    case 'large': return { tileCount: 2, imageScale: 2.0 }
+    case 'huge': return { tileCount: 3, imageScale: 3.0 }
     case 'gigantic': return { tileCount: gig?.width ?? 4, imageScale: gig?.width ?? 4.0 }
-    default:         return { tileCount: 1, imageScale: 1.0 }  // medium
+    default: return { tileCount: 1, imageScale: 1.0 }  // medium
   }
 }
 
@@ -817,7 +825,8 @@ onUnmounted(() => {
   window.removeEventListener('keyup', onKeyUp)
   window.removeEventListener('blur', resetEditorInput)
   window.removeEventListener('mouseup', editorWindowMouseUp)
-  if(selectionOutline){ scene.remove(selectionOutline);selectionOutline.geometry.dispose();(selectionOutline.material as THREE.Material).dispose() }
+  if (selectionOutline) { scene.remove(selectionOutline); selectionOutline.geometry.dispose(); (selectionOutline.material as THREE.Material).dispose() }
+  if (selectionPreviewGroup) { scene.remove(selectionPreviewGroup); clearMapGroup(selectionPreviewGroup) }
   canvasRef.value?.removeEventListener('pointerdown', onTokenPointerDown, { capture: true })
   canvasRef.value?.removeEventListener('wheel', queueCanvasWheel, { capture: true })
   window.removeEventListener('pointermove', onTokenPointerMove)
@@ -920,7 +929,7 @@ function tickAzimuthTween() {
   if (t >= 1) azimuthTween = null
 }
 
-// ── Element blend texture ──────────────────────────────────────────────────
+// ── Chunked terrain and structure geometry ──────────────────────────────────
 function buildMap() {
   losIndex = null
   if (!props.map) {
@@ -952,7 +961,7 @@ function buildMap() {
 
   // Walls — frame-only when a window or door is present
   const walledWindowIds = new Set(map.windows.map(w => w.wallId))
-  const walledDoorIds   = new Set(map.doors.map(d => d.wallId))
+  const walledDoorIds = new Set(map.doors.map(d => d.wallId))
   const { DOOR_H, DOOR_W, PILLAR_W } = MAP_GEOMETRY
   const DOOR_HDR = WALL_H - DOOR_H               // 0.1
 
@@ -1201,14 +1210,14 @@ function updateCharacterOverlays() {
     const cz = pos.z + 0.5 + centerOffset
 
     const charHeight = tileCount * TILE_SIZE
-    const charMidY   = pos.y * TILE_SIZE + TILE_H + charHeight * 0.5
-    const center     = new THREE.Vector3(cx, charMidY, cz)
+    const charMidY = pos.y * TILE_SIZE + TILE_H + charHeight * 0.5
+    const center = new THREE.Vector3(cx, charMidY, cz)
     const distToChar = camera.position.distanceTo(center)
 
     // Occlusion: raycast camera → character mid-body, skip if any wall blocks.
     // Ghost Walls mode disables occlusion so tokens show through walls.
     if (!ghostWalls.value) {
-      const dir        = center.clone().sub(camera.position).normalize()
+      const dir = center.clone().sub(camera.position).normalize()
       const occRay = occludeRaycaster
       occRay.set(camera.position, dir)
       occRay.near = 0
@@ -1220,7 +1229,7 @@ function updateCharacterOverlays() {
         if (!entry) return true
         if (!windowWallIds.has(entry.wallId)) return true
         const floorY = entry.cell.y * TILE_SIZE
-        const hitY   = hit.point.y
+        const hitY = hit.point.y
         if (hitY >= floorY + WINDOW_FRAME && hitY <= floorY + WINDOW_FRAME + WINDOW_H) return false
         return true
       })
@@ -1228,8 +1237,8 @@ function updateCharacterOverlays() {
     }
 
     const edge = center.clone().addScaledVector(camRight, imageScale * 0.45)
-    const sc   = worldToScreen2D(center)
-    const se   = worldToScreen2D(edge)
+    const sc = worldToScreen2D(center)
+    const se = worldToScreen2D(edge)
     if (!sc || !se) continue
 
     const screenRadius = Math.hypot(se.x - sc.x, se.y - sc.y)
@@ -1274,8 +1283,10 @@ function updateMovementGhostOverlay() {
   const edge = worldToScreen2D(center.clone().addScaledVector(right, imageScale * 0.45))
   if (!screen || !edge) return
   const h = Math.max(16, Math.hypot(edge.x - screen.x, edge.y - screen.y) * 2)
-  movementGhostOverlay.value = { x: screen.x, y: screen.y - h / 2, h, spriteUrl: info?.spriteUrl ?? null,
-    initial: (info?.name ?? '?')[0]!, stance: participant.currentStance ?? 'neutral', valid: ghost.valid }
+  movementGhostOverlay.value = {
+    x: screen.x, y: screen.y - h / 2, h, spriteUrl: info?.spriteUrl ?? null,
+    initial: (info?.name ?? '?')[0]!, stance: participant.currentStance ?? 'neutral', valid: ghost.valid
+  }
   const ground = movementGroundBelow(movementGroundIndex.value, ghost.cell, dims)
   if (ground !== null && ground >= ghost.cell.y) return
   const label = worldToScreen2D(movementPreviewCenter(ghost.cell, dims, ground === null ? -0.3 : -(ghost.cell.y - ground) * TILE_SIZE / 2))
@@ -1348,10 +1359,10 @@ function applyKeyMovement() {
   forward.normalize()
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize()
   const move = new THREE.Vector3()
-  if (keysHeld.has('w') || keysHeld.has('W') || keysHeld.has('ArrowUp'))    move.addScaledVector(forward,  speed)
-  if (keysHeld.has('s') || keysHeld.has('S') || keysHeld.has('ArrowDown'))  move.addScaledVector(forward, -speed)
-  if (keysHeld.has('a') || keysHeld.has('A') || keysHeld.has('ArrowLeft'))  move.addScaledVector(right,   -speed)
-  if (keysHeld.has('d') || keysHeld.has('D') || keysHeld.has('ArrowRight')) move.addScaledVector(right,    speed)
+  if (keysHeld.has('w') || keysHeld.has('W') || keysHeld.has('ArrowUp')) move.addScaledVector(forward, speed)
+  if (keysHeld.has('s') || keysHeld.has('S') || keysHeld.has('ArrowDown')) move.addScaledVector(forward, -speed)
+  if (keysHeld.has('a') || keysHeld.has('A') || keysHeld.has('ArrowLeft')) move.addScaledVector(right, -speed)
+  if (keysHeld.has('d') || keysHeld.has('D') || keysHeld.has('ArrowRight')) move.addScaledVector(right, speed)
   if (keysHeld.has('z') || keysHeld.has('Z')) move.y -= speed
   if (keysHeld.has('x') || keysHeld.has('X')) move.y += speed
   if (move.lengthSq() === 0) return
@@ -1361,16 +1372,17 @@ function applyKeyMovement() {
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
-  const target=e.target as HTMLElement|null
-  if(target?.closest?.('input,textarea,select,[contenteditable="true"]')) return
-  if(props.isDm && e.code==='Space') {
+  const target = e.target as HTMLElement | null
+  if (target?.closest?.('input,textarea,select,button,[contenteditable]:not([contenteditable="false"])')) return
+  if (props.isDm && e.code === 'Space') {
     e.preventDefault()
-    if(!spacePanning.value){cancelEditorGesture();spacePanning.value=true;syncEditorCameraControls()}
+    if (tokenDrag.isPressed()) return
+    if (!spacePanning.value) { cancelEditorGesture(); spacePanning.value = true; syncEditorCameraControls() }
     return
   }
-  if(props.isDm && (e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z') {e.preventDefault();emit('editor-action',e.shiftKey?'redo':'undo');return}
-  if(props.isDm && (e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='y') {e.preventDefault();emit('editor-action','redo');return}
-  if(props.isDm && e.key==='Escape' && dragStartHit){cancelEditorGesture();return}
+  if (props.isDm && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); emit('editor-action', e.shiftKey ? 'redo' : 'undo'); return }
+  if (props.isDm && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); emit('editor-action', 'redo'); return }
+  if (props.isDm && e.key === 'Escape' && dragStartHit) { cancelEditorGesture(); return }
 
   if (e.key === 'Escape') {
     if (tokenDrag.abort()) return   // Esc ends a token drag in progress
@@ -1385,7 +1397,7 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function onKeyUp(e: KeyboardEvent) {
-  if(e.code==='Space'){spacePanning.value=false;syncEditorCameraControls();if(panGesture)swallowNextClick()}
+  if (e.code === 'Space' && spacePanning.value) { spacePanning.value = false; syncEditorCameraControls(); if (panGesture) swallowNextClick() }
   keysHeld.delete(e.key)
 }
 
@@ -1402,12 +1414,16 @@ function invalidateFrame() {
 }
 
 function queueMouseMove(event: MouseEvent) {
+  // Keep every bend of a stroke; only the expensive ghost rendering is frame-coalesced.
+  if (props.isDm && dragStartHit && props.drawMode === 'brush' && !spacePanning.value && !panGesture) {
+    recordBrushPoint(event)
+  }
   pendingPointerEvent = event
   requestRender()
 }
 
 function onCanvasLeave() {
-  editorHint.value=null
+  editorHint.value = null
   pendingPointerEvent = null
   setHoveredTarget(null)
   if (!tokenDrag.isPressed()) {
@@ -1819,7 +1835,7 @@ function currentLosIndex(): LosIndex | null {
   if (losIndex && (losIndex as LosIndex & { canSeeDarkness?: boolean }).canSeeDarkness !== canSeeDarkness) losIndex = null
   if (!losIndex && props.map) {
     losIndex = buildLosIndex(props.map, new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId)), { canSeeDarkness })
-    ;(losIndex as LosIndex & { canSeeDarkness?: boolean }).canSeeDarkness = canSeeDarkness
+      ; (losIndex as LosIndex & { canSeeDarkness?: boolean }).canSeeDarkness = canSeeDarkness
   }
   return losIndex
 }
@@ -2006,6 +2022,7 @@ function setMouseFromEvent(event: MouseEvent) {
 }
 
 function planeCell(event: MouseEvent, level = props.currentEditY): Vec3 | null {
+  if (!Number.isSafeInteger(level)) return null
   setMouseFromEvent(event)
   const groundY = level * TILE_SIZE + TILE_H
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY)
@@ -2014,26 +2031,31 @@ function planeCell(event: MouseEvent, level = props.currentEditY): Vec3 | null {
   return { x: Math.floor(target.x), y: level, z: Math.floor(target.z) }
 }
 
-function editorCell(event:MouseEvent):Vec3|null {
-  if(props.planeLock||!['voxel','ramp','stairs','add-ground','ceiling','stamp','paint-element','eyedropper'].includes(props.activeTool)) return planeCell(event)
-  const hit=getIntersection(event).find(h=>['voxel','ground'].includes(h.object.userData.type))
-  if(!hit)return planeCell(event,dragStartHit&&'cell' in dragStartHit?dragStartHit.cell.y:props.currentEditY)
-  const cell=hit.object.userData.voxel??hit.object.userData.tile
-  if(!cell)return planeCell(event)
-  if(props.activeTool==='paint-element'||props.activeTool==='eyedropper')return {x:cell.x,y:cell.y,z:cell.z}
-  if(hit.object.userData.type==='ground')return {x:cell.x,y:cell.y,z:cell.z}
-  const normal=hit.face?.normal.clone().transformDirection(hit.object.matrixWorld)
-  if(!normal)return planeCell(event)
-  const axis=Math.abs(normal.y)>=Math.abs(normal.x)&&Math.abs(normal.y)>=Math.abs(normal.z)?'y':Math.abs(normal.x)>=Math.abs(normal.z)?'x':'z'
-  return {x:cell.x+(axis==='x'?Math.sign(normal.x):0),y:cell.y+(axis==='y'?Math.sign(normal.y):0),z:cell.z+(axis==='z'?Math.sign(normal.z):0)}
+function editorCell(event: MouseEvent): Vec3 | null {
+  const placementTools = ['voxel', 'ramp', 'stairs', 'add-ground', 'ceiling', 'stamp']
+  if ((props.planeLock && placementTools.includes(props.activeTool)) || ![...placementTools, 'paint-element', 'eyedropper', 'spawn', 'delete'].includes(props.activeTool)) return planeCell(event)
+  const hit = getIntersection(event).find(h => ['voxel', 'ground'].includes(h.object.userData.type))
+  if (!hit) return planeCell(event, dragStartHit && 'cell' in dragStartHit ? dragStartHit.cell.y : props.currentEditY)
+  const cell = hit.object.userData.voxel ?? hit.object.userData.tile
+  if (!cell) return planeCell(event)
+  if (['paint-element', 'eyedropper', 'spawn', 'delete'].includes(props.activeTool)) return { x: cell.x, y: cell.y, z: cell.z }
+  const normal = hit.face?.normal.clone().transformDirection(hit.object.matrixWorld)
+  if (hit.object.userData.type === 'ground') {
+    if (!normal || normal.y > 0.5) return { x: cell.x, y: cell.y, z: cell.z }
+    if (normal.y < -.5) return { x: cell.x, y: cell.y - 1, z: cell.z }
+    return { x: cell.x + Math.sign(normal.x), y: cell.y, z: cell.z + Math.sign(normal.z) }
+  }
+  if (!normal) return planeCell(event)
+  const axis = Math.abs(normal.y) >= Math.abs(normal.x) && Math.abs(normal.y) >= Math.abs(normal.z) ? 'y' : Math.abs(normal.x) >= Math.abs(normal.z) ? 'x' : 'z'
+  return { x: cell.x + (axis === 'x' ? Math.sign(normal.x) : 0), y: cell.y + (axis === 'y' ? Math.sign(normal.y) : 0), z: cell.z + (axis === 'z' ? Math.sign(normal.z) : 0) }
 }
 
 function wallEdgeFromEvent(event: MouseEvent): { tile: Vec3; face: WallFace } | null {
-  const wallHit=getIntersection(event).find(h=>h.object.userData.type==='wall'||h.object.userData.type==='door')
-  const id=wallHit?.object.userData.id
-  const door=props.map?.doors.find(d=>d.id===id)
-  const wall=props.map?.walls.find(w=>w.id===(door?.wallId??id))
-  if(wall)return {tile:{x:wall.x,y:wall.y,z:wall.z},face:wall.face}
+  const wallHit = getIntersection(event).find(h => h.object.userData.type === 'wall' || h.object.userData.type === 'door')
+  const id = wallHit?.object.userData.id
+  const door = props.map?.doors.find(d => d.id === id)
+  const wall = props.map?.walls.find(w => w.id === (door?.wallId ?? id))
+  if (wall) return { tile: { x: wall.x, y: wall.y, z: wall.z }, face: wall.face }
   setMouseFromEvent(event)
   const groundY = props.currentEditY * TILE_SIZE + TILE_H
   const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY)
@@ -2044,8 +2066,8 @@ function wallEdgeFromEvent(event: MouseEvent): { tile: Vec3; face: WallFace } | 
   const nearest = [
     { face: 'north' as WallFace, d: dz },
     { face: 'south' as WallFace, d: 1 - dz },
-    { face: 'west'  as WallFace, d: dx },
-    { face: 'east'  as WallFace, d: 1 - dx },
+    { face: 'west' as WallFace, d: dx },
+    { face: 'east' as WallFace, d: 1 - dx },
   ].sort((a, b) => a.d - b.d)[0]
   return { tile: { x: tx, y: props.currentEditY, z: tz }, face: nearest.face }
 }
@@ -2083,7 +2105,7 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
     }
     const voxel = voxelCellFromEvent(event)
     if (voxel) return { type: 'cell', cell: voxel }
-    const cell = planeCell(event)
+    const cell = editorCell(event)
     if (!cell) return null
     return { type: 'cell', cell }
   }
@@ -2093,7 +2115,7 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
 }
 
 function tilesBetween(start: Vec3, end: Vec3): Vec3[] {
-  return drawCells(start,end,props.drawMode,props.brushSize??1,props.roundBrush??false)
+  return drawCells(start, end, props.drawMode, props.brushSize ?? 1, props.roundBrush ?? false)
 }
 
 function makeWallGhostMesh(tile: Vec3, face: WallFace, color: number): THREE.Mesh {
@@ -2136,106 +2158,163 @@ function makeStairGhostMesh(cell: Vec3, color: number): THREE.Mesh {
 }
 
 function updateHoverGhost(event: MouseEvent) {
-  if(!props.isDm || props.activeTool==='select' || spacePanning.value)return
-  const hit=getHoveredHit(event)
-  const cell=hit?('cell' in hit?hit.cell:hit.tile):null
-  const rect=containerRef.value?.getBoundingClientRect()
-  const start=dragStartHit&&'cell' in dragStartHit?dragStartHit.cell:cell
-  const tool=props.activeTool
-  let message=tool.replaceAll('-',' '),invalid=false
-  if(cell) {
-    message+=' ('+[cell.x,cell.y,cell.z].join(', ')+')'
-    if(start&&dragStartHit)message+=' | '+[Math.abs(cell.x-start.x)+1,Math.abs(cell.y-start.y)+1,Math.abs(cell.z-start.z)+1].join(' x ')
-  } else {message+=': point at the editing plane or a visible surface.';invalid=true}
-  if((tool==='door'||tool==='window')&&hit?.type==='wall-edge'&&!props.map?.walls.some(w=>w.x===hit.tile.x&&w.y===hit.tile.y&&w.z===hit.tile.z&&w.face===hit.face)){
-    message='Place a wall first, then click its edge to add a '+tool+'.';invalid=true
+  if (!props.isDm || props.activeTool === 'select' || spacePanning.value) return
+  const hit = getHoveredHit(event)
+  const cell = hit ? ('cell' in hit ? hit.cell : hit.tile) : null
+  const rect = containerRef.value?.getBoundingClientRect()
+  const start = dragStartHit && 'cell' in dragStartHit ? dragStartHit.cell : cell
+  const tool = props.activeTool
+  let message = tool.replaceAll('-', ' '), invalid = false
+  const invalidInputs = !Number.isSafeInteger(props.currentEditY)
+    || (props.drawMode === 'brush' && (!Number.isInteger(props.brushSize ?? 1) || (props.brushSize ?? 1) < 1 || (props.brushSize ?? 1) > 32))
+    || (tool === 'room' && (!Number.isInteger(props.roomHeight ?? 3) || (props.roomHeight ?? 3) < 1 || (props.roomHeight ?? 3) > 64))
+  if (cell) {
+    message += ' (' + [cell.x, cell.y, cell.z].join(', ') + ')'
+    if (start && dragStartHit) message += ' | ' + [Math.abs(cell.x - start.x) + 1, Math.abs(cell.y - start.y) + 1, Math.abs(cell.z - start.z) + 1].join(' x ')
+  } else { message += ': point at the editing plane or a visible surface.'; invalid = true }
+  if ((tool === 'door' || tool === 'window') && hit?.type === 'wall-edge' && !props.map?.walls.some(w => w.x === hit.tile.x && w.y === hit.tile.y && w.z === hit.tile.z && w.face === hit.face)) {
+    message = 'Place a wall first, then click its edge to add a ' + tool + '.'; invalid = true
   }
-  let stampContent: ReturnType<typeof transformFragment>|null=null
-  if(tool==='stamp') {
-    if(!props.stamp){message='Choose a saved stamp in the toolbar.';invalid=true}
-    else if(cell&&props.map){stampContent=transformFragment(props.stamp.content,cell,props.stampTurns??0,()=> 'preview');const collision=fragmentCollision(props.map,stampContent);if(collision){message=collision;invalid=true}}
+  let stampContent: ReturnType<typeof transformFragment> | null = null
+  if (tool === 'stamp') {
+    if (!props.stamp) { message = 'Choose a saved stamp in the toolbar.'; invalid = true }
+    else if (!isQuarterTurns(props.stampTurns ?? 0)) { message = 'Use quarter turns for stamp rotation.'; invalid = true }
+    else if (cell && props.map) {
+      try { stampContent = transformFragment(props.stamp.content, cell, props.stampTurns ?? 0, id => id!); const collision = fragmentCollision(props.map, stampContent); if (collision) { message = collision; invalid = true } }
+      catch (error) { message = (error as Error).message; invalid = true }
+    }
   }
-  if(tool==='eyedropper'&&cell)message='Pick material at ('+[cell.x,cell.y,cell.z].join(', ')+')'
-  editorHint.value={x:Math.max(8,Math.min(event.clientX-(rect?.left??0)+18,(rect?.width??600)-270)),y:Math.max(8,Math.min(event.clientY-(rect?.top??0)+20,(rect?.height??600)-65)),text:message,invalid}
-  const key=JSON.stringify([tool,props.drawMode,props.brushSize,props.roundBrush,props.currentEditY,props.planeLock,props.roomHeight,props.roomFloor,props.stamp?.id,props.stampTurns,props.rampDirection,cell,hit&&'face' in hit?hit.face:null,dragStartHit,strokePoints,getMapGeometryRevision(props.map)])
-  if(!mapPreviewChanged(hoverGhostGroup,key))return
+  if (tool === 'eyedropper' && cell) message = 'Pick material at (' + [cell.x, cell.y, cell.z].join(', ') + ')'
+  if (invalidInputs) { message = 'Use whole numbers: Level Y, brush size 1–32, and wall height 1–64.'; invalid = true }
+  if (brushPreview.invalid) { message = 'This stroke is too large. Shorten it to stay under 100,000 cells.'; invalid = true }
+  editorHint.value = { x: Math.max(8, Math.min(event.clientX - (rect?.left ?? 0) + 18, (rect?.width ?? 600) - 270)), y: Math.max(8, Math.min(event.clientY - (rect?.top ?? 0) + 20, (rect?.height ?? 600) - 65)), text: message, invalid }
+  const key = JSON.stringify([tool, props.drawMode, props.brushSize, props.roundBrush, props.currentEditY, props.planeLock, props.roomHeight, props.roomFloor, props.stamp?.id, props.stampTurns, props.rampDirection, cell, hit && 'face' in hit ? hit.face : null, dragStartHit, strokePoints, getMapGeometryRevision(props.map)])
+  if (!mapPreviewChanged(hoverGhostGroup, key)) return
   clearMapGroup(hoverGhostGroup)
-  if(!cell||!hit)return
-  const color=invalid?0xff5544:tool==='delete'?0xff5544:tool==='area-select'?0xffc766:0x77ccff
-  if(tool==='area-select') {
-    if(start)hoverGhostGroup.add(previewBox(selectionBox(start,cell),color))
+  if (!cell || !hit || invalidInputs) return
+  const color = invalid ? 0xff5544 : tool === 'delete' ? 0xff5544 : tool === 'area-select' ? 0xffc766 : 0x77ccff
+  if (tool === 'area-select') {
+    if (start) hoverGhostGroup.add(previewBox(selectionBox(start, cell), color))
     return
   }
-  if(stampContent) {
-    const bounds=fragmentBounds(stampContent)
-    if(bounds)hoverGhostGroup.add(previewBox(bounds,color))
-    let count=0
-    for(const p of stampContent.voxels){if(count++>=1000)break;hoverGhostGroup.add(makeVoxelGhostMesh(p,color))}
-    for(const p of stampContent.walls){if(count++>=1000)break;hoverGhostGroup.add(makeWallGhostMesh(p,p.face,color))}
-    for(const p of stampContent.groundTiles){if(count++>=1000)break;hoverGhostGroup.add(makeTileGhostMesh(p,color))}
+  if (stampContent) {
+    addFragmentGhosts(hoverGhostGroup, stampContent, color)
     return
   }
-  if(tool==='room'&&start) {
-    const box=selectionBox(start,cell),height=Math.max(1,Math.min(64,props.roomHeight??3))
-    hoverGhostGroup.add(previewBox({min:box.min,max:{...box.max,y:box.min.y+height-1}},color))
-    let count=0
-    for(let y=box.min.y;y<box.min.y+height&&count<1000;y++){
-      for(let x=box.min.x;x<=box.max.x&&count<1000;x++,count+=2){hoverGhostGroup.add(makeWallGhostMesh({x,y,z:box.min.z},'north',color));hoverGhostGroup.add(makeWallGhostMesh({x,y,z:box.max.z},'south',color))}
-      for(let z=box.min.z;z<=box.max.z&&count<1000;z++,count+=2){hoverGhostGroup.add(makeWallGhostMesh({x:box.min.x,y,z},'west',color));hoverGhostGroup.add(makeWallGhostMesh({x:box.max.x,y,z},'east',color))}
+  if (tool === 'room' && start) {
+    const box = selectionBox(start, cell), height = Math.max(1, Math.min(64, props.roomHeight ?? 3))
+    const width = box.max.x - box.min.x + 1, depth = box.max.z - box.min.z + 1
+    if (2 * (width + depth) * height + (props.roomFloor ? width * depth : 0) > MAX_DRAW_CELLS) {
+      if (editorHint.value) editorHint.value = { ...editorHint.value, text: 'Keep each room under 100,000 cells.', invalid: true }
+      hoverGhostGroup.add(previewBox({ min: box.min, max: { ...box.max, y: box.min.y + height - 1 } }, 0xff5544))
+      return
+    }
+    hoverGhostGroup.add(previewBox({ min: box.min, max: { ...box.max, y: box.min.y + height - 1 } }, color))
+    let count = 0
+    for (let y = box.min.y; y < box.min.y + height && count < 1000; y++) {
+      for (let x = box.min.x; x <= box.max.x && count < 1000; x++, count += 2) { hoverGhostGroup.add(makeWallGhostMesh({ x, y, z: box.min.z }, 'north', color)); hoverGhostGroup.add(makeWallGhostMesh({ x, y, z: box.max.z }, 'south', color)) }
+      for (let z = box.min.z; z <= box.max.z && count < 1000; z++, count += 2) { hoverGhostGroup.add(makeWallGhostMesh({ x: box.min.x, y, z }, 'west', color)); hoverGhostGroup.add(makeWallGhostMesh({ x: box.max.x, y, z }, 'east', color)) }
     }
     return
   }
-  if(hit.type==='wall-edge') {
-    const begin=dragStartHit?.type==='wall-edge'?dragStartHit.tile:hit.tile
-    const face=dragStartHit?.type==='wall-edge'?dragStartHit.face:hit.face
-    for(const p of drawCells(begin,cell,'line').slice(0,1000))hoverGhostGroup.add(makeWallGhostMesh(p,face,color))
+  if (hit.type === 'wall-edge') {
+    const begin = dragStartHit?.type === 'wall-edge' ? dragStartHit.tile : hit.tile
+    const face = dragStartHit?.type === 'wall-edge' ? dragStartHit.face : hit.face
+    const cells = drawCells(begin, cell, 'line')
+    if (!cells.length && editorHint.value) editorHint.value = { ...editorHint.value, text: 'Shorten this wall to stay under 100,000 cells.', invalid: true }
+    for (const p of cells.slice(0, 1000)) hoverGhostGroup.add(makeWallGhostMesh(p, face, color))
     return
   }
-  const cells=props.drawMode==='brush'&&strokePoints.length
-    ? [...new Map(strokePoints.flatMap((p,i)=>drawCells(strokePoints[Math.max(0,i-1)]!,p,'brush',props.brushSize??1,props.roundBrush)).map(p=>[vec3Key(p),p])).values()]
-    : dragStartHit ? tilesBetween(start??cell,cell) : drawCells(cell,cell,props.drawMode,props.brushSize??1,props.roundBrush)
-  const ghost=tool==='voxel'||tool==='ramp'||hit.type==='voxel'?makeVoxelGhostMesh:tool==='stairs'?makeStairGhostMesh:makeTileGhostMesh
-  for(const p of cells.slice(0,1000))hoverGhostGroup.add(ghost(p,color))
-  if(cells.length>1000){const box=fragmentBounds({groundTiles:cells as any});if(box)hoverGhostGroup.add(previewBox(box,color))}
+  const cells = props.drawMode === 'brush' && strokePoints.length
+    ? [...brushPreview.cells.values()]
+    : dragStartHit ? tilesBetween(start ?? cell, cell) : drawCells(cell, cell, props.drawMode, props.brushSize ?? 1, props.roundBrush)
+  if (!cells.length && editorHint.value) editorHint.value = { ...editorHint.value, text: 'Shorten this edit to stay under 100,000 cells.', invalid: true }
+  const ghost = tool === 'voxel' || tool === 'ramp' || hit.type === 'voxel' ? makeVoxelGhostMesh : tool === 'stairs' ? makeStairGhostMesh : makeTileGhostMesh
+  for (const p of cells.slice(0, 1000)) hoverGhostGroup.add(ghost(p, color))
+  if (cells.length > 1000) { const box = props.drawMode === 'brush' ? brushPreview.bounds : fragmentBounds({ groundTiles: cells as any }); if (box) hoverGhostGroup.add(previewBox(box, color)) }
 }
 
-function previewBox(box:SelectionBox,color:number) {
-  return new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(box.min.x,box.min.y,box.min.z),new THREE.Vector3(box.max.x+1,box.max.y+1,box.max.z+1)),color)
+function previewBox(box: SelectionBox, color: number) {
+  return new THREE.Box3Helper(new THREE.Box3(new THREE.Vector3(box.min.x, box.min.y, box.min.z), new THREE.Vector3(box.max.x + 1, box.max.y + 1, box.max.z + 1)), color)
 }
 
 function updateSelectionOutline() {
-  if(selectionOutline){scene.remove(selectionOutline);selectionOutline.geometry.dispose();(selectionOutline.material as THREE.Material).dispose();selectionOutline=null}
-  if(props.selection&&props.isDm){selectionOutline=previewBox(props.selection,0xffc766);scene.add(selectionOutline)}
+  if (selectionOutline) { scene.remove(selectionOutline); selectionOutline.geometry.dispose(); (selectionOutline.material as THREE.Material).dispose(); selectionOutline = null }
+  if (selectionPreviewGroup) { scene.remove(selectionPreviewGroup); clearMapGroup(selectionPreviewGroup); selectionPreviewGroup = null }
+  if (props.selection && props.isDm) { selectionOutline = previewBox(props.selection, 0xffc766); scene.add(selectionOutline) }
+  if (props.isDm && props.selectionPreview?.content) {
+    const content = props.selectionPreview.content
+    // Avoid tinting the unchanged selection until a transform is requested.
+    if (props.selectionPreview.changed) {
+      selectionPreviewGroup = new THREE.Group()
+      addFragmentGhosts(selectionPreviewGroup, content, props.selectionPreview.moveError ? 0xff5544 : 0x77ccff)
+      scene.add(selectionPreviewGroup)
+    }
+  }
   requestRender()
 }
 
-function cameraAction(action:string) {
-  if(!camera||!controls)return
-  if(action==='top')topDown=true
-  else if(action.startsWith('corner-')){topDown=false;isoCorner=Number(action.slice(7))%4}
-  const focus=action==='focus'?props.selection:null
-  if(action==='focus'&&!focus)return
-  const bounds=focus?updateMapContentBounds(null,{voxels:[focus.min,focus.max] as any}):updateMapContentBounds(null,props.map??{})
-  const view=mapContentView(bounds,camera.aspect,camera.fov)
-  const target=new THREE.Vector3(view.target.x,view.target.y,view.target.z)
-  const distance=new THREE.Vector3(view.position.x,view.position.y,view.position.z).distanceTo(target)
-  const polar=topDown?0.0001:Math.acos(1/Math.sqrt(3))
-  controls.minPolarAngle=controls.maxPolarAngle=polar
+function addFragmentGhosts(group: THREE.Group, content: MapFragment, color: number) {
+  const bounds = fragmentBounds(content)
+  if (bounds) group.add(previewBox(bounds, color))
+  let count = 0
+  for (const cell of content.voxels) {
+    if (count++ >= 1000) break
+    const mesh = new THREE.Mesh(createVoxelGeometry(cell), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .45 }))
+    mesh.position.set(cell.x + .5, cell.y + .5, cell.z + .5); group.add(mesh)
+  }
+  for (const cell of content.walls) { if (count++ >= 1000) break; group.add(makeWallGhostMesh(cell, cell.face, color)) }
+  for (const cell of content.groundTiles) { if (count++ >= 1000) break; group.add(makeTileGhostMesh(cell, color)) }
+  for (const cell of content.ceilings) {
+    if (count++ >= 1000) break
+    const mesh = makeTileGhostMesh(cell, color); mesh.position.y = cell.y + 1 - TILE_H / 2; group.add(mesh)
+  }
+  for (const cell of content.stairs) {
+    if (count++ >= 1000) break
+    const mesh = new THREE.Mesh(createStairGeometry(stairDirectionForFace(cell.face)), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .45 }))
+    mesh.position.set(cell.x + .5, cell.y + .5, cell.z + .5); group.add(mesh)
+  }
+}
+
+function recordBrushPoint(event: MouseEvent) {
+  if (brushPreview.invalid) return
+  const hit = getHoveredHit(event)
+  if (hit && 'cell' in hit) {
+    const previous = strokePoints[strokePoints.length - 1]
+    const changed = !previous || vec3Key(previous) !== vec3Key(hit.cell)
+    if (!changed && brushPreview.cells.size) return
+    if (changed) strokePoints.push(hit.cell)
+    const segment = drawCells(previous ?? hit.cell, hit.cell, 'brush', props.brushSize ?? 1, props.roundBrush)
+    if (!segment.length) { brushPreview.invalid = true; return }
+    for (const cell of segment) {
+      brushPreview.cells.set(vec3Key(cell), cell)
+      const bounds = brushPreview.bounds
+      brushPreview.bounds = bounds ? { min: { x: Math.min(bounds.min.x, cell.x), y: Math.min(bounds.min.y, cell.y), z: Math.min(bounds.min.z, cell.z) }, max: { x: Math.max(bounds.max.x, cell.x), y: Math.max(bounds.max.y, cell.y), z: Math.max(bounds.max.z, cell.z) } } : selectionBox(cell, cell)
+      if (brushPreview.cells.size > MAX_DRAW_CELLS) { brushPreview.invalid = true; return }
+    }
+  }
+}
+
+function cameraAction(action: string) {
+  if (!camera || !controls) return
+  if (action === 'top') topDown = true
+  else if (action.startsWith('corner-')) { topDown = false; isoCorner = Number(action.slice(7)) % 4 }
+  const focus = action === 'focus' ? props.selection : null
+  if (action === 'focus' && !focus) return
+  const bounds = focus ? updateMapContentBounds(null, { voxels: [focus.min, focus.max] as any }) : updateMapContentBounds(null, props.map ?? {})
+  const view = mapContentView(bounds, camera.aspect, camera.fov)
+  const target = new THREE.Vector3(view.target.x, view.target.y, view.target.z)
+  const distance = new THREE.Vector3(view.position.x, view.position.y, view.position.z).distanceTo(target)
+  const polar = topDown ? 0.0001 : Math.acos(1 / Math.sqrt(3))
+  controls.minPolarAngle = controls.maxPolarAngle = polar
   controls.target.copy(target)
-  camera.position.setFromSpherical(new THREE.Spherical(distance,polar,Math.PI/4+isoCorner*Math.PI/2)).add(target)
-  camera.far=view.far;camera.updateProjectionMatrix();scene.fog=new THREE.FogExp2(0x1a1a2e,view.fogDensity)
-  azimuthTween=null;controls.update();camera.updateMatrixWorld(true);invalidateFrame()
+  camera.position.setFromSpherical(new THREE.Spherical(distance, polar, Math.PI / 4 + isoCorner * Math.PI / 2)).add(target)
+  camera.far = view.far; camera.updateProjectionMatrix(); scene.fog = new THREE.FogExp2(0x1a1a2e, view.fogDensity)
+  azimuthTween = null; controls.update(); camera.updateMatrixWorld(true); invalidateFrame()
 }
 
 function onMouseMove(event: MouseEvent) {
-  if(spacePanning.value||panGesture){editorHint.value=null;return}
-  if(props.isDm && dragStartHit && props.drawMode==='brush') {
-    const hit=getHoveredHit(event)
-    if(hit && 'cell' in hit) {
-      const previous=strokePoints[strokePoints.length-1]
-      if(!previous||vec3Key(previous)!==vec3Key(hit.cell))strokePoints.push(hit.cell)
-    }
-  }
+  if (spacePanning.value || panGesture) { editorHint.value = null; return }
   if (rightDragActive) {
     applyRightDragRotation(event.clientX - rightDragLastX)
     rightDragLastX = event.clientX
@@ -2299,13 +2378,13 @@ function onMouseMove(event: MouseEvent) {
 }
 
 function onMouseDown(event: MouseEvent) {
-  if(event.button===0&&spacePanning.value){panGesture=true;swallowNextClick();return}
-  if(event.button!==0 && event.button!==2)return
-  if(event.button===0&&props.isDm&&props.activeTool==='eyedropper') {
-    const hit=getIntersection(event).find(h=>['voxel','ground'].includes(h.object.userData.type))
-    const cell=hit?.object.userData.voxel??hit?.object.userData.tile
-    if(cell)emit('material-picked',cell.materialId??cell.element??'void')
-    else editorHint.value={x:12,y:70,text:'Point at a floor tile or block to pick its material.',invalid:true}
+  if (event.button === 0 && spacePanning.value) { panGesture = true; swallowNextClick(); return }
+  if (event.button !== 0 && event.button !== 2) return
+  if (event.button === 0 && props.isDm && props.activeTool === 'eyedropper') {
+    const hit = getIntersection(event).find(h => ['voxel', 'ground'].includes(h.object.userData.type))
+    const cell = hit?.object.userData.voxel ?? hit?.object.userData.tile
+    if (cell) emit('material-picked', cell.materialId ?? cell.element ?? 'void')
+    else editorHint.value = { x: 12, y: 70, text: 'Point at a floor tile or block to pick its material.', invalid: true }
     return
   }
   if (event.button === 2) {
@@ -2326,24 +2405,32 @@ function onMouseDown(event: MouseEvent) {
   }
   if (!props.isDm || props.activeTool === 'select') return
   dragStartHit = getHoveredHit(event)
-  strokePoints=dragStartHit&&'cell' in dragStartHit?[dragStartHit.cell]:[]
+  strokePoints = dragStartHit && 'cell' in dragStartHit ? [dragStartHit.cell] : []
+  brushPreview.cells.clear(); brushPreview.bounds = null; brushPreview.invalid = false
+  if (props.drawMode === 'brush' && dragStartHit) recordBrushPoint(event)
 }
 
 function onMouseUp(event: MouseEvent) {
-  if(panGesture||spacePanning.value){panGesture=false;dragStartHit=null;strokePoints=[];swallowNextClick();return}
+  if (panGesture || spacePanning.value) { panGesture = false; dragStartHit = null; strokePoints = []; swallowNextClick(); return }
   if (event.button === 2) { rightDragActive = false; return }
+  if (event.button !== 0) return
   if (!props.isDm || props.activeTool === 'select' || !dragStartHit) return
+  const rect = canvasRef.value?.getBoundingClientRect()
+  if (rect && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) {
+    cancelEditorGesture(); return
+  }
+  pendingPointerEvent = null
   const endHit = getHoveredHit(event)
   const tool = props.activeTool
-  if(tool==='area-select') {
-    const start='cell' in dragStartHit?dragStartHit.cell:null
-    const end=endHit&&'cell' in endHit?endHit.cell:start
-    if(start&&end)emit('area-selected',start,end)
-    dragStartHit=null;return
+  if (tool === 'area-select') {
+    const start = 'cell' in dragStartHit ? dragStartHit.cell : null
+    const end = endHit && 'cell' in endHit ? endHit.cell : start
+    if (start && end) emit('area-selected', start, end)
+    cancelEditorGesture(); return
   }
-  if(props.drawMode==='brush'&&['voxel','ramp','stairs','add-ground','add-space','paint-element','ceiling','delete'].includes(tool)) {
-    if(endHit&&'cell' in endHit)strokePoints.push(endHit.cell)
-    emit('brush-stroke',strokePoints);strokePoints=[];dragStartHit=null;return
+  if (props.drawMode === 'brush' && ['voxel', 'ramp', 'stairs', 'add-ground', 'add-space', 'paint-element', 'ceiling', 'delete'].includes(tool)) {
+    if (endHit && 'cell' in endHit) strokePoints.push(endHit.cell)
+    emit('brush-stroke', strokePoints); cancelEditorGesture(); return
   }
   if (dragStartHit.type === 'voxel') {
     if (tool === 'window' || tool === 'spawn') {
@@ -2355,7 +2442,7 @@ function onMouseUp(event: MouseEvent) {
     if (tool === 'window' || tool === 'door') {
       emit('wall-edit-at-edge', dragStartHit.tile, dragStartHit.face)
     } else if (tool === 'delete') {
-      if (event.shiftKey)     emit('wall-edit-at-edge', dragStartHit.tile, dragStartHit.face, 'delete-wall')
+      if (event.shiftKey) emit('wall-edit-at-edge', dragStartHit.tile, dragStartHit.face, 'delete-wall')
       else if (event.ctrlKey) emit('wall-edit-at-edge', dragStartHit.tile, dragStartHit.face, 'delete-fill')
     } else {
       const endTile = (endHit?.type === 'wall-edge') ? endHit.tile : dragStartHit.tile
@@ -2366,7 +2453,7 @@ function onMouseUp(event: MouseEvent) {
     const endCell = (endHit?.type === 'cell' || endHit?.type === 'wall') ? endHit.cell : startCell
     emit('cell-draw', startCell, endCell)
   }
-  dragStartHit = null
+  cancelEditorGesture()
 }
 
 // Charge "before" mode: find the closest reachable anchor (or current position) from which
@@ -2564,10 +2651,21 @@ const tokenDrag = createTokenDragController<PointerEvent>({
 
 // Window-level so a drag keeps tracking when the pointer leaves the canvas; the controller ignores
 // anything that isn't part of a gesture it started.
-const onTokenPointerDown = (e: PointerEvent) => { if(!spacePanning.value)tokenDrag.pointerDown(e) }
-const onTokenPointerMove = (e: PointerEvent) => tokenDrag.pointerMove(e)
+const onTokenPointerDown = (e: PointerEvent) => { if (!spacePanning.value) tokenDrag.pointerDown(e) }
+const onTokenPointerMove = (e: PointerEvent) => {
+  tokenDrag.pointerMove(e)
+  if (props.isDm && dragStartHit && props.drawMode === 'brush' && !spacePanning.value && !panGesture) {
+    for (const sample of e.getCoalescedEvents?.() ?? []) recordBrushPoint(sample)
+  }
+}
 const onTokenPointerUp = (e: PointerEvent) => tokenDrag.pointerUp(e)
-const onTokenPointerCancel = () => tokenDrag.pointerCancel()
+const onTokenPointerCancel = () => {
+  tokenDrag.pointerCancel()
+  cancelEditorGesture()
+  spacePanning.value = false
+  syncEditorCameraControls()
+  requestRender()
+}
 
 // ── Dropping a HUD card onto the map ──
 // Native drag-and-drop: the drag starts in the HUD, outside the canvas, so OrbitControls never
@@ -2670,7 +2768,7 @@ function selectMapParticipant(participantId: string, point: THREE.Vector3) {
 }
 
 function onCanvasClick(event: MouseEvent) {
-  if(spacePanning.value||panGesture)return
+  if (spacePanning.value || panGesture) return
   if (suppressNextClick) { suppressNextClick = false; return }
   if (props.isDm && props.activeTool !== 'select') return
   const hits = getIntersection(event)  // also updates raycaster for plane intersection below
@@ -2884,6 +2982,7 @@ function onResize() {
 
 // ── Watchers — rebuild scene on prop changes ───────────────────────────────
 watch(() => props.map, () => { if (scene) buildMap() })
+watch(() => props.map?.id, () => { cancelEditorGesture(); if (scene) updateSelectionOutline() })
 watch(() => props.destructibleStates, () => { if (scene) buildMap() }, { deep: true })
 watch([
   () => props.participants, () => props.participantPositions, () => props.tamerMap, () => props.digimonMap,
@@ -3047,7 +3146,7 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
   }
 }, { immediate: false })
 
-watch(() => props.selection, () => { if(scene)updateSelectionOutline() }, {deep:true})
+watch([() => props.selection, () => props.selectionPreview], () => { if (scene) updateSelectionOutline() }, { deep: true })
 
 watch(clipY, (y) => {
   for (const obj of buildMeshes) {

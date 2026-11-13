@@ -29,7 +29,7 @@
       <label v-if="materialTool">Material <select v-model="e.elementBrush.value"><option v-for="material in materials" :key="material.id" :value="material.id">{{ material.label }}</option></select><span class="swatch" :style="{background: materialColor}" /></label>
       <label>Level Y <input v-model.number="e.currentEditY.value" type="number" step="1" /></label>
       <label v-if="['voxel','ramp','add-ground','ceiling','stairs','stamp'].includes(e.activeTool.value)"><input v-model="e.planeLock.value" type="checkbox" /> Lock to Y plane</label>
-      <label v-if="['ramp','stairs'].includes(e.activeTool.value)">Uphill <select v-model="e.rampDirection.value"><option value="north">North</option><option value="east">East</option><option value="south">South</option><option value="west">West</option></select></label>
+      <label v-if="['ramp','stairs'].includes(e.activeTool.value)">Uphill <select v-model="e.rampDirection.value"><option v-for="direction in directions" :key="direction" :value="direction" :selected="e.rampDirection.value===direction">{{ direction[0]!.toUpperCase()+direction.slice(1) }}</option></select></label>
       <span v-if="['ramp','stairs'].includes(e.activeTool.value)" class="hint">Scroll over map to rotate</span>
       <template v-if="e.activeTool.value==='room'">
         <label>Wall height <input v-model.number="e.roomHeight.value" type="number" min="1" max="64" /></label>
@@ -42,7 +42,7 @@
     <div v-if="e.selection.value" class="tool-options selection-options">
       <strong>Selection</strong>
       <label v-for="axis in axes" :key="axis">Move {{ axis.toUpperCase() }} <input v-model.number="e.selectionOffset.value[axis]" type="number" step="1" /></label>
-      <label>Rotate <select v-model.number="e.selectionTurns.value"><option :value="0">0?</option><option :value="1">90?</option><option :value="2">180?</option><option :value="3">270?</option></select></label>
+      <label>Rotate <select v-model.number="e.selectionTurns.value"><option :value="0">0°</option><option :value="1">90°</option><option :value="2">180°</option><option :value="3">270°</option></select></label>
       <button type="button" @click="$emit('action','move')">Move / rotate</button>
       <button type="button" @click="$emit('action','duplicate')">Duplicate</button>
       <button type="button" @click="$emit('action','focus')">Focus</button>
@@ -50,10 +50,11 @@
       <button type="button" @click="e.selection.value=null">Clear</button>
       <label>Stamp name <input v-model="e.stampName.value" class="stamp-name" placeholder="e.g. Forest tree" maxlength="80" /></label>
       <button type="button" @click="e.saveStamp()">Save stamp</button>
+      <span v-if="e.selectionPreview.value?.moveError" role="status">Move: {{ e.selectionPreview.value.moveError }}</span>
     </div>
     <div v-if="e.activeTool.value==='stamp'" class="tool-options">
       <label>Stamp <select v-model="e.activeStampId.value"><option value="">Choose a stamp</option><option v-for="stamp in e.stamps.value" :key="stamp.id" :value="stamp.id">{{ stamp.name }}</option></select></label>
-      <label>Rotation <select v-model.number="e.stampTurns.value"><option :value="0">0?</option><option :value="1">90?</option><option :value="2">180?</option><option :value="3">270?</option></select></label>
+      <label>Rotation <select v-model.number="e.stampTurns.value"><option :value="0">0°</option><option :value="1">90°</option><option :value="2">180°</option><option :value="3">270°</option></select></label>
       <button type="button" :disabled="!e.activeStamp.value" @click="e.deleteStamp()">Remove stamp</button>
       <span class="hint">Select content and save a stamp to reuse it across maps in this browser.</span>
     </div>
@@ -61,23 +62,25 @@
   </div>
 </template>
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { useMapEditor } from '~/composables/useMapEditor'
 import type { MapTool } from '~/types'
 import { MAP_VOXEL_MATERIALS, getVoxelMaterialDefinition } from '~/utils/mapVoxels'
-const props=defineProps<{editor:ReturnType<typeof useMapEditor>}>()
-const e=props.editor
-const materials=MAP_VOXEL_MATERIALS
-const axes=['x','y','z'] as const
-defineEmits<{(event:'action',action:string):void}>()
-const groups:Array<{name:string;tools:Array<{id:MapTool;label:string}>}>=[
-  {name:'Navigate & select',tools:[{id:'select',label:'Pan'},{id:'area-select',label:'Select area'},{id:'stamp',label:'Stamps'}]},
-  {name:'Build',tools:[{id:'add-ground',label:'Floor'},{id:'voxel',label:'Block'},{id:'ramp',label:'Ramp'},{id:'stairs',label:'Stairs'},{id:'room',label:'Room'},{id:'wall',label:'Wall'},{id:'ceiling',label:'Ceiling'},{id:'door',label:'Door'},{id:'window',label:'Window'}]},
-  {name:'Finish',tools:[{id:'paint-element',label:'Paint'},{id:'eyedropper',label:'Eyedropper'},{id:'spawn',label:'Spawn'},{id:'delete',label:'Erase'}]},
+const props = defineProps<{ editor: ReturnType<typeof useMapEditor> }>()
+const e = props.editor
+const materials = MAP_VOXEL_MATERIALS
+const axes = ['x', 'y', 'z'] as const
+const directions = ['north', 'east', 'south', 'west'] as const
+defineEmits<{ (event: 'action', action: string): void }>()
+const groups: Array<{ name: string; tools: Array<{ id: MapTool; label: string }> }> = [
+  { name: 'Navigate & select', tools: [{ id: 'select', label: 'Pan' }, { id: 'area-select', label: 'Select area' }, { id: 'stamp', label: 'Stamps' }] },
+  { name: 'Build', tools: [{ id: 'add-ground', label: 'Floor' }, { id: 'voxel', label: 'Block' }, { id: 'ramp', label: 'Ramp' }, { id: 'stairs', label: 'Stairs' }, { id: 'room', label: 'Room' }, { id: 'wall', label: 'Wall' }, { id: 'ceiling', label: 'Ceiling' }, { id: 'door', label: 'Door' }, { id: 'window', label: 'Window' }] },
+  { name: 'Finish', tools: [{ id: 'paint-element', label: 'Paint' }, { id: 'eyedropper', label: 'Eyedropper' }, { id: 'spawn', label: 'Spawn' }, { id: 'delete', label: 'Erase' }] },
 ]
-const activeLabel=computed(()=>groups.flatMap(group=>group.tools).find(tool=>tool.id===e.activeTool.value)?.label??'Volume')
-const shapeTool=computed(()=>['add-ground','add-space','paint-element','voxel','ramp','stairs','ceiling','spawn','delete'].includes(e.activeTool.value))
-const materialTool=computed(()=>['add-ground','paint-element','voxel','ramp'].includes(e.activeTool.value)||(e.activeTool.value==='room'&&e.roomFloor.value))
-const materialColor=computed(()=> '#'+getVoxelMaterialDefinition(e.elementBrush.value).color.toString(16).padStart(6,'0'))
+const activeLabel = computed(() => groups.flatMap(group => group.tools).find(tool => tool.id === e.activeTool.value)?.label ?? 'Volume')
+const shapeTool = computed(() => ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'stairs', 'ceiling', 'spawn', 'delete'].includes(e.activeTool.value))
+const materialTool = computed(() => ['add-ground', 'paint-element', 'voxel', 'ramp'].includes(e.activeTool.value) || (e.activeTool.value === 'room' && e.roomFloor.value))
+const materialColor = computed(() => '#' + getVoxelMaterialDefinition(e.elementBrush.value).color.toString(16).padStart(6, '0'))
 </script>
 <style scoped>
 .map-toolbar{flex-shrink:0;max-height:38vh;overflow:auto;background:#131724;border-bottom:1px solid #343d52;padding:10px 12px;color:#d4dce9;font-size:12px}

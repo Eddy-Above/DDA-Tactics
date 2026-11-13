@@ -28,13 +28,13 @@ function fixture({ direction = 'north', tool = 'ramp', isDm = true, dragging = f
   editor.selectTool(tool)
   editor.drawMode.value = 'line'
   editor.rampDirection.value = direction
-  const props = reactive({ map: map.value, activeTool: tool, isDm, rampDirection: direction, drawMode: 'line' })
+  const props = reactive({ map: map.value, activeTool: tool, isDm, currentEditY:0, rampDirection: direction, drawMode: 'line' })
   const scope = effectScope()
   // Parent refs update synchronously on emits; child props follow on Vue's next render flush.
   scope.run(() => watch(editor.rampDirection, value => { props.rampDirection = value }))
   const events = [], delegated = []
   const deps = { ...loadTypeScript('utils/mapBuilder.ts'), spacePanning:ref(false), editorHint:ref(null), containerRef:ref(null), strokePoints:[], editorCell:()=>dragging?point(2):point(), THREE, createVoxelGeometry, createStairGeometry, props, nextTick, TILE_SIZE: 1,
-    hoverGhostGroup: new THREE.Group(),
+    hoverGhostGroup: new THREE.Group(), brushPreview: {cells:new Map(),bounds:null,invalid:false},
     dragStartHit: dragging ? { type: 'cell', cell: point() } : null,
     planeCell: () => dragging ? point(2) : point(),
     getMoveAim: () => moveAim,

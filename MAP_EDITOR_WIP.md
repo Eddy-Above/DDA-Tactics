@@ -1,67 +1,49 @@
-# Map editor work in progress
+# Map editor completion record
 
-Checkpoint: 2026-11-13. User requested stopping implementation, recording unfinished work, and pushing this checkpoint to resume later. This is unfinished work, not a release-ready editor.
+Completed: 2026-11-13. This replaces the unfinished checkpoint from the same date.
 
-## Requested behaviour
+## Implemented behaviour
 
-- Keep existing Y-clip; it already covers height isolation.
-- Hold Space and drag to pan, then resume the current building tool.
-- Build against pointed surfaces, with an optional fixed Y plane.
-- Select areas and move, rotate, duplicate, or delete their contents atomically.
-- Save and place rotated reusable stamps.
-- Adjustable brushes, circles, and continuous painting alongside line/rectangle/box modes.
-- Material eyedropper.
-- Fit map, focus selection, top-down, and four isometric corner views.
-- Cursor feedback with tool, coordinates, drag dimensions, and invalid-placement explanations.
-- Room creation with configurable wall height, optional material floor, and doors/windows on wall edges.
-- Place floors with the selected material immediately, like voxels.
-- Replace the bright floor-material seam overlay with natural material blending, and apply it to voxels too.
-- Reorganise all tools. Explicit air is largely redundant on endless maps; retain legacy compatibility and put volumes in advanced controls.
+- Grouped navigation, selection, building, finishing, history, and advanced volume controls. Legacy air volumes remain compatible with existing maps.
+- Hold Space and drag to pan without changing the building tool. Editing gestures cancel on Escape, blur, pointer cancellation, tool changes, map changes, or release outside the canvas. Space ignores form controls and active participant drags. Zoom remains available while building; ramp/stair scrolling rotates uphill direction.
+- Surface placement follows block and ramp normals and elevated floor surfaces, including side and underside hits. Optional fixed Y placement remains available. Paint, erase, spawn, and material sampling use the pointed cell independently of a hidden placement lock.
+- Line, rectangle, circle, box, and adjustable square/round brush tools. Every brush bend is retained before frame coalescing, preview cells update incrementally, and a complete stroke is one undoable edit.
+- Rooms have configurable wall heights and optional floors in the selected material. Doors/windows pick actual wall geometry, including upper room levels.
+- Area selection supports all-height capture, move/rotate previews, atomic move, duplication, deletion, and camera focus. Moves preserve structure IDs; copies/stamps create fresh IDs and remap linked doors/windows. Door state and other geometry metadata survive transforms, JSON saves, and undo/redo. An unchanged move creates no history entry.
+- Rotated reusable stamps persist under `dda-map-stamps-v1` in browser localStorage. Library loading validates integer coordinates, faces, materials, optional voxel properties, IDs, and linked walls; damaged entries are skipped. Storage failures preserve the session library and show feedback.
+- Selected materials apply immediately to new floors. Floor and voxel painting preserve full material identity. Integer validation and a 100,000-cell operation limit prevent malformed or excessive edits. Previews show up to 1,000 meshes plus bounds for larger content.
+- Fit map, focus selection, top-down, and four isometric corner views. Cursor feedback includes coordinates, dimensions, and invalid-input/collision explanations. Distance fog is visibly restored on normal maps and scales with large fitted views.
+- Natural, linear-colour material transitions run inside the lit Lambert shader for floors, opaque blocks/ramps, and appropriate translucent terrain. Translucent RGB blending preserves alpha and global BatchedMesh depth sorting. Glass, windows, and light sources retain crisp colours. Palettes use stable batch IDs, work with and without multi-draw, and release resources on rebuild/disposal.
 
-## Draft implementation included
+## Campaign map list correction
 
-- `app/components/MapToolbar.vue`: grouped Navigate & select / Build / Finish controls, advanced Volumes, contextual brush/material/room options, selection transforms, stamp controls, undo/redo.
-- `app/components/MapCanvas.vue`: Space pan state, surface picking and plane lock, selection outline, stroke preview, cursor feedback, room/stamp preview, camera actions, wall-edge picking from actual geometry, blur/mouse-up handling.
-- `app/components/EncounterMap.vue`: connects tools and camera actions to editor operations and existing autosave.
-- `app/composables/useMapEditor.ts`: one-operation brush strokes, room creation, selection capture/transforms/deletion, stamps, material sampling, material-aware floor placement and painting.
-- `app/utils/mapBuilder.ts`: shared drawing cells, selection bounds, fragment capture/transforms, linked structure remapping and collision checking.
-- `app/utils/terrainMaterialBlend.ts`: draft procedural, lighting-aware surface blend shader using a per-instance neighbour-colour palette. Replaces unlit overlay planes while retaining instanced draw batches.
-- `app/utils/mapTerrainChunks.ts`: material-aware floor colours; neighbour palettes for floors and opaque voxels; palette/resource cleanup.
-- Optional `materialId` added to floor JSON types in `app/types/index.ts` and `app/server/db/schema.ts`. No new database migration is required for that optional JSON property. Existing maps retain their geometry.
-- Stamps currently persist in browser localStorage under `dda-map-stamps-v1`; they are reusable across maps in that browser, not synced to accounts/devices.
+The campaign map list now uses keyed `useAsyncData` and `useRequestFetch`. The server forwards the incoming viewer session and the browser hydrates the same map payload instead of fetching a different initial list. Initial failures show an error rather than an empty-list layout. Browser verification confirms the same card content and three-column desktop grid after client navigation and SSR hydration on reload, with no hydration errors.
 
-## Verification at checkpoint
+## Verification
 
-Latest focused run: **110 tests, 109 passing, 1 failing**.
+- Full application suite: **1,547 tests passing**, no failures.
+- Production Nuxt build: passes; final Vue components and server bundle compile.
+- Actual-component Chrome checks: toolbar bindings in both directions, floor/voxel/shape tools, brushes, rooms, upper wall openings, selections/stamps, paint/sampling, spawn/erase, history, camera views, focus behaviour, Space pan, cancellation, narrow layouts, shaders, fog, and map switching.
+- Both `WEBGL_multi_draw` and its fallback: pass, including translucent shaders and campaign map-list hydration. The fallback fixture deliberately withholds that extension before creating the renderer.
+- Repeated paint/undo/redo and map switching return to the same GPU geometry/texture counts. CPU benchmarks include homogeneous and mixed maps up to 62,500 cells, repeated edits/restoration, and disposal assertions. The mixed 62,500-cell fixture uses 1,333 terrain batches; the 12,500-cell browser fixture uses 279 calls with multi-draw and 1,778 without it.
+- Full typecheck still reports **91 existing diagnostics**, all in unchanged combat/player/form/context files. No new diagnostic signatures versus the comparison log, and none in the changed editor, renderer, or campaign map-list files. This is not an application-wide typecheck pass.
+- Browser GPU verification uses Chrome SwiftShader. Physical GPU performance and authenticated production services were not exercised. No production database writes or bulk bounds updates were performed. Runtime used for these local checks: Node 22.14.0; deployment's declared target remains Node 24.
 
-Failing test: `app/tests/stairEditor.test.mjs`, ?the stair toolbar shows drawing modes, selected uphill direction and scrolling hint?. It expects `<option value="west" selected` in SSR markup. The toolbar now uses v-model on the editor's direction ref, and the rendered markup does not contain that selected attribute. Determine whether the client binding works, then fix either the binding or the test's SSR assumption. Do not simply drop direction coverage.
-
-Other focused tests passed, including atomic edits, floor materials, brush interpolation and undo, room creation, selection transforms and collisions, stamp persistence, surface picking, Space pan state, rendering batches, movement interactions, ramp geometry/scrolling, and autosave integration.
-
-Command (from `app`; PowerShell may require `node` worker permissions):
+Reproduce from `app`:
 
 ```powershell
-node --import ./scripts/offline-env.mjs --test tests/mapBuilder.test.mjs tests/atomicMapEditor.test.mjs tests/mapSaveIntegration.test.mjs tests/mapFrameScheduling.test.mjs tests/mapInteraction.test.mjs tests/mapTerrainChunks.test.mjs tests/rampGeometry.test.mjs tests/rampScroll.test.mjs tests/stairEditor.test.mjs
+node --import ./scripts/offline-env.mjs --test
+npm.cmd run build
 npm.cmd run typecheck
+node --import ./scripts/offline-env.mjs scripts/verify-map-editor-browser.mjs
+$env:DDA_MAP_NO_MULTI_DRAW='1'
+node --import ./scripts/offline-env.mjs scripts/verify-map-editor-browser.mjs
+Remove-Item Env:DDA_MAP_NO_MULTI_DRAW
+node --import ./scripts/offline-env.mjs scripts/benchmark-map-terrain.mjs
 ```
 
-Full typecheck still reports pre-existing application errors (implicit-any/untyped refs in map/combat/player components). Re-run after finishing and compare against the prior baseline; do not assume all errors are pre-existing. Earlier component compilation checks passed, but recompile the final checkpoint after further edits.
+The browser script compiles actual editor and map-list components into a temporary fixture, supplies local map data and a Nuxt-style hydration payload, starts an isolated browser profile, and cleans up its temporary files. It does not contact application APIs. Camera/renderer probes are injected only into that fixture build. Screenshots and JSON reports are written to ignored `.cache/map-editor-verification/native/` and `fallback/`. Diagnostic test/build/typecheck logs are also ignored; this file records the reproducible results.
 
-Local ignored diagnostic logs: `app/builder-tests.log` and `app/builder-typecheck.log`. They are not committed; the reproducible summary is recorded here.
+## Persistence and compatibility
 
-## Unfinished / next steps
-
-1. Resolve the one failing stair-toolbar test and verify direction selection in a real browser. Add browser/DOM coverage for the ref-based contextual toolbar controls.
-2. Run the application and exercise every new tool end to end. No browser or GPU visual verification has been completed. Check toolbar wrapping and viewport height on narrow screens, pointer feedback placement, keyboard focus, and selection actions.
-3. Verify Space pan on press/release during a drag, release outside the canvas, blur, and tool changes. Ensure it never paints, changes the selected tool, or interferes with participant dragging or text inputs. Zoom should remain available while building.
-4. Finish surface placement checks for top/side/bottom faces, ramps, floor height, empty-space fallback, and plane-locked drags. Check room wall edges at upper levels when adding doors/windows.
-5. Check continuous brush behaviour with fast/coalesced pointer events, large brush sizes and long strokes. It currently previews a trail and commits one undoable operation on release; verify this feels continuous enough. Check cancellation and preview/commit parity for circles and 3D boxes.
-6. Harden and polish selection/stamp controls: validate integer offsets and dimensions, audit rotation/anchor semantics and collision messages, preview transformed selections, handle malformed stored stamp data and storage failures, and test transforms across chunk boundaries. Confirm any coordinate/ID/door-state properties survive save/import/undo.
-7. Complete and visually validate the new material blend. The shader/palette integration is a draft, not visually approved. Verify actual GLSL compilation, lighting, seam continuity, colour space, noise scale, and both floor and voxel surfaces, including ramps and chunk boundaries. Add direct voxel blend tests.
-8. Transparent voxels currently use a separate BatchedMesh path and do **not** receive the new blend palette. Decide how to blend appropriate translucent materials while preserving opacity, depth sorting, light sources, and crisp gameplay features such as windows. Do not claim blending covers all voxel types yet.
-9. Verify GPU resource lifecycle and performance on large mixed-material maps. Current homogeneous-map batching regression tests pass; mixed-material shader/palette cost still needs profiling. Include repeated paint/delete/undo and map switching.
-10. Review new code formatting/readability and remove obsolete blend API/comments or unused scaffolding. Re-run typecheck, component compilation, relevant security/import/save tests, and then the full test suite. Update `PROJECT_MAP.md` when the final design is settled.
-
-## Previously completed context
-
-Before this WIP, main already included endless map creation with no width/depth fields or generated floor by default; cached display bounds including negative coordinates; fitted isometric starting camera; shared Workshop loading and matching map cards. The existing `0027_add_map_content_bounds.sql` migration only adds the metadata column and intentionally does not backfill old maps. Old maps initialise bounds on their next in-app save. Do not reintroduce a bulk update of existing maps.
+Stamps are reusable across maps in the same browser; they are not account/device synced. Floor `materialId` is an optional JSON property and needs no database migration. Existing map geometry is retained. The existing `0027_add_map_content_bounds.sql` migration only adds metadata; old maps initialise bounds on their next in-app save. Do not bulk-backfill old maps or reintroduce fixed width/depth boundaries.

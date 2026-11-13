@@ -25,6 +25,7 @@ function harness(size = 'large', giganticDimensions = null) {
   const hoveredMoveScreen = ref(null)
   const labels = [], events = []
   const dependencies = {
+    spacePanning: ref(false), panGesture: false, editorHint: ref(null),
     props, movingParticipantId, pathHighlightGroup, hoverGhostGroup, hoveredMoveScreen,
     movementGhost: ref(null), movementGhostOverlay: ref(null), movementGapLabel: ref(null),
     updateMovementGhostOverlay: () => {}, renderMovementGap: () => {},

@@ -32,6 +32,7 @@
           :round-brush="editor.roundBrush.value"
           :plane-lock="editor.planeLock.value"
           :selection="editor.selection.value"
+          :selection-preview="editor.selectionPreview.value"
           :stamp="editor.activeStamp.value"
           :stamp-turns="editor.stampTurns.value"
           :room-height="editor.roomHeight.value"
@@ -157,6 +158,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, shallowRef, watch, onMounted, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import type {
   GameMap, Encounter, Vec3, CombatParticipant, WallFace, DestructibleState, EddySoulRules, Stance,

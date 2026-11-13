@@ -91,12 +91,12 @@ test('legacy voxels remain cubes and omitted ramp directions ascend north', () =
 function harness(voxels, { clipY = 10, direction = 'north', tool = 'ramp', showSpawnIndicators = true } = {}) {
   const deps = {
     ...loadTypeScript('utils/mapBuilder.ts'),
-    spacePanning: {value:false}, editorHint: {value:null}, containerRef: {value:null}, strokePoints: [],
+    spacePanning: {value:false}, editorHint: {value:null}, containerRef: {value:null}, strokePoints: [], brushPreview: {cells:new Map(),bounds:null,invalid:false},
     getHoveredHit: () => ({type:'cell',cell:{x:3,y:2,z:4}}),
     THREE, createVoxelGeometry, rampRotationY,
     props: {
       map: { id: 'map', voxels, groundTiles: [], spaceTiles: [], walls: [], windows: [], doors: [], ceilings: [], stairs: [] },
-      destructibleStates: [], activeTool: tool, rampDirection: direction, isDm: true, drawMode: 'square', showSpawnIndicators,
+      destructibleStates: [], activeTool: tool, currentEditY:0, rampDirection: direction, isDm: true, drawMode: 'square', showSpawnIndicators,
     },
     scene: new THREE.Scene(), TILE_SIZE: 1, TILE_H: 0.1,
     hoverGhostGroup: new THREE.Group(), dragStartHit: null,

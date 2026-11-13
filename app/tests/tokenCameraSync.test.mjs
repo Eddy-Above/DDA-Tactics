@@ -85,6 +85,7 @@ function fixture({ width = 1200, height = 800, dragging = false, ghost = false }
   }
 
   const deps = {
+    spacePanning: ref(false), panGesture: false, editorHint: ref(null),
     THREE, camera, controls, scene: new THREE.Scene(), renderer: { render: verifyProjection },
     containerRef: ref({ clientWidth: width, clientHeight: height }),
     TILE_SIZE: 1, TILE_H: 0.12, WINDOW_FRAME: 0.2, WINDOW_H: 0.6,

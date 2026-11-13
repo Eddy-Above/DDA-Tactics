@@ -72,6 +72,8 @@ export function mapContentView(bounds: MapContentBounds | null | undefined, aspe
     target,
     position: { x: target.x + offset, y: target.y + offset, z: target.z + offset },
     far: Math.max(500, distance + radius * 2),
-    fogDensity: Math.min(0.04, 0.5 / (distance + radius)),
+    // Keep the original atmospheric fog on ordinary maps. Scale only when a
+    // large fit needs a distant camera; the far edge should still visibly fade.
+    fogDensity: Math.min(0.04, 1.25 / (distance + radius)),
   }
 }

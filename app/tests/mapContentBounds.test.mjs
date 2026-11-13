@@ -60,3 +60,16 @@ test('corner isometric view fits every content corner in wide and narrow viewpor
     }
   }
 })
+
+test('distance fog stays visible on empty, ordinary and large fitted maps', () => {
+  assert.equal(mapContentView(null,16/9).fogDensity,.04)
+  for (const extent of [20,200,2000]) {
+    const bounds=updateMapContentBounds(null,{voxels:[{x:0,y:0,z:0},{x:extent,y:3,z:extent}]})
+    const view=mapContentView(bounds,16/9)
+    const distance=new Vector3(view.position.x,view.position.y,view.position.z).distanceTo(new Vector3(view.target.x,view.target.y,view.target.z))
+    const farDistance=distance+Math.hypot(bounds.x,bounds.y,bounds.z)/2
+    const fogAmount=1-Math.exp(-((view.fogDensity*farDistance)**2))
+    assert.ok(fogAmount>.7,'the far edge has a visible atmospheric fade')
+    assert.ok(view.fogDensity<=.04)
+  }
+})
