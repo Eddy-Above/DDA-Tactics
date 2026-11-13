@@ -227,8 +227,6 @@ async function handleImportFile(event: Event) {
     </div>
 
     <template v-else>
-      <WorkshopMaps :only-mine="showOnlyMine" />
-
       <!-- Tamers -->
       <section class="mb-10">
         <h2 class="font-display text-2xl font-semibold text-white mb-4">Tamers</h2>
