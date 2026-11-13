@@ -183,6 +183,7 @@ export function useDigimon() {
       qualities: digimon.qualities ? [...digimon.qualities] : [],
       dataOptimization: digimon.dataOptimization || undefined,
       bonusDP: digimon.bonusDP || 0,
+      campaignId: digimon.campaignId ?? null,
       partnerId: digimon.partnerId || undefined,
       isEnemy: digimon.isEnemy,
       notes: digimon.notes || undefined,
