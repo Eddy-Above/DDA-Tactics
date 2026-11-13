@@ -169,7 +169,7 @@ export function useDigimon() {
     }
   }
 
-  async function copyDigimon(digimon: Digimon): Promise<Digimon | null> {
+  async function copyDigimon(digimon: Digimon, campaignId: string | null = digimon.campaignId ?? null): Promise<Digimon | null> {
     const copyData: CreateDigimonData = {
       name: `Copy of ${digimon.name}`,
       nickname: digimon.nickname ?? undefined,
@@ -183,7 +183,7 @@ export function useDigimon() {
       qualities: digimon.qualities ? [...digimon.qualities] : [],
       dataOptimization: digimon.dataOptimization || undefined,
       bonusDP: digimon.bonusDP || 0,
-      campaignId: digimon.campaignId ?? null,
+      campaignId,
       partnerId: digimon.partnerId || undefined,
       isEnemy: digimon.isEnemy,
       notes: digimon.notes || undefined,

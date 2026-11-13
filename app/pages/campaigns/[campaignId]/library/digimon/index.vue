@@ -105,7 +105,7 @@ async function handleDelete(id: string, name: string) {
 }
 
 async function handleCopy(digimon: typeof digimonList.value[0]) {
-  const copy = await copyDigimon(digimon)
+  const copy = await copyDigimon(digimon, campaignId.value)
   if (copy) {
     router.push(`/campaigns/${campaignId.value}/library/digimon/${copy.id}`)
   }

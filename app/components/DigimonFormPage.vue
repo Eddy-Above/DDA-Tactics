@@ -396,7 +396,7 @@ async function handleSubmit() {
 async function handleCopy() {
   if (!loadedDigimon.value) return
   copying.value = true
-  const newDigimon = await copyDigimon(loadedDigimon.value)
+  const newDigimon = await copyDigimon(loadedDigimon.value, isWorkshop ? null : campaignId.value)
   if (newDigimon) {
     router.push(`${digimonLinkBase.value}/${newDigimon.id}`)
   }
