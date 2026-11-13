@@ -10,7 +10,7 @@ import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 const appDirectory = fileURLToPath(new URL('../', import.meta.url))
 const pagesDirectory = resolve(appDirectory, 'pages')
 const libraryDirectory = resolve(pagesDirectory, 'campaigns/[campaignId]/library')
-const globals = ['createError', 'defineNuxtRouteMiddleware', 'useRequestFetch', 'useCookie', 'navigateTo', '$fetch']
+const globals = ['createError', 'defineNuxtRouteMiddleware', 'useRequestFetch', 'useCookie', 'navigateTo', '$fetch', 'useNuxtApp']
 const originals = Object.fromEntries(globals.map(name => [name, globalThis[name]]))
 afterEach(() => {
   for (const name of globals) {
@@ -48,6 +48,8 @@ function collectPages(directory) {
 const libraryPages = collectPages(libraryDirectory)
 
 function fixture(overrides = {}) {
+  const app = {}
+  globalThis.useNuxtApp = () => app
   globalThis.createError = data => Object.assign(new Error(data.message), data)
   globalThis.defineNuxtRouteMiddleware = guard => guard
   const campaign = { id: 'campaign', ownerId: null, passwordHash: null, dmPasswordHash: 'gm-hash', ...overrides }
@@ -175,6 +177,19 @@ test('failed access requests deny Library navigation despite an existing GM hint
   f.failFetch()
   assert.deepEqual(await f.navigate(libraryPages.find(page => page.path.endsWith('/tamers/new'))), { redirect: '/campaigns/campaign' })
   assert.equal(f.hints['campaign-dm-campaign'], null)
+})
+
+test('membership and GM guards share one check per navigation and recheck a fresh visit', async () => {
+  const f = fixture()
+  f.issueGm()
+  const root = libraryPages.find(page => page.path === '/campaigns/campaign/library')
+  assert.equal(await f.navigate(root), undefined)
+  assert.equal(f.requests.length, 1, 'two sequential guards make one authority request')
+  assert.equal(await f.navigate({ ...root }), undefined)
+  assert.equal(f.requests.length, 2, 'a new navigation must recheck authority')
+  f.campaign.dmPasswordHash = 'revoked'
+  assert.deepEqual(await f.navigate({ ...root }), { redirect: '/campaigns/campaign' })
+  assert.equal(f.requests.length, 3)
 })
 
 test('Library guard covers case and trailing-slash route variants without matching neighbouring routes', async () => {

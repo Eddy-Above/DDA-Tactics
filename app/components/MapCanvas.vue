@@ -104,6 +104,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import MapRadialMenu from './MapRadialMenu.vue'
 import { mapContentView, updateMapContentBounds } from '~/utils/mapContentBounds'
+import { supportsVerticalDrag, createMapBoxDrag, type BoxPointer } from '~/utils/mapBoxDrag'
 import { drawCells, selectionBox, transformFragment, fragmentCollision, fragmentBounds, isQuarterTurns, MAX_DRAW_CELLS, type DrawMode, type SelectionBox, type MapStamp, type MapFragment } from '~/utils/mapBuilder'
 import { displayImageUrl } from '~/utils/imageFallback'
 import * as THREE from 'three'
@@ -192,7 +193,7 @@ const emit = defineEmits<{
   (e: 'unit-moved', participantId: string, position: Vec3, path: Vec3[]): void
   (e: 'cell-clicked', cell: Vec3): void
   (e: 'cell-draw', start: Vec3, end: Vec3): void
-  (e: 'area-selected', start: Vec3, end: Vec3): void
+  (e: 'area-selected', start: Vec3, end: Vec3, boundedHeight?: boolean): void
   (e: 'brush-stroke', points: Vec3[]): void
   (e: 'material-picked', material: string): void
   (e: 'editor-action', action: string): void
@@ -613,6 +614,8 @@ let renderer: THREE.WebGLRenderer
 let scene: THREE.Scene
 let camera: THREE.PerspectiveCamera
 let controls: OrbitControls
+let fogReferenceDistance = 28
+let fogReferenceDensity = 0.04
 let rafId = 0
 let canvasDisposed = false
 let terrain: ReturnType<typeof createMapTerrainChunks> | null = null
@@ -648,6 +651,7 @@ const spacePanning = ref(false)
 let panGesture = false
 let strokePoints: Vec3[] = []
 const brushPreview = { cells: new Map<string, Vec3>(), bounds: null as SelectionBox | null, invalid: false }
+const boxDrag = createMapBoxDrag()
 const editorHint = ref<{ x: number; y: number; text: string; invalid: boolean } | null>(null)
 let selectionOutline: THREE.Box3Helper | null = null
 let selectionPreviewGroup: THREE.Group | null = null
@@ -656,6 +660,7 @@ let isoCorner = 0
 function cancelEditorGesture() {
   dragStartHit = null; strokePoints = []; panGesture = false; rightDragActive = false
   brushPreview.cells.clear(); brushPreview.bounds = null; brushPreview.invalid = false
+  boxDrag.reset()
   editorHint.value = null
   if (hoverGhostGroup) clearMapGroup(hoverGhostGroup)
 }
@@ -857,6 +862,8 @@ function initScene() {
   camera.far = view.far
   camera.updateProjectionMatrix()
   camera.lookAt(cx, cy, cz)
+  fogReferenceDistance = camera.position.distanceTo(new THREE.Vector3(cx, cy, cz))
+  fogReferenceDensity = view.fogDensity
   scene.fog = new THREE.FogExp2(0x1a1a2e, view.fogDensity)
 
   controls = new OrbitControls(camera, canvas)
@@ -868,7 +875,7 @@ function initScene() {
   controls.screenSpacePanning = false
   controls.target.set(cx, cy, cz)
   controls.update()
-  controls.addEventListener('change', () => { overlaysDirty = true; requestRender(); emit('map-changed') })
+  controls.addEventListener('change', () => { updateCameraFog(); overlaysDirty = true; requestRender(); emit('map-changed') })
 
   // Lights
   const ambient = new THREE.AmbientLight(0xffffff, 0.55)
@@ -895,6 +902,14 @@ function initScene() {
 }
 
 // ── Camera azimuth: free right-drag rotation + eased Q/E steps ──────────────
+function updateCameraFog() {
+  if (!(scene.fog instanceof THREE.FogExp2)) return
+  // A distant fitted overview needs lighter fog. Restore the normal density
+  // when zooming into play, instead of retaining that map-wide dilution.
+  const distance = Math.max(0.1, camera.position.distanceTo(controls.target))
+  scene.fog.density = Math.min(0.04, fogReferenceDensity * fogReferenceDistance / distance)
+}
+
 function setAzimuth(angle: number) {
   const dist = camera.position.distanceTo(controls.target)
   const polar = controls.getPolarAngle()
@@ -1380,6 +1395,15 @@ function onKeyDown(e: KeyboardEvent) {
     if (!spacePanning.value) { cancelEditorGesture(); spacePanning.value = true; syncEditorCameraControls() }
     return
   }
+  if (e.key === 'Control') {
+    if (props.isDm && supportsVerticalDrag(props.activeTool,props.drawMode) && boxDrag.active) {
+      e.preventDefault()
+      pendingPointerEvent=null
+      boxDrag.setControl(true)
+      refreshBoxDragPreview(true)
+    }
+    return
+  }
   if (props.isDm && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); emit('editor-action', e.shiftKey ? 'redo' : 'undo'); return }
   if (props.isDm && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); emit('editor-action', 'redo'); return }
   if (props.isDm && e.key === 'Escape' && dragStartHit) { cancelEditorGesture(); return }
@@ -1398,7 +1422,18 @@ function onKeyDown(e: KeyboardEvent) {
 
 function onKeyUp(e: KeyboardEvent) {
   if (e.code === 'Space' && spacePanning.value) { spacePanning.value = false; syncEditorCameraControls(); if (panGesture) swallowNextClick() }
+  if (e.key === 'Control' && props.isDm && supportsVerticalDrag(props.activeTool,props.drawMode) && boxDrag.active) {
+    pendingPointerEvent=null
+    boxDrag.setControl(false)
+    refreshBoxDragPreview(false)
+  }
   keysHeld.delete(e.key)
+}
+
+function refreshBoxDragPreview(ctrlKey: boolean) {
+  const pointer = boxDrag.pointer
+  if (pointer) updateHoverGhost({ ...pointer, ctrlKey } as MouseEvent)
+  requestRender()
 }
 
 function requestRender() {
@@ -1414,6 +1449,9 @@ function invalidateFrame() {
 }
 
 function queueMouseMove(event: MouseEvent) {
+  if (props.isDm && dragStartHit && supportsVerticalDrag(props.activeTool,props.drawMode) && boxDrag.active && !spacePanning.value && !panGesture) {
+    boxDrag.update(event, boxCellFromPointer)
+  }
   // Keep every bend of a stroke; only the expensive ghost rendering is frame-coalesced.
   if (props.isDm && dragStartHit && props.drawMode === 'brush' && !spacePanning.value && !panGesture) {
     recordBrushPoint(event)
@@ -2080,6 +2118,10 @@ function voxelCellFromEvent(event: MouseEvent): Vec3 | null {
 }
 
 function getHoveredHit(event: MouseEvent): EditHit | null {
+  if (props.isDm && dragStartHit && supportsVerticalDrag(props.activeTool,props.drawMode) && boxDrag.active) {
+    const cell=boxDrag.update(event,boxCellFromPointer)
+    return cell ? {type:'cell',cell} : null
+  }
   const tool = props.activeTool
   if (tool === 'window') {
     const voxel = voxelCellFromEvent(event)
@@ -2095,10 +2137,10 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
   }
   if (tool === 'spawn') {
     const voxel = voxelCellFromEvent(event)
-    if (voxel) return { type: 'voxel', cell: voxel }
+    if (voxel) return { type: props.drawMode==='cube'?'cell':'voxel', cell: voxel }
   }
   if (tool === 'delete') {
-    if (event.shiftKey || event.ctrlKey) {
+    if (event.shiftKey || (event.ctrlKey && props.drawMode!=='cube')) {
       const we = wallEdgeFromEvent(event)
       if (!we) return null
       return { type: 'wall-edge', tile: we.tile, face: we.face }
@@ -2112,6 +2154,12 @@ function getHoveredHit(event: MouseEvent): EditHit | null {
   const cell = editorCell(event)
   if (!cell) return null
   return { type: 'cell', cell }
+}
+
+function boxCellFromPointer(pointer: BoxPointer): Vec3 | null {
+  const event=pointer as MouseEvent
+  if(props.activeTool==='spawn'||props.activeTool==='delete')return voxelCellFromEvent(event)??editorCell(event)
+  return editorCell(event)
 }
 
 function tilesBetween(start: Vec3, end: Vec3): Vec3[] {
@@ -2187,6 +2235,7 @@ function updateHoverGhost(event: MouseEvent) {
   if (tool === 'eyedropper' && cell) message = 'Pick material at (' + [cell.x, cell.y, cell.z].join(', ') + ')'
   if (invalidInputs) { message = 'Use whole numbers: Level Y, brush size 1–32, and wall height 1–64.'; invalid = true }
   if (brushPreview.invalid) { message = 'This stroke is too large. Shorten it to stay under 100,000 cells.'; invalid = true }
+  if(supportsVerticalDrag(tool,props.drawMode))message+=boxDrag.vertical?' | Vertical: move up/down; release Ctrl for horizontal.':' | Hold Ctrl + drag up/down to change height.'
   editorHint.value = { x: Math.max(8, Math.min(event.clientX - (rect?.left ?? 0) + 18, (rect?.width ?? 600) - 270)), y: Math.max(8, Math.min(event.clientY - (rect?.top ?? 0) + 20, (rect?.height ?? 600) - 65)), text: message, invalid }
   const key = JSON.stringify([tool, props.drawMode, props.brushSize, props.roundBrush, props.currentEditY, props.planeLock, props.roomHeight, props.roomFloor, props.stamp?.id, props.stampTurns, props.rampDirection, cell, hit && 'face' in hit ? hit.face : null, dragStartHit, strokePoints, getMapGeometryRevision(props.map)])
   if (!mapPreviewChanged(hoverGhostGroup, key)) return
@@ -2230,6 +2279,7 @@ function updateHoverGhost(event: MouseEvent) {
     : dragStartHit ? tilesBetween(start ?? cell, cell) : drawCells(cell, cell, props.drawMode, props.brushSize ?? 1, props.roundBrush)
   if (!cells.length && editorHint.value) editorHint.value = { ...editorHint.value, text: 'Shorten this edit to stay under 100,000 cells.', invalid: true }
   const ghost = tool === 'voxel' || tool === 'ramp' || hit.type === 'voxel' ? makeVoxelGhostMesh : tool === 'stairs' ? makeStairGhostMesh : makeTileGhostMesh
+  if(props.drawMode==='cube'&&dragStartHit&&start)hoverGhostGroup.add(previewBox(selectionBox(start,cell),color))
   for (const p of cells.slice(0, 1000)) hoverGhostGroup.add(ghost(p, color))
   if (cells.length > 1000) { const box = props.drawMode === 'brush' ? brushPreview.bounds : fragmentBounds({ groundTiles: cells as any }); if (box) hoverGhostGroup.add(previewBox(box, color)) }
 }
@@ -2309,6 +2359,7 @@ function cameraAction(action: string) {
   controls.minPolarAngle = controls.maxPolarAngle = polar
   controls.target.copy(target)
   camera.position.setFromSpherical(new THREE.Spherical(distance, polar, Math.PI / 4 + isoCorner * Math.PI / 2)).add(target)
+  fogReferenceDistance = distance; fogReferenceDensity = view.fogDensity
   camera.far = view.far; camera.updateProjectionMatrix(); scene.fog = new THREE.FogExp2(0x1a1a2e, view.fogDensity)
   azimuthTween = null; controls.update(); camera.updateMatrixWorld(true); invalidateFrame()
 }
@@ -2405,6 +2456,7 @@ function onMouseDown(event: MouseEvent) {
   }
   if (!props.isDm || props.activeTool === 'select') return
   dragStartHit = getHoveredHit(event)
+  if (supportsVerticalDrag(props.activeTool,props.drawMode)&&dragStartHit?.type==='cell')boxDrag.start(dragStartHit.cell,event)
   strokePoints = dragStartHit && 'cell' in dragStartHit ? [dragStartHit.cell] : []
   brushPreview.cells.clear(); brushPreview.bounds = null; brushPreview.invalid = false
   if (props.drawMode === 'brush' && dragStartHit) recordBrushPoint(event)
@@ -2425,7 +2477,7 @@ function onMouseUp(event: MouseEvent) {
   if (tool === 'area-select') {
     const start = 'cell' in dragStartHit ? dragStartHit.cell : null
     const end = endHit && 'cell' in endHit ? endHit.cell : start
-    if (start && end) emit('area-selected', start, end)
+    if (start && end) emit('area-selected', start, end, boxDrag.heightAdjusted)
     cancelEditorGesture(); return
   }
   if (props.drawMode === 'brush' && ['voxel', 'ramp', 'stairs', 'add-ground', 'add-space', 'paint-element', 'ceiling', 'delete'].includes(tool)) {
@@ -3056,6 +3108,7 @@ watch(() => props.activeTool, (tool) => {
   syncEditorCameraControls()
   cancelEditorGesture()
 }, { immediate: true })
+watch(() => props.drawMode, () => cancelEditorGesture())
 
 // A HUD drag that ends anywhere but a valid cell (dropped off the map, or Esc) leaves its preview
 // behind, since `dragleave`/`drop` never fire for a refused spot.

@@ -2,7 +2,7 @@ import { inArray } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
 
 type ScopedKind = 'tamer' | 'digimon' | 'map' | 'evolution-line'
-function invalid(): never { throw createError({ statusCode: 400, message: 'Linked character records belong to conflicting campaigns' }) }
+function invalid(): never { throw createError({ statusCode: 400, message: 'Linked character records belong to conflicting campaigns', data: { code: 'INVALID_CHARACTER_SCOPE' } }) }
 const chainIds = (line: any): string[] => {
   let chain = line.chain
   if (typeof chain === 'string') { try { chain = JSON.parse(chain) } catch { invalid() } }
@@ -21,8 +21,15 @@ export function createEntityScopeResolver(seedRows: any[] = [], seedKind: Scoped
     const linkedLines = new Map<string, Set<string>>(), formsByLine = new Map<string, string[] | null>()
     for (const line of lines.values()) {
       let ids: string[]
-      try { ids = chainIds(line) } catch { formsByLine.set(line.id, null); continue }
-      formsByLine.set(line.id, ids)
+      try { ids = chainIds(line); formsByLine.set(line.id, ids) }
+      catch {
+        formsByLine.set(line.id, null)
+        // Keep recognizable edges protected even when another entry is broken.
+        // Resolving this line or one of its forms must still fail closed.
+        let chain = line.chain
+        if (typeof chain === 'string') { try { chain = JSON.parse(chain) } catch { chain = [] } }
+        ids = Array.isArray(chain) ? chain.flatMap(entry => typeof entry?.digimonId === 'string' && entry.digimonId ? [entry.digimonId] : []) : []
+      }
       for (const id of ids) {
         if (!linkedLines.has(id)) linkedLines.set(id, new Set())
         linkedLines.get(id)!.add(line.id)
@@ -37,7 +44,7 @@ export function createEntityScopeResolver(seedRows: any[] = [], seedKind: Scoped
       visited.add(id)
       if (isLine) {
         const ids = formsByLine.get(id)
-        if (!ids) invalid()
+        if (!ids) continue // Reject this line when resolved; do not poison unrelated list rows.
         for (const formId of ids) pending.push([false, formId])
       } else for (const lineId of linkedLines.get(id) ?? []) pending.push([true, lineId])
     }
@@ -73,7 +80,11 @@ export function createEntityScopeResolver(seedRows: any[] = [], seedKind: Scoped
         scopes.add(partner.campaignId ?? null)
       }
       if (scopes.size > 1) invalid()
-      if (isLine) for (const formId of graph.formsByLine.get(id) ?? []) pending.push([false, formId])
+      if (isLine) {
+        const ids = graph.formsByLine.get(id)
+        if (!ids) invalid()
+        for (const formId of ids) pending.push([false, formId])
+      }
       else for (const lineId of graph.linkedLines.get(id) ?? []) pending.push([true, lineId])
     }
     return [...scopes][0] ?? null

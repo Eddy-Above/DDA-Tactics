@@ -79,7 +79,7 @@ async function configure(tool, values = {}) {
   await settle()
 }
 async function point(x = 0, y = 0, z = 0) { return evaluate(`mapEditor.canvas.probe().project(${x},${y},${z})`) }
-async function mouse(type, p, button = 'left', buttons = 0) { await cdp.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button, buttons, clickCount: type === 'mouseMoved' ? 0 : 1 }) }
+async function mouse(type, p, button = 'left', buttons = 0, modifiers = 0) { await cdp.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button, buttons, modifiers, clickCount: type === 'mouseMoved' ? 0 : 1 }) }
 async function drag(a, b = a, release = true) {
   await mouse('mouseMoved', a)
   await mouse('mousePressed', a, 'left', 1)
@@ -89,7 +89,7 @@ async function drag(a, b = a, release = true) {
     await mouse('mouseReleased', b)
   await settle()
 }
-async function key(type, key, code) { await cdp.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: code === 'Space' ? 32 : 27 }) }
+async function key(type, key, code) { await cdp.send('Input.dispatchKeyEvent', { type, key, code, modifiers: key==='Control'&&type==='keyDown'?2:0, windowsVirtualKeyCode: ({Space:32,Control:17,Enter:13,ArrowDown:40,ArrowUp:38,Escape:27})[key]??27 }) }
 async function choose(label, value) {
   await evaluate(`(()=>{const label=[...document.querySelectorAll('.map-toolbar label')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(label)}));const el=label.querySelector('select,input');if(el.type==='checkbox')el.checked=${JSON.stringify(value)};else el.value=${JSON.stringify(String(value))};el.dispatchEvent(new Event(el.tagName==='SELECT'||el.type==='checkbox'?'change':'input',{bubbles:true}));})()`)
   await settle()
@@ -130,13 +130,16 @@ try {
     import {createApp,createSSRApp,h,ref,Suspense} from '${absolute(resolve(app, 'node_modules/vue/dist/vue.esm-bundler.js'))}';
     import App from '${absolute(resolve(app, 'tests/fixtures/MapEditorBrowser.vue'))}';
     import Maps from '${absolute(resolve(app, mapListFile))}';
+    import CharacterExportMenu from '${absolute(resolve(app, 'components/CharacterExportMenu.vue'))}';
+    import ParticipantPicker from '${absolute(resolve(app, 'components/ParticipantPicker.vue'))}';
     import {useMap} from '${absolute(resolve(app, 'composables/useMap.ts'))}';
     if(${noMultiDraw}){
       const getExtension=WebGL2RenderingContext.prototype.getExtension;
       WebGL2RenderingContext.prototype.getExtension=function(name){return name==='WEBGL_multi_draw'?null:getExtension.call(this,name)};
     }
     globalThis.definePageMeta=()=>{};globalThis.useRoute=()=>({params:{campaignId:'campaign'}});
-    globalThis.useTamers=()=>({});globalThis.useDigimon=()=>({});globalThis.useMap=useMap;
+    globalThis.useTamers=()=>({});globalThis.useDigimon=()=>({});globalThis.useEvolution=()=>({});globalThis.useMap=useMap;
+    globalThis.$fetch=async url=>url==='/api/digimon'?{data:[]}:[];
     globalThis.mapListRequests=0;
     globalThis.useRequestFetch=()=>async()=>{globalThis.mapListRequests++;return ${JSON.stringify(mapListData)}};
     globalThis.useAsyncData=async(_key,load)=>({data:ref(window.__mapPayload??await load()),error:ref(null)});
@@ -144,6 +147,25 @@ try {
     const register=app=>{app.component('NuxtLink',{props:['to'],setup:(props,{slots})=>()=>h('a',{href:props.to},slots.default?.())});return app};
     let application=register(location.pathname==='/maps'?createSSRApp(mapsRoot):createApp(App));application.mount('#app');
     window.openMapList=()=>{application.unmount();history.pushState({},'','/maps');application=register(createApp(mapsRoot));application.mount('#app')};
+    window.openExportMenus=()=>{
+      application.unmount();
+      const click=HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click=function(){if(this.download)window.exportFilename=this.download;else click.call(this)};
+      URL.createObjectURL=blob=>{window.exportReady=blob.text().then(text=>window.exported=JSON.parse(text));return 'blob:fixture'};
+      URL.revokeObjectURL=()=>{};
+      application=createApp({render:()=>h('div',{style:'padding:40px;display:flex;justify-content:space-between'},[
+        h(CharacterExportMenu,{kind:'tamer',record:{id:'sora',name:'Sora',age:14,totalXp:150,xp:10}}),
+        h(CharacterExportMenu,{kind:'digimon',record:{id:'biyomon',name:'Biyomon',stage:'rookie',partnerId:'sora'}})
+      ])});application.mount('#app');
+    };
+    window.openParticipantPicker=()=>{
+      application.unmount();
+      const selected=ref([]),options=ref([{value:'biyomon',label:'Biyomon (rookie)',searchText:'Piyo'},{value:'birdramon',label:'Birdramon (champion)'}]),multiple=ref(false);
+      window.participantPicker={selected,options,multiple};
+      application=createApp({render:()=>h('div',{style:'padding:40px;max-width:440px'},[
+        h(ParticipantPicker,{modelValue:selected.value,options:options.value,multiple:multiple.value,label:'Encounter participants','onUpdate:modelValue':value=>selected.value=value})
+      ])});application.mount('#app');
+    };
   `)
   await build({
     esbuild: { tsconfigRaw: { compilerOptions: { target: 'ES2022', useDefineForClassFields: true } } },
@@ -154,15 +176,20 @@ try {
         // Diagnostics exist only in this fixture build, never in the application.
         return source.replace('defineExpose({ movingParticipantId, cameraAction })', `defineExpose({ movingParticipantId, cameraAction, probe:()=>({
         project:(x:number,y:number,z:number)=>{const v=new THREE.Vector3(x,y,z).project(camera),r=canvasRef.value!.getBoundingClientRect();return {x:r.left+(v.x+1)*r.width/2,y:r.top+(1-v.y)*r.height/2}},
-        camera:camera.position.toArray(),target:controls.target.toArray(),fog:(scene.fog as THREE.FogExp2)?.density,
+        camera:camera.position.toArray(),target:controls.target.toArray(),fog:(scene.fog as THREE.FogExp2)?.density,viewDistance:camera.position.distanceTo(controls.target),
+        fogPixels:()=>{
+          const context=renderer.getContext(),sample=()=>{renderer.render(scene,camera);const pixel=new Uint8Array(4);context.readPixels(Math.floor(canvasRef.value!.width/2),Math.floor(canvasRef.value!.height/2),1,1,context.RGBA,context.UNSIGNED_BYTE,pixel);return [...pixel]};
+          const fog=scene.fog as THREE.FogExp2,density=fog.density;
+          const fogged=sample();fog.density=0;const clear=sample();fog.density=density;renderer.render(scene,camera);return {fogged,clear};
+        },
         renderer:{...renderer.info.memory,calls:renderer.info.render.calls},terrain:terrain?.stats(),
         ghostCells:hoverGhostGroup.children.length,selectionGhosts:selectionPreviewGroup?.children.length??0,
-        pan:spacePanning.value,gesture:panGesture,drag:!!dragStartHit,stroke:strokePoints.length,
+        pan:spacePanning.value,gesture:panGesture,drag:!!dragStartHit,stroke:strokePoints.length,boxEnd:boxDrag.end,boxVertical:boxDrag.vertical,boxPointer:boxDrag.pointer,
         multiDraw:renderer.extensions.has('WEBGL_multi_draw'),
         profileFrames:()=>{const times:number[]=[];for(let i=0;i<5;i++){const start=performance.now();renderer.render(scene,camera);renderer.getContext().finish();times.push(performance.now()-start)}return times},
       }) })`)
       },
-    }, vue()], build: { outDir: resolve(workspace, 'site'), emptyOutDir: true, chunkSizeWarningLimit: 2000 }
+    }, vue({ template: { compilerOptions: { comments: false } } })], build: { outDir: resolve(workspace, 'site'), emptyOutDir: true, chunkSizeWarningLimit: 2000 }
   })
   const builtHtml = await readFile(resolve(workspace, 'site/index.html'), 'utf8')
   await writeFile(resolve(workspace, 'site/maps.html'), builtHtml.replace('<div id="app"></div>', `<div id="app">${mapListHtml}</div>${mapListTeleports}<script>window.__mapPayload=${JSON.stringify(mapListData)}</script>`))
@@ -260,6 +287,34 @@ try {
   assert.equal((await state()).walls.length, 4)
   await click('Undo'); assert.equal((await state()).walls.length, 0)
   check('circle blocks, ramps, stairs, ceilings and advanced volumes')
+  for (const releaseControlFirst of [false, true]) {
+    await reset()
+    await configure('voxel', { drawMode: 'cube', planeLock: true })
+    const start=await point(.5,.12,.5),up={x:start.x+60,y:start.y-72}
+    await mouse('mousePressed',start,'left',1)
+    await key('keyDown','Control','ControlLeft')
+    await mouse('mouseMoved',up,'left',1,2)
+    await settle()
+    assert.deepEqual(await evaluate('mapEditor.canvas.probe().boxEnd'),{x:0,y:3,z:0})
+    if(releaseControlFirst)await key('keyUp','Control','ControlLeft')
+    await mouse('mouseReleased',up,'left',0,releaseControlFirst?0:2)
+    await key('keyUp','Control','ControlLeft')
+    await settle()
+    assert.deepEqual((await state()).voxels.map(({x,y,z})=>({x,y,z})).sort((a,b)=>a.y-b.y),
+      [0,1,2,3].map(y=>({x:0,y,z:0})))
+    await click('Undo');assert.equal((await state()).voxels.length,0)
+  }
+  await reset()
+  await configure('area-select', { planeLock: true, selectionAllHeights: true })
+  const selectStart=await point(.5,.12,.5),down={x:selectStart.x,y:selectStart.y+48}
+  await key('keyDown','Control','ControlLeft')
+  await mouse('mousePressed',selectStart,'left',1,2)
+  await mouse('mouseMoved',down,'left',1,2)
+  await mouse('mouseReleased',down,'left',0,2)
+  await key('keyUp','Control','ControlLeft');await settle()
+  assert.equal(await evaluate('mapEditor.editor.selectionAllHeights.value'),false)
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(mapEditor.editor.selection.value))'),{min:{x:0,y:-2,z:0},max:{x:0,y:0,z:0}})
+  check('Ctrl Box height, fixed footprint, either release order, bounded Select area and atomic undo')
   await reset()
   await configure('voxel', { drawMode: 'brush', brushSize: 3, planeLock: true })
   const a = await point(-3.5, .12, -3.5), bend = await point(3.5, .12, -3.5), b = await point(3.5, .12, 3.5)
@@ -396,6 +451,30 @@ try {
   report.largeMap = { cells: 12500, renderer: await evaluate('mapEditor.canvas.probe().renderer'), frameMs: await evaluate('mapEditor.canvas.probe().profileFrames()'), gpu: 'Chrome SwiftShader software renderer' }
   assert.ok(report.largeMap.renderer.calls < 15000, 'mixed map retains chunk batching')
   check('12,500-cell mixed-map WebGL profile and shader compilation')
+  report.encounterFog=[]
+  for(const isDm of [true,false]) {
+    await evaluate(`mapEditor.isDm.value=${isDm};mapEditor.canvas.cameraAction('fit')`)
+    await settle()
+    const fit=await evaluate('mapEditor.canvas.probe()')
+    assert.ok(fit.fog<.01,'large overview starts with scaled fog')
+    const cursor=await evaluate(`(()=>{const r=document.querySelector('canvas').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()`)
+    for(let step=0;step<20&&await evaluate('mapEditor.canvas.probe().viewDistance>20');step++) {
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseWheel',...cursor,deltaX:0,deltaY:-300})
+      await settle()
+    }
+    const zoomed=await evaluate('mapEditor.canvas.probe()')
+    assert.ok(zoomed.viewDistance<=20)
+    assert.equal(zoomed.fog,.04,'normal encounter zoom restores visible fog')
+    const pixels=await evaluate('mapEditor.canvas.probe().fogPixels()')
+    const contrast=pixel=>Math.hypot(...pixel.slice(0,3).map((value,index)=>value-[26,26,46][index]))
+    assert.ok(contrast(pixels.fogged)<contrast(pixels.clear)*.95,JSON.stringify(pixels))
+    const screenshot=await cdp.send('Page.captureScreenshot',{format:'png'})
+    await writeFile(resolve(artifacts,`encounter-fog-${isDm?'gm':'player'}.png`),Buffer.from(screenshot.data,'base64'))
+    await evaluate(`mapEditor.canvas.cameraAction('fit')`);await settle()
+    assert.ok(Math.abs(await evaluate('mapEditor.canvas.probe().fog')-fit.fog)<1e-12,'Fit map restores overview fog')
+    report.encounterFog.push({role:isDm?'gm':'player',fittedDensity:fit.fog,zoomedDensity:zoomed.fog,distance:zoomed.viewDistance,pixels})
+  }
+  check('GM and player encounter zoom restores fog, fades rendered terrain pixels and retains fitted overview visibility')
   await evaluate('window.openMapList()')
   await poll(() => evaluate(`document.querySelector('h1')?.textContent==='Maps'`), 'map list client navigation')
   const mapListSnapshot = () => evaluate(`(()=>{const grid=document.querySelector('.grid');return {html:document.querySelector('.container').outerHTML.replace(/<!--[^]*?-->/g,''),display:getComputedStyle(grid).display,columns:getComputedStyle(grid).gridTemplateColumns,width:grid.getBoundingClientRect().width}})()`)
@@ -407,6 +486,56 @@ try {
   await pause(200)
   assert.deepEqual(await mapListSnapshot(), navigated)
   check('actual campaign map page has identical DOM and grid after navigation and SSR hydration')
+  await evaluate('window.openExportMenus()')
+  await poll(()=>evaluate('document.querySelectorAll(".character-export").length===2'),'export menus')
+  for(const [index,choice,suffix] of [[0,0,'.tamer.json'],[0,1,'.character.json'],[1,0,'.digimon.json'],[1,1,'.digimon-line.json']]) {
+    await evaluate(`(()=>{window.exported=null;const m=document.querySelectorAll('.character-export')[${index}];m.querySelector('summary').click();m.querySelectorAll('button')[${choice}].click()})()`)
+    await poll(()=>evaluate('!!window.exported'),'export download')
+    assert.ok((await evaluate('window.exportFilename')).endsWith(suffix))
+    if(index===0)assert.equal(await evaluate('window.exported.tamer.name'),'Sora')
+    else assert.equal(await evaluate('window.exported.tamer'),undefined)
+    assert.equal(await evaluate(`document.querySelectorAll('.character-export')[${index}].open`),false)
+  }
+  await evaluate(`document.querySelector('summary').focus();document.querySelector('summary').click()`)
+  await key('keyDown','Escape','Escape');await key('keyUp','Escape','Escape')
+  assert.equal(await evaluate(`document.querySelector('.character-export').open`),false)
+  for(const width of [1440,390]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false})
+    for(const index of [0,1]) {
+      await evaluate(`document.querySelectorAll('.character-export summary')[${index}].click()`)
+      await pause(100)
+      const bounds=await evaluate(`(()=>{const r=document.querySelectorAll('.export-options')[${index}].getBoundingClientRect();return {left:r.left,right:r.right}})()`)
+      assert.ok(bounds.left>=0&&bounds.right<=width,JSON.stringify({width,bounds}))
+      await evaluate(`document.querySelectorAll('.character-export summary')[${index}].click()`)
+    }
+  }
+  check('actual Export dropdowns download all four formats and close after export or Escape')
+  await evaluate('window.openParticipantPicker()')
+  const typePicker=async text=>{
+    await evaluate(`(()=>{const input=document.querySelector('.participant-picker input');input.focus();input.select()})()`)
+    await cdp.send('Input.insertText',{text});await pause(50)
+  }
+  await typePicker('PIYO')
+  assert.equal(await evaluate(`document.querySelectorAll('[role="option"]').length`),1)
+  await key('keyDown','Enter','Enter');await key('keyUp','Enter','Enter')
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(participantPicker.selected.value))'),['biyomon'])
+  await typePicker('missing species')
+  assert.match(await evaluate(`document.querySelector('.participant-picker [role="status"]').textContent`),/No matches/)
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(participantPicker.selected.value))'),[],'typing a new search clears the old single selection')
+  await key('keyDown','Escape','Escape');await key('keyUp','Escape','Escape')
+  await evaluate(`participantPicker.options.value=[{value:'sora',label:'Sora'},{value:'tai',label:'Tai'},{value:'matt',label:'Matt'}];participantPicker.multiple.value=true`)
+  for(const name of ['sora','tai']) {
+    await typePicker(name)
+    await key('keyDown','Enter','Enter');await key('keyUp','Enter','Enter')
+  }
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(participantPicker.selected.value))'),['sora','tai'])
+  assert.equal(await evaluate(`document.querySelector('[role="listbox"]').getAttribute('aria-multiselectable')`),'true')
+  await evaluate(`document.querySelector('[aria-label="Remove Sora"]').click()`)
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(participantPicker.selected.value))'),['tai'])
+  await typePicker('matt')
+  await key('keyDown','Enter','Enter');await key('keyUp','Enter','Enter')
+  assert.deepEqual(await evaluate('JSON.parse(JSON.stringify(participantPicker.selected.value))'),['tai','matt'])
+  check('participant search matches names/nicknames, keyboard selects, no-match clears stale single selection and Tamer multi-select retains/removes choices')
   assert.deepEqual(errors, [], 'browser and shader errors')
   report.errors = errors
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify(report, null, 2))

@@ -43,7 +43,11 @@ export function loadTypeScriptWithMocks(relativePath, mocks) {
 /** Compile an SFC in memory for rendering with Vue's installed SSR renderer. */
 export function loadVueComponent(relativePath, options = {}) {
   const filename = resolve(appDirectory, relativePath)
-  const { descriptor, errors } = parse(readFileSync(filename, 'utf8'), { filename })
+  const comments = options.templateOptions?.compilerOptions?.comments
+  const { descriptor, errors } = parse(readFileSync(filename, 'utf8'), {
+    filename,
+    ...(comments !== undefined ? { templateParseOptions: { comments } } : {}),
+  })
   if (errors.length) throw errors[0]
 
   const compiled = compileScript(descriptor, {
@@ -60,7 +64,10 @@ export function loadVueComponent(relativePath, options = {}) {
 
 /** Run selected real page handlers with explicit refs/callbacks, without starting Nuxt. */
 export function loadPageFunctions(relativePath, functionNames, dependencies) {
+  const boxDrag = loadTypeScript('utils/mapBoxDrag.ts')
   dependencies = {
+    ...boxDrag,
+    boxDrag: boxDrag.createMapBoxDrag(),
     ...loadTypeScript('utils/mapRenderResources.ts'),
     ...loadTypeScript('utils/mapEdits.ts'),
     ...dependencies,

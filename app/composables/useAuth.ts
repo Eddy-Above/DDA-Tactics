@@ -1,18 +1,19 @@
 import type { AccountUser } from '../types'
-
-// Module-level (not per-call) so every component sees the same reactive
-// identity — mirrors the singleton-ish usage pattern of useCampaignContext.
-const user = ref<AccountUser | null>(null)
-const loading = ref(false)
-const error = ref<string | null>(null)
-const initialized = ref(false)
+import { computed } from 'vue'
 
 export function useAuth() {
+  // Shared by components in this app, isolated between SSR requests, and
+  // serialized into the hydration payload for the same initial identity.
+  const user = useState<AccountUser | null>('auth-user', () => null)
+  const loading = useState('auth-loading', () => false)
+  const error = useState<string | null>('auth-error', () => null)
+  const initialized = useState('auth-initialized', () => false)
+  const requestFetch = useRequestFetch()
   const isAuthenticated = computed(() => !!user.value)
 
   async function fetchMe(): Promise<void> {
     try {
-      const result = await $fetch<{ user: AccountUser | null }>('/api/auth/me')
+      const result = await requestFetch<{ user: AccountUser | null }>('/api/auth/me')
       user.value = result.user
     } catch (e) {
       console.error('Failed to fetch current user:', e)
@@ -31,6 +32,7 @@ export function useAuth() {
         body: { username, password },
       })
       user.value = { id: result.id, username: result.username }
+      initialized.value = true
       return true
     } catch (e: any) {
       error.value = e?.data?.message || e?.message || 'Failed to register'
@@ -49,6 +51,7 @@ export function useAuth() {
         body: { username, password },
       })
       user.value = { id: result.id, username: result.username }
+      initialized.value = true
       return true
     } catch (e: any) {
       error.value = e?.data?.message || e?.message || 'Invalid username or password'

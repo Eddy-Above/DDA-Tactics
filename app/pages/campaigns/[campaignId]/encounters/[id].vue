@@ -44,6 +44,8 @@ import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, I
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, applyDerivedStatEffects, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
+import { currentPartnerFormIds, encounterPartnerForms } from '~/utils/encounterPartnerForms'
+import { requestErrorMessage } from '~/utils/requestError'
 
 definePageMeta({
   title: 'Encounter',
@@ -85,10 +87,10 @@ const {
   grantInspiration,
 } = useEncounters()
 
-const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats } = useDigimon()
+const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats, error: digimonRosterError, warnings: digimonRosterWarnings } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
 const { tamers, fetchTamers, calculateDerivedStats: calcTamerStats } = useTamers()
-const { fetchEvolutionLines, evolutionLines, getCurrentStage, getEvolutionOptions, updateEvolutionLine } = useEvolution()
+const { fetchEvolutionLines, evolutionLines, getCurrentStage, getEvolutionOptions, updateEvolutionLine, error: evolutionLoadError } = useEvolution()
 
 // Special Orders state
 const showSpecialOrdersModal = ref(false)
@@ -99,9 +101,17 @@ const showIntercedeOptOuts = ref(false)
 const intercedeOptOutSelections = ref<Set<string>>(new Set())
 const selectedEntityType = ref<'digimon' | 'enemy' | 'tamer'>('digimon')
 const selectedEntityId = ref('')
+const selectedTamerIds = ref<string[]>([])
+const addingParticipants = ref(false)
+const participantAddError = ref('')
+const participantRosterLoading = ref(false)
+const participantRosterError = ref('')
 const selectedNpcEvoLineId = ref<string>('')
 const addQuantity = ref(1)
 const addToReserve = ref(false)
+watch([showAddParticipant, selectedEntityType], () => {
+  selectedEntityId.value = ''; selectedTamerIds.value = []; selectedNpcEvoLineId.value = ''; participantAddError.value = ''
+})
 const deployingId = ref<string | null>(null)
 const showDuplicateModal = ref(false)
 const togglingVisibility = ref(false)
@@ -1391,104 +1401,139 @@ async function handleSaveGmIntercedeOptOuts() {
   }
 }
 
-// Add participant handler - supports adding multiple of the same entity
-async function handleAddParticipant() {
-  if (!currentEncounter.value || !selectedEntityId.value) return
-
-  // For tamers, add as a placeholder participant (initiative -1 = pending setup)
-  // Digimon selection requests are sent later via "Engage Combat"
-  if (selectedEntityType.value === 'tamer') {
-    const tamer = tamers.value.find(t => t.id === selectedEntityId.value)
-    const derived = tamer ? calcTamerStats(tamer, eddySoulRules.value) : null
-    const maxWounds = derived?.woundBoxes ?? 5
-    const initialWounds = tamer?.currentWounds ?? 0
-    const initialInspiration = tamer
-      ? (tamer.inspiration ?? 1) + (tamer.grantedInspiration ?? 0) + ((tamer.xpBonuses?.inspiration) ?? 0)
-      : 1
-    const participant = createParticipant('tamer', selectedEntityId.value, -1, 0, maxWounds, undefined, undefined, initialWounds, undefined, initialInspiration)
-    if (addToReserve.value) (participant as any).inReserve = true
-    await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
-    showAddParticipant.value = false
-    selectedEntityId.value = ''
-    addQuantity.value = 1
-    addToReserve.value = false
-    return
+async function openAddParticipant() {
+  showAddParticipant.value = true
+  participantRosterLoading.value = true
+  participantRosterError.value = ''
+  try {
+    await recordRefreshQueue.run(async () => {
+      await Promise.all([
+        fetchEvolutionLines(),
+        digimonRosterError.value ? fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }) : Promise.resolve(),
+      ])
+      if (digimonRosterError.value) throw new Error(digimonRosterError.value)
+      if (evolutionLoadError.value) throw new Error(evolutionLoadError.value)
+      await syncCurrentPartnerForms()
+    })
+  } catch (cause) {
+    participantRosterError.value = requestErrorMessage(cause, 'Could not refresh partner forms. Please try again.')
+  } finally {
+    participantRosterLoading.value = false
   }
+}
 
-  // For digimon/enemies, add directly with rolled initiative
-  const quantity = addQuantity.value || 1
+// Add participant handler - supports multiple Tamers or copies of one Digimon.
+async function handleAddParticipant() {
+  if (!currentEncounter.value || addingParticipants.value || participantRosterLoading.value) return
+  if (selectedEntityType.value === 'tamer' ? !selectedTamerIds.value.length : !selectedEntityId.value) return
+  addingParticipants.value = true
+  participantAddError.value = ''
+  try {
 
-  for (let i = 0; i < quantity; i++) {
-    let initiative = 0
-    let initiativeRoll = 0
-    let maxWounds = 5
-    let digimonTotalHealth: number | undefined
+    // For tamers, add as a placeholder participant (initiative -1 = pending setup)
+    // Digimon selection requests are sent later via "Engage Combat"
+    if (selectedEntityType.value === 'tamer') {
+      for (const id of [...new Set(selectedTamerIds.value)]) {
+        const tamer = tamers.value.find(t => t.id === id)
+        if (!tamer) throw new Error('A selected Tamer is no longer available. Refresh the encounter and try again.')
+        const derived = tamer ? calcTamerStats(tamer, eddySoulRules.value) : null
+        const maxWounds = derived?.woundBoxes ?? 5
+        const initialWounds = tamer?.currentWounds ?? 0
+        const initialInspiration = tamer
+          ? (tamer.inspiration ?? 1) + (tamer.grantedInspiration ?? 0) + ((tamer.xpBonuses?.inspiration) ?? 0)
+          : 1
+        const participant = createParticipant('tamer', id, -1, 0, maxWounds, undefined, undefined, initialWounds, undefined, initialInspiration)
+        if (addToReserve.value) (participant as any).inReserve = true
+        const added = await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
+        if (!added) throw new Error(error.value || `Could not add ${tamer.name}. Please try again.`)
+        selectedTamerIds.value = selectedTamerIds.value.filter(value => value !== id)
+      }
+      showAddParticipant.value = false
+      selectedEntityId.value = ''
+      addQuantity.value = 1
+      addToReserve.value = false
+      return
+    }
 
-    if (selectedEntityType.value === 'digimon' || selectedEntityType.value === 'enemy') {
-      const digimon = digimonMap.value.get(selectedEntityId.value)
-      if (digimon) {
-        // Reserves roll on deploy, not now — park them at -1 like a queued tamer
-        if (addToReserve.value) {
-          initiative = -1
-          initiativeRoll = 0
-        } else {
-          const result = rollDigimonInitiative(digimon)
-          initiative = result.total
-          initiativeRoll = result.roll
-        }
-        const derived = calcDigimonStats(digimon)
-        maxWounds = derived.woundBoxes
-        digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
-        if (digimon.isEnemy && eddySoulRules.value?.enemyDoubleWounds) {
-          maxWounds = maxWounds * 2
+    // For digimon/enemies, add directly with rolled initiative
+    const quantity = addQuantity.value || 1
+
+    for (let i = 0; i < quantity; i++) {
+      let initiative = 0
+      let initiativeRoll = 0
+      let maxWounds = 5
+      let digimonTotalHealth: number | undefined
+
+      if (selectedEntityType.value === 'digimon' || selectedEntityType.value === 'enemy') {
+        const digimon = digimonMap.value.get(selectedEntityId.value)
+        if (digimon) {
+          // Reserves roll on deploy, not now — park them at -1 like a queued tamer
+          if (addToReserve.value) {
+            initiative = -1
+            initiativeRoll = 0
+          } else {
+            const result = rollDigimonInitiative(digimon)
+            initiative = result.total
+            initiativeRoll = result.roll
+          }
+          const derived = calcDigimonStats(digimon)
+          maxWounds = derived.woundBoxes
+          digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
+          if (digimon.isEnemy && eddySoulRules.value?.enemyDoubleWounds) {
+            maxWounds = maxWounds * 2
+          }
         }
       }
+
+      // Look up evolution line for partner digimon or NPC
+      let evoLineId: string | undefined
+      if (selectedEntityType.value === 'digimon') {
+        const matchingLine = evolutionLines.value.find((line) => {
+          const stage = getCurrentStage(line)
+          return stage?.digimonId === selectedEntityId.value
+        })
+        if (matchingLine) evoLineId = matchingLine.id
+      } else if (selectedEntityType.value === 'enemy' && selectedNpcEvoLineId.value) {
+        evoLineId = selectedNpcEvoLineId.value
+      }
+
+      const digimonEntity = digimonMap.value.get(selectedEntityId.value)
+      const persistWounds = selectedEntityType.value !== 'enemy' && digimonEntity &&
+        (digimonEntity.stage === 'fresh' || digimonEntity.stage === 'in-training' || digimonEntity.stage === 'rookie')
+      const initialWoundsForDigimon = persistWounds ? (digimonEntity!.currentWounds ?? 0) : 0
+      const participant = createParticipant(
+        selectedEntityType.value === 'enemy' ? 'digimon' : selectedEntityType.value,
+        selectedEntityId.value,
+        initiative,
+        initiativeRoll,
+        maxWounds,
+        evoLineId,
+        selectedEntityType.value === 'enemy' ? true : undefined,
+        initialWoundsForDigimon,
+        digimonTotalHealth
+      )
+
+      // Initialize npcStageIndex for NPC participants with evolution line
+      if (selectedEntityType.value === 'enemy' && evoLineId) {
+        const evoLine = evolutionLines.value.find(l => l.id === evoLineId)
+        if (evoLine) (participant as any).npcStageIndex = evoLine.currentStageIndex
+      }
+
+      if (addToReserve.value) (participant as any).inReserve = true
+
+      await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
     }
 
-    // Look up evolution line for partner digimon or NPC
-    let evoLineId: string | undefined
-    if (selectedEntityType.value === 'digimon') {
-      const matchingLine = evolutionLines.value.find((line) => {
-        const stage = getCurrentStage(line)
-        return stage?.digimonId === selectedEntityId.value
-      })
-      if (matchingLine) evoLineId = matchingLine.id
-    } else if (selectedEntityType.value === 'enemy' && selectedNpcEvoLineId.value) {
-      evoLineId = selectedNpcEvoLineId.value
-    }
-
-    const digimonEntity = digimonMap.value.get(selectedEntityId.value)
-    const persistWounds = selectedEntityType.value !== 'enemy' && digimonEntity &&
-      (digimonEntity.stage === 'fresh' || digimonEntity.stage === 'in-training' || digimonEntity.stage === 'rookie')
-    const initialWoundsForDigimon = persistWounds ? (digimonEntity!.currentWounds ?? 0) : 0
-    const participant = createParticipant(
-      selectedEntityType.value === 'enemy' ? 'digimon' : selectedEntityType.value,
-      selectedEntityId.value,
-      initiative,
-      initiativeRoll,
-      maxWounds,
-      evoLineId,
-      selectedEntityType.value === 'enemy' ? true : undefined,
-      initialWoundsForDigimon,
-      digimonTotalHealth
-    )
-
-    // Initialize npcStageIndex for NPC participants with evolution line
-    if (selectedEntityType.value === 'enemy' && evoLineId) {
-      const evoLine = evolutionLines.value.find(l => l.id === evoLineId)
-      if (evoLine) (participant as any).npcStageIndex = evoLine.currentStageIndex
-    }
-
-    if (addToReserve.value) (participant as any).inReserve = true
-
-    await addParticipant(currentEncounter.value.id, participant, digimonMap.value)
+    showAddParticipant.value = false
+    selectedEntityId.value = ''
+    selectedNpcEvoLineId.value = ''
+    addQuantity.value = 1
+    addToReserve.value = false
+  } catch (cause) {
+    participantAddError.value = requestErrorMessage(cause, 'Could not add participants. Please try again.')
+  } finally {
+    addingParticipants.value = false
   }
-
-  showAddParticipant.value = false
-  selectedEntityId.value = ''
-  selectedNpcEvoLineId.value = ''
-  addQuantity.value = 1
-  addToReserve.value = false
 }
 
 // Remove participant
@@ -3018,7 +3063,10 @@ onMounted(async () => {
     showMapView.value = true
   }
 
-  await recordRefreshQueue.run(syncEncounterDigimon)
+  await recordRefreshQueue.run(async () => {
+    await syncEncounterDigimon()
+    await syncCurrentPartnerForms()
+  })
 
   // Auto-refresh encounter as a low-frequency fallback; the WebSocket above
   // handles near-instant updates while connected.
@@ -3032,41 +3080,37 @@ onUnmounted(() => {
   if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
 })
 
-// Get set of digimon IDs that are current forms for partners
-const currentPartnerDigimonIds = computed(() => {
-  const ids = new Set<string>()
-
-  for (const evolutionLine of evolutionLines.value) {
-    // Only process evolution lines with partners
-    if (!evolutionLine.partnerId) continue
-
-    const currentStage = getCurrentStage(evolutionLine)
-    if (currentStage?.digimonId) {
-      ids.add(currentStage.digimonId)
+async function syncCurrentPartnerForms() {
+  try {
+    const known = new Set(digimonList.value.map(form => form.id))
+    const missing = currentPartnerFormIds(evolutionLines.value).filter(id => !known.has(id))
+    for (let index = 0; index < missing.length; index += 500) {
+      const ids = missing.slice(index, index + 500)
+      const result = await $fetch<{ data: Digimon[] }>('/api/digimon', { query: { ids: ids.join(',') } })
+      digimonList.value = mergeRecordsById(digimonList.value, result.data)
+      const returned = new Set(result.data.map(form => form.id))
+      if (ids.some(id => !returned.has(id))) participantRosterError.value = 'Some current partner forms could not be read. Their linked records may need repair.'
     }
+  } catch (cause) {
+    participantRosterError.value = requestErrorMessage(cause, 'Could not load current partner forms. Please try again.')
   }
+}
 
-  return ids
-})
-
-// Available entities to add (all entities - can add multiples)
-const availableDigimon = computed(() => {
-  return digimonList.value.filter((digimon) => {
-    // Only show partner digimon (those with a partnerId)
-    if (!digimon.partnerId) {
-      return false
-    }
-
-    // For partners, only show if they're at their current stage
-    return currentPartnerDigimonIds.value.has(digimon.id)
-  })
-})
+const availableDigimon = computed(() => encounterPartnerForms(digimonList.value, evolutionLines.value))
 
 const availableEnemyDigimon = computed(() => {
   return digimonList.value.filter((digimon) => digimon.isEnemy)
 })
 
 const availableTamers = computed(() => tamers.value)
+const participantOptions = computed(() => selectedEntityType.value === 'tamer'
+  ? availableTamers.value.map((tamer: Tamer) => ({ value: tamer.id, label: tamer.name }))
+  : (selectedEntityType.value === 'enemy' ? availableEnemyDigimon.value : availableDigimon.value)
+    .map((form: Digimon) => ({ value: form.id, label: `${form.name} (${form.stage})`, searchText: `${form.nickname ?? ''} ${form.stage}` })))
+const participantSelection = computed({
+  get: () => selectedEntityType.value === 'tamer' ? selectedTamerIds.value : selectedEntityId.value ? [selectedEntityId.value] : [],
+  set: (ids: string[]) => { if (selectedEntityType.value === 'tamer') selectedTamerIds.value = ids; else selectedEntityId.value = ids[0] ?? '' },
+})
 
 const npcEvolutionLineOptions = computed(() => {
   if (selectedEntityType.value !== 'enemy' || !selectedEntityId.value) return []
@@ -3803,7 +3847,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <button
                 v-if="currentEncounter.phase !== 'ended'"
                 class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                @click="showAddParticipant = true"
+                @click="openAddParticipant"
               >
                 + Add Participant
               </button>
@@ -5179,7 +5223,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
         <div
           v-if="showAddParticipant"
           class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
-          @click.self="showAddParticipant = false; addToReserve = false"
+          @click.self="!addingParticipants && (showAddParticipant = false, addToReserve = false)"
         >
           <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
             <h2 class="font-display text-xl font-semibold text-white mb-4">Add Participant</h2>
@@ -5195,6 +5239,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
                   @click="selectedEntityType = 'digimon'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
+                  :disabled="addingParticipants"
                 >
                   🦖 Partner
                 </button>
@@ -5206,6 +5251,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
                   @click="selectedEntityType = 'enemy'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
+                  :disabled="addingParticipants"
                 >
                   ⚔️ Enemy
                 </button>
@@ -5217,6 +5263,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       : 'bg-digimon-dark-700 text-digimon-dark-400',
                   ]"
                   @click="selectedEntityType = 'tamer'; selectedEntityId = ''; selectedNpcEvoLineId = ''"
+                  :disabled="addingParticipants"
                 >
                   👤 Tamer
                 </button>
@@ -5227,31 +5274,16 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <label class="block text-sm text-digimon-dark-400 mb-2">
                 Select {{ selectedEntityType === 'digimon' ? 'Partner Digimon' : selectedEntityType === 'enemy' ? 'Enemy Digimon' : 'Tamer' }}
               </label>
-              <select
-                v-model="selectedEntityId"
-                class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2
-                       text-white focus:border-digimon-orange-500 focus:outline-none"
-              >
-                <option value="">Choose...</option>
-                <template v-if="selectedEntityType === 'digimon'">
-                  <option v-for="d in availableDigimon" :key="d.id" :value="d.id">
-                    {{ d.name }} ({{ d.stage }})
-                  </option>
-                </template>
-                <template v-else-if="selectedEntityType === 'enemy'">
-                  <option v-for="d in availableEnemyDigimon" :key="d.id" :value="d.id">
-                    {{ d.name }} ({{ d.stage }})
-                  </option>
-                </template>
-                <template v-else>
-                  <option v-for="t in availableTamers" :key="t.id" :value="t.id">
-                    {{ t.name }}
-                  </option>
-                </template>
-              </select>
+              <ParticipantPicker :key="selectedEntityType" v-model="participantSelection" :options="participantOptions"
+                :multiple="selectedEntityType === 'tamer'" :disabled="addingParticipants || participantRosterLoading"
+                :label="selectedEntityType === 'tamer' ? 'Tamers' : selectedEntityType === 'enemy' ? 'Enemy Digimon' : 'Partner Digimon'" />
+              <p v-if="participantRosterLoading" role="status" class="mt-2 text-sm text-digimon-dark-400">Refreshing participants…</p>
+              <p v-if="selectedEntityType === 'tamer'" class="mt-2 text-xs text-digimon-dark-400">Select one or more Tamers. Each queues for Digimon selection before initiative.</p>
+              <p v-if="participantRosterError" role="alert" class="mt-2 text-sm text-red-300">{{ participantRosterError }} <button type="button" class="underline" @click="openAddParticipant">Retry</button></p>
+              <p v-for="message in digimonRosterWarnings" v-show="selectedEntityType !== 'tamer'" :key="message" role="status" class="mt-2 text-sm text-yellow-300">{{ message }}</p>
             </div>
 
-            <div class="mb-6">
+            <div v-if="selectedEntityType !== 'tamer'" class="mb-6">
               <label class="block text-sm text-digimon-dark-400 mb-2">Quantity</label>
               <div class="flex items-center gap-3">
                 <button
@@ -5280,9 +5312,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <p class="text-xs text-digimon-dark-400 mt-2">
                 {{ addToReserve
                   ? 'Held in reserve — initiative is rolled when you deploy them'
-                  : selectedEntityType === 'tamer'
-                    ? 'Tamers must respond with digimon selection before rolling initiative'
-                    : 'Each will roll initiative separately (3d6 + Agility)' }}
+                  : 'Each will roll initiative separately (3d6 + Agility)' }}
               </p>
             </div>
 
@@ -5313,7 +5343,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   : 'border-digimon-dark-600 hover:border-digimon-dark-500'
               ]"
             >
-              <input v-model="addToReserve" type="checkbox" class="mt-0.5 accent-digimon-orange-500" />
+              <input v-model="addToReserve" type="checkbox" :disabled="addingParticipants" class="mt-0.5 accent-digimon-orange-500" />
               <span>
                 <span class="text-white text-sm font-semibold">⏸ Add to reserve</span>
                 <span class="block text-xs text-digimon-dark-400 mt-0.5">
@@ -5325,23 +5355,25 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
             <div class="flex gap-3">
               <button
-                :disabled="!selectedEntityId"
+                :disabled="addingParticipants || participantRosterLoading || (selectedEntityType === 'tamer' ? !selectedTamerIds.length : !selectedEntityId)"
                 class="flex-1 bg-digimon-orange-500 hover:bg-digimon-orange-600 disabled:opacity-50
                        text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 @click="handleAddParticipant"
               >
-                {{ selectedEntityType === 'tamer'
-                  ? 'Queue Tamer'
+                {{ addingParticipants ? 'Adding…' : selectedEntityType === 'tamer'
+                  ? `Queue ${selectedTamerIds.length} Tamer${selectedTamerIds.length === 1 ? '' : 's'}`
                   : `Add ${addQuantity > 1 ? `${addQuantity}x ` : ''}& Roll Initiative` }}
               </button>
               <button
                 class="flex-1 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2
                        rounded-lg font-semibold transition-colors"
                 @click="showAddParticipant = false; addToReserve = false"
+                :disabled="addingParticipants"
               >
                 Cancel
               </button>
             </div>
+            <p v-if="participantAddError" role="alert" class="mt-3 text-sm text-red-300">{{ participantAddError }}</p>
           </div>
         </div>
       </Teleport>

@@ -78,8 +78,7 @@ export default defineEventHandler(async (event) => {
   if (body.totalXp != null && body.totalXp < tamerExperience(body).total) {
     throw createError({ statusCode: 400, message: 'Available XP and XP purchases cannot exceed Total XP' })
   }
-  if ((body.totalXp ?? 0) > 0 || tamerExperience(body).total > 0) {
-    if (!body.campaignId) throw createError({ statusCode: 403, message: 'Only a campaign GM can set the XP budget' })
+  if (body.campaignId && ((body.totalXp ?? 0) > 0 || tamerExperience(body).total > 0)) {
     await requireCampaignDm(event, body.campaignId)
   }
 

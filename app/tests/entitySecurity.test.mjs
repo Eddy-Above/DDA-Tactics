@@ -30,7 +30,7 @@ function fixture() {
       assertCanControlTamer: async () => { if (!admitted) throw Object.assign(new Error('denied'), { statusCode: 401 }) },
     },
   })
-  return { ...helper, rows, reads, set: values => { if ('user' in values) user = values.user; if ('admitted' in values) admitted = values.admitted; if ('gm' in values) gm = values.gm } }
+  return { ...helper, rows, reads, store, set: values => { if ('user' in values) user = values.user; if ('admitted' in values) admitted = values.admitted; if ('gm' in values) gm = values.gm } }
 }
 
 test('public unowned Workshop editing survives, while account-owned records remain owner-only', async () => {
@@ -111,4 +111,66 @@ test('filtered legacy form lists share one associated-line metadata read and bat
   assert.deepEqual(await f.filterReadableEntities({}, forms, 'digimon'), [])
   assert.equal(f.reads.filter(table => table === 'evolutionLines').length, 1)
   assert.equal(f.reads.filter(table => table === 'digimon').length, 0, 'the list already supplied every required form')
+})
+
+test('a broken or conflicting form is omitted without rejecting the valid roster or granting access to that form', async () => {
+  const f = fixture()
+  f.set({ admitted: true, gm: true })
+  const forms = [{ id: 'good', campaignId: 'private' }, { id: 'missing-partner', campaignId: 'private', partnerId: 'deleted-tamer' },
+    { id: 'conflict', campaignId: 'private' }]
+  f.rows.digimon.push(...forms)
+  f.rows.evolutionLines.push({ id: 'other-line', campaignId: 'other', chain: [{ digimonId: 'conflict' }] })
+  let omitted = 0
+  assert.deepEqual(await f.filterReadableEntities({}, forms, 'digimon', () => omitted++), [forms[0]])
+  assert.equal(omitted, 2)
+  for (const form of forms.slice(1)) for (const write of [false, true]) {
+    await assert.rejects(f.requireEntityAccess({}, 'digimon', form, write), error => error.statusCode === 400 && error.data.code === 'INVALID_CHARACTER_SCOPE')
+  }
+})
+
+test('a malformed evolution line does not poison other line results, and direct access still rejects it', async () => {
+  const f = fixture()
+  f.set({ admitted: true })
+  const linked = { id: 'linked-to-broken-line', campaignId: null, partnerId: null }
+  f.rows.digimon.push(linked)
+  const lines = [{ id: 'valid-line', campaignId: 'private', chain: [] },
+    { id: 'bad-json', campaignId: 'private', chain: '{' }, { id: 'bad-entry', campaignId: 'private', chain: [{ digimonId: linked.id }, {}] }]
+  f.rows.evolutionLines.push(...lines)
+  assert.deepEqual(await f.filterReadableEntities({}, lines, 'evolution-line'), [lines[0]])
+  for (const line of lines.slice(1)) await assert.rejects(f.requireEntityAccess({}, 'evolution-line', line), { statusCode: 400 })
+  assert.deepEqual(await f.filterReadableEntities({}, [linked], 'digimon'), [], 'a broken chain must not make its recognizable forms public')
+  await assert.rejects(f.requireEntityAccess({}, 'digimon', linked), { statusCode: 400 })
+})
+
+test('the real Digimon GET accepts pageSize 500 and returns valid campaign rows despite a broken linked record', async () => {
+  const f = fixture()
+  f.set({ admitted: true })
+  const forms = [{ id: 'current-partner', campaignId: 'private' }, { id: 'broken', campaignId: 'private', partnerId: 'deleted-tamer' }]
+  f.rows.digimon.push(...forms)
+  const previous = new Map(['defineEventHandler', 'getQuery'].map(key => [key, globalThis[key]]))
+  globalThis.defineEventHandler = handler => handler
+  globalThis.getQuery = () => ({ campaignId: 'private', pageSize: '500' })
+  let membershipChecks = 0, limit
+  const db = { select: projection => {
+    const countQuery = projection && 'value' in projection
+    const query = { from: () => query, where: () => query, limit: value => { limit = value; return query }, offset: () => query,
+      then: (yes, no) => Promise.resolve(countQuery ? [{ value: forms.length }] : forms).then(yes, no) }
+    return query
+  } }
+  try {
+    const handler = loadTypeScriptWithMocks('server/api/digimon/index.get.ts', {
+      '../../db': { ...f.store, db }, '../../utils/entitySecurity': f,
+      '../../utils/campaignSecurity': { requireCampaignMember: async (_event, id) => { assert.equal(id, 'private'); membershipChecks++ } },
+      '../../utils/session': { getSessionUser: async () => null },
+      'drizzle-orm': Object.fromEntries(['eq', 'or', 'inArray', 'and', 'count', 'isNull'].map(name => [name, () => ({})])),
+    }).default
+    const result = await handler({})
+    assert.equal(membershipChecks, 1)
+    assert.equal(limit, 500)
+    assert.equal(result.pageSize, 500)
+    assert.deepEqual(result.data, [forms[0]])
+    assert.match(result.warnings[0], /linked character records need repair/)
+  } finally {
+    for (const [key, value] of previous) value === undefined ? delete globalThis[key] : globalThis[key] = value
+  }
 })

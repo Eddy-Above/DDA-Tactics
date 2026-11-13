@@ -1,5 +1,7 @@
 import type { Tamer, Digimon } from '../server/db/schema'
 import type { GameMap } from '../types'
+import { requestErrorMessage } from '~/utils/requestError'
+import { MAP_GEOMETRY_COLLECTIONS } from '~/utils/mapEdits'
 
 interface ImportResult {
   successful: number
@@ -55,11 +57,20 @@ function validateTamerEntry(data: unknown): string | null {
 function validateMapEntry(data: unknown): string | null {
   if (!data || typeof data !== 'object') return 'Not an object'
   const d = data as Record<string, unknown>
-  if (!d.name || typeof d.name !== 'string') return 'Missing or invalid "name"'
-  if (!d.dimensions || typeof d.dimensions !== 'object') return 'Missing "dimensions"'
-  const dims = d.dimensions as Record<string, unknown>
-  if (typeof dims.width !== 'number' || typeof dims.depth !== 'number') return 'dimensions must have numeric width and depth'
+  if (typeof d.name !== 'string' || !d.name.trim() || d.name.length>1000) return 'Missing or invalid "name"'
+  if(d.description!=null&&typeof d.description!=='string')return 'Map description must be text'
+  for(const key of MAP_GEOMETRY_COLLECTIONS)if(d[key]!=null&&!Array.isArray(d[key]))return `Map ${key} must be an array`
   return null
+}
+
+function importedMapDimensions(value:unknown):GameMap['dimensions']|undefined {
+  if(!value||typeof value!=='object')return undefined
+  const dimensions=value as Record<string,unknown>
+  const positive=(number:unknown):number is number=>typeof number==='number'&&Number.isSafeInteger(number)&&number>0
+  // Dimensions are legacy display metadata; geometry and its coordinates define
+  // endless maps. Old zero/null sizes must not block importing valid terrain.
+  if(!positive(dimensions.width)||!positive(dimensions.depth))return undefined
+  return {width:dimensions.width,depth:dimensions.depth,...(positive(dimensions.height)?{height:dimensions.height}:{})}
 }
 
 function validateDigimonEntry(data: unknown): string | null {
@@ -322,7 +333,7 @@ export function useLibraryImportExport() {
           name: entry.name as string,
           description: (entry.description as string | undefined) ?? '',
           campaignId,
-          dimensions: entry.dimensions as GameMap['dimensions'],
+          dimensions: importedMapDimensions(entry.dimensions),
           generateGround: false,
         })
         await updateMap(created.id, {
@@ -342,7 +353,7 @@ export function useLibraryImportExport() {
         result.errors.push({
           index: i,
           name: (entry.name as string) || '',
-          error: e instanceof Error ? e.message : 'Unknown error',
+          error: requestErrorMessage(e,'Map import failed'),
         })
       }
     }

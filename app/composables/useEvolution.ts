@@ -1,4 +1,5 @@
 import type { EvolutionLine } from '../server/db/schema'
+import { requestErrorMessage } from '~/utils/requestError'
 import type { DigimonStage } from '../types'
 
 export interface EvolutionChainEntry {
@@ -32,7 +33,7 @@ export function useEvolution() {
       const query = params.toString() ? `?${params}` : ''
       evolutionLines.value = await $fetch<EvolutionLine[]>(`/api/evolution-lines${query}`)
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to fetch evolution lines'
+      error.value = requestErrorMessage(e, 'Failed to fetch evolution lines')
       console.error('Failed to fetch evolution lines:', e)
     } finally {
       loading.value = false
@@ -64,7 +65,7 @@ export function useEvolution() {
       evolutionLines.value = [...evolutionLines.value, newLine]
       return newLine
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to create evolution line'
+      error.value = requestErrorMessage(e,'Failed to create evolution line')
       console.error('Failed to create evolution line:', e)
       return null
     } finally {

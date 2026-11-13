@@ -1,8 +1,10 @@
+import { useCampaignNavigationAccess } from '~/composables/useCampaignNavigationAccess'
+
 export default defineNuxtRouteMiddleware(async (to) => {
   const campaignId = to.params.campaignId as string
   if (!campaignId) return
   try {
-    const access = await useRequestFetch()<{ isDm: boolean }>(`/api/campaigns/${campaignId}/my-access`)
+    const access = await useCampaignNavigationAccess(to, campaignId)
     if (access.isDm) {
       useCookie(`campaign-dm-${campaignId}`, { maxAge: 60 * 60 * 24 * 30 }).value = 'true'
       return

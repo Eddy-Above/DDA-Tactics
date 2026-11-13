@@ -179,9 +179,9 @@ function validateBundle(value: unknown): string | null {
 }
 
 export function useCharacterBundle() {
-  const { createTamer } = useTamers()
-  const { createDigimon, updateDigimon } = useDigimon()
-  const { createEvolutionLine, updateEvolutionLine } = useEvolution()
+  const { createTamer, error:tamerError } = useTamers()
+  const { createDigimon, updateDigimon, error:digimonError } = useDigimon()
+  const { createEvolutionLine, updateEvolutionLine, error:evolutionError } = useEvolution()
 
   // Bundle a tamer with their partner digimon, evolution lines, and any
   // digimon referenced by those lines' chains.
@@ -228,12 +228,12 @@ export function useCharacterBundle() {
         name: line.name,
         description: line.description ?? '',
         currentStageIndex: line.currentStageIndex ?? 0,
-        chain: (line.chain ?? []).map((entry) => ({
+        chain: (line.chain ?? []).map((entry, index) => ({
           stage: entry.stage as DigimonStage,
           species: entry.species,
           digimonKey: entry.digimonId ? keyById.get(entry.digimonId) : undefined,
           isUnlocked: entry.isUnlocked ?? false,
-          evolvesFromIndex: entry.evolvesFromIndex ?? null,
+          evolvesFromIndex: entry.evolvesFromIndex === undefined ? (index === 0 ? null : index - 1) : entry.evolvesFromIndex,
         })),
       })),
     }
@@ -242,6 +242,15 @@ export function useCharacterBundle() {
   async function exportCharacterBundle(tamer: Tamer, rules?: CreationRules | null) {
     const bundle = await buildCharacterBundle(tamer, rules)
     downloadJson(bundle, `${sanitizeFilename(tamer.name)}.character.json`)
+  }
+
+  function buildTamerBundle(tamer:Tamer,rules?:CreationRules|null):CharacterBundle {
+    return {format:CHARACTER_BUNDLE_FORMAT,version:1,exportedAt:new Date().toISOString(),
+      rules:rules??tamer.creationRules??defaultCreationRules(),tamer:toBundleTamer(tamer),digimon:[],evolutionLines:[]}
+  }
+
+  function exportTamerBundle(tamer:Tamer,rules?:CreationRules|null) {
+    downloadJson(buildTamerBundle(tamer,rules),`${sanitizeFilename(tamer.name)}.tamer.json`)
   }
 
   function buildDigimonBundle(d: Digimon, rules?: CreationRules | null): CharacterBundle {
@@ -257,6 +266,49 @@ export function useCharacterBundle() {
 
   function exportDigimonBundle(d: Digimon, rules?: CreationRules | null) {
     downloadJson(buildDigimonBundle(d, rules), `${sanitizeFilename(d.name)}.digimon.json`)
+  }
+
+  async function buildDigimonLineBundle(d:Digimon,rules?:CreationRules|null):Promise<CharacterBundle> {
+    const lines=await $fetch<EvolutionLine[]>('/api/evolution-lines',{
+      query:d.partnerId?{partnerId:d.partnerId}:d.campaignId?{campaignId:d.campaignId}:{},
+    })
+    const candidates=lines.filter(line=>d.partnerId?line.partnerId===d.partnerId:(line.campaignId??null)===(d.campaignId??null))
+    const records=new Map<string,Digimon>([[d.id,d]]),included=new Set<EvolutionLine>()
+    while(true) {
+      const needed=new Set<string>()
+      for(const record of records.values()) {
+        if(record.evolvesFromId)needed.add(record.evolvesFromId)
+        for(const id of record.evolutionPathIds??[])needed.add(id)
+      }
+      // A saved line may contain branches without reciprocal links on a form.
+      // Discover every line touching the connected graph, then fetch its forms.
+      for(const line of candidates) {
+        if(!line.chain.some(entry=>records.has(entry.digimonId)))continue
+        included.add(line)
+        for(const entry of line.chain)if(entry.digimonId)needed.add(entry.digimonId)
+      }
+      const missing=[...needed].filter(id=>!records.has(id))
+      if(!missing.length)break
+      for(let index=0;index<missing.length;index+=500) {
+        const ids=missing.slice(index,index+500)
+        const response=await $fetch<{data:Digimon[]}>('/api/digimon',{query:{ids:ids.join(',')}})
+        const available=new Map(response.data.map(record=>[record.id,record]))
+        if(ids.some(id=>!available.has(id)))throw new Error('A linked evolution form is missing or cannot be read. The full line was not exported.')
+        for(const id of ids)records.set(id,available.get(id)!)
+      }
+    }
+    const keyById=new Map([...records.keys()].map((id,index)=>[id,`d${index}`]))
+    return {format:CHARACTER_BUNDLE_FORMAT,version:1,exportedAt:new Date().toISOString(),
+      rules:rules??d.creationRules??defaultCreationRules(),
+      digimon:[...records.values()].map(record=>toBundleDigimon(record,keyById.get(record.id)!,keyById,null)),
+      evolutionLines:[...included].map(line=>({name:line.name,description:line.description??'',currentStageIndex:line.currentStageIndex??0,
+        chain:line.chain.map((entry,index)=>({stage:entry.stage as DigimonStage,species:entry.species,digimonKey:keyById.get(entry.digimonId),
+          isUnlocked:entry.isUnlocked??false,evolvesFromIndex:entry.evolvesFromIndex===undefined?(index===0?null:index-1):entry.evolvesFromIndex}))})),
+    }
+  }
+
+  async function exportDigimonLineBundle(d:Digimon,rules?:CreationRules|null) {
+    downloadJson(await buildDigimonLineBundle(d,rules),`${sanitizeFilename(d.name)}.digimon-line.json`)
   }
 
   // Reads a JSON file and classifies it: a v2 character bundle, or a legacy
@@ -317,7 +369,7 @@ export function useCharacterBundle() {
         creationRules,
       })
       if (!created) {
-        result.errors.push(`Failed to create tamer "${bundle.tamer.name}" — import aborted`)
+        result.errors.push(`Failed to create tamer "${bundle.tamer.name}": ${tamerError?.value??'Server returned no result'} — import aborted`)
         return result
       }
       result.tamerId = created.id
@@ -356,7 +408,7 @@ export function useCharacterBundle() {
         idByKey.set(bd.localKey, created.id)
         result.digimonIds.push(created.id)
       } else {
-        result.errors.push(`Failed to create digimon "${bd.name}"`)
+        result.errors.push(`Failed to create digimon "${bd.name}": ${digimonError?.value??'Server returned no result'}`)
       }
     }
 
@@ -410,7 +462,7 @@ export function useCharacterBundle() {
           await updateEvolutionLine(created.id, { currentStageIndex: line.currentStageIndex })
         }
       } else {
-        result.errors.push(`Failed to create evolution line "${line.name}"`)
+        result.errors.push(`Failed to create evolution line "${line.name}": ${evolutionError?.value??'Server returned no result'}`)
       }
     }
 
@@ -420,8 +472,12 @@ export function useCharacterBundle() {
   return {
     buildCharacterBundle,
     exportCharacterBundle,
+    buildTamerBundle,
+    exportTamerBundle,
     buildDigimonBundle,
     exportDigimonBundle,
+    buildDigimonLineBundle,
+    exportDigimonLineBundle,
     parseBundleFile,
     importBundle,
   }

@@ -14,7 +14,7 @@
     <!-- Full-screen editor canvas -->
     <div class="flex-1 min-h-0 min-w-0 overflow-hidden">
       <EncounterMap
-        v-if="mapData && fakeEncounter"
+        v-if="mapData?.id === mapId && fakeEncounter && !mapError"
         :encounter="fakeEncounter as any"
         :is-dm="true"
         :editor-mode="true"
@@ -26,7 +26,11 @@
         @encounter-updated="() => {}"
         @positions-updated="() => {}"
       />
-      <div v-else class="flex items-center justify-center h-full text-digimon-dark-400">
+      <div v-else-if="mapError" role="alert" class="flex flex-col items-center justify-center gap-3 h-full text-red-300">
+        <p>{{ mapError.message || 'Map could not be loaded.' }}</p>
+        <button class="underline" @click="refreshMap()">Retry</button>
+      </div>
+      <div v-else role="status" class="flex items-center justify-center h-full text-digimon-dark-400">
         Loading map editor...
       </div>
     </div>
@@ -34,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { useMap } from '~/composables/useMap'
+import { computed } from 'vue'
 import type { GameMap, Vec3, DestructibleState } from '~/types'
 
 definePageMeta({ middleware: ['dm-access'], layout: false })
@@ -43,10 +47,17 @@ const route = useRoute()
 const campaignId = computed(() => route.params.campaignId as string)
 const mapId = computed(() => route.params.mapId as string)
 
-const { fetchMap } = useMap()
-const mapData = ref<GameMap | null>(null)
-
-mapData.value = await fetchMap(mapId.value)
+const requestFetch = useRequestFetch()
+const { data: mapData, error: mapError, refresh: refreshMap } = await useAsyncData(
+  () => `campaign-map-editor:${campaignId.value}:${mapId.value}`,
+  async () => {
+    const map = await requestFetch<GameMap>(`/api/maps/${mapId.value}`)
+    if (!map) throw createError({ statusCode: 404, message: 'Map not found' })
+    return map
+  },
+  { lazy: true },
+)
+if (mapError.value) throw createError(mapError.value)
 
 // Create a minimal fake encounter so EncounterMap can render the map
 const fakeEncounter = computed(() => {

@@ -1,4 +1,5 @@
 import type { Digimon } from '../server/db/schema'
+import { requestErrorMessage } from '~/utils/requestError'
 import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type DigimonFamily, type EddySoulRules, type CreationRules } from '../types'
 
 // Extended type for update requests with sync option
@@ -52,12 +53,14 @@ export interface DigimonEnvelope {
   page: number
   pageSize: number
   totalPages: number
+  warnings?: string[]
 }
 
 export function useDigimon() {
   const digimonList = ref<Digimon[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const warnings = ref<string[]>([])
   const total = ref(0)
   const page = ref(1)
   const pageSize = ref(50)
@@ -75,6 +78,7 @@ export function useDigimon() {
   }) {
     loading.value = true
     error.value = null
+    warnings.value = []
     try {
       const query = new URLSearchParams()
       if (filters?.campaignId) query.set('campaignId', filters.campaignId)
@@ -93,8 +97,9 @@ export function useDigimon() {
       page.value = envelope.page
       pageSize.value = envelope.pageSize
       totalPages.value = envelope.totalPages
+      warnings.value = envelope.warnings ?? []
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to fetch digimon'
+      error.value = requestErrorMessage(e, 'Failed to fetch digimon')
       console.error('Failed to fetch digimon:', e)
     } finally {
       loading.value = false
@@ -126,7 +131,7 @@ export function useDigimon() {
       digimonList.value = [...digimonList.value, newDigimon]
       return newDigimon
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to create digimon'
+      error.value = requestErrorMessage(e,'Failed to create digimon')
       console.error('Failed to create digimon:', e)
       return null
     } finally {
@@ -145,7 +150,7 @@ export function useDigimon() {
       digimonList.value = digimonList.value.map((d) => (d.id === id ? updated : d))
       return updated
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to update digimon'
+      error.value = requestErrorMessage(e,'Failed to update digimon')
       console.error('Failed to update digimon:', e)
       return null
     } finally {
@@ -426,6 +431,7 @@ export function useDigimon() {
     digimonList,
     loading,
     error,
+    warnings,
     total,
     page,
     pageSize,

@@ -23,12 +23,13 @@ const empty = (id='browser-map') => ({ id, name:'Browser fixture', dimensions:{w
 const map = shallowRef(empty())
 const editor = useMapEditor(map)
 const canvas = ref<any>(null)
+const isDm = ref(true)
 const canvasProps = computed(() => ({
   map:map.value, participants:[], participantPositions:{}, destructibleStates:[], tamerMap:{}, digimonMap:{},
   activeTool:editor.activeTool.value,drawMode:editor.drawMode.value,brushSize:editor.brushSize.value,roundBrush:editor.roundBrush.value,
   planeLock:editor.planeLock.value,selection:editor.selection.value,selectionPreview:editor.selectionPreview.value,
   stamp:editor.activeStamp.value,stampTurns:editor.stampTurns.value,roomHeight:editor.roomHeight.value,roomFloor:editor.roomFloor.value,
-  currentEditY:editor.currentEditY.value,rampDirection:editor.rampDirection.value,isDm:true,myParticipantIds:[],
+  currentEditY:editor.currentEditY.value,rampDirection:editor.rampDirection.value,isDm:isDm.value,combatActive:true,myParticipantIds:[],
   activeParticipantId:null,secondaryActiveParticipantId:null,selectedAttack:null,attackerRange:0,attackerEffectiveLimit:0,attackerMeleeRange:1,
   attackerCaps:{} as any,reachableCells:new Set<string>(),activePath:[],placingParticipantId:null,gmMoveParticipantId:null,
   npcMoveParticipantId:null,chargeMode:null,chargeMoveParticipantId:null,
@@ -69,7 +70,7 @@ function action(value:string) {
 onMounted(() => {
   editor.loadStamps()
   ;(window as any).mapEditor = {
-    editor,map,get canvas(){return canvas.value},nextTick,
+    editor,map,isDm,get canvas(){return canvas.value},nextTick,
     async reset(content:Partial<GameMap>={},fit=true) {
       editor.selection.value=null
       editor.planeLock.value=false;editor.currentEditY.value=0;editor.brushSize.value=1;editor.drawMode.value='square'

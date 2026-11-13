@@ -25,7 +25,7 @@ const { digimonList, loading, error, fetchDigimon, deleteDigimon, copyDigimon, c
 const calculateDerivedStats = (digimon: any) => _calculateDerivedStats(digimon, eddySoulRules.value)
 const { tamers, fetchTamers } = useTamers()
 const { importDigimon } = useLibraryImportExport()
-const { exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const { parseBundleFile, importBundle } = useCharacterBundle()
 
 const filter = ref<'all' | 'partners' | 'enemies'>('all')
 const selectedTamerIds = ref<string[]>([])
@@ -93,9 +93,10 @@ onMounted(async () => {
   await Promise.all([fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }), fetchTamers(campaignId.value), loadCampaign()])
 })
 
-async function handleExport(digimon: typeof digimonList.value[0]) {
+async function loadExportRules() {
   await loadCampaign()
-  exportDigimonBundle(digimon, campaign.value ? extractCreationRules(campaign.value) : undefined)
+  if(!campaign.value)throw new Error('Campaign rules could not be loaded. Please try again.')
+  return extractCreationRules(campaign.value)
 }
 
 async function handleDelete(id: string, name: string) {
@@ -392,14 +393,7 @@ async function handleImportFile(event: Event) {
             >
               Edit
             </NuxtLink>
-            <button
-              class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
-                     text-white rounded transition-colors"
-              title="Download as a digimon bundle (campaign rules included)"
-              @click="handleExport(digimon)"
-            >
-              Export
-            </button>
+            <CharacterExportMenu kind="digimon" :record="digimon" :load-rules="loadExportRules" />
             <button
               class="px-3 py-1.5 text-sm bg-cyan-900/30 hover:bg-cyan-900/50
                      text-cyan-400 rounded transition-colors"

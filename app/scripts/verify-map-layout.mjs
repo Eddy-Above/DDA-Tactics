@@ -13,7 +13,7 @@ import postcss from 'postcss'
 import tailwindcss from 'tailwindcss'
 import ts from 'typescript'
 import * as Vue from 'vue'
-import { loadVueComponent } from '../tests/helpers/loadTypeScript.mjs'
+import { loadVueComponent, loadTypeScript } from '../tests/helpers/loadTypeScript.mjs'
 
 assert.equal(process.env.DDA_OFFLINE_VERIFY, '1', 'Preload ./scripts/offline-env.mjs')
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -45,13 +45,14 @@ async function component(filename, context, scope) {
 }
 function mapContext(editorMode, isDm = true) {
   const encounter = { id: 'fixture', phase: 'setup', mapId: 'map', participants: [], battleLog: [], destructibleStates: [] }
+  const map = { id: 'map', groundTiles: [], spaceTiles: [], voxels: [], walls: [], doors: [], windows: [], ceilings: [], stairs: [] }
+  const editor = loadTypeScript('composables/useMapEditor.ts').useMapEditor(Vue.shallowRef(map))
   const value = {
     editorMode, props: { editorMode, encounter }, encounter, isDm, bottomOverlayOffset: null, $slots: {},
-    map: { id: 'map' }, liveParticipants: [],
+    map, liveParticipants: [],
     ws: { accessError: { value: 'Campaign access has changed. Verify access and reload to reconnect.' } },
     saveStatus: 'Saved', autosave: { status: { value: 'saved' }, error: { value: null } },
-    editor: Object.fromEntries(['activeTool', 'drawMode', 'elementBrush', 'rampDirection', 'currentEditY', 'canUndo', 'canRedo']
-      .map((name, index) => [name, { value: ['select', 'line', 'void', 'north', 0, false, false][index] }])),
+    editor,
     movement: { reachableCells: { value: [] }, activePath: { value: [] } },
     attackerStats: {}, selectedStructure: null,
   }

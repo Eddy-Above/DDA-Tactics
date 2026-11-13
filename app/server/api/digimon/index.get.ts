@@ -76,12 +76,14 @@ export default defineEventHandler(async (event) => {
     .limit(pageSize)
     .offset((page - 1) * pageSize)
 
-  const data = await filterReadableEntities(event, found, 'digimon')
+  let invalidRecords = 0
+  const data = await filterReadableEntities(event, found, 'digimon', () => { invalidRecords++ })
   return {
     data,
     total: Number(total),
     page,
     pageSize,
     totalPages: Math.ceil(Number(total) / pageSize),
+    ...(invalidRecords ? { warnings: ['Some Digimon were excluded because their linked character records need repair.'] } : {}),
   }
 })

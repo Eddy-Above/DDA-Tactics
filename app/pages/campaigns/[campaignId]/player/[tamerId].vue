@@ -74,17 +74,16 @@ const isChildRoute = computed(() => {
 })
 
 // Character bundle export/import (Character Workshop feature)
-const { exportCharacterBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const { parseBundleFile, importBundle } = useCharacterBundle()
 const digimonFileInputRef = ref<HTMLInputElement | null>(null)
 const digimonImportLoading = ref(false)
 const digimonImportError = ref<string | null>(null)
 const importRulesDiff = ref<CreationRulesDiffEntry[] | null>(null)
 
-async function handleExportCharacter() {
-  if (!tamer.value) return
+async function loadExportRules() {
   await loadCampaign()
-  if (!campaign.value) return
-  await exportCharacterBundle(tamer.value, extractCreationRules(campaign.value))
+  if (!campaign.value) throw new Error('Campaign rules could not be loaded. Please try again.')
+  return extractCreationRules(campaign.value)
 }
 
 function handleImportDigimonClick() {
@@ -5801,13 +5800,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                     >
                       Edit
                     </NuxtLink>
-                    <button
-                      class="text-digimon-orange-400 hover:text-digimon-orange-300 transition-colors text-sm"
-                      title="Download this character (with partner digimon and evolution lines) as a bundle file"
-                      @click="handleExportCharacter"
-                    >
-                      Export
-                    </button>
+                    <CharacterExportMenu kind="tamer" :record="tamer" :load-rules="loadExportRules" />
                   </div>
                   <p class="text-digimon-dark-400">Age {{ tamer.age }} • {{ campaignLevel }} campaign</p>
                   <div class="mt-2 space-y-1">

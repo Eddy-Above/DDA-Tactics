@@ -9,7 +9,7 @@ const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, updateTamer, c
 const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon, updateDigimon } = useDigimon()
 const mapStore = useMap()
 const initialLoading = ref(true)
-const { exportCharacterBundle, exportDigimonBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const { parseBundleFile, importBundle } = useCharacterBundle()
 const { user: currentUser, fetchMe, initialized } = useAuth()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -303,13 +303,7 @@ async function handleImportFile(event: Event) {
                 >
                   Edit
                 </span>
-                <button
-                  class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
-                         text-white rounded transition-colors"
-                  @click="exportCharacterBundle(tamer)"
-                >
-                  Export
-                </button>
+                <CharacterExportMenu kind="tamer" :record="tamer" />
                 <button
                   v-if="isMine(tamer)"
                   :title="tamer.hidden ? 'Make visible to everyone' : 'Hide from other users'"
@@ -402,13 +396,7 @@ async function handleImportFile(event: Event) {
                 >
                   Edit
                 </span>
-                <button
-                  class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
-                         text-white rounded transition-colors"
-                  @click="exportDigimonBundle(d)"
-                >
-                  Export
-                </button>
+                <CharacterExportMenu kind="digimon" :record="d" />
                 <button
                   v-if="isMine(d)"
                   :title="d.hidden ? 'Make visible to everyone' : 'Hide from other users'"

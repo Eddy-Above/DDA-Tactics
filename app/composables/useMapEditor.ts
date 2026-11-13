@@ -451,12 +451,13 @@ export function useMapEditor(currentMap: Ref<GameMap | null>) {
     const directions: WallFace[] = ['north', 'east', 'south', 'west']
     rampDirection.value = directions[(directions.indexOf(rampDirection.value) + step + directions.length) % directions.length]!
   }
-  function setSelection(start: Vec3, end: Vec3) {
+  function setSelection(start: Vec3, end: Vec3, boundedHeight = false) {
     if (!isGridCell(start) || !isGridCell(end)) {
       feedback.value = 'Use whole-number selection coordinates.'
       return
     }
     const box = selectionBox(start, end)
+    if(boundedHeight)selectionAllHeights.value=false
     if (selectionAllHeights.value && currentMap.value) {
       const bounds = fragmentBounds(currentMap.value)
       if (bounds) {

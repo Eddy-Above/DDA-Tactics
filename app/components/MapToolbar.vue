@@ -22,6 +22,7 @@
     <div class="tool-options">
       <strong>{{ activeLabel }}</strong>
       <label v-if="shapeTool">Shape <select v-model="e.drawMode.value"><option value="line">Line</option><option value="square">Rectangle</option><option value="circle">Circle</option><option value="cube">Box</option><option v-if="e.activeTool.value!=='spawn'" value="brush">Brush</option></select></label>
+      <span v-if="shapeTool && e.drawMode.value==='cube'" class="hint">Hold Ctrl + drag up/down to change height; release Ctrl to draw horizontally.</span>
       <template v-if="shapeTool && e.drawMode.value==='brush'">
         <label>Size <input v-model.number="e.brushSize.value" type="number" min="1" max="32" /></label>
         <label><input v-model="e.roundBrush.value" type="checkbox" /> Round brush</label>
@@ -37,6 +38,7 @@
         <span class="hint">Drag a room; use Door or Window on its edges.</span>
       </template>
       <label v-if="e.activeTool.value==='area-select'"><input v-model="e.selectionAllHeights.value" type="checkbox" /> Select all heights</label>
+      <span v-if="e.activeTool.value==='area-select'" class="hint">Hold Ctrl + drag up/down to choose a bounded height.</span>
       <span class="hint">Hold Space + drag to pan &middot; Q/E rotate &middot; Esc cancel</span>
     </div>
     <div v-if="e.selection.value" class="tool-options selection-options">
@@ -65,6 +67,7 @@
 import { computed } from 'vue'
 import type { useMapEditor } from '~/composables/useMapEditor'
 import type { MapTool } from '~/types'
+import { BOX_DRAW_TOOLS } from '~/utils/mapBoxDrag'
 import { MAP_VOXEL_MATERIALS, getVoxelMaterialDefinition } from '~/utils/mapVoxels'
 const props = defineProps<{ editor: ReturnType<typeof useMapEditor> }>()
 const e = props.editor
@@ -78,7 +81,7 @@ const groups: Array<{ name: string; tools: Array<{ id: MapTool; label: string }>
   { name: 'Finish', tools: [{ id: 'paint-element', label: 'Paint' }, { id: 'eyedropper', label: 'Eyedropper' }, { id: 'spawn', label: 'Spawn' }, { id: 'delete', label: 'Erase' }] },
 ]
 const activeLabel = computed(() => groups.flatMap(group => group.tools).find(tool => tool.id === e.activeTool.value)?.label ?? 'Volume')
-const shapeTool = computed(() => ['add-ground', 'add-space', 'paint-element', 'voxel', 'ramp', 'stairs', 'ceiling', 'spawn', 'delete'].includes(e.activeTool.value))
+const shapeTool = computed(() => BOX_DRAW_TOOLS.includes(e.activeTool.value))
 const materialTool = computed(() => ['add-ground', 'paint-element', 'voxel', 'ramp'].includes(e.activeTool.value) || (e.activeTool.value === 'room' && e.roomFloor.value))
 const materialColor = computed(() => '#' + getVoxelMaterialDefinition(e.elementBrush.value).color.toString(16).padStart(6, '0'))
 </script>

@@ -9,7 +9,7 @@ definePageMeta({
 const { campaignId, campaign, eddySoulRules, loadCampaign } = useCampaignContext()
 const { tamers, loading, error, fetchTamers, deleteTamer, calculateDerivedStats } = useTamers()
 const { importTamers } = useLibraryImportExport()
-const { exportCharacterBundle, parseBundleFile, importBundle } = useCharacterBundle()
+const { parseBundleFile, importBundle } = useCharacterBundle()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
@@ -27,9 +27,10 @@ async function handleDelete(id: string, name: string) {
   }
 }
 
-async function handleExport(tamer: (typeof tamers.value)[number]) {
+async function loadExportRules() {
   await loadCampaign()
-  await exportCharacterBundle(tamer, campaign.value ? extractCreationRules(campaign.value) : undefined)
+  if(!campaign.value)throw new Error('Campaign rules could not be loaded. Please try again.')
+  return extractCreationRules(campaign.value)
 }
 
 function handleImportClick() {
@@ -219,14 +220,7 @@ async function handleImportFile(event: Event) {
             >
               Edit
             </NuxtLink>
-            <button
-              class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
-                     text-white rounded transition-colors"
-              title="Download as a character bundle (partner digimon, evolution lines, and campaign rules included)"
-              @click="handleExport(tamer)"
-            >
-              Export
-            </button>
+            <CharacterExportMenu kind="tamer" :record="tamer" :load-rules="loadExportRules" />
             <button
               class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50
                      text-red-400 rounded transition-colors"

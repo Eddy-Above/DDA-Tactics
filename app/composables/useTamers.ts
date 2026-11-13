@@ -1,4 +1,5 @@
 import type { Tamer } from '../server/db/schema'
+import { requestErrorMessage } from '~/utils/requestError'
 import type { CreationRules, EddySoulRules, TamerAttributes, TamerSkills } from '../types'
 
 export interface CreateTamerData {
@@ -86,7 +87,7 @@ export function useTamers() {
       tamers.value = [...tamers.value, newTamer]
       return newTamer
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to create tamer'
+      error.value = requestErrorMessage(e,'Failed to create tamer')
       console.error('Failed to create tamer:', e)
       return null
     } finally {

@@ -44,7 +44,7 @@
       <button class="mt-2 text-xs text-digimon-dark-400 hover:text-white" @click="importResult = null">Dismiss</button>
     </div>
 
-    <div v-if="loading" class="text-center py-12 text-digimon-dark-400">Loading maps...</div>
+    <div v-if="loading || initialLoading" role="status" class="text-center py-12 text-digimon-dark-400">Loading maps...</div>
 
     <div v-else-if="initialLoadError" role="alert" class="text-red-300 py-8">Maps could not be loaded. Reload this page to try again.</div>
 
@@ -136,9 +136,10 @@ const { exportMap, exportMaps, importMaps } = useLibraryImportExport()
 // A setup-only $fetch ran twice, so a failed unauthenticated SSR request could
 // render the empty state while the browser hydrated a populated grid.
 const requestFetch = useRequestFetch()
-const { data: initialMaps, error: initialLoadError } = await useAsyncData(
+const { data: initialMaps, error: initialLoadError, pending: initialLoading } = await useAsyncData(
   () => `campaign-maps:${campaignId.value}`,
   () => requestFetch<GameMap[]>('/api/maps', { query: { campaignId: campaignId.value } }),
+  { lazy: true },
 )
 watch(initialMaps, value => { maps.value = value ?? [] }, { immediate: true })
 

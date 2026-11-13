@@ -14,7 +14,7 @@
     <!-- Full-screen editor canvas -->
     <div class="flex-1 min-h-0 min-w-0 overflow-hidden">
       <EncounterMap
-        v-if="mapData && fakeEncounter"
+        v-if="mapData?.id === mapId && fakeEncounter && !mapError"
         :encounter="fakeEncounter as any"
         :is-dm="true"
         :editor-mode="true"
@@ -26,7 +26,11 @@
         @encounter-updated="() => {}"
         @positions-updated="() => {}"
       />
-      <div v-else class="flex items-center justify-center h-full text-digimon-dark-400">
+      <div v-else-if="mapError" role="alert" class="flex flex-col items-center justify-center gap-3 h-full text-red-300">
+        <p>{{ mapError.message || 'Map could not be loaded.' }}</p>
+        <button class="underline" @click="refreshMap()">Retry</button>
+      </div>
+      <div v-else role="status" class="flex items-center justify-center h-full text-digimon-dark-400">
         Loading map editor...
       </div>
     </div>
@@ -34,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { useMap } from '~/composables/useMap'
+import { computed } from 'vue'
 import type { GameMap, Vec3, DestructibleState } from '~/types'
 
 definePageMeta({ layout: false })
@@ -42,14 +46,22 @@ definePageMeta({ layout: false })
 const route = useRoute()
 const mapId = computed(() => route.params.mapId as string)
 
-const { fetchMap } = useMap()
-const mapData = ref<GameMap | null>(null)
-
-mapData.value = await fetchMap(mapId.value)
-if (!mapData.value || mapData.value.campaignId) throw createError({ statusCode: 404, message: 'Workshop map not found' })
+const requestFetch = useRequestFetch()
 const { user, fetchMe, initialized } = useAuth()
-if (!initialized.value) await fetchMe()
-if (mapData.value.ownerId && mapData.value.ownerId !== user.value?.id) throw createError({ statusCode: 403, message: 'You do not own this map. Export it and import a copy to edit.' })
+const { data: mapData, error: mapError, refresh: refreshMap } = await useAsyncData(
+  () => `workshop-map-editor:${mapId.value}`,
+  async () => {
+    const [map] = await Promise.all([
+      requestFetch<GameMap>(`/api/maps/${mapId.value}`),
+      initialized.value ? Promise.resolve() : fetchMe(),
+    ])
+    if (!map || map.campaignId) throw createError({ statusCode: 404, message: 'Workshop map not found' })
+    if (map.ownerId && map.ownerId !== user.value?.id) throw createError({ statusCode: 403, message: 'You do not own this map. Export it and import a copy to edit.' })
+    return map
+  },
+  { lazy: true },
+)
+if (mapError.value) throw createError(mapError.value)
 
 // Create a minimal fake encounter so EncounterMap can render the map
 const fakeEncounter = computed(() => {

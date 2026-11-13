@@ -306,6 +306,17 @@ test('players can buy and refund upgrades but cannot change the XP budget throug
   }, { campaignId: null })
 })
 
+test('Workshop can import campaign XP and grants without campaign GM access', async () => {
+  const body = { name: 'Sora', age: 14, ...savedTamer(), campaignId: null, totalXp: 150,
+    grantedInspiration: 3, torments: [{ id: 'fear', gmMarkedBoxes: 2, markedBoxes: 2 }] }
+  await withTamerApi('POST', body, async handler => {
+    const imported = await handler({})
+    for (const field of ['totalXp', 'xp', 'xpBonuses', 'grantedInspiration']) assert.deepEqual(imported[field], body[field])
+    assert.equal(imported.campaignId, null)
+    assert.equal(imported.torments[0].gmMarkedBoxes, 2)
+  }, { campaignId: null, gm: false })
+})
+
 test('a stale player save cannot erase a GM reward committed before the row lock is acquired', async () => {
   const record = savedTamer()
   await withTamerApi('PUT', { totalXp: 120, xp: 7, xpBonuses: { ...record.xpBonuses, skills: { dodge: 2, computer: 1 } } }, async (handler, stored) => {

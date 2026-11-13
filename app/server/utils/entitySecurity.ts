@@ -43,17 +43,22 @@ export async function requireEntityAccess(event: H3Event, kind: EntityKind, reco
   }
   return null
 }
-export async function filterReadableEntities(event: H3Event, rows: any[], kind: EntityKind) {
+export async function filterReadableEntities(event: H3Event, rows: any[], kind: EntityKind, onInvalidScope?: () => void) {
   const campaigns = new Map<string, boolean>()
   const resolveScope = createEntityScopeResolver(rows, kind)
   const result = []
   for (const row of rows) {
-    const scope = await resolveScope(kind, row)
-    if (scope) {
-      if (!campaigns.has(scope)) campaigns.set(scope, (await resolveCampaignAccess(event, scope)).isMember)
-      if (campaigns.get(scope)) result.push(row)
-    } else {
-      try { await requireEntityAccess(event, kind, row, false, resolveScope); result.push(row) } catch (error: any) { if (error.statusCode !== 404 && error.statusCode !== 403) throw error }
+    try {
+      const scope = await resolveScope(kind, row)
+      if (scope) {
+        if (!campaigns.has(scope)) campaigns.set(scope, (await resolveCampaignAccess(event, scope)).isMember)
+        if (campaigns.get(scope)) result.push(row)
+      } else {
+        await requireEntityAccess(event, kind, row, false, resolveScope); result.push(row)
+      }
+    } catch (error: any) {
+      if (error.data?.code === 'INVALID_CHARACTER_SCOPE') { onInvalidScope?.(); continue }
+      if (error.statusCode !== 404 && error.statusCode !== 403) throw error
     }
   }
   return result
