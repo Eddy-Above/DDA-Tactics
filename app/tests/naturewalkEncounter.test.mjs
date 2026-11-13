@@ -95,3 +95,23 @@ test('the GM environment controls create and update the persisted hazard setting
   handlers.setNaturewalkEnvironment('wind', false)
   assert.equal(props.hazards[0].effect, 'No qualifying environments.')
 })
+
+test('movement reuses its locked map for Naturewalk without changing terrain-based Water grants', async () => {
+  let mapReads = 0
+  const map = { groundTiles: [{ x: 0, y: 0, z: 0, terrain: 'water', element: 'water' }], voxels: [], spaceTiles: [], stairs: [], walls: [], doors: [], ceilings: [] }
+  const records = new Map([['mon', { id: 'mon', qualities: [{ id: 'naturewalk', choiceId: 'water' }, { id: 'advanced-mobility', choiceId: 'adv-swimmer' }] }]])
+  const { applyNaturewalkEnvironment } = loadTypeScriptWithMocks('server/utils/naturewalk.ts', {
+    './combatSpatial': { loadEncounterMap: async () => { mapReads++; return map }, loadParticipantDigimon: async () => records },
+    './encounterRoom': { getRoomPositions: async () => ({ unit: { x: 0, y: 0, z: 0 } }) },
+  })
+  const encounter = { id: 'enc', mapId: 'map', phase: 'combat', hazards: environment([], true) }
+  const participants = [{ id: 'unit', type: 'digimon', entityId: 'mon', currentTempWounds: 0, activeEffects: [] }]
+  const positions = { unit: { x: 0, y: 0, z: 0 } }
+  const reused = await applyNaturewalkEnvironment(encounter, participants, positions, { grantWater: true, records, map })
+  assert.equal(mapReads, 0)
+  assert.equal(reused.participants[0].naturewalkWaterGranted, true)
+  assert.equal(reused.participants[0].currentTempWounds, 2)
+  const loaded = await applyNaturewalkEnvironment(encounter, participants, positions, { grantWater: true, records })
+  assert.equal(mapReads, 1)
+  assert.deepEqual(reused, loaded)
+})

@@ -41,6 +41,7 @@ let browser, server, cdp
 async function api(source, url, options = {}) {
   if (url === '/api/auth/me')
     return { user: owner }
+  if (url === '/api/encounters/placement/actions/move') return { success: true, position: options.body.destination }
   assert.ok(url.startsWith('/api/maps/map'), `Unexpected fixture API ${url}`)
   if (options.method === 'PUT') {
     maps[source] = { ...maps[source], ...options.body, updatedAt: new Date().toISOString() }
@@ -159,9 +160,14 @@ try {
     import Campaign from '${absolute(files.campaign)}';import Workshop from '${absolute(files.workshop)}';
     import EncounterMap from '${absolute(sharedFiles[0])}';import MapToolbar from '${absolute(sharedFiles[1])}';import MapCanvas from '${absolute(sharedFiles[2])}';
     import {useAuth} from '${absolute('composables/useAuth.ts')}';
-    const router=createRouter({history:createWebHistory(),routes:[{path:'/start',component:{render:()=>Vue.h('div','Start')}},{path:'/campaigns/:campaignId/library/maps/:mapId',component:Campaign},{path:'/workshop/maps/:mapId',component:Workshop}]});
+    const placementEncounter={id:'placement',mapId:'map',phase:'setup',round:0,currentTurnIndex:0,revision:0,turnOrder:[],hazards:[],battleLog:[],destructibleStates:[],
+      participants:[{id:'unit',entityId:'tamer',type:'tamer',currentWounds:0,maxWounds:5,actionsRemaining:{simple:2}}],participantPositions:{unit:{x:0,y:0,z:0}}};
+    const placementRoot={render:()=>Vue.h('div',{style:'height:100vh'},[Vue.h(EncounterMap,{encounter:placementEncounter,initialMap:${JSON.stringify(maps.campaign)},isDm:true,editorMode:true,myTamerId:null,tamerMap:{tamer:{name:'Tai',woundBoxes:5}},digimonMap:{},selectedAttack:null})])};
+    const router=createRouter({history:createWebHistory(),routes:[{path:'/start',component:{render:()=>Vue.h('div','Start')}},{path:'/placement',component:placementRoot},{path:'/campaigns/:campaignId/library/maps/:mapId',component:Campaign},{path:'/workshop/maps/:mapId',component:Workshop}]});
     const state=Vue.reactive(window.fixture?.state??{}),data=window.fixture?.data??{};window.apiReads=0;window.documentToken=crypto.randomUUID();
-    const request=async(url,options={})=>{if(!options.method)window.apiReads++;if(!options.method&&url.startsWith('/api/maps/')&&window.mapRequestGate)await window.mapRequestGate;const response=await fetch('/fixture-api?source='+ (router.currentRoute.value.path.startsWith('/workshop')?'workshop':'campaign')+'&url='+encodeURIComponent(url),{method:options.method??'GET',headers:{'Content-Type':'application/json'},...(options.body?{body:JSON.stringify(options.body)}:{})});return response.json()};
+    const request=async(url,options={})=>{if(!options.method)window.apiReads++;if(!options.method&&url.startsWith('/api/maps/')&&window.mapRequestGate)await window.mapRequestGate;
+      if(url==='/api/encounters/placement/actions/move'){window.placementRequestStarted=(window.placementRequestStarted??0)+1;if(window.placementGate)await window.placementGate;if(window.rejectPlacement){window.rejectPlacement=false;throw {data:{message:'The destination is occupied'}}}}
+      const response=await fetch('/fixture-api?source='+ (router.currentRoute.value.path.startsWith('/workshop')?'workshop':'campaign')+'&url='+encodeURIComponent(url),{method:options.method??'GET',headers:{'Content-Type':'application/json'},...(options.body?{body:JSON.stringify(options.body)}:{})});return response.json()};
     Object.assign(globalThis,{ref:Vue.ref,computed:Vue.computed,watch:Vue.watch,onMounted:Vue.onMounted,onUnmounted:Vue.onUnmounted,
       definePageMeta:()=>{},useRoute:()=>router.currentRoute.value,useRequestFetch:()=>request,$fetch:request,useAuth,
       useState:(key,init)=>{if(!(key in state))state[key]=init();return Vue.toRef(state,key)},createError:value=>Object.assign(new Error(value.message??'Request failed'),value),
@@ -183,8 +189,9 @@ try {
   await build({
     configFile: false, root: workspace, logLevel: 'warn', define: { __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'true' }, esbuild: { tsconfigRaw: { compilerOptions: { target: 'ES2022' } } }, resolve: { alias: { '~': app, vue: absolute('node_modules/vue/dist/vue.runtime.esm-bundler.js') } }, plugins: [{
       name: 'editor-camera-probe', enforce: 'pre', transform(source, id) {
+        if (id.replaceAll('\\', '/').endsWith('/components/EncounterMap.vue')) return source.replace('</script>', `onMounted(()=>{(window as any).placementProbe={arm:selectParticipant,gm:onGmMoveStart,state:()=>JSON.parse(JSON.stringify({positions:positions.value,display:displayPositions.value,pending:placementPreviews.value}))}});</script>`)
         if (!id.replaceAll('\\', '/').endsWith('/components/MapCanvas.vue'))
-          return; return source.replace('defineExpose({ movingParticipantId, cameraAction })', `defineExpose({ movingParticipantId, cameraAction });onMounted(()=>{(window as any).reloadProject=(x:number,y:number,z:number)=>{const p=new THREE.Vector3(x,y,z).project(camera),r=canvasRef.value!.getBoundingClientRect();return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2}}})`)
+          return; return source.replace('defineExpose({ movingParticipantId, cameraAction })', `defineExpose({ movingParticipantId, cameraAction });onMounted(()=>{(window as any).renderedTokenPosition=(id:string)=>spriteGroups.get(id)?.position.toArray();(window as any).reloadProject=(x:number,y:number,z:number)=>{const p=new THREE.Vector3(x,y,z).project(camera),r=canvasRef.value!.getBoundingClientRect();return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2}}})`)
       }
     }, vue({ template: { compilerOptions: { comments: false } } }), {
       name: 'record-scoped-style-ids', enforce: 'post', transform(source, id) {
@@ -223,7 +230,7 @@ try {
         res.end(shell.replace('<div id="app"></div>', `<div id="app">${rendered.html}</div>${rendered.teleports}<script>window.fixture=${serialized}</script>`))
         return
       }
-      if (url.pathname === '/start') {
+      if (url.pathname === '/start' || url.pathname === '/placement') {
         res.setHeader('Content-Type', 'text/html;charset=utf-8')
         res.end(shell)
         return
@@ -293,6 +300,29 @@ try {
       checks.push({ source, width, height, navigated, reloaded, savedVoxel: copy(maps[source].voxels.find(cell => cell.x === editX && cell.z === editZ)) })
       console.log(`PASS ${source} editor navigation/edit/save/reload ${width}x${height}`)
     }
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false})
+  await cdp.send('Page.navigate',{url:origin+'/placement'})
+  await poll(()=>evaluate(`!!window.placementProbe&&!!window.renderedTokenPosition?.('unit')`),'placement canvas')
+  await evaluate(`window.placementAlerts=[];window.alert=message=>window.placementAlerts.push(message)`)
+  for(const [kind,x,z,reject] of [['placement',2,2,false],['gm',4,2,false],['gm',1,3,true]]) {
+    const before=await evaluate(`placementProbe.state().positions.unit`)
+    await evaluate(`window.rejectPlacement=${reject};window.placementGate=new Promise(resolve=>window.releasePlacement=()=>{window.placementGate=null;resolve()});placementProbe.${kind==='placement'?'arm':'gm'}('unit')`)
+    const aim=await evaluate(`reloadProject(${x+.5},.12,${z+.5})`)
+    for(const type of ['mouseMoved','mousePressed','mouseReleased'])await cdp.send('Input.dispatchMouseEvent',{type,x:aim.x,y:aim.y,button:type==='mouseMoved'?'none':'left',buttons:type==='mousePressed'?1:0,clickCount:type==='mouseMoved'?0:1})
+    await poll(()=>evaluate(`document.querySelector('.placement-save-status')&&renderedTokenPosition('unit')?.[0]===${x+.5}`),'rendered preview before response')
+    const pending=await evaluate('placementProbe.state()')
+    assert.deepEqual(pending.positions.unit,before,'pending preview must not overwrite the authoritative origin')
+    assert.deepEqual(pending.display.unit,{x,y:0,z})
+    const screenshot=await cdp.send('Page.captureScreenshot',{format:'png'})
+    await writeFile(resolve(artifacts,`${kind}-${reject?'rejected':'pending'}.png`),Buffer.from(screenshot.data,'base64'))
+    await evaluate('window.releasePlacement()')
+    await poll(()=>evaluate(`!document.querySelector('.placement-save-status')`),'placement save completion')
+    assert.deepEqual(await evaluate('placementProbe.state().positions.unit'),reject?before:{x,y:0,z})
+    await poll(()=>evaluate(`renderedTokenPosition('unit')?.[0]===${(reject?before.x:x)+.5}`),'final rendered token')
+    checks.push({kind,pendingDestination:{x,y:0,z},rejected:reject,previewBeforeResponse:true})
+    console.log(`PASS ${kind} rendered pending preview before acknowledgement${reject?' and rollback':''}`)
+  }
+  assert.deepEqual(await evaluate('window.placementAlerts'),['The destination is occupied'])
   assert.deepEqual(errors, [], 'full-page browser/hydration/shader errors')
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify({ scope: 'real page/EncounterMap/toolbar/WebGL with local APIs and Nuxt-style payload; no production services', checks, errors }, null, 2))
   console.log(`Browser evidence: ${artifacts}`)

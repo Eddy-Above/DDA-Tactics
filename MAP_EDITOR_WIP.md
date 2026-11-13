@@ -24,7 +24,8 @@ The campaign map list now uses keyed `useAsyncData` and `useRequestFetch`. The s
 
 ## Verification
 
-- Full application suite including fog, navigation, participant batching and campaign roster filtering: **1,603 tests passing**, no failures. Focused tests cover late partner joins, a single save for 20 additions, retained turn state, campaign isolation, cached picker opening and explicit roster refresh.
+- Placement and GM Move render a pending token immediately while preserving its committed origin; rejection removes the preview and keeps the selection available for retry. Chrome checks hold the save response to verify the rendered token, then confirm success or rollback. Server regressions cover character batch reuse, one geometry load and skipping combat profiles for these free moves.
+- Full application suite including fog, navigation, participant batching, campaign roster filtering and placement/GM Move feedback: **1,615 tests passing**, no failures. Focused tests cover late partner joins, a single save for 20 additions, retained turn state, campaign isolation, cached picker opening, explicit roster refresh and pending-move confirmation/rollback.
 - Fog-zoom follow-up: **51 camera, fog, scheduling and terrain tests pass**. Chrome checks zoom the GM/player canvas into a 12,500-cell map, verify normal density, compare actual terrain pixels with/without fog and return to the fitted overview. Fitted density rises from 0.00536 to 0.04 at encounter zoom; no fixed world boundaries are introduced.
 - Production Nuxt build: passes; final Vue components and server bundle compile.
 - Actual-component Chrome checks: toolbar bindings in both directions, floor/voxel/shape tools, brushes, rooms, upper wall openings, selections/stamps, paint/sampling, spawn/erase, history, camera views, focus behaviour, Space pan, cancellation, narrow layouts, shaders, fog, and map switching.

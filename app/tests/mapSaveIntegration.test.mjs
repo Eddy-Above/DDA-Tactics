@@ -29,11 +29,12 @@ function evaluate(expression, deps) {
 function initializer(name, deps) {
   const source = script()
   let expression
-  const visit = node => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) expression = node.initializer.getText(source)
-    ts.forEachChild(node, visit)
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (declaration.name.getText(source) === name) expression = declaration.initializer.getText(source)
+    }
   }
-  visit(source)
   assert.ok(expression, `Missing ${name}`)
   return evaluate(expression, deps)
 }

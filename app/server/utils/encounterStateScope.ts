@@ -27,7 +27,7 @@ export async function validateEncounterStateScope(encounter: any, body: any): Pr
   const mapId = body.mapId === undefined ? encounter.mapId : body.mapId
   if (mapId !== undefined && mapId !== null && (typeof mapId !== 'string' || !mapId)) throw createError({ statusCode: 400, message: 'Invalid encounter map' })
   if (mapId) {
-    const [map] = await db.select().from(maps).where(eq(maps.id, mapId))
+    const [map] = await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, mapId))
     if (!map || map.campaignId !== encounter.campaignId) throw createError({ statusCode: 400, message: 'The map belongs to a different campaign' })
   }
   const roster = body.participants ?? encounter.participants ?? []

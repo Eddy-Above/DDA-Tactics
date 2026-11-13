@@ -10,7 +10,7 @@ const cache = loadTypeScript('server/utils/combatRecordCache.ts')
 const queue = loadTypeScript('server/utils/intercedeClaims.ts')
 const participant = (id, extra = {}) => ({ id, entityId: id, type: 'digimon', currentWounds: 0, maxWounds: 5, actionsRemaining: { simple: 2 }, ...extra })
 
-function fixture({ roster = [participant('actor')], forms = [], lines = [], owners = [], requests = [], responses = [], isDm = false, phase = 'setup' } = {}) {
+function fixture({ roster = [participant('actor')], forms = [], lines = [], owners = [], requests = [], responses = [], isDm = false, phase = 'setup', allowMovement = false } = {}) {
   globalThis.createError = data => Object.assign(new Error(data.message), data)
   globalThis.defineEventHandler = work => work
   globalThis.getRouterParam = () => 'encounter'
@@ -22,7 +22,7 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
     digimon: new Map([{ id: 'actor', campaignId: 'own' }, ...forms].map(row => [row.id, row])),
     evolutionLines: new Map(lines.map(row => [row.id, row])), tamers: new Map(owners.map(row => [row.id, row])), maps: new Map(),
   }
-  const calls = { locks: 0, auth: 0, work: 0, writes: 0, prepared: 0, effects: 0, rolledBack: 0, reads: [] }
+  const calls = { locks: 0, auth: 0, work: 0, writes: 0, prepared: 0, published: 0, effects: 0, rolledBack: 0, reads: [] }
   const sql = { eq: (_column, value) => ({ ids: [value] }), inArray: (_column, ids) => ({ ids }) }
   const makeDb = (read, write) => ({
     select: () => ({ from: table => ({ where: filter => {
@@ -33,8 +33,10 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
       }
       return { then: (done, fail) => Promise.resolve().then(readRows).then(done, fail), for: async () => { calls.locks++; return readRows() } }
     } }) }),
-    update: table => ({ set: fields => ({ where: async () => {
-      assert.equal(table, tables.encounters); calls.writes++; write({ ...read(), ...clone(fields) })
+    update: table => ({ set: fields => ({ where: () => {
+      let applied
+      const apply = () => applied ??= (() => { assert.equal(table, tables.encounters); calls.writes++; const row = { ...read(), ...clone(fields) }; write(row); return row })()
+      return { then: (yes, no) => Promise.resolve().then(apply).then(yes, no), returning: async () => [apply()] }
     } }) }),
   })
   const live = makeDb(() => encounter, value => { encounter = value })
@@ -87,8 +89,21 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
     '../../../../db': store, 'drizzle-orm': sql, '../../../../utils/databaseScope': databaseScope,
     '../../../../utils/intercedeClaims': queue, '../../../../utils/encounterAuthorization': authorization,
     '../../../../utils/encounterStateScope': stateScope,
-    '../../../../utils/encounterRoom': { prepareRoomCommit: async () => {} },
-    '../../../../utils/encounterMovement': { prepareEncounterMovement: async () => { calls.prepared++; throw new Error('Movement must not be prepared') }, movementFingerprint: () => 'fingerprint' },
+    '../../../../utils/combatRecordCache': cache,
+    '../../../../utils/encounterRoom': { prepareRoomCommit: async () => {}, publishCommittedPositions: async (_id, patch) => {
+      assert.deepEqual(encounter.participantPositions, patch, 'publish only after the position transaction commits'); calls.published++
+    } },
+    '../../../../utils/encounterMovement': { prepareEncounterMovement: async (current, intent) => {
+      calls.prepared++
+      if (!allowMovement) throw new Error('Movement must not be prepared')
+      const spatial = loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+        '../db': store, 'drizzle-orm': sql, './combatRecordCache': cache, './resolveSupportAttack': {},
+      })
+      await spatial.loadParticipantDigimon(current.participants)
+      await spatial.loadTamersByIds(current.participants.filter(p => p.type === 'tamer').map(p => p.entityId))
+      return { participants: current.participants, participantPositions: { [intent.participantId]: intent.destination }, position: intent.destination,
+        battleLog: current.battleLog, path: [intent.destination], openedDoorIds: [], defeated: false, commitDoors: async () => {} }
+    }, movementFingerprint: () => 'fingerprint' },
   }).default
   const evolution = loadTypeScriptWithMocks('server/utils/digivolutionAction.ts', {
     '../db': store, 'drizzle-orm': sql,
@@ -199,6 +214,21 @@ test('a roster reorder that preserves the active participant does not run turn-e
   assert.equal(result.turnOrder[result.currentTurnIndex], 'actor')
   assert.equal(f.calls.effects, 0)
   assert.equal(f.calls.writes, 1)
+})
+
+test('placement reuses validated character records and the locked authorized encounter before one committed position write', async () => {
+  const f = fixture({ isDm: true, allowMovement: true, roster: [participant('actor'), participant('owner-slot', { type: 'tamer', entityId: 'owner' })],
+    owners: [{ id: 'owner', campaignId: 'own' }] })
+  const destination = { x: 3, y: 0, z: 1 }
+  const result = await f.move({ participantId: 'actor', kind: 'placement', destination, operationId: 'place-1' })
+  assert.equal(result.success, true)
+  assert.deepEqual(result.position, destination)
+  assert.equal(f.calls.auth, 2)
+  assert.equal(f.calls.writes, 1)
+  assert.equal(f.calls.published, 1)
+  assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1, 'preparation reuses the scope validator batch')
+  assert.equal(f.calls.reads.filter(read => read.table === 'tamers').length, 1)
+  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 3, 'preflight, lock and locked authorization; no redundant fourth read')
 })
 
 test('the separate movement transaction rejects foreign saved forms before path preparation', async () => {

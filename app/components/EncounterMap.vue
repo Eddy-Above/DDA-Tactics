@@ -17,6 +17,7 @@
 
     <!-- 3D Canvas (fills remaining space) -->
     <div class="canvas-wrapper">
+      <div v-if="Object.keys(placementPreviews).length" class="placement-save-status" role="status" aria-live="polite">Saving placement…</div>
       <ClientOnly>
         <MapCanvas
           ref="builderCanvas"
@@ -490,10 +491,8 @@ const isChargeAttack = computed(() => {
   return getAreaShape(props.selectedAttack.tags) !== 'pass'
 })
 
-// During setup the whole roster is offered and a card can be clicked to pick a unit back up and
-// re-place it. Once combat is underway that would silently yank a placed unit off the board
-// (selectParticipant deletes its position), so only unplaced units are offered — repositioning
-// a placed one is what GM free-move (and, for the GM, dragging) is for.
+// Setup offers the whole roster for placement and re-placement. During combat,
+// only unplaced units are offered; placed units use combat movement or GM Move.
 const isSetupPlacement = computed(() => isSetupPhase(props.encounter.phase))
 
 // Who the HUD offers for placement. The rules live in utils/placementRules.ts so they can be
@@ -532,7 +531,13 @@ const draggableParticipantIds = computed(() =>
 )
 
 const attackPreview = ref<{ participantId: string; position: Vec3 } | null>(null)
-const displayPositions = computed(() => attackPreview.value ? { ...positions.value, [attackPreview.value.participantId]: attackPreview.value.position } : positions.value)
+const placementPreviews = ref<Record<string, Vec3>>({})
+const pendingPlacementRequests = new Map<string, string>()
+watch(() => props.encounter.id, () => { placementPreviews.value = {}; pendingPlacementRequests.clear() })
+const displayPositions = computed(() => {
+  const placed = Object.keys(placementPreviews.value).length ? { ...positions.value, ...placementPreviews.value } : positions.value
+  return attackPreview.value ? { ...placed, [attackPreview.value.participantId]: attackPreview.value.position } : placed
+})
 let pendingAttackIntent: MapAttackIntent | null = null
 function attackIntent(): MapAttackIntent {
   return pendingAttackIntent ??= { operationId: crypto.randomUUID(), expectedRevision: (props.encounter as any).revision, ...(props.selectedAttack?.chargeMode ? { chargeTiming: props.selectedAttack.chargeMode } : {}) }
@@ -547,24 +552,19 @@ function selectParticipant(id: string) {
     selectedId.value = null
     return
   }
-  // Pick up if already placed
-  if (positions.value[id]) {
-    const p = { ...positions.value }
-    delete p[id]
-    positions.value = p
-  }
+  // Keep the committed position while arming re-placement. A failed save must
+  // leave the token where it was, and the request must retain its real origin.
   selectedId.value = id
 }
 
 async function onCanvasPlace(participantId: string, cell: Vec3) {
   const result = await postMove(participantId, cell, [], 'placement')
-  if (result?.success) selectedId.value = null
+  if (result?.success && selectedId.value === participantId) selectedId.value = null
 }
 
 // A drag finished on a valid cell: either a token moved on the canvas or a HUD card dropped on it.
-// MapCanvas already enforced the surface rules (players: spawn areas only; GM: anywhere), so this
-// only decides how the drop is committed. One `unit-moved` goes out per drop — never per cell
-// crossed — so the server's Guiding Light recompute isn't hammered by a long drag.
+// MapCanvas checks surface rules locally; the server validates the drop again.
+// Submit one movement command per drop, rather than for each crossed cell.
 function onUnitDragged(participantId: string, cell: Vec3) {
   hudDragId.value = null
   // The drag was offered by state that may have moved on (phase change, unit removed mid-drag).
@@ -607,16 +607,35 @@ async function onCombatMove(participantId: string, position: Vec3, path: Vec3[])
 // `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
 type MoveResult = { success: boolean; defeated?: boolean; encounter?: Encounter; position?: Vec3 }
 async function postMove(participantId: string, destination: Vec3, path: Vec3[], kind: 'normal' | 'placement' | 'gm' | 'charge-after', allowanceId?: string): Promise<MoveResult | void> {
+  const preview = kind === 'placement' || kind === 'gm'
+  if (preview && pendingPlacementRequests.has(participantId)) return
+  const encounterId = props.encounter.id
+  const origin = positions.value[participantId] ? { ...positions.value[participantId] } : undefined
+  const operationId = crypto.randomUUID()
+  if (preview) {
+    pendingPlacementRequests.set(participantId, operationId)
+    placementPreviews.value = { ...placementPreviews.value, [participantId]: { ...destination } }
+  }
   try {
-    const result = await $fetch<MoveResult>(`/api/encounters/${props.encounter.id}/actions/move`, {
+    const result = await $fetch<MoveResult>(`/api/encounters/${encounterId}/actions/move`, {
       method: 'POST',
-      body: { participantId, destination, kind, ...(path.length ? { path } : {}), origin: positions.value[participantId], allowanceId, operationId: crypto.randomUUID(), expectedRevision: (props.encounter as any).revision },
+      body: { participantId, destination, kind, ...(path.length ? { path } : {}), origin, allowanceId, operationId, expectedRevision: (props.encounter as any).revision },
     })
+    if (mapDisposed || props.encounter.id !== encounterId) return
     if (result.encounter) emit('encounter-updated', result.encounter)
-    if (result.position) positions.value = { ...positions.value, [participantId]: result.position }
+    const current = positions.value[participantId]
+    const stillAtOrigin = origin ? sameVec3(current, origin) : !current
+    // A newer WebSocket move may already have arrived while this response was
+    // in flight. Do not replace it with this earlier acknowledgement.
+    if (result.position && stillAtOrigin) positions.value = { ...positions.value, [participantId]: result.position }
     return result
   } catch (error: any) {
-    alert(error?.data?.message ?? 'The movement could not be saved')
+    if (!mapDisposed && props.encounter.id === encounterId) alert(error?.data?.message ?? 'The movement could not be saved')
+  } finally {
+    if (preview && pendingPlacementRequests.get(participantId) === operationId) {
+      pendingPlacementRequests.delete(participantId)
+      const remaining = { ...placementPreviews.value }; delete remaining[participantId]; placementPreviews.value = remaining
+    }
   }
 }
 
@@ -629,10 +648,10 @@ function onGmMoveStart(participantId: string) {
   movement.clearMovement()
 }
 
-// GM free-move destination chosen: reposition the character with NO action cost (no /actions/move).
+// GM free-move destination chosen: the validated intent grants free repositioning.
 async function onGmMove(participantId: string, position: Vec3) {
   const result = await postMove(participantId, position, [], 'gm')
-  if (result?.success) gmMoveParticipantId.value = null
+  if (result?.success && gmMoveParticipantId.value === participantId) gmMoveParticipantId.value = null
 }
 
 // ── Doors ──────────────────────────────────────────────────────────────────
@@ -1130,6 +1149,10 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
   min-height: 0;
   position: relative;
   overflow: hidden;
+}
+.placement-save-status {
+  position: absolute; top: 12px; left: 12px; z-index: 30; pointer-events: none;
+  padding: 6px 10px; border-radius: 6px; background: #151526e6; color: #ccddee; font-size: 12px;
 }
 .no-map {
   width: 100%; height: 100%;

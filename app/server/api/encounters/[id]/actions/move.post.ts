@@ -8,6 +8,7 @@ import { resolveEnemyKnockouts } from '../../../../utils/enemyKnockouts'
 import { loadEncounterMap } from '../../../../utils/combatSpatial'
 import { withDatabase } from '../../../../utils/databaseScope'
 import { validateEncounterStateScope } from '../../../../utils/encounterStateScope'
+import { withCombatRecords } from '../../../../utils/combatRecordCache'
 
 export default defineEventHandler(async event => {
   const id = getRouterParam(event, 'id')
@@ -16,10 +17,10 @@ export default defineEventHandler(async event => {
   return serializeIntercedeClaim(id!, async () => {
     await prepareRoomCommit(id!)
     const committed: Array<() => void | Promise<void>> = []
-    const result = await db.transaction(async tx => withDatabase(tx, async () => {
+    const result = await db.transaction(async tx => withDatabase(tx, () => withCombatRecords(async () => {
       await db.select().from(encounters).where(eq(encounters.id, id!)).for('update')
       const freshContext = await authorizeEncounterIntent(event, id, body, 'move')
-      const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id!))
+      const encounter = freshContext.encounter
       if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
       await validateEncounterStateScope(encounter, { participants: encounter.participants })
       const actor = encounter.participants.find(p => p.id === body.participantId)
@@ -47,7 +48,7 @@ export default defineEventHandler(async event => {
       await prepared.commitDoors(db)
       const [updated] = await db.update(encounters).set({ participants, participantPositions: prepared.participantPositions, battleLog, turnOrder, currentTurnIndex, round, updatedAt: new Date() }).where(eq(encounters.id, id!)).returning()
       return { encounter: updated, ...receiptResult, patch, openedDoorIds: prepared.openedDoorIds }
-    }, committed))
+    }), committed))
     for (const publish of committed) await publish()
     if (!('replayed' in result)) {
       await publishCommittedPositions(id!, result.patch)

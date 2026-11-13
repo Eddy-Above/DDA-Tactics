@@ -58,17 +58,12 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
   if (placement && !isSetupPhase(encounter.phase) && origin) throw createError({ statusCode: 403, message: 'Placed characters use combat movement' })
   if (!placement && intent.kind !== 'gm' && (!origin || encounter.phase !== 'combat')) throw createError({ statusCode: 400, message: 'Combat movement requires a placed character during combat' })
   const records = await loadParticipantDigimon(encounter.participants)
-  const tamers = await loadTamersByIds(encounter.participants.filter((p: any) => p.type === 'tamer').map((p: any) => p.entityId))
   const record = records.get(actor.entityId)
   const dims = getFootprintDimensions(record?.size ?? 'medium', record?.giganticDimensions)
   const destroyed = new Set<string>((room.destructibleStates ?? []).filter((s: any) => s.currentWounds <= 0).map((s: any) => s.structureId))
   const excluded = new Set<string>([actor.id])
   const occupied = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor)
-  const blocked = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
-  const initial = await applyNaturewalkEnvironment(encounter, encounter.participants, positions, { grantWater: true, records })
-  const currentActor = initial.participants.find(p => p.id === actor.id)
-  const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards))
-  const footprintBlocked = (position: Vec3) => getFootprintCells(position, dims).some(cell => blocked.has(key(cell)))
+  const initial = await applyNaturewalkEnvironment(encounter, encounter.participants, positions, { grantWater: true, records, map })
   let path: Vec3[] = origin ? [origin] : []
   let openedDoorIds: string[] = []
   if (placement || intent.kind === 'gm') {
@@ -80,6 +75,11 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     }
     path = origin ? [origin, intent.destination] : [intent.destination]
   } else {
+    const blocked = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
+    const footprintBlocked = (position: Vec3) => getFootprintCells(position, dims).some(cell => blocked.has(key(cell)))
+    const tamers = await loadTamersByIds(actor.type === 'tamer' ? [actor.entityId] : [])
+    const currentActor = initial.participants.find(p => p.id === actor.id)
+    const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards))
     if (actor.clash && !(intent.kind === 'pass' && options.attack && actor.clash.isController)) {
       const opponent = encounter.participants.find((p: any) => p.id === actor.clash.opponentParticipantId)
       const opponentPosition = opponent && positions[opponent.id]
@@ -143,7 +143,7 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     if (!placement && intent.kind !== 'gm') { next.lastMovedRound = encounter.round; next.lastMovedTurnKey = combatTurnKey(encounter.round, encounter.currentTurnIndex) }
     return next
   })
-  participants = (await applyNaturewalkEnvironment(encounter, participants, positions, { grantWater: true, records })).participants
+  participants = (await applyNaturewalkEnvironment(encounter, participants, positions, { grantWater: true, records, map })).participants
   const burn = !placement && intent.kind !== 'gm' ? applyMovementBurn(participants, [{ participantId: actor.id, meters: distance }], { round: encounter.round, digimonById: records, rules: await loadCampaignDamageOverTimeRules(encounter.campaignId) }) : { participants, logEntries: [] }
   participants = burn.participants
   const doors = (map.doors ?? []).map(d => openedDoorIds.includes(d.id) ? { ...d, isOpen: true } : d)

@@ -262,12 +262,13 @@ test('GM player movement and free GM repositioning both use validated HTTP inten
   const deps = { props: { encounter: { id: 'encounter', revision: 8, participants: [{ id: 'partner' }] } }, positions: ref({ partner: origin }),
     throwAimContext: ref(null), throwAllyAimContext: ref(null), chargeMoveParticipantId: ref(null),
     npcMoveParticipantId: ref('partner'), gmMoveParticipantId: ref('partner'),
+    placementPreviews: ref({}), pendingPlacementRequests: new Map(), mapDisposed: false,
     movement: { clearMovement: () => {} }, movePathTo: (_id, _pos, path) => path,
     ws: { send: message => messages.push(message) },
     emit: (name, value) => snapshots.push([name, value]), alert: message => assert.fail(message),
     $fetch: async (...args) => { calls.push(args); return { success: true, position: args[1].body.destination, encounter: { id: 'encounter' } } },
   }
-  const handlers = loadPageFunctions('components/EncounterMap.vue', ['onCombatMove', 'postMove', 'onGmMove'], deps)
+  const handlers = loadPageFunctions('components/EncounterMap.vue', ['onCombatMove', 'postMove', 'onGmMove', 'sameVec3'], deps)
   const path = [origin, { x: 1, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, destination]
   await handlers.onCombatMove('partner', destination, path)
   assert.equal(calls[0][0], '/api/encounters/encounter/actions/move')

@@ -1,4 +1,4 @@
-import type { Vec3 } from '../../types'
+import type { Vec3, GameMap } from '../../types'
 import { getNaturewalkBonuses, getNaturewalkElements, getNaturewalkEnvironmentSettings, resolveNaturewalkEnvironment } from '../../utils/naturewalk'
 import { createMovementMapView } from '../../utils/movementMapIndex'
 import { loadEncounterMap, loadParticipantDigimon } from './combatSpatial'
@@ -9,13 +9,15 @@ export async function applyNaturewalkEnvironment(
   encounter: any,
   participants: any[],
   positions?: Record<string, Vec3>,
-  options: { grantWater?: boolean; resetWater?: boolean; records?: Map<string, any> } = {},
+  options: { grantWater?: boolean; resetWater?: boolean; records?: Map<string, any>; map?: GameMap | null } = {},
 ): Promise<{ participants: any[]; changed: boolean }> {
   const records = options.records ?? await loadParticipantDigimon(participants)
   if (![...records.values()].some(record => getNaturewalkElements(record.qualities).length)
     && !participants.some(p => p.naturewalkActiveElements?.length || options.resetWater && p.naturewalkWaterGranted)) return { participants, changed: false }
   const settings = getNaturewalkEnvironmentSettings(encounter.hazards)
-  const map = settings.useMapTerrain && encounter.mapId ? await loadEncounterMap(encounter.mapId) : null
+  const map = settings.useMapTerrain && encounter.mapId
+    ? options.map === undefined ? await loadEncounterMap(encounter.mapId) : options.map
+    : null
   const queryMap = map ? createMovementMapView(map) : null
   const currentPositions = positions ?? (encounter.mapId ? await getRoomPositions(encounter.id) : {})
   let changed = false

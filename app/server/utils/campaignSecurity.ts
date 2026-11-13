@@ -103,7 +103,7 @@ export async function requireEncounterAccess(event: H3Event, id: string, level: 
   const access = await (level === 'dm' ? requireCampaignDm : level === 'manager' ? requireCampaignManager : requireCampaignMember)(event, encounter.campaignId)
   if (level === 'member' && !access.isDm && !encounter.visibleToPlayers) throw createError({ statusCode: 404, message: 'Encounter not found' })
   if (encounter.mapId) {
-    const [map] = await db.select().from(maps).where(eq(maps.id, encounter.mapId))
+    const [map] = await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, encounter.mapId))
     if (map && map.campaignId !== encounter.campaignId) throw createError({ statusCode: 403, message: 'Encounter map belongs to a different campaign' })
   }
   return { encounter, access }

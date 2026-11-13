@@ -8,6 +8,7 @@ const point = (x, y = 0, z = 0) => ({ x, y, z })
 const mapOf = fields => ({ groundTiles: Array.from({ length: 12 }, (_, x) => point(x)), voxels: [], walls: [], doors: [], stairs: [], ceilings: [], spaceTiles: [], ...fields })
 function fixture({ map = mapOf({}), qualities = [], origin = point(0), actor = {}, other = [], positions = {} } = {}) {
   let writes = 0, burned = 0
+  const calls = { maps: 0, tamers: 0, profiles: 0, naturewalk: [] }
   const records = new Map([['mon', { id: 'mon', size: 'medium', qualities }]])
   const participant = { id: 'actor', entityId: 'mon', type: 'digimon', currentWounds: 0, maxWounds: 20, actionsRemaining: { simple: 2 }, ...actor }
   const encounter = { id: 'enc', campaignId: 'campaign', mapId: 'map', revision: 2, phase: 'combat', round: 1, currentTurnIndex: 0, turnOrder: ['actor'], hazards: [], participants: [participant, ...other], battleLog: [] }
@@ -16,13 +17,14 @@ function fixture({ map = mapOf({}), qualities = [], origin = point(0), actor = {
     '../db': { db: {}, maps: { id: 'map-id' } },
     './databaseScope': { scopedDatabase: () => undefined },
     './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: { actor: origin, ...positions }, destructibleStates: [] }) },
-    './combatSpatial': { loadEncounterMap: async () => map, loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), getMovementProfile: () => ({ caps, budget: 7 }) },
-    './naturewalk': { applyNaturewalkEnvironment: async (_encounter, participants) => ({ participants, changed: false }) },
+    './combatSpatial': { loadEncounterMap: async () => { calls.maps++; return map }, loadParticipantDigimon: async () => records,
+      loadTamersByIds: async () => { calls.tamers++; return new Map() }, getMovementProfile: () => { calls.profiles++; return { caps, budget: 7 } } },
+    './naturewalk': { applyNaturewalkEnvironment: async (_encounter, participants, _positions, options) => { calls.naturewalk.push(options); return { participants, changed: false } } },
     './resolveSupportAttack': { getDigimonDerivedStats: async () => ({ ram: 0 }) },
     './damageOverTime': { loadCampaignDamageOverTimeRules: async () => undefined, applyMovementBurn: (participants, moves) => { burned = moves[0].meters; return { participants, logEntries: [] } } },
   })
   const intent = values => ({ participantId: 'actor', kind: 'normal', destination: point(2), operationId: 'move-1', expectedRevision: 2, ...values })
-  return { ...module, encounter, map, caps, intent, burned: () => burned, writes: () => writes }
+  return { ...module, encounter, map, caps, intent, calls, burned: () => burned, writes: () => writes }
 }
 
 test('a movement intent validates the real path, prepares action/Burn changes and commits nothing', async () => {
@@ -91,6 +93,18 @@ test('players can place only on spawn cells, while GM placement respects solid o
   await assert.rejects(f.prepareEncounterMovement(f.encounter, f.intent({ kind: 'gm', destination: point(2) }), { isDm: true }), { statusCode: 400 })
   const valid = await f.prepareEncounterMovement(f.encounter, f.intent({ kind: 'placement', destination: point(0) }), { isDm: false })
   assert.equal(valid.participants[0].actionsRemaining.simple, 2)
+})
+
+for (const kind of ['placement', 'gm']) test(`${kind} avoids walking-profile/Tamer reads and reuses the validated map for both Naturewalk checks`, async () => {
+  const f = fixture()
+  if (kind === 'placement') f.encounter.phase = 'setup'
+  await f.prepareEncounterMovement(f.encounter, f.intent({ kind }), { isDm: true })
+  assert.equal(f.calls.maps, 1)
+  assert.equal(f.calls.tamers, 0)
+  assert.equal(f.calls.profiles, 0)
+  assert.equal(f.calls.naturewalk.length, 2)
+  assert.ok(f.calls.naturewalk.every(options => options.map === f.map))
+  assert.equal(f.burned(), 0)
 })
 
 test('a dry starting cell cannot grant a jump after the path enters water', async () => {
