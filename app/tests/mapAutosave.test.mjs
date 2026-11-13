@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { afterEach, beforeEach, mock, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
+const { updateMapContentBounds } = loadTypeScript('utils/mapContentBounds.ts')
 const { useMapAutosave } = loadTypeScript('composables/useMapAutosave.ts')
 const { useMap } = loadTypeScript('composables/useMap.ts')
 const globals = ['defineEventHandler', 'getRouterParam', 'readBody', 'getQuery', 'createError', '$fetch']
@@ -165,6 +166,7 @@ test('map compact saves cannot replace newer local state, and failed/stale loads
 
 function endpointFixture() {
   let row = map([voxel(0)]), writes = 0, reads = 0
+  row.contentBounds = updateMapContentBounds(null, row)
   const columns = { id: { key: 'id' }, updatedAt: { key: 'updatedAt' }, campaignId: { key: 'campaignId' }, doors: { key: 'doors' }, walls: { key: 'walls' } }
   const encounters = { id: { key: 'id' }, mapId: { key: 'mapId' } }
   const db = {

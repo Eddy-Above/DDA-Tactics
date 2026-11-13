@@ -1,3 +1,4 @@
+import { MAP_CONTENT_COLLECTIONS, updateMapContentBounds } from '../../../utils/mapContentBounds'
 import { db, maps, encounters, type Map } from '../../db'
 import { eq } from 'drizzle-orm'
 import { requireEntityAccess } from '../../utils/entitySecurity'
@@ -15,8 +16,8 @@ export default defineEventHandler(async (event) => {
 
   let notifyIds: string[] = []
   const result = await db.transaction(async tx => {
-  // Authorize and retain live door state without downloading every voxel on each autosave.
-  const [existing] = await tx.select({ id: maps.id, campaignId: maps.campaignId, ownerId: maps.ownerId, hidden: maps.hidden, doors: maps.doors,
+  // Lock display metadata and live door state without downloading unchanged geometry.
+  const [existing] = await tx.select({ contentBounds: maps.contentBounds, id: maps.id, campaignId: maps.campaignId, ownerId: maps.ownerId, hidden: maps.hidden, doors: maps.doors,
     ...(body.doors !== undefined || body.windows !== undefined ? { walls: maps.walls } : {}),
   }).from(maps).where(eq(maps.id, mapId)).for('update')
   if (!existing) throw createError({ statusCode: 404, message: 'Map not found' })
@@ -42,6 +43,15 @@ export default defineEventHandler(async (event) => {
   if (updates.doors) {
     const states = new globalThis.Map(existing.doors.map(door => [door.id, !!door.isOpen] as const))
     updates.doors = updates.doors.map(door => ({ ...door, isOpen: states.get(door.id) ?? false }))
+  }
+  if (!existing.contentBounds) {
+    // One-time initialization for legacy maps, after authorization and under the row lock.
+    const [content] = await tx.select({ groundTiles: maps.groundTiles, spaceTiles: maps.spaceTiles,
+      voxels: maps.voxels, walls: maps.walls, ceilings: maps.ceilings, stairs: maps.stairs,
+    }).from(maps).where(eq(maps.id, mapId))
+    updates.contentBounds = updateMapContentBounds(null, { ...content, ...updates })
+  } else if (MAP_CONTENT_COLLECTIONS.some(key => updates[key] !== undefined)) {
+    updates.contentBounds = updateMapContentBounds(existing.contentBounds, updates)
   }
   const query = tx.update(maps).set(updates).where(eq(maps.id, mapId))
   const [updated] = getQuery(event).return === 'minimal'

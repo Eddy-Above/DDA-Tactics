@@ -463,6 +463,7 @@ export const evolutionLines = pgTable('evolution_lines', {
 // =====================================
 
 export const maps = pgTable('maps', {
+  contentBounds: jsonb('content_bounds').$type<import('../../utils/mapContentBounds').MapContentBounds>(),
   ownerId: text('owner_id').references(() => users.id),
   hidden: boolean('hidden').notNull().default(false),
   id: text('id').primaryKey(),

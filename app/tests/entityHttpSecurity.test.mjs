@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
+const { updateMapContentBounds } = loadTypeScript('utils/mapContentBounds.ts')
+
 const names = ['defineEventHandler', 'getRouterParam', 'readBody', 'getQuery', 'createError']
 const originals = new Map(names.map(name => [name, globalThis[name]]))
 afterEach(() => { for (const [name, value] of originals) { if (value === undefined) delete globalThis[name]; else globalThis[name] = value } })
@@ -10,6 +12,7 @@ function fixture() {
   const schema = loadTypeScript('server/db/schema.ts')
   let campaign = { id: 'campaign', ownerId: null, passwordHash: 'player-hash', dmPasswordHash: 'gm-hash' }
   let map = { id: 'map', campaignId: 'campaign', name: 'Map', dimensions: { width: 4, depth: 4, height: 4 }, groundTiles: [], spaceTiles: [], voxels: [], walls: [{ id: 'wall', x: 0, y: 0, z: 0, face: 'north' }], windows: [], ceilings: [], stairs: [], doors: [{ id: 'door', wallId: 'wall', isOpen: true }] }
+  map.contentBounds = updateMapContentBounds(null, map)
   let account = { userId: null, isOwner: false, isCoOwner: false, isCoDm: false, accessibleTamerIds: [] }
   const control = { writes: 0, locks: 0 }, cookies = {}
   const db = {
@@ -60,4 +63,28 @@ test('unowned workshop maps are editable, with visibility changes reserved for o
   assert.equal(f.state().name, 'Changed')
   await assert.rejects(f.save({ hidden: true }), { statusCode: 400 })
   assert.equal(f.control.writes, 1)
+})
+
+test('map saves persist bounds from partial geometry updates and reject forged display metadata', async () => {
+  const f = fixture(); f.setAccount({ userId: 'gm', isCoDm: true })
+  await f.save({ voxels: [{ x: -10, y: -5, z: -20, materialId: 'earth' }] })
+  assert.deepEqual([f.state().contentBounds.x, f.state().contentBounds.y, f.state().contentBounds.z], [11, 6, 21])
+  const stored = structuredClone(f.state().contentBounds)
+  await f.save({ name: 'Rename' })
+  assert.deepEqual(f.state().contentBounds, stored)
+  await f.save({ voxels: [] })
+  assert.deepEqual([f.state().contentBounds.x, f.state().contentBounds.y, f.state().contentBounds.z], [1, 1, 1])
+  await f.save({ walls: [] })
+  assert.deepEqual([f.state().contentBounds.x, f.state().contentBounds.y, f.state().contentBounds.z], [0, 0, 0])
+  await assert.rejects(f.save({ contentBounds: { x: 999, y: 999, z: 999 } }), { statusCode: 400 })
+})
+
+test('legacy maps initialize all bounds on their first save without a bulk backfill', async () => {
+  const f = fixture(); f.setAccount({ userId: 'gm', isCoDm: true })
+  f.state().contentBounds = null
+  f.state().voxels = [{ x: -50, y: 20, z: -30, materialId: 'earth' }]
+  await f.save({ name: 'First save' })
+  assert.deepEqual([f.state().contentBounds.x, f.state().contentBounds.y, f.state().contentBounds.z], [51, 21, 31])
+  assert.equal(f.state().voxels.length, 1)
+  assert.equal(f.state().walls.length, 1)
 })

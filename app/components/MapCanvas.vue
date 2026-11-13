@@ -98,6 +98,7 @@
 </template>
 
 <script setup lang="ts">
+import { mapContentView } from '~/utils/mapContentBounds'
 import { displayImageUrl } from '~/utils/imageFallback'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -797,19 +798,22 @@ function initScene() {
   scene.fog = new THREE.FogExp2(0x1a1a2e, 0.04)
 
   camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 500)
-  const cx = (props.map?.dimensions.width ?? 20) / 2
-  const cz = (props.map?.dimensions.depth ?? 20) / 2
-  camera.position.set(cx + 15, 18, cz + 15)
-  camera.lookAt(cx, 0, cz)
+  const view = mapContentView(props.map?.contentBounds, camera.aspect, camera.fov)
+  const { x: cx, y: cy, z: cz } = view.target
+  camera.position.set(view.position.x, view.position.y, view.position.z)
+  camera.far = view.far
+  camera.updateProjectionMatrix()
+  camera.lookAt(cx, cy, cz)
+  scene.fog = new THREE.FogExp2(0x1a1a2e, view.fogDensity)
 
   controls = new OrbitControls(camera, canvas)
   controls.enablePan = true
   controls.enableZoom = true
-  controls.minPolarAngle = Math.PI / 3
-  controls.maxPolarAngle = Math.PI / 3
+  controls.minPolarAngle = Math.acos(1 / Math.sqrt(3))
+  controls.maxPolarAngle = Math.acos(1 / Math.sqrt(3))
   controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: undefined as any }
   controls.screenSpacePanning = false
-  controls.target.set(cx, 0, cz)
+  controls.target.set(cx, cy, cz)
   controls.update()
   controls.addEventListener('change', () => { overlaysDirty = true; requestRender(); emit('map-changed') })
 

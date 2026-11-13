@@ -16,16 +16,7 @@
         <textarea v-model="form.description" class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white h-20" />
       </div>
 
-      <div class="grid grid-cols-2 gap-4">
-        <div>
-          <label class="block text-sm font-medium text-digimon-dark-300 mb-1">Width (X)</label>
-          <input v-model.number="form.width" type="number" min="4" max="100" class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-digimon-dark-300 mb-1">Depth (Z)</label>
-          <input v-model.number="form.depth" type="number" min="4" max="100" class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white" />
-        </div>
-      </div>
+      <p class="text-sm text-digimon-dark-400">Maps are endless. Start with an empty map and build anywhere.</p>
 
       <div v-if="error" class="text-red-400 text-sm">{{ error }}</div>
 
@@ -47,7 +38,7 @@ definePageMeta({ title: 'New Workshop Map' })
 const router = useRouter()
 const { createMap } = useMap()
 
-const form = reactive({ name: '', description: '', width: 20, depth: 20 })
+const form = reactive({ name: '', description: '' })
 const saving = ref(false)
 const error = ref<string | null>(null)
 
@@ -59,7 +50,6 @@ async function submit() {
     const map = await createMap({
       name: form.name,
       description: form.description,
-      dimensions: { width: form.width, depth: form.depth },
     })
     router.push(`/workshop/maps/${map.id}`)
   } catch (e: any) {

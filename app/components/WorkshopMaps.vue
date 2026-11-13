@@ -51,7 +51,7 @@
             <p v-if="map.description" class="text-digimon-dark-400 text-sm mt-1">{{ map.description }}</p>
           </div>
           <span class="text-xs text-digimon-dark-500 bg-digimon-dark-700 px-2 py-1 rounded">
-            {{ map.dimensions.width }}×{{ map.dimensions.depth }}
+            {{ mapContentSizeLabel(map) }}
           </span>
         </div>
 
@@ -108,6 +108,7 @@
 </template>
 
 <script setup lang="ts">
+import { mapContentSizeLabel } from '~/utils/mapContentBounds'
 import { useMap } from '~/composables/useMap'
 import { useLibraryImportExport } from '~/composables/useLibraryImportExport'
 import type { GameMap } from '~/types'

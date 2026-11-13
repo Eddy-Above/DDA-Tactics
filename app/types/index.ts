@@ -135,6 +135,8 @@ export interface MapStair {
 }
 
 export interface GameMap {
+  /** Content-derived display metadata; never constrains the map. */
+  contentBounds?: import('~/utils/mapContentBounds').MapContentBounds | null
   ownerId?: string | null
   hidden?: boolean
   id: string

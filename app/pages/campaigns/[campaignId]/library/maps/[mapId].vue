@@ -5,9 +5,6 @@
       <div class="flex items-center gap-3">
         <NuxtLink :to="`/campaigns/${campaignId}/library/maps`" class="text-digimon-dark-400 hover:text-white text-sm">← Maps</NuxtLink>
         <h1 class="text-white font-semibold text-sm">{{ mapData?.name }}</h1>
-        <span class="text-digimon-dark-500 text-xs" v-if="mapData">
-          {{ mapData.dimensions.width }}×{{ mapData.dimensions.depth }}
-        </span>
       </div>
       <div class="flex items-center gap-2">
         <NuxtLink :to="`/campaigns/${campaignId}/library/maps`" class="bg-digimon-dark-700 text-white px-3 py-1.5 rounded-lg text-sm">Close</NuxtLink>

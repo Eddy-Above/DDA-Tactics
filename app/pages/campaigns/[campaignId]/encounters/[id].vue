@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { mapContentSizeLabel } from '~/utils/mapContentBounds'
 import { displayImageUrl } from '~/utils/imageFallback'
 import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
@@ -6095,7 +6096,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               @click="attachMap(map.id)"
             >
               <div class="font-medium">{{ map.name }}</div>
-              <div class="text-xs text-digimon-dark-400 mt-0.5">{{ map.dimensions.width }}×{{ map.dimensions.depth }}</div>
+              <div class="text-xs text-digimon-dark-400 mt-0.5">{{ mapContentSizeLabel(map) }}</div>
             </button>
           </div>
           <button
