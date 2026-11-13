@@ -7,25 +7,13 @@
       <div class="flex gap-2 items-center">
         <input ref="importFileInput" type="file" accept=".json" class="hidden" @change="handleImport">
         <button
-          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-          :disabled="importing"
-          @click="importFileInput?.click()"
-        >
-          Import
-        </button>
-        <button
           v-if="visibleMaps.length > 0"
           class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
           @click="exportMaps(visibleMaps)"
         >
           Export All
         </button>
-        <NuxtLink
-          :to="'/workshop/maps/new'"
-          class="bg-digimon-orange-600 hover:bg-digimon-orange-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-        >
-          + New Map
-        </NuxtLink>
+
       </div>
     </div>
 
@@ -142,6 +130,8 @@ const actionError = ref('')
 const importing = ref(false)
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
+defineExpose({ openImport: () => { if (!importing.value) importFileInput.value?.click() } })
+
 const importResult = ref<{ successful: number; failed: number; errors: Array<{ index: number; name: string; error: string }> } | null>(null)
 
 function confirmDelete(id: string, name: string) {

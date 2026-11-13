@@ -11,6 +11,20 @@ const { user: currentUser, fetchMe, initialized } = useAuth()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const importLoading = ref(false)
+const importMenu = ref<HTMLDetailsElement | null>(null)
+const newMenu = ref<HTMLDetailsElement | null>(null)
+const workshopMaps = ref<{ openImport: () => void } | null>(null)
+function closeMenus() {
+  if (importMenu.value) importMenu.value.open = false
+  if (newMenu.value) newMenu.value.open = false
+}
+function handleMapImportClick() {
+  closeMenus()
+  workshopMaps.value?.openImport()
+}
+function handleMenuFocusOut(event: FocusEvent) {
+  if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) closeMenus()
+}
 const importFeedback = ref<{ tone: 'success' | 'warning' | 'error'; message: string; errors: string[] } | null>(null)
 const showOnlyMine = ref(false)
 
@@ -92,6 +106,7 @@ async function handleDeleteDigimon(d: { id: string; name: string; ownerId?: stri
 }
 
 function handleImportClick() {
+  closeMenus()
   fileInputRef.value?.click()
 }
 
@@ -150,28 +165,27 @@ async function handleImportFile(event: Event) {
           <input v-model="showOnlyMine" type="checkbox" class="rounded" />
           My Creations Only
         </label>
-        <button
-          :disabled="importLoading"
-          class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white
-                 px-4 py-2 rounded-lg font-semibold transition-colors"
-          @click="handleImportClick"
-        >
-          {{ importLoading ? 'Importing...' : 'Import Bundle' }}
-        </button>
-        <NuxtLink
-          to="/workshop/tamers/new"
-          class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg
-                 font-semibold transition-colors"
-        >
-          + New Tamer
-        </NuxtLink>
-        <NuxtLink
-          to="/workshop/digimon/new"
-          class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg
-                 font-semibold transition-colors"
-        >
-          + New Digimon
-        </NuxtLink>
+        <div class="flex gap-2" @keydown.esc="closeMenus" @focusout="handleMenuFocusOut">
+          <details ref="importMenu" name="workshop-actions" class="relative">
+            <summary class="list-none cursor-pointer bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors">
+              Import <span aria-hidden="true">&#9662;</span>
+            </summary>
+            <div class="absolute right-0 z-20 mt-2 w-48 rounded-lg border border-digimon-dark-600 bg-digimon-dark-800 p-1 shadow-xl">
+              <button v-for="label in ['Import Tamer', 'Import Digimon', 'Import Bundle']" :key="label" :disabled="importLoading" class="block w-full text-left px-3 py-2 rounded text-white hover:bg-digimon-dark-700 disabled:opacity-50" @click="handleImportClick">{{ label }}</button>
+              <button class="block w-full text-left px-3 py-2 rounded text-white hover:bg-digimon-dark-700" @click="handleMapImportClick">Import Map</button>
+            </div>
+          </details>
+          <details ref="newMenu" name="workshop-actions" class="relative">
+            <summary class="list-none cursor-pointer bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors">
+              New <span aria-hidden="true">&#9662;</span>
+            </summary>
+            <div class="absolute right-0 z-20 mt-2 w-48 rounded-lg border border-digimon-dark-600 bg-digimon-dark-800 p-1 shadow-xl">
+              <NuxtLink to="/workshop/tamers/new" class="block px-3 py-2 rounded text-white hover:bg-digimon-dark-700" @click="closeMenus">New Tamer</NuxtLink>
+              <NuxtLink to="/workshop/digimon/new" class="block px-3 py-2 rounded text-white hover:bg-digimon-dark-700" @click="closeMenus">New Digimon</NuxtLink>
+              <NuxtLink to="/workshop/maps/new" class="block px-3 py-2 rounded text-white hover:bg-digimon-dark-700" @click="closeMenus">New Map</NuxtLink>
+            </div>
+          </details>
+        </div>
       </div>
     </div>
 
@@ -205,6 +219,8 @@ async function handleImportFile(event: Event) {
         <li v-for="(e, i) in importFeedback.errors" :key="i">&bull; {{ e }}</li>
       </ul>
     </div>
+
+    <WorkshopMaps ref="workshopMaps" :only-mine="showOnlyMine" />
 
     <div v-if="loading && tamers.length === 0 && digimonList.length === 0" class="text-center py-12">
       <div class="text-digimon-dark-400">Loading workshop...</div>
