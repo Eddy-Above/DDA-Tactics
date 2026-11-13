@@ -9,6 +9,7 @@ function fixture(admitted = true) {
   const writes = []
   const route = loadTypeScriptWithMocks('server/api/maps/index.post.ts', {
     '../../db': { maps: {}, db: { insert: () => ({ values: async value => writes.push(value) }) } },
+    '../../utils/session': { getSessionUser: async event => event.user ?? null },
     '../../utils/campaignSecurity': { requireCampaignDm: async (_event, id) => { assert.equal(id, 'campaign'); if (!admitted) throw Object.assign(new Error('GM required'), { statusCode: 403 }) } },
   }).default
   return { route, writes }
@@ -27,4 +28,13 @@ test('large maps retain their dimensions and ordinary floor generation without a
   const filled = await f.route({ body: { name: 'Floor', campaignId: 'campaign', dimensions: { width: 100, depth: 500 } } })
   assert.equal(filled.groundTiles.length, 50000)
   assert.deepEqual(filled.groundTiles.at(-1), { x: 99, y: 0, z: 499, element: 'void', terrain: 'normal' })
+})
+
+test('workshop maps capture the current owner and start publicly shared', async () => {
+  const f = fixture()
+  const map = await f.route({ user: { id: 'owner' }, body: { name: 'Workshop', dimensions: { width: 4, depth: 4 } } })
+  assert.equal(map.campaignId, null)
+  assert.equal(map.ownerId, 'owner')
+  assert.equal(map.hidden, false)
+  assert.equal(map.groundTiles.length, 16)
 })

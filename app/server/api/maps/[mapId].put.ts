@@ -10,18 +10,19 @@ export default defineEventHandler(async (event) => {
   const sourceClientId = event.node?.req?.headers ? getRequestHeader(event, 'x-map-client-id')?.slice(0, 100) : undefined
   const body = await readBody<Partial<Pick<Map,
     'name' | 'description' | 'dimensions' | 'groundTiles' | 'spaceTiles' | 'voxels' |
-    'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs'
+    'walls' | 'windows' | 'doors' | 'ceilings' | 'stairs' | 'hidden'
   >>>(event)
 
   let notifyIds: string[] = []
   const result = await db.transaction(async tx => {
   // Authorize and retain live door state without downloading every voxel on each autosave.
-  const [existing] = await tx.select({ id: maps.id, campaignId: maps.campaignId, doors: maps.doors,
+  const [existing] = await tx.select({ id: maps.id, campaignId: maps.campaignId, ownerId: maps.ownerId, hidden: maps.hidden, doors: maps.doors,
     ...(body.doors !== undefined || body.windows !== undefined ? { walls: maps.walls } : {}),
   }).from(maps).where(eq(maps.id, mapId)).for('update')
   if (!existing) throw createError({ statusCode: 404, message: 'Map not found' })
   await requireEntityAccess(event, 'map', existing, true)
-  const fields = allowFields(body, ['name', 'description', 'dimensions', 'groundTiles', 'spaceTiles', 'voxels', 'walls', 'windows', 'doors', 'ceilings', 'stairs'])
+  const fields = allowFields(body, ['name', 'description', 'dimensions', 'groundTiles', 'spaceTiles', 'voxels', 'walls', 'windows', 'doors', 'ceilings', 'stairs', 'hidden'])
+  if (body.hidden !== undefined && (!existing.ownerId || existing.campaignId)) throw createError({ statusCode: 400, message: 'Only owned workshop maps can be hidden' })
   const updates: Partial<Map> = { ...tableWriteBody(fields, maps, existing), updatedAt: new Date() }
   if (updates.dimensions) for (const [axis, value] of Object.entries(updates.dimensions)) finiteNumber(value, axis, { integer: true, min: 1 })
   for (const collection of ['groundTiles', 'spaceTiles', 'voxels', 'walls', 'ceilings', 'stairs'] as const) {

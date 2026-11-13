@@ -1853,3 +1853,5 @@ npm run db:studio
 | Combat Monster | Quality that accumulates bonus damage each round, capped at `totalHealth` (= Base Health + Bonus DP Health); cap is restored from the pre-evolve snapshot on devolve |
 | Counterattack | Quality that lets digimon auto-attack when opponent misses |
 | Data Optimization | Quality that boosts one specific stat |
+
+**2026-11-13 Workshop maps:** Character Workshop is now Workshop. Standalone maps can be created and edited with the existing map editor, browsed publicly, hidden by their account owner, and shared through JSON export/import into Workshop or campaign libraries. Account-owned maps enforce owner-only writes and hidden-map reads; unowned maps follow the existing unowned character policy. Apply `app/server/db/migrations/0026_add_workshop_maps.sql` before deploying (manual migration; the legacy Drizzle journal does not include it). It adds `maps.owner_id` and `maps.hidden`.

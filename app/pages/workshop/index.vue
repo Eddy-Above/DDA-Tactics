@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { displayImageUrl } from '~/utils/imageFallback'
 definePageMeta({
-  title: 'Character Workshop',
+  title: 'Workshop',
 })
 
 const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, updateTamer, calculateDerivedStats } = useTamers()
@@ -140,15 +140,15 @@ async function handleImportFile(event: Event) {
         <NuxtLink to="/" class="text-digimon-dark-400 hover:text-white text-sm mb-2 inline-block">
           &larr; Back to Campaigns
         </NuxtLink>
-        <h1 class="font-display text-3xl font-bold text-white">Character Workshop</h1>
+        <h1 class="font-display text-3xl font-bold text-white">Workshop</h1>
         <p class="text-digimon-dark-400 max-w-2xl">
-          A shared sandbox for experimenting with tamer and digimon builds under any rules.
+          A shared sandbox for creating and sharing tamers, digimon, and maps under any rules.
         </p>
       </div>
       <div class="flex gap-2 flex-wrap items-center">
         <label v-if="currentUser" class="flex items-center gap-2 text-sm text-digimon-dark-300 mr-2">
           <input v-model="showOnlyMine" type="checkbox" class="rounded" />
-          My Characters Only
+          My Creations Only
         </label>
         <button
           :disabled="importLoading"
@@ -211,6 +211,8 @@ async function handleImportFile(event: Event) {
     </div>
 
     <template v-else>
+      <WorkshopMaps :only-mine="showOnlyMine" />
+
       <!-- Tamers -->
       <section class="mb-10">
         <h2 class="font-display text-2xl font-semibold text-white mb-4">Tamers</h2>

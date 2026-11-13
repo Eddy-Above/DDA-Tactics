@@ -135,10 +135,12 @@ export interface MapStair {
 }
 
 export interface GameMap {
+  ownerId?: string | null
+  hidden?: boolean
   id: string
   name: string
   description: string
-  campaignId: string
+  campaignId: string | null
   dimensions: { width: number; depth: number; height?: number }
   groundTiles: MapGroundTile[]
   spaceTiles: MapSpaceTile[]

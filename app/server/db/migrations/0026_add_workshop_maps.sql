@@ -1,0 +1,2 @@
+ALTER TABLE maps ADD COLUMN IF NOT EXISTS owner_id text REFERENCES users(id);
+ALTER TABLE maps ADD COLUMN IF NOT EXISTS hidden boolean NOT NULL DEFAULT false;

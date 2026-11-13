@@ -293,7 +293,7 @@ export function useLibraryImportExport() {
     downloadJson(data, 'maps.json')
   }
 
-  async function importMaps(file: File, campaignId: string): Promise<ImportResult> {
+  async function importMaps(file: File, campaignId?: string): Promise<ImportResult> {
     let entries: unknown[]
     try {
       entries = await parseJsonFile(file)
@@ -323,6 +323,7 @@ export function useLibraryImportExport() {
           description: (entry.description as string | undefined) ?? '',
           campaignId,
           dimensions: entry.dimensions as GameMap['dimensions'],
+          generateGround: false,
         })
         await updateMap(created.id, {
           groundTiles: (entry.groundTiles as GameMap['groundTiles']) ?? [],

@@ -27,12 +27,8 @@ export async function requireEntityAccess(event: H3Event, kind: EntityKind, reco
     if ((kind === 'digimon' && !record.isEnemy || kind === 'evolution-line') && record.partnerId) { await assertCanControlTamer(event, record.partnerId, access); return access }
     return requireCampaignDm(event, scope)
   }
-  if (kind === 'map') {
-    if (write) throw createError({ statusCode: 403, message: 'Legacy standalone maps are read-only' })
-    return null
-  }
   const user = await getSessionUser(event)
-  if ((kind === 'tamer' || kind === 'digimon') && record.ownerId && (write || record.hidden) && user?.id !== record.ownerId) throw createError({ statusCode: write ? 403 : 404, message: write ? 'You do not own this character' : 'Character not found' })
+  if ((kind === 'tamer' || kind === 'digimon' || kind === 'map') && record.ownerId && (write || record.hidden) && user?.id !== record.ownerId) throw createError({ statusCode: write ? 403 : 404, message: write ? 'You do not own this creation' : 'Creation not found' })
   if (kind === 'evolution-line') {
     if (record.partnerId) {
       const [partner] = await db.select().from(tamers).where(eq(tamers.id, record.partnerId))

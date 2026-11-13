@@ -56,14 +56,23 @@ test('all linked objects must share scope and independently allow writes', async
   assert.equal((await f.requireLinkedEntity({}, 'digimon', 'owned-mon', null)).id, 'owned-mon')
 })
 
-test('maps need GM permission and standalone maps are readable without becoming writable', async () => {
+test('campaign maps need GM permission and workshop maps follow ownership', async () => {
   const f = fixture()
   f.set({ admitted: true })
   await assert.rejects(f.requireEntityAccess({}, 'map', { campaignId: 'campaign' }, true), error => error.statusCode === 403)
   f.set({ gm: true })
   await f.requireEntityAccess({}, 'map', { campaignId: 'campaign' }, true)
   await f.requireEntityAccess({}, 'map', { campaignId: null })
-  await assert.rejects(f.requireEntityAccess({}, 'map', { campaignId: null }, true), error => error.statusCode === 403)
+  await f.requireEntityAccess({}, 'map', { campaignId: null }, true)
+  const owned = { id: 'workshop', campaignId: null, ownerId: 'owner', hidden: false }
+  await f.requireEntityAccess({}, 'map', owned)
+  await assert.rejects(f.requireEntityAccess({}, 'map', owned, true), { statusCode: 403 })
+  owned.hidden = true
+  await assert.rejects(f.requireEntityAccess({}, 'map', owned), { statusCode: 404 })
+  assert.deepEqual(await f.filterReadableEntities({}, [owned], 'map'), [])
+  f.set({ user: { id: 'owner' } })
+  await f.requireEntityAccess({}, 'map', owned, true)
+  assert.deepEqual(await f.filterReadableEntities({}, [owned], 'map'), [owned])
 })
 
 test('unpartnered legacy forms inherit a private evolution line for direct reads, writes and lists', async () => {

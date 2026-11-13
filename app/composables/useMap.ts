@@ -8,11 +8,11 @@ export function useMap() {
   const error = ref<string | null>(null)
   let fetchVersion = 0
 
-  async function fetchMaps(campaignId: string) {
+  async function fetchMaps(campaignId?: string) {
     loading.value = true
     error.value = null
     try {
-      const data = await $fetch<GameMap[]>(`/api/maps?campaignId=${campaignId}`)
+      const data = await $fetch<GameMap[]>('/api/maps', { query: campaignId ? { campaignId } : { sandbox: 'true' } })
       maps.value = data
     } catch (e: any) {
       error.value = e.message ?? 'Failed to load maps'
@@ -37,7 +37,7 @@ export function useMap() {
     }
   }
 
-  async function createMap(body: { name: string; description?: string; campaignId: string; dimensions: { width: number; depth: number; height?: number } }) {
+  async function createMap(body: { name: string; description?: string; campaignId?: string | null; generateGround?: boolean; dimensions: { width: number; depth: number; height?: number } }) {
     const data = await $fetch<GameMap>('/api/maps', { method: 'POST', body })
     maps.value.push(data)
     return data

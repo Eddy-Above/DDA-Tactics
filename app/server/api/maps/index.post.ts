@@ -1,4 +1,5 @@
 import { db, maps, type NewMap } from '../../db'
+import { getSessionUser } from '../../utils/session'
 import { generateId } from '../../utils/id'
 import { requireCampaignDm } from '../../utils/campaignSecurity'
 import { finiteNumber, allowFields, boundedString } from '../../utils/securityValidation'
@@ -6,7 +7,7 @@ import { finiteNumber, allowFields, boundedString } from '../../utils/securityVa
 interface CreateMapBody {
   name: string
   description?: string
-  campaignId: string
+  campaignId?: string | null
   dimensions: { width: number; depth: number; height?: number }
   generateGround?: boolean
 }
@@ -17,12 +18,14 @@ export default defineEventHandler(async (event) => {
   boundedString(body.name, 'name', 1000, false)
   if (body.description !== undefined) boundedString(body.description, 'description', 100000)
 
-  if (!body.name || !body.campaignId || !body.dimensions) {
-    throw createError({ statusCode: 400, message: 'Missing required fields: name, campaignId, dimensions' })
+  if (!body.name || !body.dimensions) {
+    throw createError({ statusCode: 400, message: 'Missing required fields: name, dimensions' })
   }
 
+  if (body.campaignId !== undefined && body.campaignId !== null) boundedString(body.campaignId, 'campaignId', 1000, false)
   const id = generateId()
-  await requireCampaignDm(event, body.campaignId)
+  if (body.campaignId) await requireCampaignDm(event, body.campaignId)
+  const sessionUser = body.campaignId ? null : await getSessionUser(event)
   allowFields(body.dimensions, ['width', 'depth', 'height'])
   finiteNumber(body.dimensions.width, 'width', { integer: true, min: 1 })
   finiteNumber(body.dimensions.depth, 'depth', { integer: true, min: 1 })
@@ -40,7 +43,9 @@ export default defineEventHandler(async (event) => {
     id,
     name: body.name,
     description: body.description || '',
-    campaignId: body.campaignId,
+    campaignId: body.campaignId || null,
+    ownerId: sessionUser?.id ?? null,
+    hidden: false,
     dimensions: { height: 10, ...body.dimensions },
     groundTiles,
     spaceTiles: [],

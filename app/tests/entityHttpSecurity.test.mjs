@@ -54,8 +54,10 @@ test('map writes reject scope rebinding, unknown properties and invalid coordina
   assert.equal(f.control.writes, 0)
 })
 
-test('standalone maps remain readable legacy data and cannot become anonymous writable', async () => {
+test('unowned workshop maps are editable, with visibility changes reserved for owners', async () => {
   const f = fixture(); f.state().campaignId = null
-  await assert.rejects(f.save({ name: 'Changed' }), error => error.statusCode === 403)
-  assert.equal(f.control.writes, 0)
+  await f.save({ name: 'Changed' })
+  assert.equal(f.state().name, 'Changed')
+  await assert.rejects(f.save({ hidden: true }), { statusCode: 400 })
+  assert.equal(f.control.writes, 1)
 })

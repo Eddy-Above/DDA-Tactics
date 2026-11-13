@@ -98,7 +98,7 @@ function getLevelColor(level: string) {
           to="/workshop"
           class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
         >
-          🛠️ Character Workshop
+          🛠️ Workshop
         </NuxtLink>
         <NuxtLink
           to="/campaigns/new"
