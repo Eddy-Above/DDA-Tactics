@@ -7,6 +7,7 @@ const point = (x, y = 0) => ({ x, y, z: 0 })
 function fixture() {
   const positions = ref({ actor: point(0) }), preview = ref(null), emitted = []
   const methods = loadPageFunctions('components/EncounterMap.vue', ['attackIntent', 'onChargeTargetSelected', 'onAreaAttackConfirmed'], {
+    actionFeedback: { previewMovement() {} },
     positions, attackPreview: preview, pendingAttackIntent: null,
     props: { encounter: { revision: 8 }, selectedAttack: { attackerParticipantId: 'actor', chargeMode: 'before' } },
     chargeMode: ref('before'), activeParticipantId: ref('actor'), movement: { clearMovement() {} },

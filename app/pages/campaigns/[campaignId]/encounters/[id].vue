@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { encounterFetch as $fetch, getEncounterFeedback, previewEncounterActions } from '~/utils/encounterFeedback'
 import { mapContentSizeLabel } from '~/utils/mapContentBounds'
 import { displayImageUrl } from '~/utils/imageFallback'
 import type { MapAttackIntent } from '~/types/mapAttackIntent'
@@ -43,7 +44,7 @@ import type { AttackRadialRider, MapRadialItem, MapRadialOptions, MapRadialChoic
 import { DIGIVOLVE_WILLPOWER_DC, STAGE_BATTERY_CAPACITY, INSPIRATION_ACT_COST, INSPIRATION_FATEFUL_COST } from '~/types'
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, applyDerivedStatEffects, BASIC_ATTACKS } from '~/data/attackConstants'
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
-import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
+import { battleLogActorName, buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 import { currentPartnerFormIds, encounterPartnerForms } from '~/utils/encounterPartnerForms'
 import { requestErrorMessage } from '~/utils/requestError'
 
@@ -87,6 +88,12 @@ const {
   spendInspiration,
   grantInspiration,
 } = useEncounters()
+
+const actionFeedback = getEncounterFeedback()
+const presentedEncounter = computed(() => currentEncounter.value && previewEncounterActions(currentEncounter.value, actionFeedback.pending.value))
+watch(() => actionFeedback.errors.value.at(-1), (error, previous) => {
+  if (error && error.id > (previous?.id ?? 0) && error.encounterId === currentEncounter.value?.id) void resyncEncounter()
+})
 
 const { digimonList, fetchDigimon, rollInitiative: rollDigimonInitiative, calculateDerivedStats: _calcDigimonStats, error: digimonRosterError, warnings: digimonRosterWarnings } = useDigimon()
 const calcDigimonStats = (digimon: any) => _calcDigimonStats(digimon, eddySoulRules.value)
@@ -209,9 +216,9 @@ const tamerMap = computed(() => {
 
 // Participants sorted by turn order
 const sortedParticipants = computed(() => {
-  if (!currentEncounter.value) return []
-  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
-  const turnOrder = (currentEncounter.value.turnOrder as string[]) || []
+  if (!presentedEncounter.value) return []
+  const participants = (presentedEncounter.value.participants as CombatParticipant[]) || []
+  const turnOrder = (presentedEncounter.value.turnOrder as string[]) || []
 
   // Filter turnOrder to exclude partner digimon (for backward compatibility)
   const filteredTurnOrder = turnOrder.filter(id => {
@@ -238,8 +245,8 @@ const hierarchicalParticipants = computed(() => {
 
 // Current active participant
 const activeParticipant = computed(() => {
-  if (!currentEncounter.value) return null
-  return getCurrentParticipant(currentEncounter.value)
+  if (!presentedEncounter.value) return null
+  return getCurrentParticipant(presentedEncounter.value)
 })
 
 // Turn order panel can be minimized to show only the current + next 2 turns
@@ -435,9 +442,9 @@ function getEntityDetails(participant: CombatParticipant) {
 
 // Find partner digimon for a tamer participant
 function getPartnerDigimonForTamer(tamerParticipant: CombatParticipant): CombatParticipant | null {
-  if (tamerParticipant.type !== 'tamer' || !currentEncounter.value) return null
+  if (tamerParticipant.type !== 'tamer' || !presentedEncounter.value) return null
 
-  const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
+  const participants = (presentedEncounter.value.participants as CombatParticipant[]) || []
 
   // Find digimon participant whose partnerId matches this tamer's entityId
   return participants.find(p => {
@@ -2526,6 +2533,7 @@ async function confirmDirect(targetDigimon: CombatParticipant, participantId = a
   if (!currentEncounter.value) return
   const tamer = (currentEncounter.value.participants as CombatParticipant[]).find(p => p.id === participantId)
   if (!tamer || !canMapDirect(tamer, bolstered)) return
+  showDirectTargetSelector.value = false
 
   try {
     const updated = await $fetch<any>(`/api/encounters/${currentEncounter.value.id}/actions/direct`, {
@@ -2536,7 +2544,6 @@ async function confirmDirect(targetDigimon: CombatParticipant, participantId = a
         bolstered,
       },
     })
-    showDirectTargetSelector.value = false
     await applyActionResult(updated, 'direct')
   } catch (e: any) {
     console.error('Direct failed:', e)
@@ -3472,20 +3479,20 @@ async function toggleMapView() {
 const throwAimControllerId = ref<string | null>(null)
 const throwAllyAimContext = ref<{ interceptorParticipantId: string; allyParticipantId: string } | null>(null)
 const showMapPicker = ref(false)
-const { maps: availableMaps, fetchMaps } = useMap()
+const { maps: availableMaps, fetchMaps, loading: mapPickerLoading } = useMap()
 
 // (This page's <EncounterMap> passes :player-placement-mode="false" — the GM map is always in
 // GM placement mode. Player-side placement lives on player/[tamerId].vue.)
 
 async function openMapPicker() {
-  await fetchMaps(campaignId.value)
   showMapPicker.value = true
+  await fetchMaps(campaignId.value)
 }
 
 async function attachMap(mapId: string | null) {
   if (!currentEncounter.value) return
-  await updateEncounter(currentEncounter.value.id, { mapId } as any)
   showMapPicker.value = false
+  await updateEncounter(currentEncounter.value.id, { mapId } as any)
 }
 
 // Flat maps keyed by entityId for EncounterMap
@@ -3570,6 +3577,7 @@ function onMapAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeD
 }
 
 function onMapAttackCancelled() {
+  actionFeedback.cancelMovementPreview(currentEncounter.value?.id ?? '')
   selectedAttack.value = null
 }
 
@@ -3582,7 +3590,8 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
 <template>
   <div class="container mx-auto px-4 py-8">
-    <CleanseDialog v-if="cleanseRequest" :request="cleanseRequest" :participants="currentEncounter?.participants ?? []"
+    <EncounterActionFeedback :encounter-id="presentedEncounter?.id" />
+    <CleanseDialog v-if="cleanseRequest" :request="cleanseRequest" :participants="presentedEncounter?.participants ?? []"
       :participant-name="getDisplayName" :busy="cleanseBusy" :error="cleanseError" @confirm="submitCleanse" />
     <ReactionOrdersPanel :choices="gmReactionOrders.choices.value" :busy="gmReactionOrders.busy.value" @declare="gmReactionOrders.declare" @skip="gmReactionOrders.skip" />
     <FatefulInterventionDialog v-if="gmFateful.visible.value" :rolls="gmFatefulOptions" :willpower="gmFatefulWillpower" :cost="INSPIRATION_FATEFUL_COST[campaignLevel]" :inspiration="gmFatefulTamer?.currentInspiration ?? 0" :busy="gmFateful.busy.value" :error="gmFateful.error.value" @confirm="gmFateful.confirm" @cancel="cancelGmFateful" />
@@ -3596,15 +3605,15 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       @confirm="specialOrderTargets.confirm"
       @cancel="specialOrderTargets.close"
     />
-    <div v-if="loading && !currentEncounter" class="text-center py-12">
+    <div v-if="loading && !presentedEncounter" class="text-center py-12">
       <div class="text-digimon-dark-400">Loading encounter...</div>
     </div>
 
-    <div v-else-if="error && !currentEncounter" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-red-400">
+    <div v-else-if="error && !presentedEncounter" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-red-400">
       {{ error }}
     </div>
 
-    <div v-else-if="!currentEncounter" class="text-center py-12">
+    <div v-else-if="!presentedEncounter" class="text-center py-12">
       <div class="text-6xl mb-4">❌</div>
       <h2 class="text-xl font-semibold text-white mb-2">Encounter Not Found</h2>
       <NuxtLink :to="`/campaigns/${campaignId}/encounters`" class="text-digimon-orange-400 hover:text-digimon-orange-300">
@@ -3626,38 +3635,38 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <NuxtLink :to="`/campaigns/${campaignId}/encounters`" class="text-digimon-dark-400 hover:text-white text-sm mb-2 inline-block">
             &larr; Back to Encounters
           </NuxtLink>
-          <h1 class="font-display text-3xl font-bold text-white">{{ currentEncounter.name }}</h1>
-          <p v-if="currentEncounter.description" class="text-digimon-dark-400">
-            {{ currentEncounter.description }}
+          <h1 class="font-display text-3xl font-bold text-white">{{ presentedEncounter.name }}</h1>
+          <p v-if="presentedEncounter.description" class="text-digimon-dark-400">
+            {{ presentedEncounter.description }}
           </p>
         </div>
         <div class="flex items-center gap-3">
           <span
             :class="[
               'text-sm px-3 py-1 rounded uppercase font-semibold',
-              currentEncounter.phase === 'setup' && 'bg-blue-900/30 text-blue-400',
-              currentEncounter.phase === 'combat' && 'bg-red-900/30 text-red-400',
-              currentEncounter.phase === 'ended' && 'bg-gray-900/30 text-gray-400',
+              presentedEncounter.phase === 'setup' && 'bg-blue-900/30 text-blue-400',
+              presentedEncounter.phase === 'combat' && 'bg-red-900/30 text-red-400',
+              presentedEncounter.phase === 'ended' && 'bg-gray-900/30 text-gray-400',
             ]"
           >
-            {{ currentEncounter.phase }}
+            {{ presentedEncounter.phase }}
           </span>
-          <span v-if="currentEncounter.phase === 'combat'" class="text-white font-semibold">
-            Round {{ currentEncounter.round }}
+          <span v-if="presentedEncounter.phase === 'combat'" class="text-white font-semibold">
+            Round {{ presentedEncounter.round }}
           </span>
           <!-- Player visibility: players see nothing of this encounter until it's on -->
           <button
             :disabled="togglingVisibility"
             class="text-sm px-3 py-1 rounded border font-semibold transition-colors disabled:opacity-50"
-            :class="(currentEncounter as any).visibleToPlayers
+            :class="(presentedEncounter as any).visibleToPlayers
               ? 'bg-green-900/30 border-green-600 text-green-400 hover:bg-green-900/50'
               : 'bg-digimon-dark-800 border-digimon-dark-600 text-digimon-dark-400 hover:text-white'"
-            :title="(currentEncounter as any).visibleToPlayers
+            :title="(presentedEncounter as any).visibleToPlayers
               ? 'Players can see this encounter and receive its prompts. Click to hide.'
               : 'Hidden from players — they see nothing of it and receive no prompts. Click to publish.'"
             @click="toggleVisibleToPlayers"
           >
-            {{ (currentEncounter as any).visibleToPlayers ? '👁 Visible' : '🚫 Hidden' }}
+            {{ (presentedEncounter as any).visibleToPlayers ? '👁 Visible' : '🚫 Hidden' }}
           </button>
           <button
             class="text-sm px-3 py-1 rounded border border-digimon-dark-600 bg-digimon-dark-800 text-digimon-dark-300 hover:text-white transition-colors font-semibold"
@@ -3668,7 +3677,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           </button>
           <!-- Map view toggle -->
           <button
-            v-if="(currentEncounter as any).mapId"
+            v-if="(presentedEncounter as any).mapId"
             class="text-sm px-3 py-1 rounded border font-semibold transition-colors"
             :class="showMapView
               ? 'bg-digimon-orange-600 border-digimon-orange-500 text-white'
@@ -3679,12 +3688,12 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           </button>
           <!-- Map attachment controls -->
           <button
-            v-if="!(currentEncounter as any).mapId"
+            v-if="!(presentedEncounter as any).mapId"
             class="text-sm px-3 py-1 rounded border border-digimon-orange-600 bg-digimon-orange-900/30 text-digimon-orange-300 hover:bg-digimon-orange-600 hover:text-white transition-colors font-semibold"
             @click="openMapPicker"
           >📎 Attach Map</button>
           <template v-else>
-            <span class="text-xs text-digimon-dark-400">{{ availableMaps.find(m => m.id === (currentEncounter as any).mapId)?.name ?? 'Map' }}</span>
+            <span class="text-xs text-digimon-dark-400">{{ availableMaps.find(m => m.id === (presentedEncounter as any).mapId)?.name ?? 'Map' }}</span>
             <button class="text-xs text-digimon-dark-500 hover:text-white transition-colors" @click="openMapPicker">Change</button>
             <button class="text-xs text-red-500 hover:text-red-300 transition-colors" @click="attachMap(null)">Detach</button>
           </template>
@@ -3695,7 +3704,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       <div v-if="showMapView" class="fixed inset-0 z-40 bg-digimon-dark-900" style="top:0;left:0;right:0;bottom:0;">
         <EncounterMap
           ref="encounterMapRef"
-          :encounter="currentEncounter as any"
+          :encounter="presentedEncounter as any"
           :is-dm="true"
           :my-tamer-id="myTamerId"
           :tamer-map="tamerMapForMap"
@@ -3740,7 +3749,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <template #combat-controls>
             <div class="flex gap-2 flex-wrap">
               <button
-                v-if="currentEncounter.phase === 'combat'"
+                v-if="presentedEncounter.phase === 'combat'"
                 class="bg-digimon-orange-600 hover:bg-digimon-orange-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"
                 @click="handleNextTurn"
               >Next Turn</button>
@@ -3848,7 +3857,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 ⚔ Engage {{ pendingSetupTamers.length }} Tamer{{ pendingSetupTamers.length === 1 ? '' : 's' }}
               </button>
               <button
-                v-if="currentEncounter.phase === 'setup'"
+                v-if="presentedEncounter.phase === 'setup'"
                 :disabled="!canStartCombat"
                 :class="[
                   'px-4 py-2 rounded-lg font-semibold transition-colors',
@@ -3862,14 +3871,14 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 ▶ Start Combat
               </button>
               <button
-                v-if="currentEncounter.phase === 'combat'"
+                v-if="presentedEncounter.phase === 'combat'"
                 class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 @click="handleNextTurn"
               >
                 Next Turn →
               </button>
               <button
-                v-if="currentEncounter.phase === 'combat'"
+                v-if="presentedEncounter.phase === 'combat'"
                 class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 @click="handleEndCombat"
               >
@@ -3885,7 +3894,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 </button>
               </div>
               <button
-                v-if="currentEncounter.phase !== 'ended'"
+                v-if="presentedEncounter.phase !== 'ended'"
                 class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 @click="openAddParticipant"
               >
@@ -3900,7 +3909,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
             </div>
 
             <!-- Setup Status Indicator -->
-            <div v-if="currentEncounter.phase === 'setup' && !canStartCombat" class="text-xs text-digimon-dark-400 mt-3 p-2 bg-digimon-dark-700 rounded">
+            <div v-if="presentedEncounter.phase === 'setup' && !canStartCombat" class="text-xs text-digimon-dark-400 mt-3 p-2 bg-digimon-dark-700 rounded">
               <span v-if="sortedParticipants.length < 2">
                 ⚠️ Need at least 2 participants
               </span>
@@ -3920,7 +3929,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
             <!-- Prompts are outstanding but players can't see this encounter to answer them -->
             <div
-              v-if="!(currentEncounter as any).visibleToPlayers && pendingRequests.length > 0"
+              v-if="!(presentedEncounter as any).visibleToPlayers && pendingRequests.length > 0"
               class="text-xs text-yellow-300 mt-3 p-2 bg-yellow-900/20 border border-yellow-700 rounded flex items-center justify-between gap-3"
             >
               <span>🚫 Hidden from players — they can't see this encounter, so they'll never get the {{ pendingRequests.length }} pending prompt(s).</span>
@@ -3934,7 +3943,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           </div>
 
           <!-- Active Participant's Attacks (GM Reference) -->
-          <div v-if="currentEncounter.phase === 'combat' && currentTurnParticipant && currentTurnParticipant.type === 'digimon'" class="mb-6">
+          <div v-if="presentedEncounter.phase === 'combat' && currentTurnParticipant && currentTurnParticipant.type === 'digimon'" class="mb-6">
             <div class="bg-digimon-dark-800 rounded-xl p-6 border-2 border-digimon-orange-500">
               <h3 class="text-lg font-display font-semibold text-white mb-4 flex items-center gap-2">
                 <span class="text-2xl">⚔️</span>
@@ -4184,7 +4193,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
                     <!-- Digivolve/Devolve buttons for non-partner digimon -->
                     <div
-                      v-if="item.participant.type === 'digimon' && item.participant.evolutionLineId && canParticipantAct(item.participant) && currentEncounter.phase === 'combat'"
+                      v-if="item.participant.type === 'digimon' && item.participant.evolutionLineId && canParticipantAct(item.participant) && presentedEncounter.phase === 'combat'"
                       class="mb-2 flex flex-wrap gap-1"
                     >
                       <button
@@ -4218,7 +4227,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
                     <!-- Mode Change buttons -->
                     <div
-                      v-if="item.participant.type === 'digimon' && canParticipantAct(item.participant) && currentEncounter.phase === 'combat' && getModeChangePairs(item.participant, digimonMap).length > 0"
+                      v-if="item.participant.type === 'digimon' && canParticipantAct(item.participant) && presentedEncounter.phase === 'combat' && getModeChangePairs(item.participant, digimonMap).length > 0"
                       class="mb-2 flex flex-wrap gap-1"
                     >
                       <button
@@ -4295,7 +4304,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   </div>
 
                   <!-- Actions (when active) -->
-                  <div v-if="item.participant.isActive && currentEncounter.phase === 'combat'" class="flex flex-col gap-2">
+                  <div v-if="item.participant.isActive && presentedEncounter.phase === 'combat'" class="flex flex-col gap-2">
                     <button
                       class="text-xs bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-2 py-1 rounded"
                       @click="rerollInitiative(item.participant.id)"
@@ -4309,7 +4318,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       Remove
                     </button>
                   </div>
-                  <div v-else-if="currentEncounter.phase === 'setup'" class="flex flex-col gap-2">
+                  <div v-else-if="presentedEncounter.phase === 'setup'" class="flex flex-col gap-2">
                     <!-- Re-send the whole setup prompt. Replaces whatever this tamer had
                          outstanding, so a mis-tapped digimon/solo choice can be redone. -->
                     <button
@@ -4336,7 +4345,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                     </button>
                   </div>
                   <div
-                    v-else-if="isDm && currentEncounter.phase === 'combat' && item.participant.type === 'tamer'"
+                    v-else-if="isDm && presentedEncounter.phase === 'combat' && item.participant.type === 'tamer'"
                     class="flex flex-col gap-2"
                   >
                     <span v-if="hasSetupRequest(item.participant.entityId)" class="text-xs text-digimon-dark-400 whitespace-nowrap">Setup pending…</span>
@@ -4473,7 +4482,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
                 <!-- Digivolve/Devolve buttons -->
                 <div
-                  v-if="canParticipantAct(item.partnerDigimon) && currentEncounter.phase === 'combat' && item.partnerDigimon.evolutionLineId"
+                  v-if="canParticipantAct(item.partnerDigimon) && presentedEncounter.phase === 'combat' && item.partnerDigimon.evolutionLineId"
                   class="mt-2 flex flex-wrap gap-1 items-center"
                 >
                   <span
@@ -4518,7 +4527,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
                 <!-- Mode Change buttons (partner digimon) -->
                 <div
-                  v-if="canParticipantAct(item.partnerDigimon) && currentEncounter.phase === 'combat' && getModeChangePairs(item.partnerDigimon, digimonMap).length > 0"
+                  v-if="canParticipantAct(item.partnerDigimon) && presentedEncounter.phase === 'combat' && getModeChangePairs(item.partnerDigimon, digimonMap).length > 0"
                   class="mt-2 flex flex-wrap gap-1"
                 >
                   <button
@@ -4634,7 +4643,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
         <!-- Right sidebar -->
         <div class="space-y-4">
           <!-- Active Turn Actions -->
-          <div v-if="activeParticipant && currentEncounter.phase === 'combat'" class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-orange-500">
+          <div v-if="activeParticipant && presentedEncounter.phase === 'combat'" class="bg-digimon-dark-800 rounded-xl p-4 border border-digimon-orange-500">
             <h3 class="font-display text-lg font-semibold text-digimon-orange-400 mb-3">
               {{ getEntityDetails(activeParticipant)?.name }}'s Turn
             </h3>
@@ -4682,7 +4691,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 Move (1 Simple)
               </button>
               <button
-                v-if="!activeParticipant.clash && (activeParticipant.clashCooldownUntilRound == null || activeParticipant.clashCooldownUntilRound <= (currentEncounter.round || 0))"
+                v-if="!activeParticipant.clash && (activeParticipant.clashCooldownUntilRound == null || activeParticipant.clashCooldownUntilRound <= (presentedEncounter.round || 0))"
                 :disabled="activeParticipant.actionsRemaining.simple < 1"
                 class="w-full bg-orange-700 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed
                        text-white px-3 py-2 rounded text-sm font-medium"
@@ -4691,7 +4700,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 Initiate Clash (1 Simple)
               </button>
               <div
-                v-if="!activeParticipant.clash && activeParticipant.clashCooldownUntilRound != null && activeParticipant.clashCooldownUntilRound > (currentEncounter.round || 0)"
+                v-if="!activeParticipant.clash && activeParticipant.clashCooldownUntilRound != null && activeParticipant.clashCooldownUntilRound > (presentedEncounter.round || 0)"
                 class="text-xs text-digimon-dark-400 italic"
               >
                 Cannot initiate clash until next round
@@ -4976,7 +4985,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       Roll Dodge
                     </button>
                     <button
-                      @click="cancelRequest(currentEncounter.id, request.id)"
+                      @click="cancelRequest(presentedEncounter.id, request.id)"
                       class="text-red-400 hover:text-red-300 text-sm font-semibold"
                     >
                       Cancel
@@ -4992,7 +5001,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                       Roll Clash Response
                     </button>
                     <button
-                      @click="cancelRequest(currentEncounter.id, request.id)"
+                      @click="cancelRequest(presentedEncounter.id, request.id)"
                       class="text-red-400 hover:text-red-300 text-sm font-semibold"
                     >
                       Cancel
@@ -5006,7 +5015,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                     <div v-if="request.data?.isAreaAttack" class="text-yellow-300 text-xs mr-2">
                       Area attack on:
                       {{ getAreaProtectTargetIds(request.data).map((tid: string) => {
-                        const p = currentEncounter?.participants.find(pp => pp.id === tid)
+                        const p = presentedEncounter?.participants.find((pp: CombatParticipant) => pp.id === tid)
                         return p?.name || tid
                       }).join(', ') }}
                     </div>
@@ -5052,7 +5061,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   </template>
                   <template v-else>
                     <button
-                      @click="cancelRequest(currentEncounter.id, request.id)"
+                      @click="cancelRequest(presentedEncounter.id, request.id)"
                       class="text-red-400 hover:text-red-300 text-sm font-semibold"
                     >
                       Cancel
@@ -5111,7 +5120,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                 class="mb-3 p-3 bg-digimon-dark-700 rounded-lg"
               >
                 <div class="text-digimon-dark-400 text-xs mb-1">
-                  Round {{ entry.round }} • {{ entry.actorName }}
+                  Round {{ entry.round }} • {{ battleLogActorName(entry, participantDisplayNames) }}
                 </div>
                 <!-- Accuracy dice (Attack entries) -->
                 <div v-if="entry.accuracyDiceResults && entry.accuracyDiceResults.length > 0" class="mt-1 p-2 bg-digimon-dark-600 rounded">
@@ -5221,7 +5230,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
             <p class="text-sm text-digimon-dark-400 mb-4">Select which participants you want to be queried to intercede for. Unchecked participants will be skipped.</p>
             <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
               <button
-                v-for="p in (currentEncounter.participants as any[]).filter((p: any) => p.type !== 'gm')"
+                v-for="p in (presentedEncounter.participants as any[]).filter((p: any) => p.type !== 'gm')"
                 :key="p.id"
                 class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
                 @click="intercedeOptOutSelections.has(p.id) ? intercedeOptOutSelections.delete(p.id) : intercedeOptOutSelections.add(p.id); intercedeOptOutSelections = new Set(intercedeOptOutSelections)"
@@ -5253,7 +5262,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       <!-- Duplicate Encounter Modal -->
       <DuplicateEncounterModal
         v-if="showDuplicateModal"
-        :encounter-name="currentEncounter.name"
+        :encounter-name="presentedEncounter.name"
         @confirm="handleDuplicate"
         @cancel="showDuplicateModal = false"
       />
@@ -5756,7 +5765,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
             <AttackRiderOptions
               :selected-attack="selectedAttack"
-              :round="currentEncounter?.round || 0"
+              :round="presentedEncounter?.round || 0"
               :eddy-soul-rules="eddySoulRules"
               :can-bolster="selectedAttack.attack.type !== 'clash-initiate' && canBolsterAttack(selectedAttack.participant, selectedAttack.attack)"
               :huge-power="selectedAttack.attack.type !== 'clash-initiate' ? canUseHugePower(selectedAttack.participant, selectedAttack.attack) : { rank1: false, rank2: false }"
@@ -6160,7 +6169,8 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       <div v-if="showMapPicker" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-600">
           <h3 class="text-white font-semibold mb-4">Select a Map</h3>
-          <div v-if="availableMaps.length === 0" class="text-digimon-dark-400 text-sm py-4 text-center">
+          <div v-if="mapPickerLoading && availableMaps.length === 0" role="status" class="text-digimon-dark-400 text-sm py-4 text-center">Loading maps…</div>
+          <div v-else-if="availableMaps.length === 0" class="text-digimon-dark-400 text-sm py-4 text-center">
             No maps found. Create one in the library first.
           </div>
           <div v-else class="space-y-2 max-h-72 overflow-y-auto">
@@ -6168,7 +6178,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               v-for="map in availableMaps"
               :key="map.id"
               class="w-full text-left px-4 py-3 rounded-lg border transition-colors"
-              :class="(currentEncounter as any).mapId === map.id
+              :class="(presentedEncounter as any).mapId === map.id
                 ? 'border-digimon-orange-500 bg-digimon-orange-900/20 text-white'
                 : 'border-digimon-dark-600 bg-digimon-dark-700 text-digimon-dark-200 hover:border-digimon-dark-400'"
               @click="attachMap(map.id)"

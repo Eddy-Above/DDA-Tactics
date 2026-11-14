@@ -1,4 +1,5 @@
 import { computed, ref, shallowRef, type Ref } from 'vue'
+import { encounterFetch as $fetch } from '../utils/encounterFeedback'
 import type { Tamer } from '~/server/db/schema'
 import type { CombatParticipant } from '~/composables/useEncounters'
 import { DIGIVOLVE_WILLPOWER_DC, type CampaignLevel } from '~/types'

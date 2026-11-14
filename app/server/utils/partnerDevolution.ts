@@ -3,7 +3,7 @@ import { db, digimon, evolutionLines, type Digimon, type EvolutionLine, type Enc
 import { STAGE_CONFIG, type DigimonStage } from '../../types'
 import type { CombatParticipant, StoredCombatParticipant } from '../../types/combat'
 import { getCombatEvolutionParent, resolveCombatEvolutionIndex } from '../../utils/combatEvolutionOptions'
-import { readCombatRecord, withCombatRecords } from './combatRecordCache'
+import { readCombatRecord, withCombatRecords, invalidateCombatRecord } from './combatRecordCache'
 import { getDigizoidArmorBonus } from './digizoidArmor'
 import { resolveParticipantName } from './participantName'
 
@@ -98,6 +98,7 @@ export async function autoDevolveParticipant(
         currentStageIndex: previousState.stageIndex,
         updatedAt: new Date(),
       }).where(eq(evolutionLines.id, participant.evolutionLineId))
+      invalidateCombatRecord('evolution-line', participant.evolutionLineId)
     }
 
     if (Array.isArray(participant.woundsHistory) && participant.woundsHistory.length > 0) {

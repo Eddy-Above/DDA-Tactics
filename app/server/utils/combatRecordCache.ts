@@ -1,19 +1,24 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
-type RecordKind = 'digimon' | 'tamer'
+type RecordKind = 'digimon' | 'tamer' | 'evolution-line'
 interface CombatRecordScope {
   digimon: Map<string, Promise<any>>
   tamer: Map<string, Promise<any>>
+  'evolution-line': Map<string, Promise<any>>
   derived: Map<string, Promise<any>>
+  metadata: Map<string, Promise<any>>
+  access: WeakMap<object, Map<string, Promise<any>>>
 }
 
-// Only immutable entity records/raw derived stats are shared. Participants, wounds,
+// Entity records, raw derived stats and admission metadata are shared within one action. Participants, wounds,
 // effects, forms and turn order always come from each sequential resolution step.
 const scopes = new AsyncLocalStorage<CombatRecordScope>()
 
+export function hasCombatRecordScope(): boolean { return scopes.getStore() !== undefined }
+
 export function withCombatRecords<T>(work: () => Promise<T>): Promise<T> {
   if (scopes.getStore()) return work()
-  return scopes.run({ digimon: new Map(), tamer: new Map(), derived: new Map() }, work)
+  return scopes.run({ digimon: new Map(), tamer: new Map(), 'evolution-line': new Map(), derived: new Map(), metadata: new Map(), access: new WeakMap() }, work)
 }
 
 function remember<T>(cache: Map<string, Promise<T>>, id: string, load: () => PromiseLike<T>): Promise<T> {
@@ -64,6 +69,21 @@ export function readCombatDerivedStats<T>(id: string, compute: () => Promise<T>)
   return scope ? remember(scope.derived, id, compute) : compute()
 }
 
+/** Immutable scope metadata is shared within the action, never between commands. */
+export function readCombatMetadata<T>(key: string, load: () => PromiseLike<T>): Promise<T> {
+  const scope = scopes.getStore()
+  return scope ? remember(scope.metadata, key, load) : Promise.resolve(load())
+}
+
+/** Repeated guards share admission inside this transaction, never across requests or queue waits. */
+export function readCombatAccess<T>(event: object, campaignId: string, load: () => Promise<T>): Promise<T> {
+  const scope = scopes.getStore()
+  if (!scope) return load()
+  let cache = scope.access.get(event)
+  if (!cache) scope.access.set(event, cache = new Map())
+  return remember(cache, campaignId, load)
+}
+
 /** Reuse the cast's existing bulk reads without issuing another query per target. */
 export function primeCombatRecords(kind: RecordKind, records: { id: string }[]): void {
   const cache = scopes.getStore()?.[kind]
@@ -76,4 +96,5 @@ export function invalidateCombatRecord(kind: RecordKind, id: string): void {
   const scope = scopes.getStore()
   scope?.[kind].delete(id)
   if (kind === 'digimon') scope?.derived.delete(id)
+  scope?.metadata.clear()
 }

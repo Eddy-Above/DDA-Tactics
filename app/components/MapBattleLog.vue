@@ -16,7 +16,7 @@
         @click="entry._expanded = !entry._expanded"
       >
         <div class="entry-summary">
-          <span class="entry-actor">{{ entry.actorName }}</span>
+          <span class="entry-actor">{{ battleLogActorName(entry, participantNames ?? {}) }}</span>
           <span class="entry-action">{{ entry.action }}</span>
           <span v-if="entry.target" class="entry-target">→ {{ entry.target }}</span>
         </div>
@@ -36,11 +36,13 @@
 
 <script setup lang="ts">
 import type { BattleLogEntry } from '~/types'
+import { battleLogActorName } from '~/utils/participantDisplayNames'
 
 const props = defineProps<{
   battleLog: BattleLogEntry[]
   isDm: boolean
   npcEntityIds: Set<string>  // set of entity IDs that belong to NPCs
+  participantNames?: Record<string, string>
   battleLogTotal?: number
   battleLogWasTrimmed?: boolean
 }>()

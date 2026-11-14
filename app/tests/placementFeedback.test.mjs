@@ -24,14 +24,14 @@ function fixture({ fetch } = {}) {
     display: computed(() => ({ ...positions.value, ...placementPreviews.value })) }
 }
 
-for (const kind of ['placement', 'gm']) {
+for (const kind of ['placement', 'gm', 'normal', 'charge-after']) {
   test(`${kind} displays a pending destination immediately while retaining the committed origin for validation`, async () => {
     const f = fixture()
-    const saving = kind === 'placement' ? f.onCanvasPlace('actor', point(3)) : f.onGmMove('actor', point(3))
+    const saving = kind === 'placement' ? f.onCanvasPlace('actor', point(3)) : kind === 'gm' ? f.onGmMove('actor', point(3)) : f.postMove('actor', point(3), [point(0), point(3)], kind)
     assert.deepEqual(f.display.value.actor, point(3))
     assert.deepEqual(f.positions.value.actor, point(0))
     if (kind === 'placement') assert.equal(f.selectedId.value, 'second', 'advance before the save completes')
-    else assert.equal(f.gmMoveParticipantId.value, null)
+    else if (kind === 'gm') assert.equal(f.gmMoveParticipantId.value, null)
     await settle()
     assert.deepEqual(f.calls[0][1].body.origin, point(0))
     assert.equal(f.calls[0][1].body.expectedRevision, 4)
@@ -40,19 +40,19 @@ for (const kind of ['placement', 'gm']) {
     await saving
     assert.deepEqual(f.positions.value.actor, point(3))
     assert.deepEqual(f.placementPreviews.value, {})
-    assert.equal((kind === 'placement' ? f.selectedId : f.gmMoveParticipantId).value, kind === 'placement' ? 'second' : null)
+    if (kind === 'placement' || kind === 'gm') assert.equal((kind === 'placement' ? f.selectedId : f.gmMoveParticipantId).value, kind === 'placement' ? 'second' : null)
     assert.equal(f.errors.length, 0)
   })
 
   test(`${kind} rolls back its preview after rejection without stealing selection or blocking with an alert`, async () => {
     const f = fixture()
-    const saving = kind === 'placement' ? f.onCanvasPlace('actor', point(3)) : f.onGmMove('actor', point(3))
+    const saving = kind === 'placement' ? f.onCanvasPlace('actor', point(3)) : kind === 'gm' ? f.onGmMove('actor', point(3)) : f.postMove('actor', point(3), [point(0), point(3)], kind)
     await settle()
     f.reject({ data: { message: 'The destination is occupied' } })
     await saving
     assert.deepEqual(f.display.value.actor, point(0))
     assert.deepEqual(f.placementPreviews.value, {})
-    assert.equal((kind === 'placement' ? f.selectedId : f.gmMoveParticipantId).value, kind === 'placement' ? 'second' : null)
+    if (kind === 'placement' || kind === 'gm') assert.equal((kind === 'placement' ? f.selectedId : f.gmMoveParticipantId).value, kind === 'placement' ? 'second' : null)
     assert.match(f.placementError.value, /Token: The destination is occupied/)
     assert.deepEqual(f.errors, [])
   })

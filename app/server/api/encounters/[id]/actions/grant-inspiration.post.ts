@@ -1,3 +1,4 @@
+import { invalidateCombatRecord } from '../../../../utils/combatRecordCache'
 import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
@@ -57,6 +58,7 @@ export default defineEncounterCommand(async (event) => {
       grantedInspiration: (tamer.grantedInspiration ?? 0) + body.amount,
       updatedAt: new Date(),
     }).where(eq(tamers.id, tamer.id))
+    invalidateCombatRecord('tamer', tamer.id)
   }
 
   const participantName = tamer?.name ?? 'Tamer'

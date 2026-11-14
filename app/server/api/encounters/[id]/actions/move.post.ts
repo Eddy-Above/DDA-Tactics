@@ -9,6 +9,7 @@ import { loadEncounterMap } from '../../../../utils/combatSpatial'
 import { withDatabase } from '../../../../utils/databaseScope'
 import { validateEncounterStateScope } from '../../../../utils/encounterStateScope'
 import { withCombatRecords } from '../../../../utils/combatRecordCache'
+import { shapeEncounterResult } from '../../../../../utils/encounterSnapshot'
 
 export default defineEventHandler(async event => {
   const id = getRouterParam(event, 'id')
@@ -18,8 +19,8 @@ export default defineEventHandler(async event => {
     await prepareRoomCommit(id!)
     const committed: Array<() => void | Promise<void>> = []
     const result = await db.transaction(async tx => withDatabase(tx, () => withCombatRecords(async () => {
-      await db.select().from(encounters).where(eq(encounters.id, id!)).for('update')
-      const freshContext = await authorizeEncounterIntent(event, id, body, 'move')
+      const [lockedEncounter] = await db.select().from(encounters).where(eq(encounters.id, id!)).for('update')
+      const freshContext = await authorizeEncounterIntent(event, id, body, 'move', lockedEncounter)
       const encounter = freshContext.encounter
       if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
       await validateEncounterStateScope(encounter, { participants: encounter.participants })
@@ -54,6 +55,6 @@ export default defineEventHandler(async event => {
       await publishCommittedPositions(id!, result.patch)
       if (result.openedDoorIds.length) broadcast(id!, { type: 'door-toggled', encounterId: id! })
     }
-    return result
+    return shapeEncounterResult(result)
   })
 })

@@ -302,3 +302,32 @@ test('raw derived caching never caches live effects or exposes its mutable resul
     assert.equal(calls.derived, 1)
   })
 })
+
+
+test('scope metadata is shared inside one command, invalidated by writes, and fresh in later commands', async () => {
+  let reads = 0;
+  const load = async () => ({ revision: ++reads });
+  await cache.withCombatRecords(async () => {
+    const [a, b] = await Promise.all([cache.readCombatMetadata('graph', load), cache.readCombatMetadata('graph', load)]);
+    assert.equal(a, b); assert.equal(reads, 1);
+    cache.invalidateCombatRecord('evolution-line', 'line');
+    assert.equal((await cache.readCombatMetadata('graph', load)).revision, 2);
+  });
+  await cache.withCombatRecords(() => cache.readCombatMetadata('graph', load));
+  await cache.readCombatMetadata('graph', load);
+  assert.equal(reads, 4);
+});
+
+test('admission is shared only by the same request and campaign after the command lock', async () => {
+  const event = {}, other = {}; let reads = 0;
+  const load = async () => ({ revision: ++reads });
+  await cache.withCombatRecords(async () => {
+    const [a,b] = await Promise.all([cache.readCombatAccess(event, 'campaign', load), cache.readCombatAccess(event, 'campaign', load)]);
+    assert.equal(a,b);
+    await cache.readCombatAccess(other, 'campaign', load);
+    await cache.readCombatAccess(event, 'other-campaign', load);
+    assert.equal(reads, 3);
+  });
+  await cache.withCombatRecords(() => cache.readCombatAccess(event, 'campaign', load));
+  assert.equal(reads, 4, 'the next command must recheck grants and credentials');
+});

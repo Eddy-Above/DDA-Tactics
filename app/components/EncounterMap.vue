@@ -17,13 +17,13 @@
 
     <!-- 3D Canvas (fills remaining space) -->
     <div class="canvas-wrapper">
-      <div v-if="Object.keys(placementPreviews).length" class="placement-save-status" role="status" aria-live="polite">Saving {{ Object.keys(placementPreviews).length }} placement(s)… Keep placing tokens.</div>
+      <div v-if="Object.keys(placementPreviews).length" class="placement-save-status" role="status" aria-live="polite">Saving {{ Object.keys(placementPreviews).length }} token move(s)…</div>
       <div v-if="placementError" class="placement-save-error" role="alert">{{ placementError }} <button type="button" @click="placementError = ''">Dismiss</button></div>
       <ClientOnly>
         <MapCanvas
           ref="builderCanvas"
-          v-if="map && map.id === encounter.mapId"
-          :map="map"
+          v-if="displayMap && displayMap.id === encounter.mapId"
+          :map="displayMap"
           :participants="liveParticipants"
           :participant-positions="displayPositions"
           :destructible-states="encounter.destructibleStates ?? []"
@@ -107,6 +107,7 @@
       <!-- Overlay: Battle Log (right side) -->
       <div v-if="!editorMode" class="overlay overlay-right">
         <MapBattleLog
+          :participant-names="participantNames"
           :battle-log="encounter.battleLog"
           :is-dm="isDm"
           :npc-entity-ids="npcEntityIds"
@@ -160,6 +161,8 @@
 </template>
 
 <script setup lang="ts">
+import { encounterFetch as $fetch, getEncounterFeedback } from '~/utils/encounterFeedback'
+import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
 import { computed, ref, shallowRef, watch, onMounted, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import type {
@@ -238,6 +241,12 @@ const emit = defineEmits<{
 // ── Map state ──────────────────────────────────────────────────────────────
 const mapStore = useMap()
 const map = shallowRef<GameMap | null>(props.initialMap ?? null)
+const doorPreviews = ref<Record<string, { isOpen: boolean; operationId: string }>>({})
+const displayMap = computed(() => !map.value || !Object.keys(doorPreviews.value).length ? map.value : {
+  ...map.value,
+  doors: map.value.doors.map(door => doorPreviews.value[door.id] ? { ...door, isOpen: doorPreviews.value[door.id].isOpen } : door),
+})
+watch(() => [props.encounter.id, props.encounter.mapId], () => { doorPreviews.value = {} })
 let mapLoadGeneration = 0
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let refreshInFlight = false
@@ -362,6 +371,7 @@ async function retryMapSaves() {
 onBeforeRouteLeave(async () => { await placementQueue.flush(); return await autosave.flush() })
 onBeforeRouteUpdate(async () => { await placementQueue.flush(); return await autosave.flush() })
 onBeforeUnmount(() => {
+  actionFeedback.cancelMovementPreview(props.encounter.id)
   mapDisposed = true
   ++mapLoadGeneration
   if (refreshTimer) clearTimeout(refreshTimer)
@@ -381,6 +391,9 @@ const movement = useMapMovement()
 const liveParticipants = computed(() =>
   props.encounter.participants.filter(p => !(p as any).inReserve)
 )
+const participantNames = computed(() => buildParticipantDisplayNames(props.encounter.participants,
+  p => (p.type === 'tamer' ? props.tamerMap[p.entityId] : props.digimonMap[p.entityId])?.name,
+  p => p.isEnemy ?? (p.type === 'digimon' && props.digimonMap[p.entityId]?.isEnemy === true)))
 
 const myParticipantIds = computed(() =>
   props.myParticipantIds?.length
@@ -533,6 +546,7 @@ const draggableParticipantIds = computed(() =>
 )
 
 const attackPreview = ref<{ participantId: string; position: Vec3 } | null>(null)
+const actionFeedback = getEncounterFeedback()
 const placementPreviews = ref<Record<string, Vec3>>({})
 const pendingPlacementRequests = new Map<string, string>()
 const placementQueue = createSerialTaskQueue()
@@ -542,7 +556,9 @@ watch(() => props.encounter.id, () => { placementPreviews.value = {}; pendingPla
 const placementPositions = computed(() => Object.keys(placementPreviews.value).length ? { ...positions.value, ...placementPreviews.value } : positions.value)
 const displayPositions = computed(() => {
   const placed = placementPositions.value
-  return attackPreview.value ? { ...placed, [attackPreview.value.participantId]: attackPreview.value.position } : placed
+  const previews = actionFeedback.movementPreviews.value.filter(item => item.encounterId === props.encounter.id)
+  const moved = previews.length ? { ...placed, ...Object.fromEntries(previews.map(item => [item.participantId, item.position])) } : placed
+  return attackPreview.value ? { ...moved, [attackPreview.value.participantId]: attackPreview.value.position } : moved
 })
 let pendingAttackIntent: MapAttackIntent | null = null
 function attackIntent(): MapAttackIntent {
@@ -606,11 +622,11 @@ async function onCombatMove(participantId: string, position: Vec3, path: Vec3[])
 
   const movePath = movePathTo(participantId, position, path)
   const allowance = (props.encounter.participants.find(p => p.id === participantId) as any)?.pendingChargeMove
-  const result = await postMove(participantId, position, movePath, allowance ? 'charge-after' : 'normal', allowance?.castId)
-  if (!result?.success) return
+  const saving = postMove(participantId, position, movePath, allowance ? 'charge-after' : 'normal', allowance?.castId)
   chargeMoveParticipantId.value = null
   npcMoveParticipantId.value = null
   movement.clearMovement()
+  await saving
 }
 
 // Reports a combat move to the server: spends a simple action (unless the move is part of a
@@ -619,17 +635,15 @@ async function onCombatMove(participantId: string, position: Vec3, path: Vec3[])
 // `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
 type MoveResult = { success: boolean; defeated?: boolean; encounter?: Encounter; position?: Vec3 }
 async function postMove(participantId: string, destination: Vec3, path: Vec3[], kind: 'normal' | 'placement' | 'gm' | 'charge-after', allowanceId?: string): Promise<MoveResult | void> {
-  const preview = kind === 'placement' || kind === 'gm'
-  if (preview && pendingPlacementRequests.has(participantId)) return
+  const queuePlacement = kind === 'placement' || kind === 'gm'
+  if (pendingPlacementRequests.has(participantId)) return
   const encounterId = props.encounter.id
   const origin = positions.value[participantId] ? { ...positions.value[participantId] } : undefined
   const operationId = crypto.randomUUID()
-  if (preview) {
-    pendingPlacementRequests.set(participantId, operationId)
-    placementPreviews.value = { ...placementPreviews.value, [participantId]: { ...destination } }
-  }
+  pendingPlacementRequests.set(participantId, operationId)
+  placementPreviews.value = { ...placementPreviews.value, [participantId]: { ...destination } }
   const submit = async () => {
-    if (mapDisposed || props.encounter.id !== encounterId || preview && pendingPlacementRequests.get(participantId) !== operationId) return
+    if (mapDisposed || props.encounter.id !== encounterId || pendingPlacementRequests.get(participantId) !== operationId) return
     // Earlier queued placements may have advanced the revision before props update.
     const expectedRevision = lastMovementRevision?.encounterId === encounterId
       ? Math.max(lastMovementRevision.revision, (props.encounter as any).revision ?? 0)
@@ -651,19 +665,16 @@ async function postMove(participantId: string, destination: Vec3, path: Vec3[], 
     return result
   }
   try {
-    return await (preview ? placementQueue.run(submit) : submit())
+    return await (queuePlacement ? placementQueue.run(submit) : submit())
   } catch (error: any) {
     if (!mapDisposed && props.encounter.id === encounterId) {
       const message = error?.data?.message ?? 'The movement could not be saved'
-      if (preview) {
-        const participant = props.encounter.participants.find(p => p.id === participantId)
-        const name = participant && (participant.type === 'tamer' ? props.tamerMap[participant.entityId] : props.digimonMap[participant.entityId])?.name
-        placementError.value = `${name ?? 'Token'}: ${message}. Place this token again to retry.`
-      }
-      else alert(message)
+      const participant = props.encounter.participants.find(p => p.id === participantId)
+      const name = participant && (participant.type === 'tamer' ? props.tamerMap[participant.entityId] : props.digimonMap[participant.entityId])?.name
+      placementError.value = `${name ?? 'Token'}: ${message}. Choose a destination again to retry.`
     }
   } finally {
-    if (preview && pendingPlacementRequests.get(participantId) === operationId) {
+    if (pendingPlacementRequests.get(participantId) === operationId) {
       pendingPlacementRequests.delete(participantId)
       const remaining = { ...placementPreviews.value }; delete remaining[participantId]; placementPreviews.value = remaining
     }
@@ -692,11 +703,24 @@ async function onGmMove(participantId: string, position: Vec3) {
 // Door state lives on the map record, like in-encounter map edits: update it locally (MapCanvas
 // rebuilds the scene and its line-of-sight model), save it, then tell other viewers to refetch.
 async function setDoorsOpen(doorIds: string[], isOpen: boolean) {
+  if (!map.value) return
+  const encounterId = props.encounter.id, mapId = map.value.id, operationId = crypto.randomUUID()
+  const next = { ...doorPreviews.value }
+  for (const id of doorIds) next[id] = { isOpen, operationId }
+  doorPreviews.value = next
   const participantId = selectedId.value ?? activeParticipantId.value ?? props.myParticipantIds?.find(id => positions.value[id])
   try {
-    const result = await $fetch<{ doors: any[] }>(`/api/encounters/${props.encounter.id}/actions/doors`, { method: 'POST', body: { participantId, doorIds, isOpen } })
-    if (map.value) map.value = { ...map.value, doors: result.doors }
-  } catch (error: any) { alert(error?.data?.message ?? 'The door change could not be saved') }
+    const result = await $fetch<{ doors: any[] }>(`/api/encounters/${encounterId}/actions/doors`, { method: 'POST', body: { participantId, doorIds, isOpen } })
+    if (mapDisposed || props.encounter.id !== encounterId || map.value?.id !== mapId) return
+    const accepted = new Map(result.doors.filter(door => doorPreviews.value[door.id]?.operationId === operationId).map(door => [door.id, door]))
+    map.value = { ...map.value, doors: map.value.doors.map(door => accepted.has(door.id) ? { ...door, isOpen: accepted.get(door.id)!.isOpen } : door) }
+  } catch (error: any) {
+    if (!mapDisposed && props.encounter.id === encounterId) placementError.value = error?.data?.message ?? 'The door change could not be saved'
+  } finally {
+    const remaining = { ...doorPreviews.value }
+    for (const id of doorIds) if (remaining[id]?.operationId === operationId) delete remaining[id]
+    doorPreviews.value = remaining
+  }
 }
 
 // The mover's path to `destination` (for opening doors and measuring the move): the drawn path when
@@ -841,6 +865,7 @@ function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId:
   const intent = attackIntent()
   intent.movement = { kind: 'charge-before', origin, destination, path: movePathTo(attackerId, destination) }
   attackPreview.value = { participantId: attackerId, position: destination }
+  actionFeedback.previewMovement(props.encounter.id, intent.operationId, attackerId, destination)
   chargeMode.value = null
   movement.clearMovement()
   if (targetId) emit('target-selected', targetId, intent)
@@ -859,12 +884,15 @@ function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData
     if (!origin) return
     const destination = computePassLanding(origin, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
     intent.movement = { kind: 'pass', origin, destination, path: segmentCells(origin, destination), direction: areaShapeData.dir }
+    attackPreview.value = { participantId: attackerId!, position: destination }
+    actionFeedback.previewMovement(props.encounter.id, intent.operationId, attackerId!, destination)
   }
   chargeMode.value = null
   emit('area-attack-confirmed', targetIds, areaShapeData, intent)
 }
 
 watch(() => props.selectedAttack, (val, previous) => {
+  if (val && (!previous || val.attackId !== previous.attackId || val.attackerParticipantId !== previous.attackerParticipantId)) actionFeedback.cancelMovementPreview(props.encounter.id)
   if (!val || !previous || val.attackId !== previous.attackId || val.attackerParticipantId !== previous.attackerParticipantId) { pendingAttackIntent = null; attackPreview.value = null }
   if (val !== null) {
     // Record polling rebuilds the descriptor; keep the selected charge step across equivalent snapshots.

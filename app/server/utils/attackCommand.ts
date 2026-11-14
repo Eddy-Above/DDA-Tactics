@@ -10,6 +10,7 @@ import { withCombatRecords } from './combatRecordCache'
 import { prepareRoomCommit } from './encounterRoom'
 import { validateEncounterStateScope } from './encounterStateScope'
 import { validateEncounterContextScope } from './encounterContextScope'
+import { shapeEncounterResult } from '../../utils/encounterSnapshot'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -17,12 +18,12 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
   await authorizeEncounterIntent(event, id, body, operation)
   const operationId = body.operationId === undefined ? undefined : boundedString(body.operationId, 'operationId', 128, false)
   const fingerprint = createHash('sha256').update(JSON.stringify({ operation, body })).digest('hex')
-  return serializeIntercedeClaim(id, async () => {
+  return shapeEncounterResult(await serializeIntercedeClaim(id, async () => {
     await prepareRoomCommit(id)
     const committed: Array<() => void | Promise<void>> = []
     const result = await db.transaction(async transaction => withDatabase(transaction, () => withCombatRecords(async () => {
-      await db.select().from(encounters).where(eq(encounters.id, id)).for('update')
-      const context = await authorizeEncounterIntent(event, id, body, operation)
+      const [lockedEncounter] = await db.select().from(encounters).where(eq(encounters.id, id)).for('update')
+      const context = await authorizeEncounterIntent(event, id, body, operation, lockedEncounter)
       // Update can replace a tainted legacy roster; deletion needs no linked records.
       // All other services may use targets, saved forms or partners beyond the actor.
       if (operation !== 'delete' && operation !== 'update') await validateEncounterStateScope(context.encounter, { participants: context.encounter.participants })
@@ -54,5 +55,5 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
     }), committed))
     for (const publish of committed) await publish()
     return result
-  })
+  }))
 }

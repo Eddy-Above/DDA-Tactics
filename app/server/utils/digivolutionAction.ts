@@ -1,3 +1,4 @@
+import { invalidateCombatRecord } from './combatRecordCache'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, tamers, type Digimon, type EvolutionLine } from '../db'
 import { STAGE_CONFIG } from '../../types'
@@ -285,6 +286,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
       currentStageIndex: body.targetChainIndex,
       updatedAt: new Date(),
     }).where(eq(evolutionLines.id, participant.evolutionLineId))
+    invalidateCombatRecord('evolution-line', participant.evolutionLineId)
   }
 
   // EddySoul: increment digivolutionsUsedToday on successful evolve
@@ -298,6 +300,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
         digivolutionsUsedToday: (tamerEntity.digivolutionsUsedToday || 0) + 1,
         updatedAt: new Date(),
       }).where(eq(tamers.id, tamerEntity.id))
+      invalidateCombatRecord('tamer', tamerEntity.id)
     }
   }
 

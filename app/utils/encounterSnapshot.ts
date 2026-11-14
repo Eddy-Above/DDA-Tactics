@@ -39,12 +39,25 @@ export function trimBattleLog<T>(log: readonly T[] | null | undefined): { entrie
 
 /** Old encounters stored `{ simple, complex }`; the app now only tracks `{ simple }`. */
 export function normalizeActionsRemaining<T extends { actionsRemaining?: any }>(participants: readonly T[]): T[] {
-  return participants.map((p) => ({
-    ...p,
-    actionsRemaining: p.actionsRemaining?.complex !== undefined
-      ? { simple: p.actionsRemaining.simple || 0 }
-      : p.actionsRemaining || { simple: 2 },
-  }))
+  return participants.map((p) => {
+    // Retry receipts include old movement paths and fingerprints; only the server uses them.
+    const { attackReceipts: _attacks, movementReceipts: _moves, ...visible } = p as T & { attackReceipts?: unknown; movementReceipts?: unknown }
+    return {
+      ...visible,
+      actionsRemaining: p.actionsRemaining?.complex !== undefined
+        ? { simple: p.actionsRemaining.simple || 0 }
+        : p.actionsRemaining || { simple: 2 },
+    } as T
+  })
+}
+
+/** Bound every public command response just like GET/WebSocket snapshots. */
+export function shapeEncounterResult<T>(result: T): T {
+  if (!result || typeof result !== 'object') return result
+  const value = result as any
+  if (typeof value.id === 'string' && Array.isArray(value.participants)) return shapeActionResponse(value)
+  if (value.encounter && Array.isArray(value.encounter.participants)) return { ...value, encounter: shapeActionResponse(value.encounter) }
+  return result
 }
 
 /** `updatedAt` as milliseconds, or null when absent/unparseable (such a snapshot cannot be ordered). */

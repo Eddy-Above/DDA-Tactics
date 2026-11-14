@@ -1,12 +1,13 @@
 import type { H3Event } from 'h3'
 import { requireEncounterAccess, requireEncounterActor } from './campaignSecurity'
 import { requireLinkedEntity } from './entitySecurity'
+import type { Encounter } from '../db'
 
 /** Bind every intent to its stored encounter and request; never use a supplied campaign/role. */
-export async function authorizeEncounterIntent(event: H3Event, encounterId: string | undefined, body: any, operation: string) {
+export async function authorizeEncounterIntent(event: H3Event, encounterId: string | undefined, body: any, operation: string, lockedEncounter?: Encounter) {
   if (!encounterId) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   const gmOperations = new Set(['update', 'delete', 'duplicate', 'requests-create', 'grant-inspiration', 'data-absorb', 'tormentor-check', 'npc-attack', 'gm-digivolve'])
-  const context = await requireEncounterAccess(event, encounterId, gmOperations.has(operation) ? 'dm' : 'member')
+  const context = await requireEncounterAccess(event, encounterId, gmOperations.has(operation) ? 'dm' : 'member', lockedEncounter)
   const { encounter, access } = context
   if (operation === 'read') return context
   const validate = (value: any, depth = 0): void => {

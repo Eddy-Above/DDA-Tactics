@@ -24,11 +24,12 @@ const EMPTY_ACCESS: MyCampaignAccessResult = {
 // Single source of truth for "what can the current session do on this
 // campaign" — consumed by all three middleware files (client-side, via the
 // /my-access endpoint) and by the server-side write-path checks below.
-export async function getMyCampaignAccess(event: H3Event, campaignId: string): Promise<MyCampaignAccessResult> {
+export async function getMyCampaignAccess(event: H3Event, campaignId: string, storedCampaign?: { id: string; ownerId: string | null }): Promise<MyCampaignAccessResult> {
   const user = await getSessionUser(event)
   if (!user) return EMPTY_ACCESS
 
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
+  const campaign = storedCampaign?.id === campaignId ? storedCampaign
+    : (await db.select().from(campaigns).where(eq(campaigns.id, campaignId)))[0]
   if (!campaign) return { ...EMPTY_ACCESS, userId: user.id }
 
   const isOwner = campaign.ownerId === user.id

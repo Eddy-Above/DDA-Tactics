@@ -39,8 +39,12 @@ export function useSpecialOrderTargets(options: {
     const selected = selection.value
     if (!selected || busy.value) return
     busy.value = true
+    selection.value = null
     try {
-      if (await options.send(selected.participant, selected.orderName, choice)) selection.value = null
+      if (!await options.send(selected.participant, selected.orderName, choice) && !selection.value) selection.value = selected
+    } catch (error) {
+      if (!selection.value) selection.value = selected
+      throw error
     } finally { busy.value = false }
   }
 

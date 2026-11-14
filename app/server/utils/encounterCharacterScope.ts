@@ -1,6 +1,6 @@
 import { inArray } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
-import { primeCombatRecords } from './combatRecordCache'
+import { readCombatRecords } from './combatRecordCache'
 import { createEntityScopeResolver } from './entityScopeGraph'
 
 interface CharacterLinks {
@@ -18,7 +18,7 @@ export async function validateEncounterCharacterScope(campaignId: string, links:
     return result
   }
   const digimonIds = ids(links.digimonIds), tamerIds = ids(links.tamerIds), lineIds = ids(links.evolutionLineIds)
-  const lines = lineIds.size ? await db.select().from(evolutionLines).where(inArray(evolutionLines.id, [...lineIds])) : []
+  const lines = [...(await readCombatRecords('evolution-line', [...lineIds], ids => db.select().from(evolutionLines).where(inArray(evolutionLines.id, ids)))).values()]
   if (lines.length !== lineIds.size) fail()
   for (const line of lines) {
     if (line.campaignId && line.campaignId !== campaignId) fail()
@@ -32,7 +32,7 @@ export async function validateEncounterCharacterScope(campaignId: string, links:
       digimonIds.add(entry.digimonId)
     }
   }
-  const forms = digimonIds.size ? await db.select().from(digimon).where(inArray(digimon.id, [...digimonIds])) : []
+  const forms = [...(await readCombatRecords('digimon', [...digimonIds], ids => db.select().from(digimon).where(inArray(digimon.id, ids)))).values()]
   if (forms.length !== digimonIds.size) fail()
   for (const form of forms) {
     if (form.campaignId && form.campaignId !== campaignId) fail()
@@ -40,10 +40,8 @@ export async function validateEncounterCharacterScope(campaignId: string, links:
     // campaign never makes a conflicting foreign partner safe.
     if (form.partnerId) tamerIds.add(form.partnerId)
   }
-  const owners = tamerIds.size ? await db.select().from(tamers).where(inArray(tamers.id, [...tamerIds])) : []
+  const owners = [...(await readCombatRecords('tamer', [...tamerIds], ids => db.select().from(tamers).where(inArray(tamers.id, ids)))).values()]
   if (owners.length !== tamerIds.size || owners.some(owner => owner.campaignId !== campaignId)) fail()
   const resolveScope = createEntityScopeResolver(forms, 'digimon')
   for (const form of forms) if (await resolveScope('digimon', form) !== campaignId) fail()
-  primeCombatRecords('digimon', forms)
-  primeCombatRecords('tamer', owners)
 }

@@ -1,3 +1,4 @@
+import { encounterFetch as $fetch } from '../utils/encounterFeedback'
 import type { MapAttackIntent } from '../types/mapAttackIntent'
 import { combatTurnKey } from '../utils/specialOrderCombat'
 import { toRaw } from 'vue'

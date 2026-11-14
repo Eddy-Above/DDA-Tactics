@@ -20,6 +20,7 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
   const calls = { reach: [], clear: 0, emitted: [], moved: [], movers: [] }
   const caps = { pos: positions.value.partner, budget: 4, caps: {}, occupied: new Map(), dInfo: { size: 'small' } }
   const dependencies = {
+    actionFeedback: { previewMovement() {}, cancelMovementPreview() {} },
     ref: Vue.ref, computed: Vue.computed, watch: Vue.watch, props, positions, pendingAttackIntent: null,
     map: Vue.ref({ id: 'map' }), activeParticipantId: Vue.ref('tamer'),
     getAreaShape, computePassLanding, chebyshev,

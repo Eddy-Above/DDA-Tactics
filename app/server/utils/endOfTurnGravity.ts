@@ -1,10 +1,11 @@
 import type { Vec3, GameMap } from '../../types'
 import { getRoomSnapshot, getDestroyedStructureIds, broadcastPositionPatch } from './encounterRoom'
-import { loadEncounterMap, loadParticipantDigimon, getFallerProfile } from './combatSpatial'
+import { loadEncounterMap, loadParticipantDigimon, loadTamersByIds, getFallerProfile } from './combatSpatial'
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
+import { resolveParticipantName } from './participantName'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
 // wounds in place and returns the position patch + battle-log entries. Flyers hover (skipped
@@ -17,6 +18,7 @@ export async function computeGravityDrops(
   digimonById: Map<string, any>,
   round: number,
   destroyedStructures: Set<string> = new Set(),
+  tamerById: Map<string, any> = new Map(),
 ): Promise<{ patch: Record<string, Vec3>; logEntries: any[] }> {
   const patch: Record<string, Vec3> = {}
   const logEntries: any[] = []
@@ -47,7 +49,9 @@ export async function computeGravityDrops(
       timestamp: new Date().toISOString(),
       round,
       actorId: p.id,
-      actorName: p.id,
+      actorName: p.type === 'digimon'
+        ? resolveParticipantName(p, participants, digimonById.get(p.entityId)?.name, digimonById.get(p.entityId)?.isEnemy ?? false)
+        : tamerById.get(p.entityId)?.name || 'Tamer',
       action: 'Fall',
       target: null,
       result: `Fell ${fallHeight} tile${fallHeight !== 1 ? 's' : ''}${damage > 0 ? ` (${damage} wound${damage !== 1 ? 's' : ''})` : ' (no damage)'}`,
@@ -80,9 +84,12 @@ export async function applyEndOfTurnGravity(
   if (!map) return { participants, logEntries: [] }
 
   const digimonById = await loadParticipantDigimon(participants)
+  const tamerIds = participants.filter(p => p.type === 'tamer' && positions[p.id]
+    && isFootprintAirborne(positions[p.id], getFootprintDimsForParticipant(p, digimonById), map)).map(p => p.entityId)
+  const tamerById = tamerIds.length ? await loadTamersByIds(tamerIds) : new Map()
 
   const { patch, logEntries } = await computeGravityDrops(positions, participants, map, digimonById, round,
-    getDestroyedStructureIds(snapshot.destructibleStates))
+    getDestroyedStructureIds(snapshot.destructibleStates), tamerById)
 
   if (Object.keys(patch).length > 0) {
     await broadcastPositionPatch(encounterId, patch)

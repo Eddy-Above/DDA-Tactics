@@ -1,6 +1,7 @@
 import { and, desc, eq, type SQL } from 'drizzle-orm'
 import { db, encounters } from '../../db'
 import { requireCampaignMember, resolveCampaignAccess } from '../../utils/campaignSecurity'
+import { normalizeActionsRemaining } from '../../../utils/encounterSnapshot'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
@@ -37,12 +38,6 @@ export default defineEventHandler(async (event) => {
     // fields here; callers needing them should fetch the single encounter.
     battleLog: [],
     requestResponses: [],
-    participants: (encounter.participants as any[]).map((p: any) => ({
-      ...p,
-      // Migrate old format { simple: X, complex: Y } to new format { simple: X }
-      actionsRemaining: p.actionsRemaining?.complex !== undefined
-        ? { simple: p.actionsRemaining.simple || 0 }
-        : p.actionsRemaining || { simple: 2 }
-    })),
+    participants: normalizeActionsRemaining(encounter.participants as any[]),
   }))
 })

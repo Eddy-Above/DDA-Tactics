@@ -7,6 +7,11 @@ export interface DisplayNameParticipant {
   isEnemy?: boolean
 }
 
+/** Older fall entries stored the participant ID in both fields. Preserve named history. */
+export function battleLogActorName(entry: { action: string; actorId: string; actorName: string }, names: Record<string, string>): string {
+  return entry.action === 'Fall' && entry.actorName === entry.actorId ? names[entry.actorId] ?? entry.actorName : entry.actorName
+}
+
 /**
  * Only enemy Digimon are numbered. Their duplicate groups use the resolved base name, including
  * across entity IDs, and keep assigned sequence numbers or fall back to sorted participant IDs.

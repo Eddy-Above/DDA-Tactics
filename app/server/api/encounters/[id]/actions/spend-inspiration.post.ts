@@ -1,3 +1,4 @@
+import { invalidateCombatRecord } from '../../../../utils/combatRecordCache'
 import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
@@ -241,6 +242,7 @@ export default defineEncounterCommand(async (event) => {
       xpBonuses: { ...xpBonuses, inspiration: newXpInspiration },
       updatedAt: new Date(),
     }).where(eq(tamers.id, tamer.id))
+    invalidateCombatRecord('tamer', tamer.id)
   }
 
   // Battle log entry

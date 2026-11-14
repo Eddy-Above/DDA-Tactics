@@ -1,5 +1,6 @@
 import { inArray } from 'drizzle-orm'
 import { db, digimon, tamers, evolutionLines } from '../db'
+import { hasCombatRecordScope, readCombatMetadata, readCombatRecords } from './combatRecordCache'
 
 type ScopedKind = 'tamer' | 'digimon' | 'map' | 'evolution-line'
 function invalid(): never { throw createError({ statusCode: 400, message: 'Linked character records belong to conflicting campaigns', data: { code: 'INVALID_CHARACTER_SCOPE' } }) }
@@ -14,7 +15,7 @@ const chainIds = (line: any): string[] => {
 export function createEntityScopeResolver(seedRows: any[] = [], seedKind: ScopedKind = 'digimon') {
   let snapshot: Promise<any> | undefined
   const prepare = async () => {
-    const lineRows = await db.select({ id: evolutionLines.id, campaignId: evolutionLines.campaignId, partnerId: evolutionLines.partnerId, chain: evolutionLines.chain }).from(evolutionLines).where(undefined)
+    const lineRows = await readCombatMetadata('entity-scope-lines', () => db.select({ id: evolutionLines.id, campaignId: evolutionLines.campaignId, partnerId: evolutionLines.partnerId, chain: evolutionLines.chain }).from(evolutionLines).where(undefined))
     const lines = new Map<string, any>(lineRows.map(line => [line.id, line]))
     if (seedKind === 'evolution-line') for (const line of seedRows) lines.set(line.id, line)
     const forms = new Map<string, any>(seedKind === 'digimon' ? seedRows.map(row => [row.id, row]) : [])
@@ -50,13 +51,17 @@ export function createEntityScopeResolver(seedRows: any[] = [], seedKind: Scoped
     }
     const missingForms = [...requiredForms].filter(id => !forms.has(id))
     if (missingForms.length) {
-      const rows = await db.select({ id: digimon.id, campaignId: digimon.campaignId, partnerId: digimon.partnerId }).from(digimon).where(inArray(digimon.id, missingForms))
+      const rows = hasCombatRecordScope()
+        ? [...(await readCombatRecords('digimon', missingForms, ids => db.select().from(digimon).where(inArray(digimon.id, ids)))).values()]
+        : await db.select({ id: digimon.id, campaignId: digimon.campaignId, partnerId: digimon.partnerId }).from(digimon).where(inArray(digimon.id, missingForms))
       for (const row of rows) forms.set(row.id, row)
     }
     const partnerIds = [...new Set([...forms.values(), ...[...requiredLines].map(id => lines.get(id))].flatMap(row => row?.partnerId ? [row.partnerId] : []))]
     const partners = new Map<string, any>()
     if (partnerIds.length) {
-      const owners = await db.select({ id: tamers.id, campaignId: tamers.campaignId }).from(tamers).where(inArray(tamers.id, partnerIds))
+      const owners = hasCombatRecordScope()
+        ? [...(await readCombatRecords('tamer', partnerIds, ids => db.select().from(tamers).where(inArray(tamers.id, ids)))).values()]
+        : await db.select({ id: tamers.id, campaignId: tamers.campaignId }).from(tamers).where(inArray(tamers.id, partnerIds))
       for (const owner of owners) partners.set(owner.id, owner)
     }
     return { lines, forms, partners, linkedLines, formsByLine }

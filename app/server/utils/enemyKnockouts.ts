@@ -6,13 +6,15 @@ import { applyEffectToParticipant } from './applyEffect'
 import { resolveParticipantName } from './participantName'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
 import { applyEndOfTurnGravity, computeGravityDrops } from './endOfTurnGravity'
-import { loadParticipantDigimon } from './combatSpatial'
+import { loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 import { applyRoundStartQualityTriggers } from './roundStartQualityTriggers'
 import { applyRoundEndEffects, loadRoundEndContext } from './damageOverTime'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { autoDevolveParticipant } from './partnerDevolution'
 import { applyLagInitiative } from '../../utils/lagInitiative'
 import { getRoomDestructibleStates, getDestroyedStructureIds } from './encounterRoom'
+import { isFootprintAirborne } from '../../utils/movementRules'
+import { getFootprintDimsForParticipant } from './mapMovement'
 
 // Enemy knockouts. An enemy whose Wound Boxes are all filled leaves the encounter, whatever filled
 // them: an attack (resolveNpcAttack), Poison/Burn, a Clash Throw, a fall, interceding or reflected
@@ -331,7 +333,11 @@ export async function resolveEnemyKnockouts(
       destroyedStructures ??= gravity.destroyedStructures ?? (ctx.encounterId
         ? getDestroyedStructureIds(await getRoomDestructibleStates(ctx.encounterId))
         : new Set())
-      const g = await computeGravityDrops(positions, participants, gravity.map, await loadParticipantDigimon(participants), round, destroyedStructures)
+      const digimonById = await loadParticipantDigimon(participants)
+      const tamerIds = participants.filter(p => p.type === 'tamer' && positions[p.id]
+        && isFootprintAirborne(positions[p.id], getFootprintDimsForParticipant(p, digimonById), gravity.map)).map(p => p.entityId)
+      const tamerById = tamerIds.length ? await loadTamersByIds(tamerIds) : new Map()
+      const g = await computeGravityDrops(positions, participants, gravity.map, digimonById, round, destroyedStructures, tamerById)
       if (Object.keys(g.patch).length > 0) positionPatch = { ...(positionPatch ?? {}), ...g.patch }
       logEntries.push(...g.logEntries)
       return

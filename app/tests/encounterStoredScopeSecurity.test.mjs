@@ -50,7 +50,7 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
   }
   const db = new Proxy({}, { get: (_target, key) => (databaseScope.scopedDatabase() ?? live)[key] })
   const store = { db, ...tables }
-  const entityGraph = loadTypeScriptWithMocks('server/utils/entityScopeGraph.ts', { '../db': store, 'drizzle-orm': sql })
+  const entityGraph = loadTypeScriptWithMocks('server/utils/entityScopeGraph.ts', { '../db': store, 'drizzle-orm': sql, './combatRecordCache': cache })
   const characterScope = loadTypeScriptWithMocks('server/utils/encounterCharacterScope.ts', {
     '../db': store, 'drizzle-orm': sql, './combatRecordCache': cache, './entityScopeGraph': entityGraph,
   })
@@ -60,9 +60,9 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
   const stateScope = loadTypeScriptWithMocks('server/utils/encounterStateScope.ts', {
     '../db': store, 'drizzle-orm': sql, './encounterCharacterScope': characterScope, './encounterContextScope': contextScope,
   })
-  const authorization = { authorizeEncounterIntent: async () => {
+  const authorization = { authorizeEncounterIntent: async (_event, _id, _body, _operation, lockedEncounter) => {
     calls.auth++
-    const [current] = await db.select().from(tables.encounters).where(sql.eq(tables.encounters.id, 'encounter'))
+    const current = lockedEncounter ?? (await db.select().from(tables.encounters).where(sql.eq(tables.encounters.id, 'encounter')))[0]
     assert.equal(rows.digimon.get('actor').campaignId, 'own', 'the admitted actor remains in the authorized campaign')
     return { encounter: current, access: { isMember: true, isDm } }
   } }
@@ -199,7 +199,7 @@ test('a 20-participant addition uses one save and one scope graph snapshot, rath
   assert.equal(f.calls.writes, 1)
   assert.equal(f.calls.reads.filter(read => read.table === 'evolutionLines').length, 1)
   assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1)
-  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 4, 'preflight, lock, locked authorization and saved result; no additional handler/service reads')
+  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 3, 'preflight, lock and saved result; authorization reuses the locked row')
 })
 
 test('the optimized update still rejects a foreign addition before saving anything', async () => {
@@ -229,7 +229,7 @@ test('placement reuses validated character records and the locked authorized enc
   assert.equal(f.calls.published, 1)
   assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1, 'preparation reuses the scope validator batch')
   assert.equal(f.calls.reads.filter(read => read.table === 'tamers').length, 1)
-  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 3, 'preflight, lock and locked authorization; no redundant fourth read')
+  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 2, 'preflight and lock; authorization reuses the locked row')
 })
 
 test('the separate movement transaction rejects foreign saved forms before path preparation', async () => {
@@ -268,3 +268,19 @@ test('generic updates reject foreign recovery context and allow a GM to clear a 
   assert.deepEqual(repaired.pendingRequests, [])
   assert.equal(f.calls.writes, 1)
 })
+
+
+test('repeated roster and prompt validation share full character batches and graph metadata inside the locked command', async () => {
+  const f = fixture({ roster: [participant('actor', { partnerId: 'owner', evolutionLineId: 'line' }), participant('owner-slot', { type: 'tamer', entityId: 'owner' })],
+    forms: [{ id: 'actor', campaignId: 'own', partnerId: 'owner' }],
+    lines: [{ id: 'line', campaignId: 'own', partnerId: 'owner', chain: [{ digimonId: 'actor' }] }],
+    owners: [{ id: 'owner', campaignId: 'own' }],
+    requests: [{ id: 'request', targetTamerId: 'owner', targetParticipantId: 'actor', data: { digimonId: 'actor' } }] });
+  await f.run('attack', async ({ encounter }) => {
+    await f.stateScope.validateEncounterStateScope(encounter, { participants: encounter.participants });
+    await f.stateScope.validateEncounterStateScope(encounter, { participants: encounter.participants });
+  });
+  assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1);
+  assert.equal(f.calls.reads.filter(read => read.table === 'tamers').length, 1);
+  assert.equal(f.calls.reads.filter(read => read.table === 'evolutionLines').length, 2, 'one selected line batch plus one reverse-link metadata snapshot');
+});

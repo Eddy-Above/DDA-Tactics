@@ -1,3 +1,4 @@
+import { invalidateCombatRecord } from '../../../../utils/combatRecordCache'
 import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq, inArray } from 'drizzle-orm'
@@ -321,6 +322,7 @@ export default defineEncounterCommand(async (event) => {
       usedPerDayOrders: [...usedPerDayOrders, body.orderName],
       updatedAt: new Date(),
     }).where(eq(tamers.id, tamer.id))
+    invalidateCombatRecord('tamer', tamer.id)
   }
 
   // Update encounter

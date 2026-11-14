@@ -159,13 +159,24 @@ try {
     import {createRouter,createWebHistory,RouterView,RouterLink} from '${absolute('node_modules/vue-router/dist/vue-router.mjs')}';
     import Campaign from '${absolute(files.campaign)}';import Workshop from '${absolute(files.workshop)}';
     import EncounterMap from '${absolute(sharedFiles[0])}';import MapToolbar from '${absolute(sharedFiles[1])}';import MapCanvas from '${absolute(sharedFiles[2])}';
+    import EncounterActionFeedback from '${absolute('components/EncounterActionFeedback.vue')}';
+    import {encounterFetch,getEncounterFeedback,previewEncounterActions} from '${absolute('utils/encounterFeedback.ts')}';
     import {useAuth} from '${absolute('composables/useAuth.ts')}';
     const placementEncounter={id:'placement',mapId:'map',phase:'setup',round:0,currentTurnIndex:0,revision:0,turnOrder:[],hazards:[],battleLog:[],destructibleStates:[],
       participants:['unit','unit2','unit3'].map(id=>({id,entityId:'tamer',type:'tamer',currentWounds:0,maxWounds:5,actionsRemaining:{simple:2}})),participantPositions:{unit:{x:0,y:0,z:0}}};
     const placementRoot={render:()=>Vue.h('div',{style:'height:100vh'},[Vue.h(EncounterMap,{encounter:placementEncounter,initialMap:${JSON.stringify(maps.campaign)},isDm:true,editorMode:true,myTamerId:null,tamerMap:{tamer:{name:'Tai',woundBoxes:5}},digimonMap:{},selectedAttack:null})])};
-    const router=createRouter({history:createWebHistory(),routes:[{path:'/start',component:{render:()=>Vue.h('div','Start')}},{path:'/placement',component:placementRoot},{path:'/campaigns/:campaignId/library/maps/:mapId',component:Campaign},{path:'/workshop/maps/:mapId',component:Workshop}]});
+    const feedbackModel=Vue.ref({id:'feedback',participants:[{id:'actor',currentStance:'neutral',actionsRemaining:{simple:2}}]});
+    const feedback=getEncounterFeedback();
+    const sendFeedback=(action,body)=>encounterFetch('/api/encounters/feedback/actions/'+action,{method:'POST',body}).then(result=>{feedbackModel.value=result}).catch(()=>{});
+    window.feedbackProbe={send:sendFeedback,pending:()=>feedback.pending.value.length};
+    const feedbackRoot={render:()=>Vue.h('div',[
+      Vue.h('div',{id:'stance-label'},previewEncounterActions(feedbackModel.value,feedback.pending.value).participants[0].currentStance),
+      Vue.h('button',{id:'stance-choice',onClick:()=>sendFeedback('stance',{participantId:'actor',stance:'offensive'})},'Offensive'),
+      Vue.h(EncounterActionFeedback,{encounterId:'feedback'})])};
+    const router=createRouter({history:createWebHistory(),routes:[{path:'/start',component:{render:()=>Vue.h('div','Start')}},{path:'/feedback',component:feedbackRoot},{path:'/placement',component:placementRoot},{path:'/campaigns/:campaignId/library/maps/:mapId',component:Campaign},{path:'/workshop/maps/:mapId',component:Workshop}]});
     const state=Vue.reactive(window.fixture?.state??{}),data=window.fixture?.data??{};window.apiReads=0;window.documentToken=crypto.randomUUID();
     const request=async(url,options={})=>{if(!options.method)window.apiReads++;if(!options.method&&url.startsWith('/api/maps/')&&window.mapRequestGate)await window.mapRequestGate;
+      if(url.startsWith('/api/encounters/feedback/')){if(window.feedbackGate)await window.feedbackGate;if(window.rejectFeedback){window.rejectFeedback=false;throw {data:{message:'The action was rejected'}}}return options.body.stance?{...feedbackModel.value,participants:[{...feedbackModel.value.participants[0],currentStance:options.body.stance,actionsRemaining:{simple:1}}]}:feedbackModel.value}
       if(url==='/api/encounters/placement/actions/move'){window.placementRequestStarted=(window.placementRequestStarted??0)+1;if(window.placementGate)await window.placementGate;if(window.rejectPlacement){window.rejectPlacement=false;throw {data:{message:'The destination is occupied'}}}}
       const response=await fetch('/fixture-api?source='+ (router.currentRoute.value.path.startsWith('/workshop')?'workshop':'campaign')+'&url='+encodeURIComponent(url),{method:options.method??'GET',headers:{'Content-Type':'application/json'},...(options.body?{body:JSON.stringify(options.body)}:{})});return response.json()};
     Object.assign(globalThis,{ref:Vue.ref,computed:Vue.computed,watch:Vue.watch,onMounted:Vue.onMounted,onUnmounted:Vue.onUnmounted,
@@ -189,7 +200,7 @@ try {
   await build({
     configFile: false, root: workspace, logLevel: 'warn', define: { __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'true' }, esbuild: { tsconfigRaw: { compilerOptions: { target: 'ES2022' } } }, resolve: { alias: { '~': app, vue: absolute('node_modules/vue/dist/vue.runtime.esm-bundler.js') } }, plugins: [{
       name: 'editor-camera-probe', enforce: 'pre', transform(source, id) {
-        if (id.replaceAll('\\', '/').endsWith('/components/EncounterMap.vue')) return source.replace('</script>', `onMounted(()=>{(window as any).placementProbe={arm:selectParticipant,gm:onGmMoveStart,state:()=>JSON.parse(JSON.stringify({positions:positions.value,display:displayPositions.value,pending:placementPreviews.value,selected:selectedId.value,error:placementError.value}))}});</script>`)
+        if (id.replaceAll('\\', '/').endsWith('/components/EncounterMap.vue')) return source.replace('</script>', `onMounted(()=>{(window as any).placementProbe={arm:selectParticipant,gm:onGmMoveStart,combat:(id:string,destination:Vec3,charge:boolean)=>{const actor=props.encounter.participants.find(p=>p.id===id) as any;actor.pendingChargeMove=charge?{castId:'browser-cast'}:undefined;return onCombatMove(id,destination,[positions.value[id],destination])},state:()=>JSON.parse(JSON.stringify({positions:positions.value,display:displayPositions.value,pending:placementPreviews.value,selected:selectedId.value,error:placementError.value}))}});</script>`)
         if (!id.replaceAll('\\', '/').endsWith('/components/MapCanvas.vue'))
           return; return source.replace('defineExpose({ movingParticipantId, cameraAction })', `defineExpose({ movingParticipantId, cameraAction });onMounted(()=>{(window as any).renderedTokenPosition=(id:string)=>spriteGroups.get(id)?.position.toArray();(window as any).reloadProject=(x:number,y:number,z:number)=>{const p=new THREE.Vector3(x,y,z).project(camera),r=canvasRef.value!.getBoundingClientRect();return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2}}})`)
       }
@@ -230,7 +241,7 @@ try {
         res.end(shell.replace('<div id="app"></div>', `<div id="app">${rendered.html}</div>${rendered.teleports}<script>window.fixture=${serialized}</script>`))
         return
       }
-      if (url.pathname === '/start' || url.pathname === '/placement') {
+      if (url.pathname === '/start' || url.pathname === '/placement' || url.pathname === '/feedback') {
         res.setHeader('Content-Type', 'text/html;charset=utf-8')
         res.end(shell)
         return
@@ -324,6 +335,20 @@ try {
   }
   assert.deepEqual(await evaluate('window.placementAlerts'),[], 'placement failures must not block with a modal alert')
   assert.match(await evaluate('placementProbe.state().error'),/The destination is occupied/)
+  for (const [kind, destination, rejected] of [
+    ['normal', { x: 2, y: 0, z: 3 }, false], ['charge-after', { x: 3, y: 0, z: 3 }, false],
+    ['normal', { x: 4, y: 0, z: 3 }, true],
+  ]) {
+    const before = await evaluate('placementProbe.state().positions.unit')
+    await evaluate(`window.rejectPlacement=${rejected};window.placementGate=new Promise(resolve=>window.releasePlacement=()=>{window.placementGate=null;resolve()});void placementProbe.combat('unit',${JSON.stringify(destination)},${kind === 'charge-after'})`)
+    await poll(() => evaluate(`renderedTokenPosition('unit')?.[0]===${destination.x + .5}`), `${kind} preview while response is held`)
+    assert.deepEqual(await evaluate('placementProbe.state().positions.unit'), before)
+    await evaluate('window.releasePlacement()')
+    await poll(() => evaluate('Object.keys(placementProbe.state().pending).length===0'), `${kind} save completion`)
+    assert.deepEqual(await evaluate('placementProbe.state().positions.unit'), rejected ? before : destination)
+    checks.push({ kind, rejected, renderedBeforeResponse: true })
+    console.log(`PASS ${kind} renders before acknowledgement${rejected ? ' and rolls back on rejection' : ''}`)
+  }
   const requestsBefore = await evaluate('window.placementRequestStarted')
   await evaluate(`window.placementGate=new Promise(resolve=>window.releasePlacement=()=>{window.placementGate=null;resolve()});placementProbe.arm('unit')`)
   for (const [index, id] of ['unit', 'unit2', 'unit3'].entries()) {
@@ -343,6 +368,19 @@ try {
   for(const [index,id]of ['unit','unit2','unit3'].entries())assert.deepEqual(finalPositions[id],{x:index+1,y:0,z:1})
   checks.push({kind:'rapid-placement',tokens:3,allPreviewsBeforeFirstResponse:true,serializedSaves:true})
   console.log('PASS three tokens placed before the first save completes, with automatic selection and serialized saves')
+  await cdp.send('Page.navigate',{url:origin+'/feedback'})
+  await poll(()=>evaluate(`!!document.querySelector('#stance-choice')`),'feedback fixture')
+  await evaluate(`window.feedbackGate=new Promise(resolve=>window.releaseFeedback=()=>{window.feedbackGate=null;resolve()});document.querySelector('#stance-choice').click()`)
+  await poll(()=>evaluate(`document.querySelector('#stance-label').textContent==='offensive'&&document.querySelector('[role=status]')?.textContent.includes('Changing stance')`),'stance changes visibly before response')
+  await evaluate('window.releaseFeedback()')
+  await poll(()=>evaluate('feedbackProbe.pending()===0'),'stance acknowledgement')
+  assert.equal(await evaluate(`document.querySelector('#stance-label').textContent`),'offensive')
+  await evaluate(`window.rejectFeedback=true;window.feedbackGate=new Promise(resolve=>window.releaseFeedback=()=>{window.feedbackGate=null;resolve()});void feedbackProbe.send('stance',{participantId:'actor',stance:'defensive'})`)
+  await poll(()=>evaluate(`document.querySelector('#stance-label').textContent==='defensive'`),'second stance preview')
+  await evaluate('window.releaseFeedback()')
+  await poll(()=>evaluate(`document.querySelector('#stance-label').textContent==='offensive'&&document.querySelector('[role=alert]')?.textContent.includes('The action was rejected')`),'stance rollback and visible explanation')
+  checks.push({kind:'stance',renderedBeforeResponse:true,rejectionRollsBack:true,errorVisible:true})
+  console.log('PASS stance responds before acknowledgement and visibly restores confirmed state on rejection')
   assert.deepEqual(errors, [], 'full-page browser/hydration/shader errors')
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify({ scope: 'real page/EncounterMap/toolbar/WebGL with local APIs and Nuxt-style payload; no production services', checks, errors }, null, 2))
   console.log(`Browser evidence: ${artifacts}`)

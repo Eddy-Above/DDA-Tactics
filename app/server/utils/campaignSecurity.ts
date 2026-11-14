@@ -1,10 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { getCookie, setCookie, type H3Event } from 'h3'
 import { eq } from 'drizzle-orm'
-import { db, campaigns, encounters, tamers, digimon, maps, type Campaign } from '../db'
+import { db, campaigns, encounters, tamers, digimon, maps, type Campaign, type Encounter } from '../db'
 import { getMyCampaignAccess } from './campaignAuth'
 import { enforcePrincipalWriteLimit } from './securityTransport'
 import { createEntityScopeResolver } from './entityScopeGraph'
+import { readCombatAccess, readCombatRecord } from './combatRecordCache'
 
 const TTL = 30 * 24 * 60 * 60 * 1000
 type CredentialCampaign = Pick<Campaign, 'id' | 'passwordHash' | 'dmPasswordHash'>
@@ -46,9 +47,12 @@ export interface CampaignAccess {
   expiresAt?: number
 }
 export async function resolveCampaignAccess(event: H3Event, campaignId: string): Promise<CampaignAccess> {
+  return readCombatAccess(event, campaignId, () => loadCampaignAccess(event, campaignId))
+}
+async function loadCampaignAccess(event: H3Event, campaignId: string): Promise<CampaignAccess> {
   const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
   if (!campaign) throw createError({ statusCode: 404, message: 'Campaign not found' })
-  const account = await getMyCampaignAccess(event, campaignId)
+  const account = await getMyCampaignAccess(event, campaignId, campaign)
   const dm = credential(event, campaign, true), member = credential(event, campaign, false)
   const fullyPublic = !campaign.ownerId && !campaign.passwordHash && !campaign.dmPasswordHash
   const isDm = account.isOwner || account.isCoOwner || account.isCoDm || !!dm || fullyPublic
@@ -93,8 +97,9 @@ export async function requireCampaignManager(event: H3Event, id: string): Promis
   if (event.node?.req?.method) enforcePrincipalWriteLimit(event, access.principalId)
   return access
 }
-export async function requireEncounterAccess(event: H3Event, id: string, level: 'member' | 'dm' | 'manager' = 'member') {
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id))
+export async function requireEncounterAccess(event: H3Event, id: string, level: 'member' | 'dm' | 'manager' = 'member', lockedEncounter?: Encounter) {
+  const encounter = lockedEncounter?.id === id ? lockedEncounter
+    : (await db.select().from(encounters).where(eq(encounters.id, id)))[0]
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
   if (!encounter.campaignId) {
     if (level !== 'member') throw createError({ statusCode: 403, message: 'Legacy standalone encounters are read-only' })
@@ -109,7 +114,7 @@ export async function requireEncounterAccess(event: H3Event, id: string, level: 
   return { encounter, access }
 }
 export async function assertCanControlTamer(_event: H3Event, id: string, access: CampaignAccess): Promise<any> {
-  const [tamer] = await db.select().from(tamers).where(eq(tamers.id, id))
+  const tamer = await readCombatRecord('tamer', id, () => db.select().from(tamers).where(eq(tamers.id, id)))
   if (!tamer || tamer.campaignId !== access.campaign.id) throw createError({ statusCode: 400, message: 'Tamer does not belong to this campaign' })
   if (!access.isMember) denied(access, 'Campaign access is required')
   return tamer
@@ -122,10 +127,10 @@ export async function requireEncounterActor(event: H3Event, encounter: any, id: 
   if (participant.isEnemy && !access.isDm) denied(access, 'GM access is required for this participant')
   if (participant.type === 'tamer') { await assertCanControlTamer(event, participant.entityId, access); return participant }
   if (participant.type === 'digimon') {
-    const [record] = await db.select().from(digimon).where(eq(digimon.id, participant.entityId))
+    const record = await readCombatRecord('digimon', participant.entityId, () => db.select().from(digimon).where(eq(digimon.id, participant.entityId)))
     let scope = record?.campaignId
     if (record && !scope && record.partnerId) {
-      const [partner] = await db.select().from(tamers).where(eq(tamers.id, record.partnerId))
+      const partner = await readCombatRecord('tamer', record.partnerId, () => db.select().from(tamers).where(eq(tamers.id, record.partnerId!)))
       scope = partner?.campaignId
     }
     if (record && !scope && !record.partnerId) scope = await createEntityScopeResolver([record], 'digimon')('digimon', record)

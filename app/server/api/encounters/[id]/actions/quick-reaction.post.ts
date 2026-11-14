@@ -1,3 +1,4 @@
+import { invalidateCombatRecord } from '../../../../utils/combatRecordCache'
 import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
@@ -321,6 +322,7 @@ async function useQuickReaction(encounterId: string, body: QuickReactionBody) {
     usedPerDayOrders: [...usedPerDayOrders, 'Quick Reaction'],
     updatedAt: new Date(), // lets a page that refetches the Tamer see the change
   }).where(eq(tamers.id, tamerParticipant.entityId))
+  invalidateCombatRecord('tamer', tamerParticipant.entityId)
 
   // Other attacks may already be waiting with the old daily-order flag. Once this Tamer spends
   // Quick Reaction, those offers become ordinary intercede choices rather than usable QR offers.

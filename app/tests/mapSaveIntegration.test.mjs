@@ -47,6 +47,7 @@ function fixture(t, initial = makeMap()) {
     mapStore: { updateMapMinimal: async (mapId, patch, clientId) => { writes.push({ mapId, patch, clientId }); return await gate.promise } },
     ws: { send: message => messages.push(message) }, refreshAgain: false, mapDisposed: false, scheduleMapRefresh: () => {} })
   const deps = { map, props, editor, autosave, ...mapEdits, lastQueuedRevision: 0, selectedStructure: shallowRef({ id: 'wall' }),
+    doorPreviews: ref({}), placementError: ref(''), mapDisposed: false,
     selectedId: shallowRef('hero'), activeParticipantId: shallowRef(null), positions: shallowRef({ hero: point() }),
     $fetch: async (url, options) => { doorWrites.push({ url, ...options }); return { doors: map.value.doors.map(door => options.body.doorIds.includes(door.id) ? { ...door, isOpen: options.body.isOpen } : door) } },
   }
