@@ -217,12 +217,13 @@ export function useAttackTags(
       if (quality.id === 'ammo') {
         const alreadyUsed = isTagAlreadyUsed('ammo')
         const hasSignature = currentTags.some((t) => t.includes('Signature Move'))
-        const hasEnoughTags = currentTags.length >= 1
+        // Range and type supply two base tags; a selected effect also counts as the third.
+        const hasEnoughTags = currentTags.some((tag) => tag !== 'Ammo') || !!newAttackValue.value.effect?.trim()
         const blocked = alreadyUsed || hasSignature || !hasEnoughTags
         let reason: string | undefined
         if (alreadyUsed) reason = 'Already used on another attack'
         else if (hasSignature) reason = 'Cannot combine with Signature Move'
-        else if (!hasEnoughTags) reason = 'Requires at least 1 other tag first'
+        else if (!hasEnoughTags) reason = 'Requires at least 1 other tag or effect first'
         tags.push({
           id: 'ammo',
           name: 'Ammo',
