@@ -3,9 +3,9 @@ import { authorizeEncounterIntent } from '../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters } from '../../db'
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const id = getRouterParam(event, 'id')
-  await authorizeEncounterIntent(event, id, undefined, 'delete')
+  if (!commandContext) await authorizeEncounterIntent(event, id, undefined, 'delete')
 
   if (!id) {
     throw createError({
@@ -15,7 +15,7 @@ export default defineEncounterCommand(async (event) => {
   }
 
   // Check if encounter exists
-  const [existing] = await db.select().from(encounters).where(eq(encounters.id, id))
+  const existing = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, id)))[0]
 
   if (!existing) {
     throw createError({

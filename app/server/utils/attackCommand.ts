@@ -11,6 +11,7 @@ import { prepareRoomCommit } from './encounterRoom'
 import { validateEncounterStateScope } from './encounterStateScope'
 import { validateEncounterContextScope } from './encounterContextScope'
 import { shapeEncounterResult } from '../../utils/encounterSnapshot'
+import { withEncounterCommandReceipt } from './encounterCommandReceipt'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -39,15 +40,14 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
         finiteNumber(body.expectedRevision, 'expectedRevision', { integer: true, min: 0 })
         if (body.expectedRevision !== context.encounter.revision) throw createError({ statusCode: 409, message: 'The encounter changed. Review the action and try again.' })
       }
-      const value = await work(context)
-      if (operationId) {
+      const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, () => work(context))
+      if (operationId && !saved) {
         const [fresh] = await db.select().from(encounters).where(eq(encounters.id, id))
         if (fresh?.participants?.some((p: any) => p.id === actorId)) {
           const participants = fresh.participants.map((p: any) => p.id === actorId ? { ...p,
             attackReceipts: [...(p.attackReceipts ?? []), { operationId, fingerprint }].slice(-50),
           } : p)
-          await db.update(encounters).set({ participants, updatedAt: new Date() }).where(eq(encounters.id, id))
-          const [updated] = await db.select().from(encounters).where(eq(encounters.id, id))
+          const [updated] = await db.update(encounters).set({ participants, updatedAt: new Date() }).where(eq(encounters.id, id)).returning()
           if (value && typeof value === 'object' && (value as any).id === id) Object.assign(value, updated)
         }
       }

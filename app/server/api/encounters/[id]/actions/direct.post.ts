@@ -9,10 +9,10 @@ interface DirectActionBody {
   bolstered: boolean
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<DirectActionBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'direct')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'direct')
 
   if (!encounterId) {
     throw createError({
@@ -29,7 +29,7 @@ export default defineEncounterCommand(async (event) => {
   }
 
   // Fetch encounter
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
 
   if (!encounter) {
     throw createError({

@@ -18,10 +18,10 @@ interface IntercedeOptOutsBody {
   intercedeOptOuts: string[] // full replacement array of target participant IDs
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeOptOutsBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'intercede-optouts')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'intercede-optouts')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

@@ -9,10 +9,10 @@ interface DataAbsorbBody {
   extraActions?: number  // 0 = BIT×2, 1 = BIT×4, 2 = BIT×6
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<DataAbsorbBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'data-absorb')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'data-absorb')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
@@ -21,7 +21,7 @@ export default defineEncounterCommand(async (event) => {
     throw createError({ statusCode: 400, message: 'participantId is required' })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }

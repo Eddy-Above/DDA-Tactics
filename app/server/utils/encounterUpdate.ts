@@ -17,6 +17,7 @@ import { applyLagInitiative } from '../../utils/lagInitiative'
 import { applyNaturewalkEnvironment } from './naturewalk'
 import { getNaturewalkEnvironmentSettings } from '../../utils/naturewalk'
 import { validateEncounterStateScope, clearInvalidChargeMoves } from './encounterStateScope'
+import { includeEncounterCommandReceipt, markEncounterCommandReceiptSaved } from './encounterCommandReceipt'
 
 export type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
@@ -306,7 +307,11 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
     if (auraResult.changed) updateData.participants = auraResult.participants
   }
 
+  const receiptBase = (updateData.participants ?? existing.participants) as any[]
+  const receipted = includeEncounterCommandReceipt(id, receiptBase)
+  if (receipted !== receiptBase) updateData.participants = receipted
   await db.update(encounters).set(updateData).where(eq(encounters.id, id))
+  markEncounterCommandReceiptSaved(id)
 
   // Passes are per combat: once the encounter is no longer in combat (ended, reopened for setup)
   // none survives, so a later combat in the same encounter starts with everyone prompted again.

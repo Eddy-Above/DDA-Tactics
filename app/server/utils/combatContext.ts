@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, campaigns, encounters } from '../db'
 import type { CampaignLevel, CampaignRulesSettings, EddySoulRules, HouseRules } from '../../types'
+import { readCombatMetadata } from './combatRecordCache'
 
 export interface CampaignCombatContext {
   campaignLevel: CampaignLevel
@@ -11,9 +12,9 @@ export interface CampaignCombatContext {
 
 // Keep rule defaults consistent for actions that already loaded their encounter row.
 export async function loadCampaignCombatContext(campaignId: string | null | undefined): Promise<CampaignCombatContext> {
-  const [campaign] = campaignId
-    ? await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
-    : []
+  const campaign = campaignId
+    ? await readCombatMetadata(`campaign-row:${campaignId}`, async () => (await db.select().from(campaigns).where(eq(campaigns.id, campaignId)))[0])
+    : undefined
   const rulesSettings = campaign ? campaign.rulesSettings ?? {} : undefined
   return {
     campaignLevel: campaign?.level ?? 'standard',

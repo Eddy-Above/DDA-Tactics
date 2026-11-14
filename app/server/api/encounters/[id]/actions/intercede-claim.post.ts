@@ -97,10 +97,10 @@ function stripClaimantFromGroupOffers(
   return updated
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeClaimBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'intercede-claim')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'intercede-claim')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

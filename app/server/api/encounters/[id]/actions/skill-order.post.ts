@@ -11,10 +11,10 @@ interface SkillOrderBody {
   orderName: string
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SkillOrderBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'skill-order')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'skill-order')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
@@ -25,7 +25,7 @@ export default defineEncounterCommand(async (event) => {
   }
 
   // Fetch encounter
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }

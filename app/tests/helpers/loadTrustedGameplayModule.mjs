@@ -56,7 +56,8 @@ export function loadTrustedGameplayModule(relativePath, mocks = {}) {
       // Handlers consuming the boundary's locked context need that context in
       // business fixtures too. Preserve explicitly supplied access guards.
       const policy = [...definitions].find(([name, value]) => name.endsWith('/utils/campaignSecurity') && value.requireEncounterAccess)?.[1] ?? security
-      return work(event, await policy.requireEncounterAccess(event, globalThis.getRouterParam(event, 'id'), 'dm'))
+      const id = globalThis.getRouterParam(event, 'id')
+      return queue.serializeIntercedeClaim(id, async () => work(event, await policy.requireEncounterAccess(event, id, 'dm')))
     } }],
     ['attackCommand', { runAttackCommand: async (_event, id, _body, _operation, work) => queue.serializeIntercedeClaim(id, async () => work(await contextFor(id))) }],
     ['securityValidation', {
@@ -98,7 +99,7 @@ export function loadTrustedGameplayModule(relativePath, mocks = {}) {
         ...childModule,
         // Historical GM business fixtures exercise the force-capable internal service;
         // real public HTTP guard tests separately reject a supplied force flag.
-        performDigivolution: (id, body) => childModule.performDigivolution(id, body, !!body.force),
+        performDigivolution: (id, body, _force, encounter) => childModule.performDigivolution(id, body, !!body.force, encounter),
       } : childModule
     }
     if (key.endsWith('/actions/intercede-offer.post') && key !== filename.replace(/\.ts$/, '')) {

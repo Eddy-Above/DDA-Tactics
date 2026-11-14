@@ -16,10 +16,10 @@ interface QuickReactionBody {
   targetParticipantId?: string
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<QuickReactionBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'quick-reaction')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'quick-reaction')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

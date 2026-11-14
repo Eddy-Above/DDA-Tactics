@@ -21,9 +21,10 @@ function fixture() {
         for: async lock => { assert.equal(lock, 'update'); control.locks++; return [copy(read())] },
         then: (done, fail) => Promise.resolve([copy(read())]).then(done, fail),
       }) }) }),
-      update: () => ({ set: fields => ({ where: async () => {
-        control.writes++
-        write({ ...read(), ...copy(fields), revision: read().revision + 1 })
+      update: () => ({ set: fields => ({ where: () => {
+        let applied = false
+        const apply = () => { if (!applied) { applied = true; control.writes++; write({ ...read(), ...copy(fields), revision: read().revision + 1 }) }; return [copy(read())] }
+        return { then: (yes, no) => Promise.resolve().then(apply).then(yes, no), returning: async () => apply() }
       } }) }),
     }
   }

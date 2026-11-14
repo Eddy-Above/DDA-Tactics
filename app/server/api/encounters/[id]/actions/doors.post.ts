@@ -8,13 +8,13 @@ import { loadEncounterMap, loadParticipantDigimon } from '../../../../utils/comb
 import { getFootprintDimensions } from '../../../../utils/mapMovement'
 import { doorsAdjacentTo } from '../../../../../utils/mapDoors'
 
-export default defineEncounterCommand(async event => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const id = getRouterParam(event, 'id')
   const body = await readBody<{ participantId?: string; doorIds: string[]; isOpen: boolean }>(event)
-  const { access } = await authorizeEncounterIntent(event, id, body, 'doors')
+  const { access } = (commandContext ?? await authorizeEncounterIntent(event, id, body, 'doors'))
   if (!Array.isArray(body.doorIds) || body.doorIds.length < 1 || body.doorIds.length > 100 || body.doorIds.some(id => typeof id !== 'string') || typeof body.isOpen !== 'boolean') throw createError({ statusCode: 400, message: 'Choose doors and an open state' })
   return serializeIntercedeClaim(id!, async () => {
-    const [encounter] = await db.select().from(encounters).where(eq(encounters.id, id!))
+    const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, id!)))[0]
     if (encounter?.mapId) await db.select({ id: maps.id }).from(maps).where(eq(maps.id, encounter.mapId)).for('update')
     const map = await loadEncounterMap(encounter?.mapId)
     if (!map) throw createError({ statusCode: 400, message: 'No encounter map is available' })

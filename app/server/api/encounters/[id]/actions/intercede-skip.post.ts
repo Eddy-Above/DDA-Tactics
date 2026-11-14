@@ -20,10 +20,10 @@ interface IntercedeSkipBody {
   characterOptOuts?: string[] // GM-only: participant IDs to never intercede with for this target
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedeSkipBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'intercede-skip')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'intercede-skip')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

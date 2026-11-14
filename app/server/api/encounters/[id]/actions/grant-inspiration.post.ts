@@ -9,10 +9,10 @@ interface GrantInspirationBody {
   amount: number
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<GrantInspirationBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'grant-inspiration')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'grant-inspiration')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
@@ -26,7 +26,7 @@ export default defineEncounterCommand(async (event) => {
     throw createError({ statusCode: 400, message: 'amount must be at least 1' })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }

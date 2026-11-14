@@ -4,10 +4,10 @@ import { db, encounters } from '../../../../db'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const requestId = getRouterParam(event, 'requestId')
-  await authorizeEncounterIntent(event, encounterId, { requestId }, 'requests-delete')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, { requestId }, 'requests-delete')
 
   if (!encounterId || !requestId) {
     throw createError({

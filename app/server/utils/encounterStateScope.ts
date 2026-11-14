@@ -4,6 +4,7 @@ import { allowFields, finiteNumber } from './securityValidation'
 import { combatTurnKey } from '../../utils/specialOrderCombat'
 import { validateEncounterCharacterScope } from './encounterCharacterScope'
 import { validateEncounterContextScope } from './encounterContextScope'
+import { readCombatMetadata } from './combatRecordCache'
 
 /** Server-owned allowances survive snapshots only while their original cast context is current. */
 export function clearInvalidChargeMoves(previous: any, update: any): any[] {
@@ -27,7 +28,8 @@ export async function validateEncounterStateScope(encounter: any, body: any): Pr
   const mapId = body.mapId === undefined ? encounter.mapId : body.mapId
   if (mapId !== undefined && mapId !== null && (typeof mapId !== 'string' || !mapId)) throw createError({ statusCode: 400, message: 'Invalid encounter map' })
   if (mapId) {
-    const [map] = await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, mapId))
+    const map = await readCombatMetadata(`map-scope:${mapId}`, async () =>
+      (await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, mapId)))[0])
     if (!map || map.campaignId !== encounter.campaignId) throw createError({ statusCode: 400, message: 'The map belongs to a different campaign' })
   }
   const roster = body.participants ?? encounter.participants ?? []

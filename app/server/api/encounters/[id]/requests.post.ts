@@ -11,10 +11,10 @@ interface CreateRequestBody {
   data?: any
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<CreateRequestBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'requests-create')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'requests-create')
 
   if (!encounterId) {
     throw createError({

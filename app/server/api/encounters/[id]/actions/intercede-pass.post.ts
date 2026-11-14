@@ -13,10 +13,10 @@ interface IntercedePassBody {
   action: 'start' | 'resume'
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<IntercedePassBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'intercede-pass')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'intercede-pass')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })

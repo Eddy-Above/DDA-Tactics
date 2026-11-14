@@ -40,10 +40,10 @@ function swapsAreEqual(a: StatSwaps, b: StatSwaps): boolean {
 const SWAP_DAMAGE_ARMOR: StatSwaps = { damage: 'armor', armor: 'damage' }
 const SWAP_ACCURACY_DODGE: StatSwaps = { accuracy: 'dodge', dodge: 'accuracy' }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ModeChangeBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'mode-change')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'mode-change')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
@@ -52,7 +52,7 @@ export default defineEncounterCommand(async (event) => {
     throw createError({ statusCode: 400, message: 'participantId and newSwaps are required' })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: `Encounter ${encounterId} not found` })
   }

@@ -33,6 +33,10 @@ export async function getMyCampaignAccess(event: H3Event, campaignId: string, st
   if (!campaign) return { ...EMPTY_ACCESS, userId: user.id }
 
   const isOwner = campaign.ownerId === user.id
+  if (isOwner) return {
+    userId: user.id, ...(user.expiresAt !== undefined ? { sessionExpiresAt: user.expiresAt } : {}),
+    isOwner: true, isCoOwner: true, isCoDm: true, accessibleTamerIds: [],
+  }
 
   const [grant] = await db
     .select()

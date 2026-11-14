@@ -230,5 +230,5 @@ export async function advanceEncounterTurn(storedEncounter: Encounter, digimonMa
       const existingLog = [...((encounter?.battleLog as any[]) || [])]
       updatePayload.battleLog = existingLog.concat(logEntries)
     }
-    return updateEncounterState(encounter.id, updatePayload)
+    return updateEncounterState(encounter.id, updatePayload, storedEncounter)
   }

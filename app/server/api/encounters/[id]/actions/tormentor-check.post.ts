@@ -8,10 +8,10 @@ interface TormentorCheckBody {
   failingParticipantIds: string[]
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<TormentorCheckBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'tormentor-check')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'tormentor-check')
 
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
@@ -20,7 +20,7 @@ export default defineEncounterCommand(async (event) => {
     throw createError({ statusCode: 400, message: 'bossParticipantId and failingParticipantIds[] are required' })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }

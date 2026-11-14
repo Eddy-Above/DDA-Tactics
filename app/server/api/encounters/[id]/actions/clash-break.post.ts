@@ -15,17 +15,17 @@ interface ClashBreakBody {
   diceResults: number[]
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<ClashBreakBody>(event)
-  await authorizeEncounterIntent(event, encounterId, body, 'clash-break')
+  if (!commandContext) await authorizeEncounterIntent(event, encounterId, body, 'clash-break')
 
   if (!encounterId) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   if (!body.clashId || !body.breakerId || !body.tamerId || body.roll === undefined || !body.diceResults) {
     throw createError({ statusCode: 400, message: 'clashId, breakerId, tamerId, roll, and diceResults are required' })
   }
 
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = commandContext?.encounter ?? (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) throw createError({ statusCode: 404, message: 'Encounter not found' })
 
   let participants = encounter.participants

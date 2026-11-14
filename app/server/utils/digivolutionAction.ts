@@ -1,6 +1,6 @@
 import { invalidateCombatRecord } from './combatRecordCache'
 import { eq } from 'drizzle-orm'
-import { db, encounters, digimon, evolutionLines, tamers, type Digimon, type EvolutionLine } from '../db'
+import { db, encounters, digimon, evolutionLines, tamers, type Digimon, type EvolutionLine, type Encounter } from '../db'
 import { STAGE_CONFIG } from '../../types'
 import type { DigimonStage } from '../../types'
 import { getDigizoidArmorBonus } from './digizoidArmor'
@@ -17,7 +17,7 @@ export interface DigivolveBody {
   rollTotal?: number
 }
 
-export async function performDigivolution(encounterId: string, body: DigivolveBody, force = false) {
+export async function performDigivolution(encounterId: string, body: DigivolveBody, force = false, lockedEncounter?: Encounter) {
   if (!encounterId) {
     throw createError({ statusCode: 400, message: 'Encounter ID is required' })
   }
@@ -28,7 +28,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
 
 
   // Fetch encounter
-  const [encounter] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
+  const encounter = lockedEncounter?.id === encounterId ? lockedEncounter : (await db.select().from(encounters).where(eq(encounters.id, encounterId)))[0]
   if (!encounter) {
     throw createError({ statusCode: 404, message: 'Encounter not found' })
   }

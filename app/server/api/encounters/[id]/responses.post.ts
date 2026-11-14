@@ -56,10 +56,10 @@ interface SubmitResponseBody {
   }
 }
 
-export default defineEncounterCommand(async (event) => {
+export default defineEncounterCommand(async (event, commandContext) => {
   const encounterId = getRouterParam(event, 'id')
   const body = await readBody<SubmitResponseBody>(event)
-  const responseContext = await authorizeEncounterIntent(event, encounterId, body, 'response')
+  const responseContext = (commandContext ?? await authorizeEncounterIntent(event, encounterId, body, 'response'))
   if (body.response?.digimonId) await requireLinkedEntity(event, 'digimon', body.response.digimonId, responseContext.encounter.campaignId)
 
   if (!encounterId) {

@@ -5,7 +5,7 @@ import { db, campaigns, encounters, tamers, digimon, maps, type Campaign, type E
 import { getMyCampaignAccess } from './campaignAuth'
 import { enforcePrincipalWriteLimit } from './securityTransport'
 import { createEntityScopeResolver } from './entityScopeGraph'
-import { readCombatAccess, readCombatRecord } from './combatRecordCache'
+import { readCombatAccess, readCombatRecord, readCombatMetadata } from './combatRecordCache'
 
 const TTL = 30 * 24 * 60 * 60 * 1000
 type CredentialCampaign = Pick<Campaign, 'id' | 'passwordHash' | 'dmPasswordHash'>
@@ -50,7 +50,7 @@ export async function resolveCampaignAccess(event: H3Event, campaignId: string):
   return readCombatAccess(event, campaignId, () => loadCampaignAccess(event, campaignId))
 }
 async function loadCampaignAccess(event: H3Event, campaignId: string): Promise<CampaignAccess> {
-  const [campaign] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId))
+  const campaign = await readCombatMetadata(`campaign-row:${campaignId}`, async () => (await db.select().from(campaigns).where(eq(campaigns.id, campaignId)))[0])
   if (!campaign) throw createError({ statusCode: 404, message: 'Campaign not found' })
   const account = await getMyCampaignAccess(event, campaignId, campaign)
   const dm = credential(event, campaign, true), member = credential(event, campaign, false)
@@ -108,7 +108,8 @@ export async function requireEncounterAccess(event: H3Event, id: string, level: 
   const access = await (level === 'dm' ? requireCampaignDm : level === 'manager' ? requireCampaignManager : requireCampaignMember)(event, encounter.campaignId)
   if (level === 'member' && !access.isDm && !encounter.visibleToPlayers) throw createError({ statusCode: 404, message: 'Encounter not found' })
   if (encounter.mapId) {
-    const [map] = await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, encounter.mapId))
+    const map = await readCombatMetadata(`map-scope:${encounter.mapId}`, async () =>
+      (await db.select({ id: maps.id, campaignId: maps.campaignId }).from(maps).where(eq(maps.id, encounter.mapId!)))[0])
     if (map && map.campaignId !== encounter.campaignId) throw createError({ statusCode: 403, message: 'Encounter map belongs to a different campaign' })
   }
   return { encounter, access }
