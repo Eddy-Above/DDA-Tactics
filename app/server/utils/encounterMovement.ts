@@ -37,7 +37,7 @@ export function movementFingerprint(intent: MovementIntent): string {
 
 /** Validate from stored state and prepare one write; this function never persists or broadcasts. */
 export async function prepareEncounterMovement(encounter: any, intent: MovementIntent,
-  options: { isDm: boolean; noActionCost?: boolean; attack?: any } = { isDm: false }) {
+  options: { isDm: boolean; noActionCost?: boolean; attack?: any; chargeTargetId?: string } = { isDm: false }) {
   if (!intent.operationId || typeof intent.operationId !== 'string' || intent.operationId.length > 128 || !validMapCell(intent.destination)) {
     throw createError({ statusCode: 400, message: 'A movement operation ID and integer destination are required' })
   }
@@ -108,7 +108,36 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
       flySpeed: profile.caps.canFly ? (profile.caps.flySpeed ?? 0) + passExtra : 0,
     } : profile.caps
     const supplied = intent.path
-    if (supplied) {
+    if (intent.kind === 'charge-before' && options.chargeTargetId) {
+      const target = encounter.participants.find((p: any) => p.id === options.chargeTargetId && !p.inReserve)
+      const targetPosition = target && positions[target.id]
+      if (!targetPosition) throw createError({ statusCode: 400, message: 'Place the Charge target before attacking' })
+      const targetRecord = records.get(target.entityId)
+      const targetDims = getFootprintDimensions(targetRecord?.size ?? 'medium', targetRecord?.giganticDimensions)
+      const reach = Math.max(1, (record?.qualities?.find((q: any) => q.id === 'reach')?.ranks ?? 0) * 2)
+      const reachable = getMovementReachability(origin, budget, caps, traversable, destroyed, blocked, dims)
+      let destination: Vec3 | undefined, closest = Infinity
+      for (const cell of reachable.cells) {
+        const [x, y, z] = cell.split(',').map(Number)
+        const candidate = { x, y, z }
+        const gap = Math.max(
+          0, x - (targetPosition.x + targetDims.width - 1), targetPosition.x - (x + dims.width - 1),
+          y - (targetPosition.y + targetDims.height - 1), targetPosition.y - (y + dims.height - 1),
+          z - (targetPosition.z + targetDims.depth - 1), targetPosition.z - (z + dims.depth - 1),
+        )
+        const distance = Math.max(Math.abs(x - origin.x), Math.abs(y - origin.y), Math.abs(z - origin.z))
+        if (gap > reach || distance >= closest) continue
+        const launch = reachable.launchOriginTo(candidate) ?? (same(candidate, origin) ? origin : undefined)
+        if (!isFootprintValid(candidate, dims, traversable, occupied, caps, launch)) continue
+        destination = candidate
+        closest = distance
+      }
+      if (!destination) throw createError({ statusCode: 400, message: 'No reachable Charge position is within melee range of the target' })
+      // The browser's square is a preview. Select and commit the landing from
+      // the same authoritative search that validates the route and movement cost.
+      intent = { ...intent, destination }
+      path = reachable.pathTo(destination)!
+    } else if (supplied) {
       const maximumPath = getMovementCostProfile(caps, budget, destroyed, origin)?.budget ?? budget
       if (!Array.isArray(supplied) || supplied.length > Math.max(2, maximumPath + 2) || supplied.some(p => !validMapCell(p)) || !same(supplied[0], origin) || !same(supplied[supplied.length - 1], intent.destination)) throw createError({ statusCode: 400, message: 'The movement path is invalid' })
       const costs = getMovementCostProfile(caps, budget, destroyed, origin)

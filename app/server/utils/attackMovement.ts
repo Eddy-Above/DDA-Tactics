@@ -20,6 +20,8 @@ import { resolveEnemyKnockouts } from './enemyKnockouts'
 const CANONICAL_AREA = Symbol.for('dda.server.canonicalArea')
 
 export interface AttackMovementRequest {
+  targetId?: string
+  targetIds?: string[]
   operationId?: string
   expectedRevision?: number
   chargeTiming?: 'before' | 'after'
@@ -74,9 +76,12 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
   }
   const result = await prepareEncounterMovement(encounter, { participantId: actorId, kind: move.kind as 'pass' | 'charge-before',
     origin, destination, path, operationId: body.operationId, expectedRevision: body.expectedRevision,
-  }, { isDm: !!access?.isDm, attack, noActionCost: true })
+  }, { isDm: !!access?.isDm, attack, noActionCost: true,
+    ...(!pass && !getAreaShape(attack.tags ?? []) && attack.range === 'melee'
+      ? { chargeTargetId: body.targetId ?? body.targetIds?.[0] } : {}),
+  })
   let turnState = { turnOrder: encounter.turnOrder, currentTurnIndex: encounter.currentTurnIndex, round: encounter.round }
-  const patch = { [actorId]: destination }
+  const patch = { [actorId]: result.participantPositions[actorId] }
   if (result.defeated) {
     result.participants = result.participants.map((p: any) => p.id === actorId
       ? { ...p, actionsRemaining: { ...p.actionsRemaining, simple: p.actionsRemaining.simple - actionCost } } : p)
