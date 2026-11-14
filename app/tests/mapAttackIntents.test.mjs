@@ -29,7 +29,8 @@ test('Charge-before prepares a local preview and final attack intent without mov
   const intent = f.emitted[0][2]
   assert.equal(intent.expectedRevision, 8)
   assert.equal(intent.chargeTiming, 'before')
-  assert.deepEqual(intent.movement.path, [point(0), point(1), point(2)])
+  assert.deepEqual(intent.movement.destination, point(2))
+  assert.equal(intent.movement.path, undefined, 'the server derives the automatic Charge route')
   assert.equal(f.attackIntent().operationId, intent.operationId)
 })
 test('Pass confirmation submits its origin, direction and destination with the final attack, without a separate movement write', () => {

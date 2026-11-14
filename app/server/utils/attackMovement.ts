@@ -48,7 +48,10 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
   if (optionError) throw createError({ statusCode: 400, message: optionError })
   const actionCost = Math.max(actor.clash ? 2 : 1, attackActionCost(actor, attack, access?.campaign.rulesSettings?.eddySoulRules, body as any))
   if ((actor.actionsRemaining?.simple ?? 0) < actionCost) throw createError({ statusCode: 403, message: 'Not enough actions for the declared attack' })
-  let path = move.path
+  // Charge selects a landing anchor automatically. Derive its route from the
+  // authoritative map instead of requiring a browser preview path (which may
+  // be empty or stale). Pass supplies its canonical straight route below.
+  let path: any[] | undefined
   if (pass) {
     const records = await loadParticipantDigimon(encounter.participants)
     const tamers = await loadTamersByIds(encounter.participants.filter((p: any) => p.type === 'tamer').map((p: any) => p.entityId))

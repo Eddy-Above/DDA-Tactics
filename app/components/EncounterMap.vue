@@ -863,7 +863,7 @@ function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId:
   const origin = positions.value[attackerId]
   if (!origin) return
   const intent = attackIntent()
-  intent.movement = { kind: 'charge-before', origin, destination, path: movePathTo(attackerId, destination) }
+  intent.movement = { kind: 'charge-before', origin, destination }
   attackPreview.value = { participantId: attackerId, position: destination }
   actionFeedback.previewMovement(props.encounter.id, intent.operationId, attackerId, destination)
   chargeMode.value = null

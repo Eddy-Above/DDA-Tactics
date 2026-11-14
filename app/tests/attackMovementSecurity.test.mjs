@@ -6,20 +6,30 @@ const originalError = globalThis.createError
 afterEach(() => { if (originalError === undefined) delete globalThis.createError; else globalThis.createError = originalError })
 const point = (x = 0, y = 0) => ({ x, y, z: 0 })
 const { detectCapabilities } = loadTypeScript('utils/movementRules.ts')
-function fixture() {
+function fixture({ realMovement = false } = {}) {
   globalThis.createError = options => Object.assign(new Error(options.message), options)
   const actor = { id: 'actor', entityId: 'mon', type: 'digimon', actionsRemaining: { simple: 2 }, currentWounds: 0, maxWounds: 10 }
-  const encounter = { id: 'enc', mapId: 'map', round: 1, revision: 7, currentTurnIndex: 0, participants: [actor, { id: 'target', entityId: 'target-mon', type: 'digimon' }] }
+  const encounter = { id: 'enc', mapId: 'map', phase: 'combat', turnOrder: ['actor'], round: 1, revision: 7, currentTurnIndex: 0, participants: [actor, { id: 'target', entityId: 'target-mon', type: 'digimon' }] }
   const positions = { actor: point(), target: point(1) }, writes = [], prepared = []
   const map = { groundTiles: Array.from({ length: 10 }, (_, x) => point(x)), walls: [], doors: [], ceilings: [], stairs: [], spaceTiles: [], voxels: [] }
   const records = new Map([['mon', { id: 'mon', size: 'medium', qualities: [] }], ['target-mon', { id: 'target-mon', size: 'medium' }]])
   const caps = detectCapabilities([], 4, 1, 1)
+  const movement = realMovement ? loadTypeScriptWithMocks('server/utils/encounterMovement.ts', {
+    '../db': { db: {}, maps: { id: 'id' } },
+    './databaseScope': { scopedDatabase: () => undefined },
+    './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: positions, destructibleStates: [] }) },
+    './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), loadEncounterMap: async () => map,
+      getMovementProfile: () => ({ caps, budget: 4 }) },
+    './naturewalk': { applyNaturewalkEnvironment: async (_enc, participants) => ({ participants }) },
+    './damageOverTime': { loadCampaignDamageOverTimeRules: async () => undefined, applyMovementBurn: participants => ({ participants, logEntries: [] }) },
+  }) : null
   const module = loadTypeScriptWithMocks('server/utils/attackMovement.ts', {
     '../db': { db: { update: () => ({ set: value => ({ where: async () => { writes.push(value); Object.assign(encounter, value) } }) }), select: () => ({ from: () => ({ where: async () => [encounter] }) }) }, encounters: { id: 'id' } },
     'drizzle-orm': { eq: () => null },
     './encounterRoom': { getRoomPositions: async () => positions, getRoomSnapshot: async () => ({ destructibleStates: [] }), getDestroyedStructureIds: () => new Set(), publishCommittedPositions: async (_id, patch) => Object.assign(positions, patch), broadcast: () => {} },
-    './encounterMovement': { prepareEncounterMovement: async (_enc, intent) => {
+    './encounterMovement': { prepareEncounterMovement: async (_enc, intent, options) => {
       prepared.push(intent)
+      if (movement) return movement.prepareEncounterMovement(_enc, intent, options)
       return { participants: encounter.participants, battleLog: [], participantPositions: { ...positions, actor: intent.destination }, openedDoorIds: [], defeated: false, commitDoors: async () => {} }
     } },
     './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), loadEncounterMap: async () => map,
@@ -36,6 +46,48 @@ test('forged Charge timing and movement without a stored Charge attack cannot wr
   await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', plain, { chargeTiming: 'after' }, f.access), { statusCode: 400 })
   await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', plain, f.body(), f.access), { statusCode: 400 })
   assert.equal(f.writes.length, 0)
+})
+
+for (const browserPath of [undefined, [], [point(9), point(3)]]) {
+  test(`automatic Charge derives a valid route with browser path ${JSON.stringify(browserPath)}`, async () => {
+    const f = fixture({ realMovement: true })
+    f.positions.target = point(4)
+    const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'] }, {
+      operationId: 'cast', expectedRevision: 7, chargeTiming: 'before',
+      movement: { kind: 'charge-before', origin: point(), destination: point(3), path: browserPath },
+    }, f.access)
+    assert.deepEqual(result.path[0], point())
+    assert.deepEqual(result.path.at(-1), point(3))
+    assert.equal(result.distance, 3)
+    for (let i = 1; i < result.path.length; i++) {
+      const from = result.path[i - 1], to = result.path[i]
+      assert.equal(Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), Math.abs(to.z - from.z)), 1)
+    }
+    assert.deepEqual(f.positions.actor, point(3))
+    assert.equal(result.participants[0].actionsRemaining.simple, 2)
+  })
+}
+
+for (const destination of [point(1), point(8)]) {
+  test(`automatic Charge still rejects occupied or unreachable destination ${destination.x}`, async () => {
+    const f = fixture({ realMovement: true })
+    await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'] }, {
+      operationId: 'cast', expectedRevision: 7, chargeTiming: 'before',
+      movement: { kind: 'charge-before', origin: point(), destination, path: [] },
+    }, f.access), { statusCode: 400, message: 'The destination is not reachable' })
+    assert.deepEqual(f.positions.actor, point())
+    assert.equal(f.writes.length, 0)
+  })
+}
+
+test('automatic Charge can attack from its current anchor when already in range', async () => {
+  const f = fixture({ realMovement: true })
+  const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'] }, {
+    operationId: 'cast', expectedRevision: 7, chargeTiming: 'before',
+    movement: { kind: 'charge-before', origin: point(), destination: point() },
+  }, f.access)
+  assert.deepEqual(result.path, [point()])
+  assert.equal(result.distance, 0)
 })
 
 test('attack movement requires a live preview origin, revision and enough attack actions', async () => {
