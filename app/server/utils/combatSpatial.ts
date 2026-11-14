@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, tamers, maps, type Digimon, type Tamer } from '../db'
-import type { GameMap } from '../../types'
+import type { GameMap, CampaignLevel } from '../../types'
 import { calculateDigimonDerivedStats } from '../../types'
 import { calculateSwimSpeed, detectCapabilities, type MovementCapabilities, type FallerProfile } from '../../utils/movementRules'
 import { calculateEffectiveBaseMovement } from '../../utils/movementQualities'
@@ -9,6 +9,7 @@ import { getDigimonDerivedStats } from './resolveSupportAttack'
 import { applyDerivedStatEffects } from '../../data/attackConstants'
 import { readCombatRecords } from './combatRecordCache'
 import { getNaturewalkBonuses, type NaturewalkEnvironmentSettings } from '../../utils/naturewalk'
+import { hasPartnerStrikeFirst } from '../../utils/specialOrders'
 
 // Loads a full GameMap (all tile/structure layers) from the maps table for the given id, or null.
 // Centralises the map-record construction that was previously copied across every map-aware handler,
@@ -94,13 +95,15 @@ export function getMovementProfile(
   digimonById: Map<string, any>,
   tamerById: Map<string, any>,
   naturewalkEnvironment?: NaturewalkEnvironmentSettings,
+  campaignLevel?: CampaignLevel,
 ): MovementProfile {
   if (participant.type === 'digimon') {
     const digRec = digimonById.get(participant.entityId)
     if (!digRec) return { budget: 0, caps: detectCapabilities([], 0, 0, 0), bodyStat: 0 }
     const quals = digRec.qualities ?? []
     const baseStats = calculateDigimonDerivedStats(digRec.baseStats, digRec.stage, digRec.size)
-    const basicMovement = calculateEffectiveBaseMovement(baseStats.movement, quals)
+    const strikeFirst = campaignLevel && hasPartnerStrikeFirst(digRec.partnerId, [...tamerById.values()], campaignLevel)
+    const basicMovement = calculateEffectiveBaseMovement(baseStats.movement + (strikeFirst ? 2 : 0), quals)
     const speedyRanks = quals.find((q: any) => q.id === 'speedy')?.ranks || 0
     const advancedMovement = quals.some((q: any) => q.id === 'advanced-mobility' && q.choiceId === 'adv-movement')
     const movement = basicMovement + Math.min(speedyRanks * 2, basicMovement * (advancedMovement ? 3 : 2))

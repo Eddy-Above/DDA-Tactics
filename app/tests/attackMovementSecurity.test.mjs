@@ -6,7 +6,7 @@ const originalError = globalThis.createError
 afterEach(() => { if (originalError === undefined) delete globalThis.createError; else globalThis.createError = originalError })
 const point = (x = 0, y = 0) => ({ x, y, z: 0 })
 const { detectCapabilities } = loadTypeScript('utils/movementRules.ts')
-function fixture({ realMovement = false } = {}) {
+function fixture({ realMovement = false, realStats = false } = {}) {
   globalThis.createError = options => Object.assign(new Error(options.message), options)
   const actor = { id: 'actor', entityId: 'mon', type: 'digimon', actionsRemaining: { simple: 2 }, currentWounds: 0, maxWounds: 10 }
   const encounter = { id: 'enc', mapId: 'map', phase: 'combat', turnOrder: ['actor'], round: 1, revision: 7, currentTurnIndex: 0, participants: [actor, { id: 'target', entityId: 'target-mon', type: 'digimon' }] }
@@ -14,12 +14,17 @@ function fixture({ realMovement = false } = {}) {
   const map = { groundTiles: Array.from({ length: 10 }, (_, x) => point(x)), walls: [], doors: [], ceilings: [], stairs: [], spaceTiles: [], voxels: [] }
   const records = new Map([['mon', { id: 'mon', size: 'medium', qualities: [] }], ['target-mon', { id: 'target-mon', size: 'medium' }]])
   const caps = detectCapabilities([], 4, 1, 1)
+  const tamers = new Map(), loadedTamerIds = []
+  const spatial = realStats ? loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
+    '../db': {}, './combatRecordCache': {}, './resolveSupportAttack': {},
+  }) : null
+  const loadTamersByIds = async ids => { loadedTamerIds.push(...ids); return new Map(ids.filter(id => tamers.has(id)).map(id => [id, tamers.get(id)])) }
+  const getMovementProfile = (...args) => spatial ? spatial.getMovementProfile(...args) : { caps, budget: 4 }
   const movement = realMovement ? loadTypeScriptWithMocks('server/utils/encounterMovement.ts', {
     '../db': { db: {}, maps: { id: 'id' } },
     './databaseScope': { scopedDatabase: () => undefined },
     './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: positions, destructibleStates: [] }) },
-    './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), loadEncounterMap: async () => map,
-      getMovementProfile: () => ({ caps, budget: 4 }) },
+    './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds, loadEncounterMap: async () => map, getMovementProfile },
     './naturewalk': { applyNaturewalkEnvironment: async (_enc, participants) => ({ participants }) },
     './damageOverTime': { loadCampaignDamageOverTimeRules: async () => undefined, applyMovementBurn: participants => ({ participants, logEntries: [] }) },
   }) : null
@@ -32,12 +37,11 @@ function fixture({ realMovement = false } = {}) {
       if (movement) return movement.prepareEncounterMovement(_enc, intent, options)
       return { participants: encounter.participants, battleLog: [], participantPositions: { ...positions, actor: intent.destination }, openedDoorIds: [], defeated: false, commitDoors: async () => {} }
     } },
-    './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds: async () => new Map(), loadEncounterMap: async () => map,
-      getMovementProfile: () => ({ caps, budget: 4 }) },
+    './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds, loadEncounterMap: async () => map, getMovementProfile },
     './resolveSupportAttack': { getDigimonDerivedStats: async () => ({ ram: 1, bit: 2, movement: 4, effectiveLimit: 10 }) },
   })
   const body = () => ({ operationId: 'cast', expectedRevision: 7, movement: { kind: 'pass', origin: point(), destination: point(3), direction: point(1), movement: 2, ram: 1 } })
-  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, body, access: { isDm: false, campaign: { rulesSettings: {} } } }
+  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, tamers, loadedTamerIds, body, access: { isDm: false, campaign: { level: 'standard', rulesSettings: {} } } }
 }
 
 test('forged Charge timing and movement without a stored Charge attack cannot write', async () => {
@@ -116,6 +120,37 @@ test('melee Charge rejects a target beyond all legal attack positions without wr
   assert.equal(f.writes.length, 0)
   assert.deepEqual(f.positions.actor, point())
 })
+
+for (const [level, agility, allowed] of [['standard', 3, true], ['enhanced', 3, false], ['enhanced', 5, true], ['extreme', 5, false], ['extreme', 6, true]]) {
+  test(`an 11m Charge walking down a step respects Strike First at ${level} Agility ${agility}`, async () => {
+    const f = fixture({ realMovement: true, realStats: true })
+    Object.assign(f.records.get('mon'), {
+      name: 'Pulsemon', stage: 'rookie', partnerId: 'tamer',
+      baseStats: { accuracy: 6, damage: 6, dodge: 6, armor: 6, health: 6 },
+      qualities: [{ id: 'instinct', ranks: 1 }, { id: 'speedy', ranks: 1 }],
+    })
+    f.tamers.set('tamer', { id: 'tamer', attributes: { agility, body: 0, charisma: 0, intelligence: 0, willpower: 0 }, xpBonuses: null })
+    f.access.campaign.level = level
+    const tile = x => point(x, x < 5 ? 1 : 0)
+    f.map.groundTiles = Array.from({ length: 13 }, (_, x) => tile(x))
+    f.positions.actor = tile(0)
+    f.positions.target = tile(12)
+    const charge = f.commitAttackMovement(f.encounter, 'actor', { name: 'Elec Rush', tags: ['Charge Attack'], range: 'melee' }, {
+      operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
+      movement: { kind: 'charge-before', origin: tile(0), destination: tile(11) },
+    }, f.access)
+    if (allowed) {
+      const result = await charge
+      assert.equal(result.distance, 11)
+      assert.deepEqual(f.positions.actor, tile(11))
+      assert.ok(result.path.some((cell, i) => i > 0 && cell.y < result.path[i - 1].y), 'the route descends to the road')
+    } else {
+      await assert.rejects(charge, /No reachable Charge position/)
+      assert.equal(f.writes.length, 0)
+    }
+    assert.ok(f.loadedTamerIds.includes('tamer'), 'load the partner even when the tamer is not on the map')
+  })
+}
 
 for (const surface of ['ground', 'stairs', 'voxels']) for (const direction of [1, -1]) {
   test(`melee Charge walks ${direction > 0 ? 'up' : 'down'} ${surface} without requiring flight or jumping`, async () => {

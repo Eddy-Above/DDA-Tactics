@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db, maps } from '../db'
-import type { Vec3 } from '../../types'
+import type { Vec3, CampaignLevel } from '../../types'
 import { getRoomSnapshot } from './encounterRoom'
 import { getMovementProfile, loadEncounterMap, loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 import { canActOnEncounterTurn } from './participantTurn'
@@ -37,7 +37,7 @@ export function movementFingerprint(intent: MovementIntent): string {
 
 /** Validate from stored state and prepare one write; this function never persists or broadcasts. */
 export async function prepareEncounterMovement(encounter: any, intent: MovementIntent,
-  options: { isDm: boolean; noActionCost?: boolean; attack?: any; chargeTargetId?: string } = { isDm: false }) {
+  options: { isDm: boolean; noActionCost?: boolean; attack?: any; chargeTargetId?: string; campaignLevel?: CampaignLevel } = { isDm: false }) {
   if (!intent.operationId || typeof intent.operationId !== 'string' || intent.operationId.length > 128 || !validMapCell(intent.destination)) {
     throw createError({ statusCode: 400, message: 'A movement operation ID and integer destination are required' })
   }
@@ -77,9 +77,9 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
   } else {
     const blocked = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
     const footprintBlocked = (position: Vec3) => getFootprintCells(position, dims).some(cell => blocked.has(key(cell)))
-    const tamers = await loadTamersByIds(actor.type === 'tamer' ? [actor.entityId] : [])
+    const tamers = await loadTamersByIds(actor.type === 'tamer' ? [actor.entityId] : record?.partnerId ? [record.partnerId] : [])
     const currentActor = initial.participants.find(p => p.id === actor.id)
-    const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards))
+    const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards), options.campaignLevel)
     if (actor.clash && !(intent.kind === 'pass' && options.attack && actor.clash.isController)) {
       const opponent = encounter.participants.find((p: any) => p.id === actor.clash.opponentParticipantId)
       const opponentPosition = opponent && positions[opponent.id]

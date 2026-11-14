@@ -31,7 +31,9 @@ export default defineEventHandler(async event => {
         if (prior.fingerprint !== fingerprint) throw createError({ statusCode: 409, message: 'This operation ID was used for different movement' })
         return { encounter, ...prior.result, replayed: true }
       }
-      const prepared = await prepareEncounterMovement(encounter, body, { isDm: freshContext.access?.isDm ?? false })
+      const prepared = await prepareEncounterMovement(encounter, body, {
+        isDm: freshContext.access?.isDm ?? false, campaignLevel: freshContext.access?.campaign?.level,
+      })
       let participants = prepared.participants
       let turnOrder = encounter.turnOrder, currentTurnIndex = encounter.currentTurnIndex, round = encounter.round
       let battleLog = prepared.battleLog

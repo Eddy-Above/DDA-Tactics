@@ -56,8 +56,12 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
   let path: any[] | undefined
   if (pass) {
     const records = await loadParticipantDigimon(encounter.participants)
-    const tamers = await loadTamersByIds(encounter.participants.filter((p: any) => p.type === 'tamer').map((p: any) => p.entityId))
-    const profile = getMovementProfile(actor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards))
+    const partnerId = records.get(actor.entityId)?.partnerId
+    const tamers = await loadTamersByIds([...new Set<string>([
+      ...encounter.participants.filter((p: any) => p.type === 'tamer').map((p: any) => p.entityId),
+      ...(partnerId ? [partnerId] : []),
+    ])])
+    const profile = getMovementProfile(actor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards), access?.campaign.level)
     const derived = (actor.type === 'digimon' ? await getDigimonDerivedStats(actor.entityId, actor) : null) ?? { ram: 0, bit: 1 }
     const direction = move.direction ?? body.areaShapeData?.dir
     allowFields(direction, ['x', 'y', 'z'])
@@ -76,7 +80,7 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
   }
   const result = await prepareEncounterMovement(encounter, { participantId: actorId, kind: move.kind as 'pass' | 'charge-before',
     origin, destination, path, operationId: body.operationId, expectedRevision: body.expectedRevision,
-  }, { isDm: !!access?.isDm, attack, noActionCost: true,
+  }, { isDm: !!access?.isDm, attack, noActionCost: true, campaignLevel: access?.campaign.level,
     ...(!pass && !getAreaShape(attack.tags ?? []) && attack.range === 'melee'
       ? { chargeTargetId: body.targetId ?? body.targetIds?.[0] } : {}),
   })
