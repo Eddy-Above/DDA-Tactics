@@ -21,22 +21,35 @@ function isSignatureAttack(attack: Pick<CombatAttackOption, 'tags'>): boolean {
   return attack.tags?.some(tag => /signature/i.test(tag)) ?? false
 }
 
+type SignatureMoveContext = { round: number; houseRules?: Pick<HouseRules, 'signatureMoveBattery'> | null }
+
+/** Battery replaces the opening-round restriction; it is not an additional cooldown. */
+export function signatureMoveError(
+  participant: Pick<AttackOptionParticipant, 'battery' | 'decimationReady'>,
+  attack: Pick<CombatAttackOption, 'tags'> | null | undefined,
+  context: SignatureMoveContext,
+): string | null {
+  if (!attack || !isSignatureAttack(attack)) return null
+  if (context.houseRules?.signatureMoveBattery) {
+    return (participant.battery ?? 0) >= 1 ? null : 'Signature Move requires at least 1 Battery'
+  }
+  const readyRound = signatureReadyRound(participant)
+  return context.round < readyRound ? `Signature Move is available from round ${readyRound}` : null
+}
+
 /** Custom attacks retain their order, followed by the unused basic attacks. No action is spent. */
 export function availableCombatAttacks<T extends CombatAttackOption>(
   participant: AttackOptionParticipant,
   attacks: readonly T[],
   basicAttacks: readonly T[],
-  context: { round: number; houseRules?: Pick<HouseRules, 'signatureMoveBattery'> | null },
+  context: SignatureMoveContext,
 ): T[] {
   if (participant.type !== 'digimon') return []
   const usedIds = new Set(participant.usedAttackIds ?? [])
   const filtered = attacks.filter(attack => {
     if (usedIds.has(attack.id)) return false
     if (attack.effect === 'Shield' && participant.lastShieldRound === context.round) return false
-    if (!isSignatureAttack(attack)) return true
-    if (context.round < signatureReadyRound(participant)) return false
-    if (context.houseRules?.signatureMoveBattery && (participant.battery ?? 0) < 1) return false
-    return true
+    return !signatureMoveError(participant, attack, context)
   })
   return [...filtered, ...basicAttacks.filter(attack => !usedIds.has(attack.id))]
 }

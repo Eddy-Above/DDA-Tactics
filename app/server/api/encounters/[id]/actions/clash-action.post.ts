@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
-import { db, encounters, digimon, tamers, maps } from '../../../../db'
+import { db, encounters, digimon, tamers, maps, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
@@ -27,6 +27,7 @@ import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
 import { grantChargeAfter, isChargeAttack, commitAttackMovement, type AttackMovementRequest } from '../../../../utils/attackMovement'
 import { resolveAttackOffers } from './intercede-offer.post'
 import { BASIC_ATTACKS } from '../../../../../data/attackConstants'
+import { signatureMoveError } from '../../../../../utils/combatAttackOptions'
 
 interface ClashActionBody extends AttackMovementRequest {
   clashId: string
@@ -475,6 +476,14 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
     // (server-enforced from the attack's tags).
     let isPassAttack = false
     const attackDefForClash = actorDigimonEntity?.attacks?.find((a: any) => a.id === body.attackId)
+    const signatureTagged = !!attackDefForClash?.tags?.some((tag: string) => /signature/i.test(tag))
+    const [campaign] = signatureTagged && encounter.campaignId
+      ? await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId)) : []
+    const houseRules = campaign?.rulesSettings?.houseRules
+    const signatureError = signatureMoveError(actor, attackDefForClash, { round: encounter.round, houseRules })
+    if (signatureError) throw createError({ statusCode: 400, message: signatureError })
+    const isSignatureMove = !!houseRules?.signatureMoveBattery && signatureTagged
+    const batteryCount = isSignatureMove ? actor.battery ?? 0 : 0
     if (attackDefForClash && getAreaShape(attackDefForClash.tags ?? []) === 'pass') {
       isPassAttack = true
     }
@@ -518,6 +527,7 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
           ...p,
           actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 2) },
           usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+          ...(isSignatureMove ? { battery: 0, usedSignatureMoveThisTurn: true } : {}),
         }
       }
       return p
@@ -557,6 +567,8 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
         accuracyDice: body.accuracyDiceResults,
         attackId: body.attackId,
         attackName: body.attackName,
+        isSignatureMove,
+        batteryCount,
         attackData: { dicePool: body.accuracyDicePool || 0 },
       }, { actionsPaid: true, clashAttack: true })
     if (shouldEndClash) return await finalizeClashEndAfterAttack()

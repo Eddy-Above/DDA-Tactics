@@ -75,6 +75,18 @@ function createMapActions(role) {
 }
 
 for (const role of Object.keys(pages)) {
+  test(`${role} radial can select a charged Signature in round 2 without spending locally`, () => {
+    const page = createMapActions(role)
+    page.encounter.value.round = 2
+    page.dependencies.houseRules.value = { signatureMoveBattery: true }
+    page.actor.battery = 1
+    page.onMapAttackSelected(page.actor.id, 'signature')
+    assert.equal(page.dependencies.selectedAttack.value.attack.id, 'signature')
+    assert.equal(page.actor.battery, 1)
+    assert.equal(page.actor.actionsRemaining.simple, 2)
+    assert.deepEqual(page.updates, [])
+  })
+
   test(`${role} charge choices reach map targeting and empty Continue clears a previous movement choice`, () => {
     const page = createMapActions(role)
     page.attack.tags.push('Charge Attack')

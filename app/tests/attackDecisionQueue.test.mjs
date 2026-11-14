@@ -29,7 +29,7 @@ function gate() {
   } }
 }
 
-function fixture({ area = false, unlockStrikeLast = true, counterattack = false } = {}) {
+function fixture({ area = false, unlockStrikeLast = true, counterattack = false, signature = false, battery = 1 } = {}) {
   globalThis.defineEventHandler = handler => handler
   globalThis.getRouterParam = (event, key) => key === 'id' ? 'encounter' : event.requestId
   globalThis.readBody = async event => event.body
@@ -43,7 +43,7 @@ function fixture({ area = false, unlockStrikeLast = true, counterattack = false 
   })
   let stored = {
     id: 'encounter', campaignId: 'campaign', phase: 'combat', round: 2,
-    participants: [unit('attacker', 'digimon', { isEnemy: true }), unit('target'),
+    participants: [unit('attacker', 'digimon', { isEnemy: true, battery }), unit('target'),
       unit('owner', 'tamer', { actionsRemaining: { simple: 0 } })],
     turnOrder: ['attacker', 'owner'], currentTurnIndex: 0,
     battleLog: [], pendingRequests: [{ id: 'existing', type: 'dodge-roll', targetTamerId: 'owner', answeredAt: 'then', data: {} }],
@@ -53,10 +53,10 @@ function fixture({ area = false, unlockStrikeLast = true, counterattack = false 
   const attributes = Object.fromEntries(['agility', 'body', 'charisma', 'intelligence', 'willpower']
     .map(name => [name, unlockStrikeLast ? 5 : 0]))
   const rows = {
-    campaigns: { campaign: { id: 'campaign', level: 'standard', rulesSettings: {} } },
+    campaigns: { campaign: { id: 'campaign', level: 'standard', rulesSettings: { houseRules: { signatureMoveBattery: signature } } } },
     digimon: {
       attacker: { id: 'attacker', name: 'Attacker', isEnemy: true, qualities: [],
-        attacks: [{ id: 'attack', name: 'Attack', type: 'damage', range: 'ranged', tags: [] }] },
+        attacks: [{ id: 'attack', name: 'Attack', type: 'damage', range: 'ranged', tags: signature ? ['Signature Move'] : [] }] },
       target: { id: 'target', name: 'Target', partnerId: 'owner',
         qualities: counterattack ? [{ id: 'counterattack' }] : [] },
     },
@@ -199,6 +199,27 @@ test('single-target automatic-miss counterattack writes stay in the decision que
 })
 
 for (const area of [false, true]) {
+  test(`${area ? 'area' : 'single-target'} Signature spends Battery once in round 2 and preserves it for delegated defenses`, async () => {
+    const f = fixture({ area, signature: true, battery: 2, unlockStrikeLast: false })
+    const result = await f.attack({ accuracySuccesses: 1, accuracyDiceResults: [6, 2] })
+    assert.equal(result.participants[0].battery, 0)
+    assert.equal(result.participants[0].usedSignatureMoveThisTurn, true)
+    assert.equal(result.participants[0].actionsRemaining.simple, 1)
+    assert.equal(f.delegations.length, 1)
+    assert.equal(f.delegations[0].batteryCount, 2)
+    const defenses = result.pendingRequests.filter(request => request.type === 'dodge-roll' && request.id !== 'existing')
+    assert.equal(defenses.length, 1)
+    assert.equal(defenses[0].data.isSignatureMove, true)
+    assert.equal(defenses[0].data.batteryCount, 2)
+  })
+
+  test(`${area ? 'area' : 'single-target'} Signature rejects an empty Battery before any writes or delegation`, async () => {
+    const f = fixture({ area, signature: true, battery: 0 })
+    await assert.rejects(f.attack(), /requires at least 1 Battery/)
+    assert.deepEqual(f.writes, [])
+    assert.deepEqual(f.delegations, [])
+  })
+
   test(`${area ? 'area' : 'single-target'} hit delegates to the real queued intercede handler without deadlock`, { timeout: 3000 }, async () => {
     const f = fixture({ area, unlockStrikeLast: false })
     const result = await f.attack({ accuracySuccesses: 1, accuracyDiceResults: [6, 2] })

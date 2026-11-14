@@ -33,12 +33,14 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
     id: index ? 'defender-token' : 'taunter-token', type: 'digimon', entityId: record.id,
     activeEffects: [], currentWounds: 0, maxWounds: 100, totalHealth: 100, actionsRemaining: { simple: 2 },
   }))
-  const encounter = { id: 'encounter', phase: 'combat', round: 1, participants, turnOrder: participants.map(p => p.id),
+  const campaign = { id: 'campaign', level: 'standard', rulesSettings: {} }
+  const encounter = { id: 'encounter', campaignId: campaign.id, phase: 'combat', round: 1, participants, turnOrder: participants.map(p => p.id),
     currentTurnIndex: 0, battleLog: [], pendingRequests: [], requestResponses: [] }
   const tables = Object.fromEntries(['encounters', 'digimon', 'tamers', 'campaigns', 'maps', 'evolutionLines'].map(name => [name, { name, id: name }]))
   const db = {
     select: () => ({ from: table => ({ where: async condition => {
       if (table === tables.encounters) return [encounter]
+      if (table === tables.campaigns) return [campaign]
       if (table === tables.digimon) return records.filter(record => Array.isArray(condition.value) ? condition.value.includes(record.id) : record.id === condition.value)
       return []
     } }) }),
@@ -103,18 +105,23 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
     '~/server/utils/resolveNpcAttack': npc,
   })
   return {
-    attack, records, participants, encounter, support, params,
+    attack, records, participants, encounter, campaign, support, params,
     npc: overrides => npc.resolveNpcAttack({ ...params, ...overrides }),
-    playerAttack: async flags => {
+    playerAttack: async (flags, clash = false) => {
       const offerHandler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/intercede-offer.post.ts', {
         '../../../../db': store, 'drizzle-orm': sql, '~/server/utils/resolveSupportAttack': support,
         '~/server/utils/resolveNpcAttack': npc, '~/server/utils/encounterRoom': room,
         '~/server/utils/intercedePasses': { applyActivePasses: unexpected, passableOfferOwners: () => [] },
       }).default
       globalThis.$fetch = async (url, { body }) => { assert.ok(url.endsWith('/intercede-offer')); return offerHandler(body) }
-      const handler = loadTrustedGameplayModule('server/api/encounters/[id]/actions/attack.post.ts', mocks).default
-      return handler({ participantId: participants[0].id, targetId: participants[1].id, attackId: attack.id, tamerId: 'owner',
-        accuracyDicePool: 3, accuracySuccesses: 3, accuracyDiceResults: [6, 6, 6], ...flags })
+      if (clash) {
+        participants[0].clash = { clashId: 'clash', isController: true, opponentParticipantId: participants[1].id }
+        participants[1].clash = { clashId: 'clash', isController: false, opponentParticipantId: participants[0].id }
+      }
+      const handler = loadTrustedGameplayModule(`server/api/encounters/[id]/actions/${clash ? 'clash-action' : 'attack'}.post.ts`, mocks).default
+      return handler({ participantId: participants[0].id, attackId: attack.id, tamerId: 'owner',
+        accuracyDicePool: 3, accuracySuccesses: 3, accuracyDiceResults: [6, 6, 6],
+        ...(clash ? { clashId: 'clash', actionType: 'attack' } : { targetId: participants[1].id }), ...flags })
     },
     health: async flags => {
       records[1].partnerId = 'owner'
@@ -187,6 +194,77 @@ function fixture(type = 'support', tags = [], effect = 'Taunt') {
         accuracyDicePool: 3, accuracySuccesses: 3, accuracyDiceResults: [6, 6, 6], dodgeDicePool: 0, dodgeSuccesses: 0, dodgeDiceResults: [], ...flags })
     },
   }
+}
+
+const signatureDeclarations = {
+  player: f => f.playerAttack(),
+  GM: f => f.offer(),
+  'GM area': f => f.offer(true),
+  legacy: f => f.legacy(),
+  Clash: f => f.playerAttack({}, true),
+}
+
+function signatureFixture(type, battery = 2) {
+  const f = fixture(type, ['Signature Move'], type === 'support' ? 'Taunt' : undefined)
+  if (type === 'damage') delete f.attack.effect
+  f.records[0].stage = 'champion'
+  f.encounter.round = 2
+  f.campaign.rulesSettings = { houseRules: { signatureMoveBattery: true } }
+  f.participants[0].battery = battery
+  return f
+}
+
+async function finishSignatureOffers(f) {
+  for (const offer of f.encounter.pendingRequests.filter(request => request.type === 'intercede-offer')) await f.skip(offer.id)
+}
+
+for (const [route, declare] of Object.entries(signatureDeclarations)) {
+  test(`${route} Signature uses charged Battery in round 2, pays once, and retains the damage/SPEC bonus`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    for (const type of ['damage', 'support']) {
+      const f = signatureFixture(type)
+      const cpu = (await f.support.getDigimonDerivedStats(f.records[0].id, f.participants[0])).cpu
+      await declare(f)
+      await finishSignatureOffers(f)
+      const attacker = f.encounter.participants.find(p => p.id === f.participants[0].id)
+      const target = f.encounter.participants.find(p => p.id === f.participants[1].id)
+      assert.equal(attacker.battery, 0, type)
+      assert.equal(attacker.usedSignatureMoveThisTurn, true, type)
+      assert.equal(attacker.actionsRemaining.simple, route === 'Clash' ? 0 : 1, type)
+      assert.deepEqual(attacker.usedAttackIds, [f.attack.id], type)
+      if (type === 'damage') assert.equal(target.currentWounds, 8 + 3 + 2, 'base damage + net successes + Battery')
+      else assert.equal(target.activeEffects.find(effect => effect.name === 'Taunt').potency, cpu * 2 + 2, 'CPU x2 + Battery')
+    }
+  })
+
+  test(`${route} Signature refuses zero Battery without spending actions or creating a request`, async () => {
+    const f = signatureFixture('damage', 0)
+    await assert.rejects(declare(f), error => error.statusCode === 400 && /requires at least 1 Battery/.test(error.message))
+    assert.equal(f.encounter.participants[0].actionsRemaining.simple, 2)
+    assert.equal(f.encounter.participants[0].battery, 0)
+    assert.equal(f.encounter.participants[0].usedSignatureMoveThisTurn, undefined)
+    assert.equal(f.encounter.participants[0].usedAttackIds, undefined)
+    assert.deepEqual(f.encounter.pendingRequests, [])
+    assert.deepEqual(f.encounter.battleLog, [])
+  })
+
+  test(`${route} standard Signature keeps the round-3 gate and round-2 Decimation exception`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const blocked = signatureFixture('damage', 0)
+    blocked.campaign.rulesSettings = {}
+    await assert.rejects(declare(blocked), /available from round 3/)
+    for (const decimationReady of [false, true]) {
+      const f = signatureFixture('damage', 0)
+      f.campaign.rulesSettings = {}
+      f.participants[0].decimationReady = decimationReady
+      f.encounter.round = decimationReady ? 2 : 3
+      await declare(f)
+      await finishSignatureOffers(f)
+      assert.equal(f.encounter.participants[0].battery, 0)
+      assert.equal(f.encounter.participants[0].usedSignatureMoveThisTurn, undefined)
+      assert.ok(f.encounter.participants[0].actionsRemaining.simple < 2)
+    }
+  })
 }
 
 for (const complex of [false, true]) {

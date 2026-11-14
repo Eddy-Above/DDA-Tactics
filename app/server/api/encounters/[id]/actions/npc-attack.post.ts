@@ -7,7 +7,7 @@ import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { EFFECT_ALIGNMENT, BASIC_ATTACKS } from '../../../../../data/attackConstants'
 import { STAGE_CONFIG } from '../../../../../types'
-import type { DigimonStage, EddySoulRules } from '../../../../../types'
+import type { DigimonStage, EddySoulRules, HouseRules } from '../../../../../types'
 import { applyDeferredIntercedeCost, recordTurnStart } from '../../../../../utils/intercedeActions'
 import { resolveParticipantName } from '../../../../utils/participantName'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
@@ -20,7 +20,7 @@ import { knockedOutEnemyIds, resolveEnemyKnockouts } from '../../../../utils/ene
 import { refreshGuidingLightForParticipants } from '../../../../utils/guidingLight'
 import { applyLagInitiative } from '../../../../../utils/lagInitiative'
 import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
-import { attackActionCost, effectActionError } from '../../../../../utils/combatAttackOptions'
+import { attackActionCost, effectActionError, signatureMoveError } from '../../../../../utils/combatAttackOptions'
 import { applyPositiveSupportEffect } from '../../../../utils/positiveSupportEffect'
 import { applyWoundDamage } from '../../../../utils/damageOverTime'
 import { lifestealHealing } from '../../../../../utils/lifesteal'
@@ -97,7 +97,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
   }
 
   // Fetch house rules from campaign
-  let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let houseRules: HouseRules | undefined
   let eddySoulRules: EddySoulRules | undefined
   let campaignLevel: 'standard' | 'enhanced' | 'extreme' = 'standard'
   if (encounter.campaignId) {
@@ -150,6 +150,10 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
   // Check actions
   const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
   const declaredAttack = attackerDigimon?.attacks?.find((attack: any) => attack.id === body.attackId)
+  const signatureError = signatureMoveError(actor, declaredAttack, { round: encounter.round, houseRules })
+  if (signatureError) throw createError({ statusCode: 400, message: signatureError })
+  const isSignatureMove = !!houseRules?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
+  const batteryCount = isSignatureMove ? actor.battery ?? 0 : 0
   const optionError = effectActionError(declaredAttack ?? {}, body)
   if (optionError) throw createError({ statusCode: 400, message: optionError })
   if (declaredAttack?.effect === 'Shield' && actor.lastShieldRound === encounter.round) throw createError({ statusCode: 403, message: 'Shield can only be used once per round' })
@@ -170,6 +174,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost),
         },
         usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+        ...(isSignatureMove ? { battery: 0, usedSignatureMoveThisTurn: true } : {}),
         ...(declaredAttack?.effect === 'Shield' ? { lastShieldRound: encounter.round } : {}),
         // Consume Directed effect on attacker (bonus was applied client-side to accuracy pool by GM)
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
@@ -199,7 +204,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
     const bonusStats = (attackerDigimon as any).bonusStats
 
     // Base damage comes from digimon stats
-    attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0)
+    attackBaseDamage = (baseStats?.damage ?? 0) + (bonusStats?.damage ?? 0) + batteryCount
 
     // Parse attacks array to get tag bonuses
     if (attackerDigimon.attacks) {
@@ -245,6 +250,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
     ? calculateEffectPotency(npcAttackDef.effect, await getDigimonDerivedStats(actor.entityId, actor), null)
     : null
   if (npcAttackDef?.effect === 'Shield' && body.shieldComplex && sourceEffectPotency) sourceEffectPotency.potency *= 3
+  if (sourceEffectPotency) sourceEffectPotency.potency += batteryCount
 
   const pendingRequests = [...(encounter.pendingRequests ?? [])]
   const cleanseCastId = npcAttackDef?.effect === 'Cleanse' && hit && !effectBlocked ? startCleanseCast(pendingRequests, {
@@ -320,7 +326,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
         attackerParticipantId: actor.id,
         targetParticipantId: body.targetId,
         effect: appliedEffectName,
-        distance: potency,
+        distance: potency + batteryCount,
         campaignLevel,
         houseRules,
       })
@@ -521,7 +527,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
       attackerParticipantId: actor.id,
       targetParticipantId: body.targetId,
       effect: appliedEffectName,
-      distance: potency,
+      distance: potency + batteryCount,
       campaignLevel,
       houseRules,
     })

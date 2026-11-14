@@ -29,6 +29,8 @@ interface ResolveNpcAttackParams {
   attackerParticipantId: string
   targetParticipantId: string
   attackId: string
+  isSignatureMove?: boolean
+  batteryCount?: number
   lifestealed?: boolean
   shieldComplex?: boolean
   accuracySuccesses: number
@@ -142,6 +144,8 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
     targetParticipant: target,
     participants,
     attackId: params.attackId,
+    isSignatureMove: params.isSignatureMove,
+    batteryCount: params.batteryCount,
     attackerName: params.attackerName,
     accuracySuccesses: params.accuracySuccesses,
     dodgeSuccesses,

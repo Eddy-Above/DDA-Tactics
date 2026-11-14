@@ -128,6 +128,7 @@ describe('trusted action business services keep their validation errors around t
       '../../../../utils/participantTurn': { canActOnEncounterTurn },
       '../../../../utils/intercedeClaims': { serializeIntercedeClaim: (_id, run) => run() },
       '../../../../../utils/specialOrderCombat': orders,
+      '../../../../../utils/combatAttackOptions': loadTypeScript('utils/combatAttackOptions.ts'),
       '../../../../utils/enemyKnockouts': { knockedOutEnemyIds: () => [] },
     })
     // Campaign/actor admission and HTTP payload validation have dedicated security

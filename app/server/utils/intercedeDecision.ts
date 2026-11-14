@@ -254,6 +254,8 @@ export async function resolveIntercedeGroupIfDecided(
 
   // Damage attack — auto-resolve (roll dodge, calculate damage)
   const result = await resolveNpcAttack({
+    isSignatureMove: data.isSignatureMove,
+    batteryCount: data.batteryCount,
     pendingRequests, cleanseCastId: data.attackData?.cleanseCastId,
     lifestealed: data.lifestealed || false,
     shieldComplex: data.shieldComplex || false,

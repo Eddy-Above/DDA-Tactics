@@ -43,7 +43,7 @@ test('signature cooldown uses the ordinary and Decimation ready rounds', () => {
   }
 })
 
-test('Battery, cooldown, used attacks and mixed-case Signature tags combine independently', () => {
+test('Battery replaces the round cooldown while used attacks and mixed-case Signature tags still apply', () => {
   const tagged = attack('mixed-case', { tags: ['Enhanced SIGNATURE Move'] })
   const context = { round: 3, houseRules: { signatureMoveBattery: true } }
   for (const battery of [undefined, 0, -1]) {
@@ -51,7 +51,10 @@ test('Battery, cooldown, used attacks and mixed-case Signature tags combine inde
   }
   assert.deepEqual(availableCombatAttacks(actor({ battery: 1 }), [tagged], [], context), [tagged])
   assert.deepEqual(availableCombatAttacks(actor({ battery: 1, usedAttackIds: [tagged.id] }), [tagged], [], context), [])
-  assert.deepEqual(availableCombatAttacks(actor({ battery: 2 }), [tagged], [], { ...context, round: 2 }), [])
+  for (const round of [1, 2, 3]) for (const decimationReady of [false, true]) {
+    assert.deepEqual(availableCombatAttacks(actor({ battery: 1, decimationReady }), [tagged], [], { ...context, round }), [tagged])
+    assert.deepEqual(availableCombatAttacks(actor({ battery: 0, decimationReady }), [tagged], [], { ...context, round }), [])
+  }
   assert.deepEqual(availableCombatAttacks(actor({ battery: 0 }), [tagged], [], { round: 3 }), [tagged])
 })
 

@@ -39,8 +39,8 @@ import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { applyActivePasses, passableOfferOwners } from '~/server/utils/intercedePasses'
 import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatRecordCache'
-import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '~/utils/specialOrderCombat'
-import { attackActionCost, effectActionError } from '~/utils/combatAttackOptions'
+import { getAttackOrderModifiers, consumeAttackOrders } from '~/utils/specialOrderCombat'
+import { attackActionCost, effectActionError, signatureMoveError } from '~/utils/combatAttackOptions'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
 import { runAttackCommand } from '~/server/utils/attackCommand'
@@ -136,7 +136,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   }
 
   // Fetch campaign house rules
-  let houseRules: { stunMaxDuration1?: boolean; maxTempWoundsRule?: boolean } | undefined
+  let houseRules: import('~/types').HouseRules | undefined
   let eddySoulRules: import('~/types').EddySoulRules | undefined
   let campaignLevel: string = 'standard'
   if (encounter.campaignId) {
@@ -222,7 +222,9 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     if (!participants.some((p: any) => p.id === id && !p.inReserve)) throw createError({ statusCode: 400, message: 'Target does not belong to this encounter' })
   }
   if (!body.skipActionDeduction) {
-    body.isSignatureMove = !!(houseRules as any)?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
+    const signatureError = signatureMoveError(attacker, declaredAttack, { round: encounter.round, houseRules })
+    if (signatureError) throw createError({ statusCode: 400, message: signatureError })
+    body.isSignatureMove = !!houseRules?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
     body.batteryCount = body.isSignatureMove ? attacker.battery ?? 0 : 0
   }
   const basicAttack = BASIC_ATTACKS.find(a => a.id === body.attackId)
@@ -257,9 +259,6 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   }
   if (body.finishingTouch) body.accuracySuccesses = body.accuracyDice.filter(d => d >= 4).length
     + combatAttackStats(digimonById.get(attacker.entityId), attacker, declaredAttack ?? body.attackData).automaticSuccesses
-  if (declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(attacker)) {
-    throw createError({ statusCode: 400, message: `Signature Move is available from round ${signatureReadyRound(attacker)}` })
-  }
   participants = participants.map((p: any) => p.id === attacker.id ? consumeAttackOrders(p) : p)
 
   // While clashing, a participant cannot Dodge attacks from OUTSIDE the clash. An attack from the
@@ -653,6 +652,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           }
         } else {
           const result = await resolveNpcAttack({
+            isSignatureMove: body.isSignatureMove,
+            batteryCount: body.batteryCount,
             pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
             lifestealed: body.lifestealed || false,
             shieldComplex: body.shieldComplex || false,
@@ -1468,6 +1469,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
       } else {
         // Damage attack — auto-resolve NPC (roll dodge, calculate damage)
         const result = await resolveNpcAttack({
+          isSignatureMove: body.isSignatureMove,
+          batteryCount: body.batteryCount,
           pendingRequests, cleanseCastId: body.attackData?.cleanseCastId,
           lifestealed: body.lifestealed || false,
           shieldComplex: body.shieldComplex || false,

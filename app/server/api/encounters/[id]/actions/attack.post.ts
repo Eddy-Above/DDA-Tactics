@@ -9,11 +9,11 @@ import { getDigimonDerivedStats } from '../../../../utils/resolveSupportAttack'
 import { getRoomPositions } from '../../../../utils/encounterRoom'
 import type { AreaShapeData } from '~/utils/areaShapes'
 import { getAreaShape } from '~/utils/areaShapes'
-import { getAttackOrderModifiers, consumeAttackOrders, signatureReadyRound } from '../../../../../utils/specialOrderCombat'
+import { getAttackOrderModifiers, consumeAttackOrders } from '../../../../../utils/specialOrderCombat'
 import { combatAttackStats } from '../../../../../utils/combatDice'
 import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
-import { effectActionError } from '../../../../../utils/combatAttackOptions'
+import { effectActionError, signatureMoveError } from '../../../../../utils/combatAttackOptions'
 import { runAttackCommand } from '../../../../utils/attackCommand'
 import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
 import { commitAttackMovement, grantChargeAfter, finishPassClash, validateAttackTargets, type AttackMovementRequest } from '../../../../utils/attackMovement'
@@ -133,9 +133,8 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
     const attack = actorRecord?.attacks?.find((a: any) => a.id === body.attackId)
     if (orderModifiers.successThreshold === 4) body.accuracySuccesses = body.accuracyDiceResults.filter(d => d >= 4).length
       + combatAttackStats(actorRecord, actor, attack).automaticSuccesses
-    if (attack?.tags?.some((tag: string) => /signature/i.test(tag)) && encounter.round < signatureReadyRound(actor)) {
-      throw createError({ statusCode: 400, message: `Signature Move is available from round ${signatureReadyRound(actor)}` })
-    }
+    const signatureError = signatureMoveError(actor, attack, { round: encounter.round, houseRules: campaign?.rulesSettings?.houseRules })
+    if (signatureError) throw createError({ statusCode: 400, message: signatureError })
   }
 
   // Check if participant can act (direct turn or partner digimon on tamer's turn)
@@ -342,14 +341,10 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
   let isSignatureMove = false
   let batteryCount = 0
   if (houseRules?.signatureMoveBattery && actor.type === 'digimon') {
-    const [actorDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
-    if (actorDigimon?.attacks) {
-      const attacks = actorDigimon.attacks
-      const attackDef = attacks?.find((a: any) => a.id === body.attackId)
-      if (attackDef?.tags?.some((t: string) => t.toLowerCase().includes('signature'))) {
-        isSignatureMove = true
-        batteryCount = (actor as any).battery ?? 0
-      }
+    const attackDef = actorRecord?.attacks?.find((a: any) => a.id === body.attackId)
+    if (attackDef?.tags?.some((t: string) => /signature/i.test(t))) {
+      isSignatureMove = true
+      batteryCount = actor.battery ?? 0
     }
   }
 

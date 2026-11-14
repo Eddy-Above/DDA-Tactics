@@ -445,6 +445,8 @@ export async function resolveAreaIntercedeGroup({
       }
     } else {
       const result = await resolveNpcAttack({
+        isSignatureMove: groupData.isSignatureMove,
+        batteryCount: groupData.batteryCount,
         pendingRequests: updatedPendingRequests, cleanseCastId: groupData.attackData?.cleanseCastId,
         lifestealed: groupData.lifestealed || false,
         shieldComplex: groupData.shieldComplex || false,
