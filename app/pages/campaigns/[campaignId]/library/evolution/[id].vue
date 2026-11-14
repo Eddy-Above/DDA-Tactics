@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { h, defineComponent, type PropType } from 'vue'
+import { h, defineComponent, computed, ref, type PropType } from 'vue'
 import type { EvolutionLine, Digimon } from '~/server/db/schema'
 import type { EvolutionChainEntry } from '~/composables/useEvolution'
 import type { DigimonStage } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
+import { getEvolutionBaseIndex } from '~/utils/evolutionLineTree'
 
 // Tree node component
 const EvolutionTreeNode = defineComponent({
@@ -169,6 +170,17 @@ const chain = computed(() => evolutionLine.value ? getChainArray(evolutionLine.v
 const currentStage = computed(() => evolutionLine.value ? getCurrentStage(evolutionLine.value) : null)
 const evolutionOptions = computed(() => evolutionLine.value ? getEvolutionOptions(evolutionLine.value) : [])
 const evolutionStatus = computed(() => evolutionLine.value ? canEvolve(evolutionLine.value) : { canEvolve: false, reason: '' })
+const baseFormId = computed(() => chain.value[getEvolutionBaseIndex(chain.value)]?.digimonId ?? '')
+
+async function handleBaseFormChange(event: Event) {
+  if (!evolutionLine.value) return
+  const id = (event.target as HTMLSelectElement).value
+  const updated = await updateEvolutionLine(evolutionLine.value.id, {
+    chain: chain.value.map(entry => ({ ...entry, isBaseForm: entry.digimonId === id })),
+  })
+  if (updated) evolutionLine.value = updated
+  else (event.target as HTMLSelectElement).value = baseFormId.value
+}
 
 // Handle lock/unlock toggle
 async function handleToggleLock(stageIndex: number) {
@@ -358,6 +370,16 @@ const treeRoots = computed(() => buildTree(chain.value))
 
         <!-- Sidebar -->
         <div class="space-y-4">
+          <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
+            <label for="base-form" class="block font-display text-lg font-semibold text-white mb-2">Base Form</label>
+            <select id="base-form" :value="baseFormId" :disabled="loading" @change="handleBaseFormChange"
+              class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white focus:border-digimon-orange-500 focus:outline-none">
+              <option v-for="entry in chain" :key="entry.digimonId" :value="entry.digimonId" :disabled="!entry.isUnlocked">
+                {{ entry.species }} ({{ entry.stage }}){{ entry.isUnlocked ? '' : ' — Locked' }}
+              </option>
+            </select>
+            <p class="text-sm text-digimon-dark-400 mt-2">Returns to this form after combat. Recovery checks use this form. Unlock a form before choosing it.</p>
+          </div>
           <!-- Current Status -->
           <div class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700">
             <h3 class="font-display text-lg font-semibold text-white mb-4">Current Status</h3>

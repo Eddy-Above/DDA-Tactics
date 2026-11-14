@@ -6,6 +6,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type NewDigimon } from '../../db'
 import { generateId } from '../../utils/id'
 import { getSessionUser } from '../../utils/session'
+import { lockEvolutionLineSync, syncEvolutionLines } from '../../utils/syncEvolutionLines'
 import {
   type DigimonStage,
   type DigimonAttribute,
@@ -97,6 +98,9 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   await requireLinkedEntity(event, 'tamer', body.partnerId, body.campaignId ?? null)
   for (const link of [body.evolvesFromId, ...(body.evolutionPathIds ?? [])]) await requireLinkedEntity(event, 'digimon', link, body.campaignId ?? null)
 
+  const hasEvolutionLinks = !!body.evolvesFromId || !!body.evolutionPathIds?.length
+  if (hasEvolutionLinks) await lockEvolutionLineSync(body.campaignId ?? null)
+
   const id = generateId()
   const now = new Date()
   const stageConfig = STAGE_CONFIG[body.stage]
@@ -167,6 +171,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   // Fetch and return the created digimon
+  if (hasEvolutionLinks) await syncEvolutionLines(event, [id], body.campaignId ?? null)
   const [created] = await db.select().from(digimon).where(eq(digimon.id, id))
   return created
 }))

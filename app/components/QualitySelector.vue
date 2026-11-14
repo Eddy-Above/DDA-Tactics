@@ -530,7 +530,16 @@ function getDisplayDescription(item: { id: string; description: string }): strin
   if (props.eddySoulRules?.instinctBoostsDodgeArmorSpeed && item.id === 'instinct') {
     return '+Rank to Armor, Dodge, Base Movement. Ranks limited by stage.'
   }
-  return item.description
+  const template = getQualityById(item.id)
+  return template ? getEffectiveTemplate(template).description : item.description
+}
+
+function getDisplayEffect(quality: Quality): string {
+  const template = getCurrentQualityTemplate(quality)
+  if (!template) return quality.effect
+  const effective = getEffectiveTemplate(template)
+  if (quality.choiceId) return effective.choices?.find(choice => choice.id === quality.choiceId)?.effect ?? quality.effect
+  return effective.effect
 }
 
 function qualityHasSingleRankPerChoice(quality: Quality): boolean {
@@ -748,7 +757,7 @@ function isChoiceEddySoulBlocked(template: QualityTemplate, choice: NonNullable<
             </span>
           </div>
           <p class="text-sm text-digimon-dark-400 mt-1">{{ getDisplayDescription(quality) }}</p>
-          <p class="text-xs text-digimon-dark-300 mt-2 whitespace-pre-line">{{ quality.effect }}</p>
+          <p class="text-xs text-digimon-dark-300 mt-2 whitespace-pre-line">{{ getDisplayEffect(quality) }}</p>
         </div>
         <button type="button" class="text-red-400 hover:text-red-300 text-sm ml-2" @click="emit('remove', index)">
           Remove

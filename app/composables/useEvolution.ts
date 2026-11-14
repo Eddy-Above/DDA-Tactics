@@ -7,6 +7,7 @@ export interface EvolutionChainEntry {
   species: string
   digimonId: string // Required: must link to library Digimon
   isUnlocked: boolean // GM-controlled unlock state
+  isBaseForm?: boolean
   evolvesFromIndex: number | null // Index of parent form (null for root)
 }
 

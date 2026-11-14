@@ -33,6 +33,8 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   // Build map of existing lock states
   const lockStates = new Map<string, boolean>()
+  const previousEntries = new Map(existingChain.map(entry => [entry.digimonId, entry]))
+  const currentFormId = existingChain[existing.currentStageIndex]?.digimonId
   existingChain.forEach((entry: EvolutionChainEntry) => {
     lockStates.set(entry.digimonId, entry.isUnlocked)
   })
@@ -70,6 +72,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
     const wasUnlocked = lockStates.get(digimon.id)
 
     newChain.push({
+      ...previousEntries.get(digimon.id),
       stage: digimon.stage,
       species: digimon.name,
       digimonId: digimon.id,
@@ -105,6 +108,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   // Update evolution line with new chain
   const updateData = {
     chain: newChain,
+    currentStageIndex: Math.max(0, newChain.findIndex(entry => entry.digimonId === currentFormId)),
     updatedAt: new Date(),
   }
 

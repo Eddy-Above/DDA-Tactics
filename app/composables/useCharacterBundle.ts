@@ -47,6 +47,7 @@ export interface BundleEvolutionLine {
     species: string
     digimonKey?: string
     isUnlocked: boolean
+    isBaseForm?: boolean
     evolvesFromIndex: number | null
   }>
 }
@@ -233,6 +234,7 @@ export function useCharacterBundle() {
           species: entry.species,
           digimonKey: entry.digimonId ? keyById.get(entry.digimonId) : undefined,
           isUnlocked: entry.isUnlocked ?? false,
+          ...(entry.isBaseForm ? { isBaseForm: true } : {}),
           evolvesFromIndex: entry.evolvesFromIndex === undefined ? (index === 0 ? null : index - 1) : entry.evolvesFromIndex,
         })),
       })),
@@ -303,7 +305,7 @@ export function useCharacterBundle() {
       digimon:[...records.values()].map(record=>toBundleDigimon(record,keyById.get(record.id)!,keyById,null)),
       evolutionLines:[...included].map(line=>({name:line.name,description:line.description??'',currentStageIndex:line.currentStageIndex??0,
         chain:line.chain.map((entry,index)=>({stage:entry.stage as DigimonStage,species:entry.species,digimonKey:keyById.get(entry.digimonId),
-          isUnlocked:entry.isUnlocked??false,evolvesFromIndex:entry.evolvesFromIndex===undefined?(index===0?null:index-1):entry.evolvesFromIndex}))})),
+          isUnlocked:entry.isUnlocked??false,...(entry.isBaseForm?{isBaseForm:true}:{}),evolvesFromIndex:entry.evolvesFromIndex===undefined?(index===0?null:index-1):entry.evolvesFromIndex}))})),
     }
   }
 
@@ -433,7 +435,7 @@ export function useCharacterBundle() {
         .map((key) => idByKey.get(key))
         .filter((id): id is string => !!id)
       if (pathIds.length > 0) {
-        const updated = await updateDigimon(newId, { evolutionPathIds: pathIds })
+        const updated = await updateDigimon(newId, { evolutionPathIds: pathIds, syncEvolutionLines: !bundle.evolutionLines?.length })
         if (!updated) result.errors.push(`Failed to link evolutions for "${bd.name}"`)
       }
     }
@@ -441,7 +443,7 @@ export function useCharacterBundle() {
       const newId = idByKey.get(bd.localKey)
       const evolvesFromId = bd.evolvesFromKey ? idByKey.get(bd.evolvesFromKey) : undefined
       if (!newId || !evolvesFromId) continue
-      const updated = await updateDigimon(newId, { evolvesFromId })
+      const updated = await updateDigimon(newId, { evolvesFromId, syncEvolutionLines: !bundle.evolutionLines?.length })
       if (!updated) result.errors.push(`Failed to link pre-evolution for "${bd.name}"`)
     }
 
@@ -453,6 +455,7 @@ export function useCharacterBundle() {
           species: entry.species,
           digimonId: entry.digimonKey ? idByKey.get(entry.digimonKey) ?? '' : '',
           isUnlocked: entry.isUnlocked ?? false,
+          ...(entry.isBaseForm ? { isBaseForm: true } : {}),
           evolvesFromIndex: entry.evolvesFromIndex ?? null,
         }))
         .filter((entry) => !!entry.digimonId)

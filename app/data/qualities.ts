@@ -652,7 +652,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: [],
     limitedTag: true,
     exclusiveOnSameAttackWith: ['certain-strike'], // Can't be on same attack unless Signature Move
-    description: 'Ignore armor on one attack. Ranks limited by stage.',
+    description: 'Ignore 2 Armor per rank on one tagged attack. Ranks limited by stage.',
     effect: `Choose one Attack. Ignores X×2 Armor (X = ranks). Cannot have both Armor Piercing and Certain Strike on same attack unless Signature Move.`,
     maxRanksByStage: { rookie: 1, champion: 2, ultimate: 3, mega: 3, ultra: 3 },
   },
@@ -707,7 +707,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     prerequisites: [],
     limitedTag: true,
     exclusiveWith: ['instinct'],
-    description: 'Bonus to weapon attacks. Ranks limited by stage.',
+    description: '+Rank Accuracy and Damage on Weapon attacks. Ranks limited by stage.',
     effect: `[Weapon] tagged attacks gain +Rank to Accuracy and Damage. Can tag attacks up to Rank count.`,
     maxRanksByStage: { rookie: 1, champion: 2, ultimate: 3, mega: 3, ultra: 3 },
   },
@@ -720,7 +720,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: 'Bonus vs specific enemy type.',
+    description: '+RAM Accuracy against a chosen Family or Type.',
     effect: `Choose a Family/Type. +RAM to Accuracy vs that type. If you match the type, take unalterable damage on miss = stages above Fresh.`,
   },
   {
@@ -1227,7 +1227,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 3,
     prerequisites: ['Quick Healer'],
-    description: 'Guaranteed recovery.',
+    description: '+Rank guaranteed Wound Boxes on Recovery.',
     effect: `+Rank guaranteed Wound Boxes on Recovery.`,
   },
   {
@@ -1239,7 +1239,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: ['Quick Healer', 'Regenerator Rank 1'],
-    description: 'Recovery during combat.',
+    description: 'Recover as a Simple Action; cannot attack that turn.',
     effect: `Make Recovery Check as Simple Action in combat. Cannot attack that turn. Not affected by Huge Power.`,
   },
   {
@@ -1251,7 +1251,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 3,
     prerequisites: [],
-    description: 'Shorter effect durations.',
+    description: 'Shorten incoming positive and negative effects by 2 rounds per rank, subject to minimum durations.',
     effect: `Per Rank: -2 rounds on incoming [Effect] duration (min 1, min 3 for Poison).`,
   },
   {
@@ -1287,7 +1287,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: 'Allies intercede without penalty.',
+    description: 'Once per combat, an ally can Intercede for you without an action penalty.',
     effect: `Once per combat, when targeted, an ally can Intercede without action penalty.`,
   },
   {
@@ -1329,8 +1329,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Reduces target movement.',
-    effect: `Apply [Immobilize] tag to an attack. Target suffers movement penalty based on potency (BIT-based). Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Movement by your BIT x2.',
+    effect: `Apply [Immobilize] tag to an attack. Movement penalty = your BIT x2. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-taunt',
@@ -1353,8 +1353,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Accuracy penalty on target.',
-    effect: `Apply [Fear] tag to an attack. Target suffers accuracy penalty based on potency (BIT-based). Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Accuracy against you by your BIT.',
+    effect: `Apply [Fear] tag to an attack. Target takes an Accuracy penalty equal to your BIT when attacking you. Ends an active Clash. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-knockback',
@@ -1365,8 +1365,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N/A] Push target away.',
-    effect: `Apply [Knockback] tag to an attack. Push target away from you based on potency.`,
+    description: '[N/A] Push target away by your CPU + Stage Bonus meters.',
+    effect: `Apply [Knockback] tag to an attack. Push target away by your CPU + Stage Bonus meters. Resolves immediately with no Duration.`,
   },
   {
     id: 'effect-pull',
@@ -1377,8 +1377,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 1,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N/A] Pull target toward you.',
-    effect: `Apply [Pull] tag to an attack. Pull target toward you based on potency.`,
+    description: '[N/A] Pull target toward you by your CPU + Stage Bonus meters.',
+    effect: `Apply [Pull] tag to an attack. Pull target toward you by your CPU + Stage Bonus meters. Resolves immediately with no Duration.`,
   },
   // 2 DP Effects
   {
@@ -1390,8 +1390,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Damage over time, min 3 rounds.',
-    effect: `Apply [Poison] tag to an attack. Target takes damage each round. Minimum duration 3 rounds (cannot be reduced below 3 by Resistant).`,
+    description: '[N] Unalterable damage equal to target CPU each round; normally at least 3 rounds.',
+    effect: `Apply [Poison] tag to an attack. Target takes unalterable Wound Box damage equal to its CPU at round end (turn end with the EddySoul rule). Duration = leftover Accuracy successes, minimum 3 rounds even after Resistant; Naturewalk: Wood lowers the minimum to 2 in qualifying terrain. Replaces Burn.`,
   },
   {
     id: 'effect-confuse',
@@ -1402,8 +1402,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Random targeting.',
-    effect: `Apply [Confuse] tag to an attack. Target may attack allies randomly. Duration = leftover Accuracy successes.`,
+    description: '[N] Apply Confuse with potency equal to the higher of target CPU or BIT.',
+    effect: `Apply [Confuse] tag to an attack. Potency = the higher of the target's CPU or BIT. Duration = leftover Accuracy successes. Targeting consequences are resolved by the GM.`,
   },
   {
     id: 'effect-stun',
@@ -1414,8 +1414,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Target loses actions.',
-    effect: `Apply [Stun] tag to an attack. Target loses actions. Duration = leftover Accuracy successes.`,
+    description: '[N] Lose one Simple Action per affected turn; ends Clash.',
+    effect: `Apply [Stun] tag to an attack. Target loses one Simple Action per affected turn. Ends an active Clash. Duration = leftover Accuracy successes (capped at 1 round with the house rule).`,
   },
   {
     id: 'effect-lifesteal',
@@ -1438,8 +1438,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally damage.',
-    effect: `Apply [Vigor] tag to a support attack. Ally gains damage bonus. Single-target: Ally rolls Health for duration (guaranteed 1 round min).`,
+    description: '[P] Boost Dodge by your BIT and Movement by your BIT x2.',
+    effect: `Apply [Vigor] tag to a support attack. Dodge bonus = your BIT; Movement bonus = your BIT x2. Target rolls Health to determine Duration, minimum 1 round.`,
   },
   {
     id: 'effect-fury',
@@ -1450,8 +1450,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally accuracy.',
-    effect: `Apply [Fury] tag to a support attack. Ally gains accuracy bonus. Single-target: Ally rolls Health for duration (guaranteed 1 round min).`,
+    description: '[P] Boost Accuracy and Damage by your BIT.',
+    effect: `Apply [Fury] tag to a support attack. Accuracy and Damage bonuses = your BIT. Target rolls Health to determine Duration, minimum 1 round.`,
   },
   {
     id: 'effect-cleanse',
@@ -1474,7 +1474,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Grant extra action.',
+    description: '[P] Grant one extra Simple Action for one round; requires a Complex Action.',
     effect: `The target gains one additional Simple Action for one round. Haste has no Duration and always requires a Complex Action.`,
   },
   {
@@ -1486,8 +1486,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally armor.',
-    effect: `Apply [Strengthen] tag to a support attack. Ally gains armor bonus. Single-target: Ally rolls Health for duration.`,
+    description: '[P] Boost Damage and Armor by your BIT.',
+    effect: `Apply [Strengthen] tag to a support attack. Damage and Armor bonuses = your BIT. Target rolls Health to determine Duration, minimum 1 round.`,
   },
   {
     id: 'effect-weaken',
@@ -1498,8 +1498,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Reduce target armor.',
-    effect: `Apply [Weaken] tag to an attack. Target suffers armor penalty. Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Damage and Armor by your BIT.',
+    effect: `Apply [Weaken] tag to an attack. Damage and Armor penalties = your BIT. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-swiftness',
@@ -1510,8 +1510,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally dodge.',
-    effect: `Apply [Swiftness] tag to a support attack. Ally gains dodge bonus. Single-target: Ally rolls Health for duration.`,
+    description: '[P] Boost Dodge and Accuracy by your BIT.',
+    effect: `Apply [Swiftness] tag to a support attack. Dodge and Accuracy bonuses = your BIT. Target rolls Health to determine Duration, minimum 1 round.`,
   },
   {
     id: 'effect-vigilance',
@@ -1522,7 +1522,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Boost ally Dodge and Armor.',
+    description: '[P] Boost Dodge and Armor by your BIT.',
     effect: `Apply [Vigilance] tag to a support attack. Ally gains Dodge + Armor bonus equal to user's BIT. Single-target: Ally rolls Health for duration.`,
   },
   {
@@ -1534,8 +1534,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Reduce target dodge.',
-    effect: `Apply [Distract] tag to an attack. Target suffers dodge penalty. Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Dodge and Accuracy by your BIT.',
+    effect: `Apply [Distract] tag to an attack. Dodge and Accuracy penalties = your BIT. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-exploit',
@@ -1546,8 +1546,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Reduce target damage.',
-    effect: `Apply [Exploit] tag to an attack. Target suffers damage penalty. Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Armor and Dodge by your BIT.',
+    effect: `Apply [Exploit] tag to an attack. Armor and Dodge penalties = your BIT. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-pacify',
@@ -1558,8 +1558,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 2,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Prevent target attacks.',
-    effect: `Apply [Pacify] tag to an attack. Target cannot attack. Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Damage and Accuracy by your BIT.',
+    effect: `Apply [Pacify] tag to an attack. Damage and Accuracy penalties = your BIT. Target can still attack. Duration = leftover Accuracy successes.`,
   },
   // 3 DP Effects
   {
@@ -1571,8 +1571,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Severe accuracy/dodge penalty.',
-    effect: `Apply [Blind] tag to an attack. Target suffers severe accuracy and dodge penalties. Duration = leftover Accuracy successes.`,
+    description: '[N] Reduce Accuracy and Dodge by your BIT.',
+    effect: `Apply [Blind] tag to an attack. Accuracy and Dodge penalties = your BIT. Duration = leftover Accuracy successes.`,
   },
   {
     id: 'effect-paralysis',
@@ -1583,8 +1583,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Target cannot act.',
-    effect: `Apply [Paralysis] tag to an attack. Target cannot take actions. Duration = leftover Accuracy successes. Can break Overwrite state.`,
+    description: '[N] Reduce Dodge by your BIT; movement counts as difficult terrain.',
+    effect: `Apply [Paralysis] tag to an attack. Dodge penalty = your BIT; movement counts as difficult terrain. Ends an active Clash. Duration = leftover Accuracy successes. Can break Overwrite state.`,
   },
   {
     id: 'effect-dot',
@@ -1595,8 +1595,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Damage over time (severe).',
-    effect: `Apply [DOT] tag to an attack. Target takes significant damage each round. Can break Overwrite state.`,
+    description: '[N] Apply a target RAM-based DOT status, capped at 3 rounds.',
+    effect: `Apply [DOT] tag to a damage attack. Potency = target RAM. Duration = leftover Accuracy successes, maximum 3 rounds. DOT does not automatically deal recurring damage; resolve its other consequences with the GM. Can break Overwrite state.`,
   },
   {
     id: 'effect-shield',
@@ -1607,7 +1607,7 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[P] Grant temporary wound boxes.',
+    description: '[P] Grant BIT temporary Wound Boxes, or BIT x3 as a Complex Action.',
     effect: `Grant temporary Wound Boxes equal to the user's BIT, or BIT ×3 as a Complex Action. Shield can only be used once per round. Temporary wounds expire at combat end and do not increase Combat Monster count.`,
   },
   {
@@ -1643,8 +1643,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     dpCost: 3,
     maxRanks: 1,
     prerequisites: [],
-    description: '[N] Damage over time (fire).',
-    effect: `Apply [Burn] tag to an attack. Target takes fire damage each round. Prevented by Naturewalk: Fire.`,
+    description: '[N] Damage when moving or standing still for a round; lasts up to 3 rounds.',
+    effect: `Apply [Burn] tag to a damage attack. On a map, moving deals 1 damage per meter, reduced by Armor (minimum 1); standing still all round deals target Stage Bonus x2, reduced by Armor (minimum 1). EddySoul may instead deal 1 unalterable damage per 2 spaces moved with no stationary damage. Duration = leftover Accuracy successes, maximum 3 rounds. Naturewalk: Fire is immune. Replaces Poison.`,
   },
 
   // === ADVANCED QUALITIES (Section 3.10) ===

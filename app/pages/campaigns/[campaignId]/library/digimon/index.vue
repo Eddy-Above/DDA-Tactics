@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { displayImageUrl } from '~/utils/imageFallback'
+import { matchesLibrarySearch } from '~/utils/librarySearch'
 import { STAGE_CONFIG, type DigimonStage } from '~/types'
 
 const STAGE_FILTERS = [
@@ -30,6 +31,7 @@ const { parseBundleFile, importBundle } = useCharacterBundle()
 const filter = ref<'all' | 'partners' | 'enemies'>('all')
 const selectedTamerIds = ref<string[]>([])
 const selectedStages = ref<string[]>([])
+const searchQuery = ref('')
 const currentPage = ref(1)
 const PAGE_SIZE = 12
 
@@ -58,7 +60,10 @@ const filteredDigimon = computed(() => {
     })
   }
 
-  return list
+  return list.filter(d => matchesLibrarySearch(searchQuery.value, [
+    d.name, d.nickname, d.stage, d.attribute, d.family, d.type,
+    d.partnerId ? tamerMap.value.get(d.partnerId) : undefined,
+  ]))
 })
 
 const totalFilteredPages = computed(() => Math.max(1, Math.ceil(filteredDigimon.value.length / PAGE_SIZE)))
@@ -74,9 +79,11 @@ watch(filter, (val) => {
   }
 })
 
-watch([filter, selectedTamerIds, selectedStages], () => {
+watch([filter, selectedTamerIds, selectedStages, searchQuery], () => {
   currentPage.value = 1
-})
+}, { deep: true })
+
+watch(totalFilteredPages, pages => { currentPage.value = Math.min(currentPage.value, pages) })
 
 function goToPage(newPage: number) {
   if (newPage < 1 || newPage > totalFilteredPages.value) return
@@ -90,7 +97,7 @@ const tamerMap = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }), fetchTamers(campaignId.value), loadCampaign()])
+  await Promise.all([fetchDigimon({ campaignId: campaignId.value, all: true }), fetchTamers(campaignId.value), loadCampaign()])
 })
 
 async function loadExportRules() {
@@ -164,7 +171,7 @@ async function handleImportFile(event: Event) {
         errors: result.errors.map((message, i) => ({ index: i, name: '', error: message })),
       }
     }
-    await fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })
+    await fetchDigimon({ campaignId: campaignId.value, all: true })
   } catch (e) {
     importResult.value = {
       show: true,
@@ -240,6 +247,11 @@ async function handleImportFile(event: Event) {
     </div>
 
     <!-- Filter tabs -->
+    <div class="mb-4">
+      <label for="digimon-search" class="block text-sm text-digimon-dark-400 mb-1">Search Digimon</label>
+      <input id="digimon-search" v-model="searchQuery" type="search" placeholder="Name, nickname, stage, attribute, family, type, or tamer..."
+        class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white focus:border-digimon-orange-500 focus:outline-none" />
+    </div>
     <div class="flex gap-2 mb-6">
       <button
         v-for="f in (['all', 'partners', 'enemies'] as const)"
@@ -300,8 +312,8 @@ async function handleImportFile(event: Event) {
 
     <div v-else-if="filteredDigimon.length === 0" class="text-center py-12">
       <div class="text-6xl mb-4">🦖</div>
-      <h2 class="text-xl font-semibold text-white mb-2">No Digimon Yet</h2>
-      <p class="text-digimon-dark-400 mb-4">Create your first digimon to get started</p>
+      <h2 class="text-xl font-semibold text-white mb-2">{{ digimonList.length ? 'No Matching Digimon' : 'No Digimon Yet' }}</h2>
+      <p class="text-digimon-dark-400 mb-4">{{ digimonList.length ? 'Try another search or change your filters.' : 'Create your first digimon to get started' }}</p>
       <NuxtLink
         :to="`/campaigns/${campaignId}/library/digimon/new`"
         class="bg-digimon-orange-500 hover:bg-digimon-orange-600 text-white px-4 py-2 rounded-lg

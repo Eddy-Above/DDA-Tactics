@@ -7046,7 +7046,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
 
         <!-- Digimon roll section -->
         <div v-if="recoveryRookieDigimon" class="mb-4 bg-green-900/20 rounded-lg p-4">
-          <div class="text-green-300 font-semibold mb-2">{{ (recoveryRookieDigimon as any).nickname || recoveryRookieDigimon.name }} (Digimon, Rookie) — {{ recoveryDigimonDicePool }}d6</div>
+          <div class="text-green-300 font-semibold mb-2">{{ (recoveryRookieDigimon as any).nickname || recoveryRookieDigimon.name }} (Digimon, Base Form) — {{ recoveryDigimonDicePool }}d6</div>
           <div v-if="recoveryRollResult" class="text-center">
             <div class="flex flex-wrap justify-center gap-1 mb-1">
               <span

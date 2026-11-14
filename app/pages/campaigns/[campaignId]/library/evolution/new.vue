@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { displayImageUrl } from '~/utils/imageFallback'
+import { matchesLibrarySearch } from '~/utils/librarySearch'
 import type { DigimonStage } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
 import type { EvolutionChainEntry } from '~/composables/useEvolution'
@@ -16,7 +17,7 @@ const { tamers, fetchTamers } = useTamers()
 const { digimonList, fetchDigimon } = useDigimon()
 
 onMounted(async () => {
-  await Promise.all([fetchTamers(campaignId.value), fetchDigimon({ campaignId: campaignId.value, pageSize: 500 })])
+  await Promise.all([fetchTamers(campaignId.value), fetchDigimon({ campaignId: campaignId.value, all: true })])
 })
 
 const form = reactive({
@@ -27,6 +28,7 @@ const form = reactive({
 })
 
 const selectedBaseDigimon = ref<Digimon | null>(null)
+const searchQuery = ref('')
 
 // Get available partner Digimon that can be bases (have no prevolution or are the root)
 const baseDigimonOptions = computed(() => {
@@ -36,7 +38,10 @@ const baseDigimonOptions = computed(() => {
   return digimonList.value.filter((d) => {
     const hasEvolutionPaths = d.evolutionPathIds && d.evolutionPathIds.length > 0
     const canBeLast = d.evolutionPathIds?.length === 0
-    return d.partnerId || (hasEvolutionPaths || canBeLast)
+    return (d.partnerId || hasEvolutionPaths || canBeLast) && matchesLibrarySearch(searchQuery.value, [
+      d.name, d.nickname, d.stage, d.attribute, d.family, d.type,
+      tamers.value.find(t => t.id === d.partnerId)?.name,
+    ])
   })
 })
 
@@ -221,6 +226,13 @@ function getLinkedDigimon(digimonId: string): Digimon | null {
           >
             Change
           </button>
+        </div>
+
+        <div v-if="!selectedBaseDigimon" class="mb-4">
+          <label for="base-digimon-search" class="block text-sm text-digimon-dark-400 mb-1">Search Digimon</label>
+          <input id="base-digimon-search" v-model="searchQuery" type="search" placeholder="Name, nickname, stage, attribute, family, type, or tamer..."
+            class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white focus:border-digimon-orange-500 focus:outline-none" />
+          <p v-if="baseDigimonOptions.length === 0" class="text-digimon-dark-400 text-sm mt-3">No matching Digimon. Try another search or add a Digimon to your library.</p>
         </div>
 
         <div v-if="!selectedBaseDigimon" class="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-96 overflow-y-auto">

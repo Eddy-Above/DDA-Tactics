@@ -4,9 +4,11 @@ import { tableWriteBody } from '../../utils/securityValidation'
 import { eq, inArray } from 'drizzle-orm'
 import { db, digimon, type Digimon } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
+import { lockEvolutionLineSync, syncEvolutionLines } from '../../utils/syncEvolutionLines'
 
 type UpdateDigimonBody = Partial<Omit<Digimon, 'id' | 'createdAt' | 'updatedAt'>> & {
   syncBonusDP?: boolean // Whether to sync bonusDP to all linked evolution forms
+  syncEvolutionLines?: boolean // Bundle import restores explicit lines after linking all forms
 }
 
 export default defineEventHandler(async (event) => entityWrite(async () => {
@@ -21,7 +23,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   // Check if digimon exists
-  const [existing] = await db.select().from(digimon).where(eq(digimon.id, id))
+  let [existing] = await db.select().from(digimon).where(eq(digimon.id, id))
 
   if (!existing) {
     throw createError({
@@ -31,8 +33,15 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   await requireEntityAccess(event, 'digimon', existing, true)
-  body = tableWriteBody(body, digimon, existing, ['syncBonusDP']) as UpdateDigimonBody
+  body = tableWriteBody(body, digimon, existing, ['syncBonusDP', 'syncEvolutionLines']) as UpdateDigimonBody
   const scope = await entityCampaignId('digimon', existing)
+  const linksProvided = body.evolvesFromId !== undefined || body.evolutionPathIds !== undefined
+  if (linksProvided) {
+    await lockEvolutionLineSync(scope)
+    const [refreshed] = await db.select().from(digimon).where(eq(digimon.id, id))
+    if (!refreshed) throw createError({ statusCode: 404, message: 'Digimon no longer exists' })
+    existing = refreshed
+  }
   if (body.partnerId !== undefined) await requireLinkedEntity(event, 'tamer', body.partnerId, scope)
   const linked = new Set([...(existing.evolutionPathIds ?? []), ...(body.evolutionPathIds ?? []), existing.evolvesFromId, body.evolvesFromId].filter(Boolean))
   if (body.syncBonusDP) for (const linkedId of await collectAllLinkedDigimon(id, existing)) linked.add(linkedId)
@@ -110,7 +119,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   // Update digimon (remove syncBonusDP from body as it's not a DB field)
-  const { syncBonusDP: _, ...updateFields } = body
+  const { syncBonusDP: _, syncEvolutionLines: _syncLines, ...updateFields } = body
   const updateData: Partial<Digimon> = {
     ...updateFields,
     updatedAt: now,
@@ -123,6 +132,10 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   console.log('[PUT /api/digimon/:id] Received qualities:', { id, qualitiesCount: body.qualities?.length, qualities: body.qualities })
 
   await db.update(digimon).set(updateData).where(eq(digimon.id, id))
+
+  if (linksProvided && body.syncEvolutionLines !== false) {
+    await syncEvolutionLines(event, [id, ...linked].filter((value): value is string => typeof value === 'string'), scope)
+  }
 
   // Return updated digimon
   const [updated] = await db.select().from(digimon).where(eq(digimon.id, id))

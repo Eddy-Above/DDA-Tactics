@@ -443,6 +443,7 @@ export const evolutionLines = pgTable('evolution_lines', {
     species: string // Species name (e.g., "Agumon", "Greymon")
     digimonId: string // Required: Link to actual Digimon sheet from library
     isUnlocked: boolean // GM can unlock/lock this stage
+    isBaseForm?: boolean // Chosen post-combat form; stored on the sheet identity rather than an index
     evolvesFromIndex: number | null // Index of parent form in chain (null for root)
   }>>(),
 

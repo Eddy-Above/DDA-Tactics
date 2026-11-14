@@ -59,6 +59,11 @@ function unlocks(chain: any[]): Map<string, number> {
 export async function requireEvolutionGmFields(event: H3Event, campaignId: string | null | undefined, body: any, previous?: any): Promise<void> {
   if (body.chain === undefined) return
   const chain = chainArray(body.chain)
+  const bases = chain.filter(entry => entry?.isBaseForm === true)
+  if (bases.length > 1 || chain.some(entry => entry?.isBaseForm !== undefined && typeof entry.isBaseForm !== 'boolean')) {
+    throw createError({ statusCode: 400, message: 'Choose exactly one base form, or use the default' })
+  }
+  if (bases.some(entry => !entry.isUnlocked)) throw createError({ statusCode: 400, message: 'The base form must be unlocked' })
   const before = previous ? unlocks(chainArray(previous.chain)) : new Map<string, number>()
   const after = unlocks(chain)
   let changed = false

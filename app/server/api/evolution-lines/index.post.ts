@@ -13,6 +13,7 @@ interface CreateEvolutionLineBody {
     species: string
     digimonId: string // Required: must link to library Digimon
     isUnlocked?: boolean
+    isBaseForm?: boolean
     evolvesFromIndex?: number | null
   }>
   partnerId?: string

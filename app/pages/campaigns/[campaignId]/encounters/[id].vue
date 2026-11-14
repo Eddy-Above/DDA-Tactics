@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getEvolutionBaseIndex, isPersistentEvolutionForm } from '~/utils/evolutionLineTree'
 import { encounterFetch as $fetch, getEncounterFeedback, previewEncounterActions } from '~/utils/encounterFeedback'
 import { mapContentSizeLabel } from '~/utils/mapContentBounds'
 import { displayImageUrl } from '~/utils/imageFallback'
@@ -1538,7 +1539,7 @@ async function handleAddParticipant() {
 
       const digimonEntity = digimonMap.value.get(selectedEntityId.value)
       const persistWounds = selectedEntityType.value !== 'enemy' && digimonEntity &&
-        (digimonEntity.stage === 'fresh' || digimonEntity.stage === 'in-training' || digimonEntity.stage === 'rookie')
+        isPersistentEvolutionForm(digimonEntity, evolutionLines.value.find(line => line.id === evoLineId))
       const initialWoundsForDigimon = persistWounds ? (digimonEntity!.currentWounds ?? 0) : 0
       const participant = createParticipant(
         selectedEntityType.value === 'enemy' ? 'digimon' : selectedEntityType.value,
@@ -1838,8 +1839,8 @@ async function processResponse(response: any) {
         })
 
         // Create BOTH participants with the same initiative
-        // Persist wounds for partner digimon at rookie and below
-        const digimonPersistWounds = digimon.stage === 'fresh' || digimon.stage === 'in-training' || digimon.stage === 'rookie'
+        // Persist wounds for the chosen base form as well as Rookie and below.
+        const digimonPersistWounds = isPersistentEvolutionForm(digimon, matchingEvoLine)
         const digimonTotalHealth = (digimon.baseStats?.health || 0) + ((digimon as any).bonusStats?.health || 0)
         const digimonParticipant = createParticipant(
           'digimon',
@@ -2071,15 +2072,14 @@ async function executeEndCombatSequence(skipDevolve = false) {
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
 
   if (!skipDevolve) {
-    // Refresh evolution lines and devolve all partner digimon to rookie
+    // Refresh evolution lines and return each Digimon to its chosen base form.
     await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
     for (const p of participants) {
       if (p.type === 'digimon' && p.evolutionLineId) {
         const evoLine = evolutionLines.value.find(l => l.id === p.evolutionLineId)
         if (evoLine) {
           const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
-          const rookieIndex = chain.findIndex((e: any) => e.stage === 'rookie')
-          const targetIndex = rookieIndex >= 0 ? rookieIndex : 0
+          const targetIndex = getEvolutionBaseIndex(chain)
           if (evoLine.currentStageIndex !== targetIndex) {
             await updateEvolutionLine(p.evolutionLineId, { currentStageIndex: targetIndex })
           }
@@ -2090,7 +2090,7 @@ async function executeEndCombatSequence(skipDevolve = false) {
 
   await endCombat(currentEncounter.value.id)
 
-  // Persist wounds back to DB for tamers and fresh/in-training/rookie digimon
+  // Persist wounds back to sheets for Tamers and persistent Digimon forms.
   for (const p of participants) {
     const wounds = (p as any).currentWounds ?? 0
     if (p.type === 'tamer') {
@@ -2104,7 +2104,7 @@ async function executeEndCombatSequence(skipDevolve = false) {
       }
     } else if (p.type === 'digimon') {
       const digimonEntity = digimonMap.value.get(p.entityId)
-      if (digimonEntity && (digimonEntity.stage === 'fresh' || digimonEntity.stage === 'in-training' || digimonEntity.stage === 'rookie') && !digimonEntity.isEnemy) {
+      if (digimonEntity && isPersistentEvolutionForm(digimonEntity, evolutionLines.value.find(line => line.id === p.evolutionLineId))) {
         try {
           await $fetch(`/api/digimon/${p.entityId}`, {
             method: 'PUT',
@@ -2143,15 +2143,14 @@ async function handleRequestRecoveryChecks() {
   const encounterId = currentEncounter.value.id
   await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
 
-  // Devolve all partner digimon to rookie
+  // Return each Digimon to its chosen base form before recovery.
   const participants = (currentEncounter.value.participants as CombatParticipant[]) || []
   for (const p of participants) {
     if (p.type === 'digimon' && p.evolutionLineId) {
       const evoLine = evolutionLines.value.find(l => l.id === p.evolutionLineId)
       if (evoLine) {
         const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
-        const rookieIndex = chain.findIndex((e: any) => e.stage === 'rookie')
-        const targetIndex = rookieIndex >= 0 ? rookieIndex : 0
+        const targetIndex = getEvolutionBaseIndex(chain)
         if (evoLine.currentStageIndex !== targetIndex) {
           await updateEvolutionLine(p.evolutionLineId, { currentStageIndex: targetIndex })
         }
@@ -2159,7 +2158,7 @@ async function handleRequestRecoveryChecks() {
     }
   }
 
-  // Reload evolution lines so we have fresh rookieDigimonId data
+  // Reload evolution lines so recovery targets the selected base sheet.
   await recordRefreshQueue.run(() => fetchEvolutionLines(undefined, campaignId.value))
 
   // Send one recovery-check request per non-enemy tamer participant
@@ -2173,14 +2172,13 @@ async function handleRequestRecoveryChecks() {
       return entity?.partnerId === p.entityId
     }) as CombatParticipant | undefined
 
-    // Resolve rookie digimon ID via evolution line
+    // Keep the recovery request's legacy field name, but target the chosen base form.
     let rookieDigimonId: string | null = null
     if (digimonPart?.evolutionLineId) {
       const evoLine = evolutionLines.value.find(l => l.id === digimonPart.evolutionLineId)
       if (evoLine) {
         const chain = typeof evoLine.chain === 'string' ? JSON.parse(evoLine.chain) : evoLine.chain
-        const rookieIndex = chain.findIndex((e: any) => e.stage === 'rookie')
-        const idx = rookieIndex >= 0 ? rookieIndex : 0
+        const idx = getEvolutionBaseIndex(chain)
         rookieDigimonId = chain[idx]?.digimonId ?? null
       }
     }

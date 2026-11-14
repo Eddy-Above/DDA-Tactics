@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { getTableColumns, getTableName } from 'drizzle-orm'
+import { getTableColumns, getTableName, sql } from 'drizzle-orm'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 // These tests load the real HTTP handlers, session lookup, signed credentials,
@@ -50,6 +50,7 @@ function fixture({ beforeEvolutionLock } = {}) {
   function database(state) {
     const list = table => state.get(getTableName(table)) ?? []
     return {
+      execute: async () => {}, // Transaction advisory lock; row writes still use the staged database.
       select: selection => ({ from: table => {
         const name = getTableName(table)
         let contexts = list(table).map(row => ({ [name]: row })), expression, limit
@@ -117,6 +118,9 @@ function fixture({ beforeEvolutionLock } = {}) {
   const stateScope = loadTypeScriptWithMocks('server/utils/encounterStateScope.ts', { ...common, './encounterCharacterScope': characters, './encounterContextScope': contexts })
   const entities = loadTypeScriptWithMocks('server/utils/entitySecurity.ts', { ...common, './session': session, './campaignSecurity': security, './databaseScope': scopes, './entityScopeGraph': graph })
   const gmFields = loadTypeScriptWithMocks('server/utils/libraryGmFields.ts', { './campaignSecurity': security })
+  const evolutionSync = loadTypeScriptWithMocks('server/utils/syncEvolutionLines.ts', {
+    ...common, 'drizzle-orm': { ...common['drizzle-orm'], sql }, './entitySecurity': entities, './libraryGmFields': gmFields,
+  })
   const authorization = loadTypeScriptWithMocks('server/utils/encounterAuthorization.ts', { './campaignSecurity': security, './entitySecurity': entities })
   const queue = loadTypeScript('server/utils/intercedeClaims.ts')
   const command = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
@@ -131,6 +135,7 @@ function fixture({ beforeEvolutionLock } = {}) {
     '../../utils/campaignSecurity': security, '../../utils/campaignAuth': account,
     '../../utils/campaignDm': security, '../../utils/entitySecurity': entities,
     '../../utils/libraryGmFields': gmFields, '../../utils/session': session, '../../utils/ownership': ownership,
+    '../../utils/syncEvolutionLines': evolutionSync,
     '../../utils/databaseScope': scopes, '../../utils/encounterCommand': boundary,
     '../../utils/intercedeClaims': queue,
     '../../utils/websocketSecurity': { invalidateCampaignPeers: () => {} },
@@ -514,6 +519,69 @@ function linkRefreshForms(f, reparent = false) {
   records.get('child').evolvesFromId = reparent ? 'locked' : 'root'
 }
 
+test('creating a linked Digimon auto-creates its line and subsequent saves refresh it without duplicates', async () => {
+  const f = fixture(), campaign = f.campaign(), cookies = f.credentials('member', campaign)
+  f.add(schema.tamers, person())
+  f.add(schema.digimon, { id: 'root', name: 'Agumon', stage: 'rookie', campaignId: 'campaign', partnerId: 'tamer', isEnemy: false, evolutionPathIds: [] })
+  const created = await f.route('digimon/index.post.ts')(f.event('POST', 'digimon', '', cookies, {
+    name: 'Greymon', stage: 'champion', attribute: 'vaccine', family: 'dragon', partnerId: 'tamer', campaignId: 'campaign',
+    baseStats: { accuracy: 3, damage: 3, dodge: 3, armor: 3, health: 3 }, evolvesFromId: 'root',
+  }))
+  let lines = f.rows.get(getTableName(schema.evolutionLines))
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0].name, 'Agumon Line')
+  assert.equal(lines[0].partnerId, 'tamer')
+  assert.deepEqual(lines[0].chain.map(entry => [entry.digimonId, entry.isUnlocked]), [['root', true], [created.id, false]])
+  await f.route('digimon/[id].put.ts')(f.event('PUT', 'digimon', created.id, cookies, { evolvesFromId: 'root' }))
+  lines = f.rows.get(getTableName(schema.evolutionLines))
+  assert.equal(lines.length, 1)
+})
+
+test('editing links creates a missing line, and later branches preserve current form, grants and base', async () => {
+  const f = fixture(), campaign = f.campaign(), cookies = f.credentials('member', campaign)
+  addPlayerLine(f); linkRefreshForms(f)
+  const lines = f.rows.get(getTableName(schema.evolutionLines))
+  lines[0].currentStageIndex = 1
+  lines[0].chain[1].isBaseForm = true
+  f.add(schema.digimon, { id: 'new', name: 'New', stage: 'mega', campaignId: 'campaign', partnerId: 'tamer', isEnemy: false })
+  await f.route('digimon/[id].put.ts')(f.event('PUT', 'digimon', 'root', cookies, { evolutionPathIds: ['new', 'child', 'locked'] }))
+  const [updated] = f.rows.get(getTableName(schema.evolutionLines))
+  assert.equal(updated.chain[updated.currentStageIndex].digimonId, 'child')
+  assert.equal(updated.chain.find(e => e.digimonId === 'child').isBaseForm, true)
+  assert.equal(updated.chain.find(e => e.digimonId === 'new').isUnlocked, false)
+  assert.equal(updated.chain.find(e => e.digimonId === 'locked').isUnlocked, false)
+  assert.equal(f.rows.get(getTableName(schema.evolutionLines)).length, 1)
+
+  const missing = fixture(), c = missing.campaign(), credentials = missing.credentials('member', c)
+  missing.add(schema.tamers, person())
+  for (const id of ['a', 'b']) missing.add(schema.digimon, { id, name: id, stage: 'rookie', campaignId: 'campaign', partnerId: 'tamer', isEnemy: false })
+  await missing.route('digimon/[id].put.ts')(missing.event('PUT', 'digimon', 'a', credentials, { evolutionPathIds: ['b'] }))
+  assert.equal(missing.rows.get(getTableName(schema.evolutionLines)).length, 1)
+})
+
+test('base form selection accepts an unlocked form and rejects locked or multiple bases', async () => {
+  const f = fixture(), campaign = f.campaign(); addPlayerLine(f)
+  const entries = chain(); entries[1].isBaseForm = true
+  const saved = await f.route('evolution-lines/[id].put.ts')(f.event('PUT', 'evolution-lines', 'line', f.credentials('member', campaign), { chain: entries }))
+  assert.equal(saved.chain[1].isBaseForm, true)
+  for (const invalid of [chain().map((e, i) => ({ ...e, isBaseForm: i === 2 })), chain().map(e => ({ ...e, isBaseForm: true }))]) {
+    await assert.rejects(f.route('evolution-lines/[id].put.ts')(f.event('PUT', 'evolution-lines', 'line', f.credentials('member', campaign), { chain: invalid })), error => error.statusCode === 400)
+  }
+})
+
+test('automatic line creation cannot cross campaign or Workshop ownership boundaries', async () => {
+  for (const campaignMode of [true, false]) {
+    const f = fixture(), c = campaignMode ? f.campaign() : null
+    const cookies = c ? f.credentials('dm', c) : f.login()
+    f.add(schema.digimon, { id: 'a', name: 'A', stage: 'rookie', campaignId: c?.id ?? null, ownerId: 'owner', evolutionPathIds: [] })
+    f.add(schema.digimon, { id: 'b', name: 'B', stage: 'champion', campaignId: c ? 'other' : null, ownerId: 'another', evolutionPathIds: [] })
+    const before = copy(f.rows.get(getTableName(schema.digimon)))
+    await assert.rejects(f.route('digimon/[id].put.ts')(f.event('PUT', 'digimon', 'a', cookies, { evolutionPathIds: ['b'] })), error => [400, 403].includes(error.statusCode))
+    assert.deepEqual(f.rows.get(getTableName(schema.digimon)), before)
+    assert.equal(f.rows.get(getTableName(schema.evolutionLines))?.length ?? 0, 0)
+  }
+})
+
 test('refresh locks the row and preserves a GM relock committed before the waiting refresh acquires it', async () => {
   const f = fixture({ beforeEvolutionLock: row => {
     // Model the other transaction's final commit immediately before this SELECT
@@ -536,6 +604,19 @@ test('normal player refresh retains existing grants and discovers new forms as l
   assert.equal(saved.chain.find(entry => entry.digimonId === 'child').isUnlocked, true)
   assert.equal(saved.chain.find(entry => entry.digimonId === 'locked').isUnlocked, false)
   assert.equal(saved.chain.find(entry => entry.digimonId === 'new-form').isUnlocked, false)
+})
+
+test('manual refresh preserves the current form and chosen base when branch order changes', async () => {
+  const f = fixture(), campaign = f.campaign()
+  addPlayerLine(f); linkRefreshForms(f)
+  const stored = f.rows.get(getTableName(schema.evolutionLines))[0]
+  stored.currentStageIndex = 1
+  stored.chain[1].isBaseForm = true
+  f.rows.get(getTableName(schema.digimon)).find(row => row.id === 'root').evolutionPathIds = ['locked', 'child']
+  const saved = await f.route('evolution-lines/[id]/refresh.post.ts')(f.event('POST', 'evolution-lines', 'line', f.credentials('member', campaign), {}))
+  assert.equal(saved.currentStageIndex, 2)
+  assert.equal(saved.chain[saved.currentStageIndex].digimonId, 'child')
+  assert.equal(saved.chain[saved.currentStageIndex].isBaseForm, true)
 })
 
 test('refresh cannot bypass GM unlock semantics by reparenting a granted form; GM and Workshop refresh remain available', async () => {

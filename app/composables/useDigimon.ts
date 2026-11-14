@@ -5,6 +5,7 @@ import { STAGE_CONFIG, SIZE_CONFIG, type DigimonStage, type DigimonSize, type Di
 // Extended type for update requests with sync option
 export type UpdateDigimonData = Partial<Digimon> & {
   syncBonusDP?: boolean
+  syncEvolutionLines?: boolean
 }
 
 // Tree node structure for evolution chain display
@@ -75,6 +76,7 @@ export function useDigimon() {
     ids?: string
     page?: number
     pageSize?: number
+    all?: boolean
   }) {
     loading.value = true
     error.value = null
@@ -90,8 +92,17 @@ export function useDigimon() {
       if (filters?.page !== undefined) query.set('page', String(filters.page))
       if (filters?.pageSize !== undefined) query.set('pageSize', String(filters.pageSize))
 
+      if (filters?.all) { query.set('page', '1'); query.set('pageSize', '500') }
       const url = query.toString() ? `/api/digimon?${query}` : '/api/digimon'
       const envelope = await $fetch<DigimonEnvelope>(url)
+      if (filters?.all) {
+        for (let nextPage = 2; nextPage <= envelope.totalPages; nextPage++) {
+          query.set('page', String(nextPage))
+          const next = await $fetch<DigimonEnvelope>(`/api/digimon?${query}`)
+          envelope.data.push(...next.data)
+          envelope.warnings = [...new Set([...(envelope.warnings ?? []), ...(next.warnings ?? [])])]
+        }
+      }
       digimonList.value = envelope.data
       total.value = envelope.total
       page.value = envelope.page

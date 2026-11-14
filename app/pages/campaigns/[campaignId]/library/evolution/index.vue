@@ -3,6 +3,7 @@ import type { EvolutionLine } from '~/server/db/schema'
 import type { EvolutionChainEntry } from '~/composables/useEvolution'
 import type { DigimonStage } from '~/types'
 import { getStageColor } from '~/utils/displayHelpers'
+import { matchesLibrarySearch } from '~/utils/librarySearch'
 
 definePageMeta({
   title: 'Evolution Lines',
@@ -31,6 +32,12 @@ const tamerMap = computed(() => {
   tamers.value.forEach((t) => map.set(t.id, t.name))
   return map
 })
+
+const searchQuery = ref('')
+const filteredLines = computed(() => evolutionLines.value.filter(line => matchesLibrarySearch(searchQuery.value, [
+  line.name, line.description, line.partnerId ? tamerMap.value.get(line.partnerId) : undefined,
+  ...getChainArray(line.chain).flatMap(entry => [entry.species, entry.stage]),
+])))
 
 async function handleDelete(id: string, name: string) {
   if (confirm(`Are you sure you want to delete "${name}"?`)) {
@@ -110,6 +117,12 @@ function getChainLevels(chain: EvolutionChainEntry[]): EvolutionChainEntry[][] {
       </NuxtLink>
     </div>
 
+    <div class="mb-6">
+      <label for="evolution-search" class="block text-sm text-digimon-dark-400 mb-1">Search Evolution Lines</label>
+      <input id="evolution-search" v-model="searchQuery" type="search" placeholder="Line name, Digimon, stage, description, or tamer..."
+        class="w-full bg-digimon-dark-700 border border-digimon-dark-600 rounded-lg px-3 py-2 text-white focus:border-digimon-orange-500 focus:outline-none" />
+    </div>
+
     <div v-if="loading" class="text-center py-12">
       <div class="text-digimon-dark-400">Loading evolution lines...</div>
     </div>
@@ -131,9 +144,14 @@ function getChainLevels(chain: EvolutionChainEntry[]): EvolutionChainEntry[][] {
       </NuxtLink>
     </div>
 
+    <div v-else-if="filteredLines.length === 0" class="text-center py-12">
+      <h2 class="text-xl font-semibold text-white mb-2">No Matching Evolution Lines</h2>
+      <p class="text-digimon-dark-400">Try another search.</p>
+    </div>
+
     <div v-else class="grid gap-4">
       <NuxtLink
-        v-for="line in evolutionLines"
+        v-for="line in filteredLines"
         :key="line.id"
         :to="`/campaigns/${campaignId}/library/evolution/${line.id}`"
         class="bg-digimon-dark-800 rounded-xl p-6 border border-digimon-dark-700

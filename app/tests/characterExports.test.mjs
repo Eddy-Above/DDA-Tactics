@@ -51,6 +51,7 @@ test('full Digimon export traverses ancestors, descendants, branches and saved l
     useEvolution: () => ({ createEvolutionLine: async data => { savedLines.push(data); return { id: 'new-line' } },
       updateEvolutionLine: async (id, data) => lineUpdates.push({ id, data }) }),
   }, async api => {
+    lines[0].chain[2].isBaseForm = true
     const bundle = await api.buildDigimonLineBundle(records[1], rules)
     assert.deepEqual(fetches[0].query, { partnerId: 'sora' })
     assert.equal(bundle.tamer, undefined)
@@ -59,14 +60,16 @@ test('full Digimon export traverses ancestors, descendants, branches and saved l
     assert.ok(bundle.digimon.every(d => d.partneredToTamer === false && !('partnerId' in d) && !('campaignId' in d)))
     assert.deepEqual(bundle.evolutionLines.map(line => line.name), ['Branched'])
     assert.deepEqual(bundle.evolutionLines[0].chain.map(entry => entry.evolvesFromIndex), [null, 0, 0, 2])
+    assert.equal(bundle.evolutionLines[0].chain[2].isBaseForm, true)
     const result = await api.importBundle(JSON.parse(JSON.stringify(bundle)), { sandbox: true })
     assert.deepEqual(result.errors, [])
     assert.equal(result.tamerId, null)
     assert.equal(creates.length, 5)
     assert.ok(creates.every(data => data.partnerId === null && data.campaignId === null))
-    assert.deepEqual(updates.find(entry => entry.id === 'new-b' && entry.data.evolvesFromId)?.data, { evolvesFromId: 'new-a' })
+    assert.deepEqual(updates.find(entry => entry.id === 'new-b' && entry.data.evolvesFromId)?.data, { evolvesFromId: 'new-a', syncEvolutionLines: false })
     assert.deepEqual(updates.find(entry => entry.id === 'new-a')?.data.evolutionPathIds.sort(), ['new-b', 'new-branch'])
     assert.deepEqual(savedLines[0].chain.map(entry => entry.digimonId), ['new-a', 'new-b', 'new-branch', 'new-saved-only'])
+    assert.equal(savedLines[0].chain[2].isBaseForm, true)
     assert.equal(savedLines[0].partnerId, undefined)
     assert.deepEqual(lineUpdates, [{ id: 'new-line', data: { currentStageIndex: 2 } }])
   })
