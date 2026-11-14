@@ -1,15 +1,13 @@
 import { defineEncounterCommand } from '../../utils/encounterCommand'
-import { requireEncounterAccess } from '../../utils/campaignSecurity'
 import { updateEncounterState, type UpdateEncounterBody } from '../../utils/encounterUpdate'
 import { serializeIntercedeClaim } from '../../utils/intercedeClaims'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { encounters } from '../../db'
 import { requireLinkedEntity } from '../../utils/entitySecurity'
 
-export default defineEncounterCommand(async event => {
+export default defineEncounterCommand(async (event, { encounter }) => {
   const id = getRouterParam(event, 'id')
   if (!id) throw createError({ statusCode: 400, message: 'Encounter ID is required' })
-  const { encounter } = await requireEncounterAccess(event, id, 'dm')
   const body = tableWriteBody(await readBody(event), encounters, encounter, [], ['revision']) as UpdateEncounterBody
   if (body.mapId) await requireLinkedEntity(event, 'map', body.mapId, encounter.campaignId)
   if (body.participants) {
@@ -26,5 +24,5 @@ export default defineEncounterCommand(async event => {
       }
     }
   }
-  return serializeIntercedeClaim(id, () => updateEncounterState(id, body))
+  return serializeIntercedeClaim(id, () => updateEncounterState(id, body, encounter))
 })

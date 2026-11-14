@@ -161,7 +161,7 @@ try {
     import EncounterMap from '${absolute(sharedFiles[0])}';import MapToolbar from '${absolute(sharedFiles[1])}';import MapCanvas from '${absolute(sharedFiles[2])}';
     import {useAuth} from '${absolute('composables/useAuth.ts')}';
     const placementEncounter={id:'placement',mapId:'map',phase:'setup',round:0,currentTurnIndex:0,revision:0,turnOrder:[],hazards:[],battleLog:[],destructibleStates:[],
-      participants:[{id:'unit',entityId:'tamer',type:'tamer',currentWounds:0,maxWounds:5,actionsRemaining:{simple:2}}],participantPositions:{unit:{x:0,y:0,z:0}}};
+      participants:['unit','unit2','unit3'].map(id=>({id,entityId:'tamer',type:'tamer',currentWounds:0,maxWounds:5,actionsRemaining:{simple:2}})),participantPositions:{unit:{x:0,y:0,z:0}}};
     const placementRoot={render:()=>Vue.h('div',{style:'height:100vh'},[Vue.h(EncounterMap,{encounter:placementEncounter,initialMap:${JSON.stringify(maps.campaign)},isDm:true,editorMode:true,myTamerId:null,tamerMap:{tamer:{name:'Tai',woundBoxes:5}},digimonMap:{},selectedAttack:null})])};
     const router=createRouter({history:createWebHistory(),routes:[{path:'/start',component:{render:()=>Vue.h('div','Start')}},{path:'/placement',component:placementRoot},{path:'/campaigns/:campaignId/library/maps/:mapId',component:Campaign},{path:'/workshop/maps/:mapId',component:Workshop}]});
     const state=Vue.reactive(window.fixture?.state??{}),data=window.fixture?.data??{};window.apiReads=0;window.documentToken=crypto.randomUUID();
@@ -189,7 +189,7 @@ try {
   await build({
     configFile: false, root: workspace, logLevel: 'warn', define: { __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'true' }, esbuild: { tsconfigRaw: { compilerOptions: { target: 'ES2022' } } }, resolve: { alias: { '~': app, vue: absolute('node_modules/vue/dist/vue.runtime.esm-bundler.js') } }, plugins: [{
       name: 'editor-camera-probe', enforce: 'pre', transform(source, id) {
-        if (id.replaceAll('\\', '/').endsWith('/components/EncounterMap.vue')) return source.replace('</script>', `onMounted(()=>{(window as any).placementProbe={arm:selectParticipant,gm:onGmMoveStart,state:()=>JSON.parse(JSON.stringify({positions:positions.value,display:displayPositions.value,pending:placementPreviews.value}))}});</script>`)
+        if (id.replaceAll('\\', '/').endsWith('/components/EncounterMap.vue')) return source.replace('</script>', `onMounted(()=>{(window as any).placementProbe={arm:selectParticipant,gm:onGmMoveStart,state:()=>JSON.parse(JSON.stringify({positions:positions.value,display:displayPositions.value,pending:placementPreviews.value,selected:selectedId.value,error:placementError.value}))}});</script>`)
         if (!id.replaceAll('\\', '/').endsWith('/components/MapCanvas.vue'))
           return; return source.replace('defineExpose({ movingParticipantId, cameraAction })', `defineExpose({ movingParticipantId, cameraAction });onMounted(()=>{(window as any).renderedTokenPosition=(id:string)=>spriteGroups.get(id)?.position.toArray();(window as any).reloadProject=(x:number,y:number,z:number)=>{const p=new THREE.Vector3(x,y,z).project(camera),r=canvasRef.value!.getBoundingClientRect();return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2}}})`)
       }
@@ -322,7 +322,27 @@ try {
     checks.push({kind,pendingDestination:{x,y:0,z},rejected:reject,previewBeforeResponse:true})
     console.log(`PASS ${kind} rendered pending preview before acknowledgement${reject?' and rollback':''}`)
   }
-  assert.deepEqual(await evaluate('window.placementAlerts'),['The destination is occupied'])
+  assert.deepEqual(await evaluate('window.placementAlerts'),[], 'placement failures must not block with a modal alert')
+  assert.match(await evaluate('placementProbe.state().error'),/The destination is occupied/)
+  const requestsBefore = await evaluate('window.placementRequestStarted')
+  await evaluate(`window.placementGate=new Promise(resolve=>window.releasePlacement=()=>{window.placementGate=null;resolve()});placementProbe.arm('unit')`)
+  for (const [index, id] of ['unit', 'unit2', 'unit3'].entries()) {
+    assert.equal(await evaluate('placementProbe.state().selected'), id)
+    const aim = await evaluate(`reloadProject(${index+1.5},.12,1.5)`)
+    for (const type of ['mouseMoved','mousePressed','mouseReleased']) await cdp.send('Input.dispatchMouseEvent',{type,x:aim.x,y:aim.y,button:type==='mouseMoved'?'none':'left',buttons:type==='mousePressed'?1:0,clickCount:type==='mouseMoved'?0:1})
+    await poll(()=>evaluate(`renderedTokenPosition('${id}')?.[0]===${index+1.5}`),`queued ${id} preview`)
+  }
+  const queued = await evaluate('placementProbe.state()')
+  assert.equal(Object.keys(queued.pending).length, 3, 'all tokens render before the first save finishes')
+  assert.equal(queued.selected, null)
+  assert.equal(await evaluate('window.placementRequestStarted'), requestsBefore+1, 'requests serialize while interaction continues')
+  await evaluate('window.releasePlacement()')
+  await poll(()=>evaluate('Object.keys(placementProbe.state().pending).length===0'),'all queued placements saved')
+  assert.equal(await evaluate('window.placementRequestStarted'),requestsBefore+3)
+  const finalPositions=await evaluate('placementProbe.state().positions')
+  for(const [index,id]of ['unit','unit2','unit3'].entries())assert.deepEqual(finalPositions[id],{x:index+1,y:0,z:1})
+  checks.push({kind:'rapid-placement',tokens:3,allPreviewsBeforeFirstResponse:true,serializedSaves:true})
+  console.log('PASS three tokens placed before the first save completes, with automatic selection and serialized saves')
   assert.deepEqual(errors, [], 'full-page browser/hydration/shader errors')
   await writeFile(resolve(artifacts, 'report.json'), JSON.stringify({ scope: 'real page/EncounterMap/toolbar/WebGL with local APIs and Nuxt-style payload; no production services', checks, errors }, null, 2))
   console.log(`Browser evidence: ${artifacts}`)

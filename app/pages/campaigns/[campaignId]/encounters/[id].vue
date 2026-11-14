@@ -105,6 +105,8 @@ const selectedEntityId = ref('')
 const selectedTamerIds = ref<string[]>([])
 const addingParticipants = ref(false)
 const participantAddError = ref('')
+const pendingParticipantCount = ref(0)
+const failedParticipantBatches = ref<Array<{ encounterId: string; additions: CombatParticipant[]; message: string }>>([])
 const participantRosterLoading = ref(false)
 const participantRosterError = ref('')
 const selectedNpcEvoLineId = ref<string>('')
@@ -1433,6 +1435,30 @@ async function refreshParticipantRoster() {
 }
 
 // Add participant handler - supports multiple Tamers or copies of one Digimon.
+async function saveParticipantAdditions(additions: CombatParticipant[]) {
+  const encounterId = currentEncounter.value!.id
+  pendingParticipantCount.value += additions.length
+  showAddParticipant.value = false
+  selectedTamerIds.value = []
+  selectedEntityId.value = ''; selectedNpcEvoLineId.value = ''
+  addQuantity.value = 1; addToReserve.value = false
+  addingParticipants.value = false
+  try {
+    const added = await addParticipants(encounterId, additions, digimonMap.value)
+    if (!added) throw new Error(error.value || 'Could not add characters. Please retry.')
+  } catch (cause) {
+    failedParticipantBatches.value.push({ encounterId, additions, message: requestErrorMessage(cause, 'Could not add characters. Please retry.') })
+  } finally {
+    pendingParticipantCount.value -= additions.length
+  }
+}
+
+async function retryParticipantBatch(batch: typeof failedParticipantBatches.value[number]) {
+  if (batch.encounterId !== currentEncounter.value?.id) return
+  failedParticipantBatches.value = failedParticipantBatches.value.filter(candidate => candidate !== batch)
+  await saveParticipantAdditions(batch.additions)
+}
+
 async function handleAddParticipant() {
   if (!currentEncounter.value || addingParticipants.value || participantRosterLoading.value) return
   if (selectedEntityType.value === 'tamer' ? !selectedTamerIds.value.length : !selectedEntityId.value) return
@@ -1456,13 +1482,7 @@ async function handleAddParticipant() {
         if (addToReserve.value) (participant as any).inReserve = true
         return participant
       })
-      const added = await addParticipants(currentEncounter.value.id, additions, digimonMap.value)
-      if (!added) throw new Error(error.value || 'Could not add the selected Tamers. Please try again.')
-      selectedTamerIds.value = []
-      showAddParticipant.value = false
-      selectedEntityId.value = ''
-      addQuantity.value = 1
-      addToReserve.value = false
+      await saveParticipantAdditions(additions)
       return
     }
 
@@ -1535,14 +1555,7 @@ async function handleAddParticipant() {
 
       additions.push(participant)
     }
-    const added = await addParticipants(currentEncounter.value.id, additions, digimonMap.value)
-    if (!added) throw new Error(error.value || 'Could not add the selected Digimon. Please try again.')
-
-    showAddParticipant.value = false
-    selectedEntityId.value = ''
-    selectedNpcEvoLineId.value = ''
-    addQuantity.value = 1
-    addToReserve.value = false
+    await saveParticipantAdditions(additions)
   } catch (cause) {
     participantAddError.value = requestErrorMessage(cause, 'Could not add participants. Please try again.')
   } finally {
@@ -3587,7 +3600,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
       <div class="text-digimon-dark-400">Loading encounter...</div>
     </div>
 
-    <div v-else-if="error" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-red-400">
+    <div v-else-if="error && !currentEncounter" class="bg-red-900/20 border border-red-500 rounded-lg p-4 text-red-400">
       {{ error }}
     </div>
 
@@ -3600,6 +3613,13 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
     </div>
 
     <template v-else>
+      <p v-if="error" role="alert" class="mb-3 text-red-300">{{ error }}</p>
+      <p v-if="pendingParticipantCount" role="status" class="mb-3 text-digimon-dark-300">Adding {{ pendingParticipantCount }} character(s)… You can keep adding characters or placing tokens.</p>
+      <div v-for="(batch, index) in failedParticipantBatches" :key="index" role="alert" class="mb-3 rounded bg-red-950 p-3 text-red-200">
+        {{ batch.additions.length }} character(s) could not be added: {{ batch.message }}
+        <button type="button" class="ml-2 underline" @click="retryParticipantBatch(batch)">Retry</button>
+        <button type="button" class="ml-2 underline" @click="failedParticipantBatches.splice(index, 1)">Dismiss</button>
+      </div>
       <!-- Header -->
       <div class="flex justify-between items-start mb-6">
         <div>

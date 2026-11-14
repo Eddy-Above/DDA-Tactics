@@ -13,6 +13,7 @@ const modeChange = loadTypeScript('utils/modeChange.ts')
 const orders = loadTypeScript('utils/specialOrders.ts')
 const skills = loadTypeScript('utils/skillOrders.ts')
 const { chebyshev } = loadTypeScript('utils/pathfinding.ts')
+const { createSerialTaskQueue } = loadTypeScript('utils/serialTaskQueue.ts')
 
 function initializer(path, name, deps) {
   const { descriptor } = parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'))
@@ -261,8 +262,9 @@ test('GM player movement and free GM repositioning both use validated HTTP inten
   const origin = { x: 0, y: 0, z: 0 }, destination = { x: 3, y: 0, z: 0 }
   const deps = { props: { encounter: { id: 'encounter', revision: 8, participants: [{ id: 'partner' }] } }, positions: ref({ partner: origin }),
     throwAimContext: ref(null), throwAllyAimContext: ref(null), chargeMoveParticipantId: ref(null),
-    npcMoveParticipantId: ref('partner'), gmMoveParticipantId: ref('partner'),
+    npcMoveParticipantId: ref('partner'), gmMoveParticipantId: ref('partner'), selectedId: ref(null),
     placementPreviews: ref({}), pendingPlacementRequests: new Map(), mapDisposed: false,
+    placementQueue: createSerialTaskQueue(), placementError: ref(''), lastMovementRevision: null,
     movement: { clearMovement: () => {} }, movePathTo: (_id, _pos, path) => path,
     ws: { send: message => messages.push(message) },
     emit: (name, value) => snapshots.push([name, value]), alert: message => assert.fail(message),

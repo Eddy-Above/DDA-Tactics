@@ -20,7 +20,7 @@ import { validateEncounterStateScope, clearInvalidChargeMoves } from './encounte
 
 export type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
-export async function updateEncounterState(id: string, body: UpdateEncounterBody) {
+export async function updateEncounterState(id: string, body: UpdateEncounterBody, lockedEncounter?: Encounter) {
   return withCombatRecords(async () => {
   if ('participantPositions' in body || 'destructibleStates' in body) {
     throw createError({
@@ -30,7 +30,9 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
   }
 
   // Check if encounter exists
-  const [existing] = await db.select().from(encounters).where(eq(encounters.id, id))
+  // Command handlers pass the row already authorized under their transaction lock.
+  const existing = lockedEncounter?.id === id ? lockedEncounter
+    : (await db.select().from(encounters).where(eq(encounters.id, id)))[0]
 
   if (!existing) {
     throw createError({

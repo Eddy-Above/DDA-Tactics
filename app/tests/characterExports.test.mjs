@@ -136,3 +136,44 @@ test('bundle import surfaces the API reason when Tamer creation fails', async ()
     assert.match((await api.importBundle(bundle, { sandbox: true })).errors[0], /Sora.*Total XP cannot be negative/)
   })
 })
+
+test('Workshop imports discard all source campaign/owner IDs and remap every relationship to new records', async () => {
+  const creates = [], updates = []
+  const imported = {
+    format: 'dda-character-bundle', version: 1, rules,
+    campaignId: 'source-campaign', ownerId: 'source-owner',
+    tamer: { id: 'source-tamer', name: 'Sora', campaignId: 'source-campaign', ownerId: 'source-owner' },
+    digimon: [
+      { ...form('source-a'), localKey: 'a', name: 'A', partneredToTamer: true, evolutionPathKeys: ['b'], evolutionPathIds: ['source-b'] },
+      { ...form('source-b'), localKey: 'b', name: 'B', partneredToTamer: true, evolvesFromKey: 'a', evolvesFromId: 'source-a' },
+    ],
+    evolutionLines: [{ id: 'source-line', name: 'Line', campaignId: 'source-campaign', partnerId: 'source-tamer',
+      chain: [{ digimonKey: 'a', digimonId: 'source-a' }, { digimonKey: 'b', digimonId: 'source-b' }] }],
+  }
+  await withServices({
+    useTamers: () => ({ createTamer: async body => { creates.push(body); return { id: 'new-tamer' } } }),
+    useDigimon: () => ({ createDigimon: async body => { creates.push(body); return { id: 'new-' + body.name } },
+      updateDigimon: async (id, body) => { updates.push({ id, body }); return { id } } }),
+    useEvolution: () => ({ createEvolutionLine: async body => { creates.push(body); return { id: 'new-line' } } }),
+  }, async api => {
+    const result = await api.importBundle(imported, { sandbox: true, campaignId: 'ignored-campaign' })
+    assert.deepEqual(result.errors, [])
+    assert.ok(creates.every(body => body.campaignId === null))
+    assert.ok(creates.every(body => !Object.hasOwn(body, 'id') && !Object.hasOwn(body, 'ownerId')))
+    assert.deepEqual(creates.slice(1, 3).map(body => body.partnerId), ['new-tamer', 'new-tamer'])
+    assert.deepEqual(creates[3].chain.map(entry => entry.digimonId), ['new-A', 'new-B'])
+    assert.ok(!JSON.stringify({ creates, updates }).includes('source-'))
+    assert.ok(!JSON.stringify({ creates, updates }).includes('ignored-campaign'))
+  })
+})
+
+test('Workshop import refuses an existing campaign Tamer before creating any records', async () => {
+  await withServices({
+    $fetch: async () => ({ id: 'source-tamer', campaignId: 'source-campaign' }),
+    useDigimon: () => ({ createDigimon: () => { throw Error('Must not create a cross-campaign import') } }),
+  }, async api => {
+    const result = await api.importBundle(api.buildDigimonBundle(form('source')), { sandbox: true, partnerTamerId: 'source-tamer' })
+    assert.match(result.errors[0], /campaign Tamers cannot be linked/)
+    assert.deepEqual(result.digimonIds, [])
+  })
+})

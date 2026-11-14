@@ -107,6 +107,7 @@ function fixture({ beforeEvolutionLock } = {}) {
   const persistence = { ...schema, db }
   const common = { '../db': persistence, 'drizzle-orm': { getTableColumns, ...predicates }, h3 }
   const session = loadTypeScriptWithMocks('server/utils/session.ts', common)
+  const ownership = loadTypeScriptWithMocks('server/utils/ownership.ts', { './session': session })
   const transport = loadTypeScriptWithMocks('server/utils/securityTransport.ts', { h3 })
   const account = loadTypeScriptWithMocks('server/utils/campaignAuth.ts', { ...common, './session': session, './securityTransport': transport })
   const graph = loadTypeScriptWithMocks('server/utils/entityScopeGraph.ts', common)
@@ -129,7 +130,7 @@ function fixture({ beforeEvolutionLock } = {}) {
     '../../db': persistence, 'drizzle-orm': { getTableColumns, ...predicates },
     '../../utils/campaignSecurity': security, '../../utils/campaignAuth': account,
     '../../utils/campaignDm': security, '../../utils/entitySecurity': entities,
-    '../../utils/libraryGmFields': gmFields, '../../utils/session': session,
+    '../../utils/libraryGmFields': gmFields, '../../utils/session': session, '../../utils/ownership': ownership,
     '../../utils/databaseScope': scopes, '../../utils/encounterCommand': boundary,
     '../../utils/intercedeClaims': queue,
     '../../utils/websocketSecurity': { invalidateCampaignPeers: () => {} },
@@ -174,6 +175,46 @@ const rejectedWithoutWrites = async (f, path, event) => {
   await assert.rejects(f.route(path)(event), error => [401, 403].includes(error.statusCode), path)
   assert.equal(f.writes(), before, `${path} must not write when unauthorized`)
 }
+
+test('Workshop Tamer deletion can unlink its own records even when an evolution line has conflicting legacy campaign links', async () => {
+  const f = fixture(), cookies = f.login()
+  f.add(schema.tamers, { id: 'workshop-tamer', campaignId: null, ownerId: 'owner' })
+  f.add(schema.digimon, { id: 'workshop-partner', campaignId: null, ownerId: 'owner', partnerId: 'workshop-tamer' })
+  f.add(schema.digimon, { id: 'campaign-form', campaignId: 'foreign', ownerId: 'someone-else', partnerId: null })
+  f.add(schema.evolutionLines, { id: 'legacy-line', campaignId: null, partnerId: 'workshop-tamer',
+    chain: [{ digimonId: 'workshop-partner' }, { digimonId: 'campaign-form' }] })
+  // This is the reported INVALID_CHARACTER_SCOPE failure in ordinary graph access.
+  await assert.rejects(f.route('digimon/[id].get.ts')(f.event('GET', 'digimon', 'workshop-partner', cookies)),
+    error => error.data?.code === 'INVALID_CHARACTER_SCOPE')
+  const foreignBefore = copy(f.rows.get(getTableName(schema.digimon))[1])
+  const result = await f.route('tamers/[id].delete.ts')(f.event('DELETE', 'tamers', 'workshop-tamer', cookies))
+  assert.equal(result.success, true)
+  assert.equal(f.rows.get(getTableName(schema.tamers)).length, 0)
+  assert.equal(f.rows.get(getTableName(schema.digimon))[0].partnerId, null)
+  assert.deepEqual(f.rows.get(getTableName(schema.digimon))[1], foreignBefore, 'do not modify referenced campaign records')
+  const line = f.rows.get(getTableName(schema.evolutionLines))[0]
+  assert.equal(line.partnerId, null)
+  assert.deepEqual(line.chain, [{ digimonId: 'workshop-partner' }, { digimonId: 'campaign-form' }])
+})
+
+test('Workshop Tamer deletion preserves ownership checks and performs no writes for another owner', async () => {
+  for (const foreignChild of [false, true]) {
+    const f = fixture(), cookies = f.login()
+    f.add(schema.tamers, { id: 'workshop-tamer', campaignId: null, ownerId: foreignChild ? 'owner' : 'someone-else' })
+    f.add(schema.digimon, { id: 'partner', campaignId: null, ownerId: 'someone-else', partnerId: 'workshop-tamer' })
+    await rejectedWithoutWrites(f, 'tamers/[id].delete.ts', f.event('DELETE', 'tamers', 'workshop-tamer', cookies))
+  }
+})
+
+test('Workshop Tamer deletion refuses directly linked campaign records before unlinking anything', async () => {
+  for (const table of [schema.digimon, schema.evolutionLines]) {
+    const f = fixture(), cookies = f.login()
+    f.add(schema.tamers, { id: 'workshop-tamer', campaignId: null, ownerId: 'owner' })
+    f.add(table, { id: 'foreign-child', campaignId: 'foreign', partnerId: 'workshop-tamer', chain: [] })
+    await assert.rejects(f.route('tamers/[id].delete.ts')(f.event('DELETE', 'tamers', 'workshop-tamer', cookies)), { statusCode: 400 })
+    assert.equal(f.writes(), 0)
+  }
+})
 
 test('real campaign PUT/DELETE reject outsiders for owned and protected ownerless campaigns', async () => {
   for (const ownerId of ['owner', null]) for (const method of ['PUT', 'DELETE']) {

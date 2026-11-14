@@ -114,7 +114,7 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
   })
   const put = loadTypeScriptWithMocks('server/api/encounters/[id].put.ts', {
     '../../db': store,
-    '../../utils/encounterCommand': { defineEncounterCommand: work => event => run('update', () => work(event)) },
+    '../../utils/encounterCommand': { defineEncounterCommand: work => event => run('update', context => work(event, context)) },
     '../../utils/campaignSecurity': { requireEncounterAccess: async () => ({ encounter: clone(encounter) }) },
     '../../utils/securityValidation': { tableWriteBody: body => body },
     '../../utils/entitySecurity': { requireLinkedEntity: async () => { throw Error('roster validation must use bulk scope checks') } },
@@ -199,6 +199,7 @@ test('a 20-participant addition uses one save and one scope graph snapshot, rath
   assert.equal(f.calls.writes, 1)
   assert.equal(f.calls.reads.filter(read => read.table === 'evolutionLines').length, 1)
   assert.equal(f.calls.reads.filter(read => read.table === 'digimon').length, 1)
+  assert.equal(f.calls.reads.filter(read => read.table === 'encounters').length, 4, 'preflight, lock, locked authorization and saved result; no additional handler/service reads')
 })
 
 test('the optimized update still rejects a foreign addition before saving anything', async () => {

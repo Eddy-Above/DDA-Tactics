@@ -26,17 +26,29 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   await requireEntityAccess(event, 'tamer', existing, true)
 
-  for (const child of await db.select().from(digimon).where(eq(digimon.partnerId, id))) {
+  const children = await db.select().from(digimon).where(eq(digimon.partnerId, id))
+  const lines = await db.select().from(evolutionLines).where(eq(evolutionLines.partnerId, id))
+  const workshop = !existing.campaignId
+  for (const child of children) {
     if ((child.campaignId ?? null) !== (existing.campaignId ?? null)) throw createError({ statusCode: 400, message: 'Linked Digimon has a different campaign' })
-    await requireEntityAccess(event, 'digimon', child, true)
+    // Workshop deletes only unlink these records. Validate the actual row's
+    // ownership rather than traversing unrelated/malformed evolution graphs.
+    if (workshop) await assertCanModifySandboxCharacter(event, child)
+    else await requireEntityAccess(event, 'digimon', child, true)
   }
-  for (const line of await db.select().from(evolutionLines).where(eq(evolutionLines.partnerId, id))) await requireEntityAccess(event, 'evolution-line', line, true)
+  for (const line of lines) {
+    if ((line.campaignId ?? null) !== (existing.campaignId ?? null)) throw createError({ statusCode: 400, message: 'Linked evolution line has a different campaign' })
+    // Standalone lines are controlled by their stored partner Tamer, authorized above.
+    if (!workshop) await requireEntityAccess(event, 'evolution-line', line, true)
+  }
 
-  // Delete all digimon associated with this tamer
-  await db.delete(digimon).where(eq(digimon.partnerId, id))
-
-  // Delete all evolution lines associated with this tamer
-  await db.delete(evolutionLines).where(eq(evolutionLines.partnerId, id))
+  if (workshop) {
+    await db.update(digimon).set({ partnerId: null, updatedAt: new Date() }).where(eq(digimon.partnerId, id))
+    await db.update(evolutionLines).set({ partnerId: null, updatedAt: new Date() }).where(eq(evolutionLines.partnerId, id))
+  } else {
+    await db.delete(digimon).where(eq(digimon.partnerId, id))
+    await db.delete(evolutionLines).where(eq(evolutionLines.partnerId, id))
+  }
 
   // Delete any per-tamer access grants (no DB-level FK, so this is manual)
   await db.delete(tamerAccessGrants).where(eq(tamerAccessGrants.tamerId, id))

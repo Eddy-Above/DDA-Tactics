@@ -57,6 +57,7 @@ function addFixture({ fail = false, reserve = false } = {}) {
   const selectedTamerIds = ref(['sora', 'tai']), currentEncounter = ref({ id: 'encounter', participants: [] })
   const added = [], requests = [], addingParticipants = ref(false), participantAddError = ref(''), showAddParticipant = ref(true)
   const deps = { selectedTamerIds, currentEncounter, addingParticipants, participantAddError, showAddParticipant,
+    pendingParticipantCount: ref(0), failedParticipantBatches: ref([]),
     participantRosterLoading: ref(false), selectedEntityType: ref('tamer'), selectedEntityId: ref(''), selectedNpcEvoLineId: ref(''), addQuantity: ref(1), addToReserve: ref(reserve),
     tamers: ref([{ id: 'sora', name: 'Sora', currentWounds: 2, inspiration: 1, grantedInspiration: 2, xpBonuses: { inspiration: 1 } },
       { id: 'tai', name: 'Tai', currentWounds: 0, inspiration: 3 }]),
@@ -71,7 +72,7 @@ function addFixture({ fail = false, reserve = false } = {}) {
       return currentEncounter.value
     },
   }
-  return { ...deps, added, requests, ...loadPageFunctions(page, ['handleAddParticipant'], deps) }
+  return { ...deps, added, requests, ...loadPageFunctions(page, ['handleAddParticipant', 'saveParticipantAdditions', 'retryParticipantBatch'], deps) }
 }
 
 test('multi-select queues every Tamer once with their own wounds, Inspiration and reserve state', async () => {
@@ -86,15 +87,36 @@ test('multi-select queues every Tamer once with their own wounds, Inspiration an
   assert.equal(f.requests.length, 1, 'all selected Tamers are saved together')
 })
 
-test('a failed batch retains every selected Tamer for an atomic retry', async () => {
+test('a failed background batch retains the exact additions for an atomic retry without reopening the picker', async () => {
   const f = addFixture({ fail: true })
   await f.handleAddParticipant()
   assert.deepEqual(f.added, [])
-  assert.deepEqual(f.selectedTamerIds.value, ['sora', 'tai'])
-  assert.equal(f.showAddParticipant.value, true)
-  assert.match(f.participantAddError.value, /selected Tamers/)
-  await f.handleAddParticipant()
+  assert.deepEqual(f.selectedTamerIds.value, [])
+  assert.equal(f.showAddParticipant.value, false)
+  assert.equal(f.failedParticipantBatches.value.length, 1)
+  assert.deepEqual(f.failedParticipantBatches.value[0].additions.map(p => p.entityId), ['sora', 'tai'])
+  await f.retryParticipantBatch(f.failedParticipantBatches.value[0])
   assert.deepEqual(f.added.map(p => p.entityId), ['sora', 'tai'])
+  assert.deepEqual(f.failedParticipantBatches.value, [])
+})
+
+test('adding characters closes and unlocks the picker before the save completes', async () => {
+  const f = addFixture()
+  let release
+  const held = new Promise(done => { release = done })
+  const deps = { ...f, addParticipants: async () => { await held; return { id: 'encounter' } } }
+  const handlers = loadPageFunctions(page, ['handleAddParticipant', 'saveParticipantAdditions'], deps)
+  const first = handlers.handleAddParticipant()
+  assert.equal(f.showAddParticipant.value, false)
+  assert.equal(f.addingParticipants.value, false)
+  assert.equal(f.pendingParticipantCount.value, 2)
+  f.showAddParticipant.value = true
+  f.selectedTamerIds.value = ['tai']
+  const second = handlers.handleAddParticipant()
+  assert.equal(f.showAddParticipant.value, false)
+  assert.equal(f.pendingParticipantCount.value, 3)
+  release(); await Promise.all([first, second])
+  assert.equal(f.pendingParticipantCount.value, 0)
 })
 
 test('opening the participant picker reuses the roster without a data request', () => {

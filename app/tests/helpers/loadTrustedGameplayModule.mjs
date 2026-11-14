@@ -52,7 +52,12 @@ export function loadTrustedGameplayModule(relativePath, mocks = {}) {
     ['campaignSecurity', security], ['campaignDm', security], ['entitySecurity', entitySecurity],
     ['encounterAuthorization', { authorizeEncounterIntent: () => ({ access: accessFor('campaign') }) }],
     ['encounterStateScope', { validateEncounterStateScope: async () => {}, clearInvalidChargeMoves: scopeHelpers.clearInvalidChargeMoves }],
-    ['encounterCommand', { defineEncounterCommand: work => work }],
+    ['encounterCommand', { defineEncounterCommand: work => work.length < 2 ? work : async event => {
+      // Handlers consuming the boundary's locked context need that context in
+      // business fixtures too. Preserve explicitly supplied access guards.
+      const policy = [...definitions].find(([name, value]) => name.endsWith('/utils/campaignSecurity') && value.requireEncounterAccess)?.[1] ?? security
+      return work(event, await policy.requireEncounterAccess(event, globalThis.getRouterParam(event, 'id'), 'dm'))
+    } }],
     ['attackCommand', { runAttackCommand: async (_event, id, _body, _operation, work) => queue.serializeIntercedeClaim(id, async () => work(await contextFor(id))) }],
     ['securityValidation', {
       ...validation,

@@ -55,3 +55,27 @@ test('a rejected batch leaves the cached roster and Lag metadata untouched', asy
   assert.equal(result, null)
   assert.deepEqual(clone(f.api.currentEncounter.value), before)
 })
+
+test('rapid additions queue without losing earlier additions or using a stale encounter list', async () => {
+  const f = fixture(), gates = []
+  f.api.encounters.value = [clone(f.api.currentEncounter.value)]
+  globalThis.$fetch = (_url, { body }) => new Promise(resolve => gates.push(() => resolve({ ...f.api.currentEncounter.value, ...body })))
+  const first = f.api.addParticipants('encounter', [f.api.createParticipant('digimon', 'enemy', 5, 3)])
+  const second = f.api.addParticipants('encounter', [f.api.createParticipant('digimon', 'enemy', 7, 4)])
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(gates.length, 1)
+  gates[0](); await first
+  for (let i = 0; i < 10; i++) await Promise.resolve()
+  assert.equal(gates.length, 2)
+  gates[1](); await second
+  assert.equal(f.api.currentEncounter.value.participants.length, 3)
+  assert.deepEqual(f.api.currentEncounter.value.participants.slice(1).map(p => p.seq), [1, 2])
+})
+
+test('retrying an acknowledged-by-WebSocket batch does not duplicate participants or send another save', async () => {
+  const f = fixture(), additions = [f.api.createParticipant('digimon', 'enemy', 5, 3)]
+  await f.api.addParticipants('encounter', additions)
+  await f.api.addParticipants('encounter', additions)
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.api.currentEncounter.value.participants.length, 2)
+})

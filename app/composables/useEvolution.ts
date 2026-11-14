@@ -15,7 +15,7 @@ export interface CreateEvolutionLineData {
   description?: string
   chain: EvolutionChainEntry[] // All entries must have valid digimonId
   partnerId?: string
-  campaignId?: string
+  campaignId?: string | null
 }
 
 export function useEvolution() {

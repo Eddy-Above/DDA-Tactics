@@ -9,6 +9,7 @@ import { applyDeferredIntercedeCost, recordTurnStart } from '../utils/intercedeA
 import { PERMANENT_EFFECTS, DAMAGE_OVER_TIME_EFFECTS } from '../data/attackConstants'
 import type { CombatParticipant } from '../types/combat'
 import { applyLagInitiative } from '../utils/lagInitiative'
+import { createSerialTaskQueue } from '../utils/serialTaskQueue'
 
 export type { ActiveEffect, ClashState, CombatParticipant } from '../types/combat'
 
@@ -171,6 +172,7 @@ export function useEncounters() {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const pendingIntentIds = new Map<string, string>()
+  const participantSaveQueues = new Map<string, ReturnType<typeof createSerialTaskQueue>>()
   function commandId(key: string, supplied?: string): string {
     const existing = pendingIntentIds.get(key)
     if (existing) return existing
@@ -410,27 +412,37 @@ export function useEncounters() {
     additions: CombatParticipant[],
     digimonMap?: Map<string, any>,
   ): Promise<Encounter | null> {
-    const encounter = encounters.value.find((e) => e.id === encounterId) || currentEncounter.value
-    if (!encounter) return null
+    let queue = participantSaveQueues.get(encounterId)
+    if (!queue) { queue = createSerialTaskQueue(); participantSaveQueues.set(encounterId, queue) }
+    return queue.run(async () => {
+      // Build from the latest saved roster when this batch reaches the front.
+      const encounter = currentEncounter.value?.id === encounterId ? currentEncounter.value
+        : encounters.value.find((e) => e.id === encounterId)
+      if (!encounter) return null
 
-    if (!additions.length) return encounter
-    // Assign stable sequences across the entire batch before one atomic save.
-    const existing = (encounter.participants as any[]) || []
-    const sequences = new Map<string, number>()
-    for (const participant of existing) sequences.set(participant.entityId, Math.max(sequences.get(participant.entityId) ?? 0, participant.seq ?? 0))
-    const participants = [...existing.map(participant => ({ ...participant })), ...additions.map(participant => {
-      const seq = (sequences.get(participant.entityId) ?? 0) + 1
-      sequences.set(participant.entityId, seq)
-      return { ...participant, seq }
-    })]
+      if (!additions.length) return encounter
+      // Assign stable sequences across the entire batch before one atomic save.
+      const existing = (encounter.participants as any[]) || []
+      // Retried requests keep their participant IDs. A WebSocket snapshot may
+      // already contain a batch whose HTTP acknowledgement was lost.
+      const existingIds = new Set(existing.map(participant => participant.id))
+      const missing = additions.filter(participant => !existingIds.has(participant.id))
+      if (!missing.length) return encounter
+      const sequences = new Map<string, number>()
+      for (const participant of existing) sequences.set(participant.entityId, Math.max(sequences.get(participant.entityId) ?? 0, participant.seq ?? 0))
+      const participants = [...existing.map(participant => ({ ...participant })), ...missing.map(participant => {
+        const seq = (sequences.get(participant.entityId) ?? 0) + 1
+        sequences.set(participant.entityId, seq)
+        return { ...participant, seq }
+      })]
 
-    // Keep the active participant active across the re-sort — otherwise adding a
-    // late-joining tamer mid-combat moves the turn to someone else.
-    const activeId = activeTurnAnchor(encounter, participants)
-    const { turnOrder, currentTurnIndex } = rebuildTurnOrder(participants, digimonMap, activeId)
+      // Keep the active participant active across the re-sort — otherwise adding a
+      // late-joining tamer mid-combat moves the turn to someone else.
+      const activeId = activeTurnAnchor(encounter, participants)
+      const { turnOrder, currentTurnIndex } = rebuildTurnOrder(participants, digimonMap, activeId)
 
-    const result = await updateEncounter(encounterId, { participants, turnOrder, currentTurnIndex })
-    return result
+      return await updateEncounter(encounterId, { participants, turnOrder, currentTurnIndex })
+    })
   }
 
   async function removeParticipant(

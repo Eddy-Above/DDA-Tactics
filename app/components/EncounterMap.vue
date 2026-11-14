@@ -17,7 +17,8 @@
 
     <!-- 3D Canvas (fills remaining space) -->
     <div class="canvas-wrapper">
-      <div v-if="Object.keys(placementPreviews).length" class="placement-save-status" role="status" aria-live="polite">Saving placement…</div>
+      <div v-if="Object.keys(placementPreviews).length" class="placement-save-status" role="status" aria-live="polite">Saving {{ Object.keys(placementPreviews).length }} placement(s)… Keep placing tokens.</div>
+      <div v-if="placementError" class="placement-save-error" role="alert">{{ placementError }} <button type="button" @click="placementError = ''">Dismiss</button></div>
       <ClientOnly>
         <MapCanvas
           ref="builderCanvas"
@@ -173,6 +174,7 @@ import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { useMapMovement, detectCapabilities, PROJECTILE_CAPS } from '~/composables/useMapMovement'
 import { useMapEditor } from '~/composables/useMapEditor'
 import { useMapAutosave } from '~/composables/useMapAutosave'
+import { createSerialTaskQueue } from '~/utils/serialTaskQueue'
 import { getMapEditChange, getMapGeometryRevision } from '~/utils/mapEdits'
 import { getNaturewalkBonuses, getNaturewalkEnvironmentSettings, resolveNaturewalkEnvironment } from '~/utils/naturewalk'
 import { calculateDigimonDerivedStats, STAGE_CONFIG, type DigimonStage } from '~/types'
@@ -343,7 +345,7 @@ const saveStatus = computed(() => autosave.status.value === 'error' ? 'Save fail
   : autosave.hasUnsaved.value ? 'Saving?' : 'Saved')
 
 function beforeMapUnload(event: BeforeUnloadEvent) {
-  if (!autosave.hasUnsaved.value) return
+  if (!autosave.hasUnsaved.value && !Object.keys(placementPreviews.value).length) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -357,8 +359,8 @@ async function retryMapSaves() {
   }
 }
 
-onBeforeRouteLeave(async () => await autosave.flush())
-onBeforeRouteUpdate(async () => await autosave.flush())
+onBeforeRouteLeave(async () => { await placementQueue.flush(); return await autosave.flush() })
+onBeforeRouteUpdate(async () => { await placementQueue.flush(); return await autosave.flush() })
 onBeforeUnmount(() => {
   mapDisposed = true
   ++mapLoadGeneration
@@ -499,12 +501,12 @@ const isSetupPlacement = computed(() => isSetupPhase(props.encounter.phase))
 // tested without a canvas.
 const placeableIds = computed(() => getPlaceableParticipantIds({
   participants: props.encounter.participants,
-  positions: positions.value,
+  positions: placementPositions.value,
   isDm: props.isDm,
   phase: props.encounter.phase,
   myParticipantIds: props.myParticipantIds,
-}))
-const placedIds = computed(() => Object.keys(positions.value))
+}).filter(id => !placementPreviews.value[id]))
+const placedIds = computed(() => Object.keys(placementPositions.value))
 
 // The HUD is the placement control; this switches its cards into placement mode. The GM can
 // place units at any point in a live encounter, not just during setup — reinforcements deployed
@@ -523,19 +525,23 @@ const draggableParticipantIds = computed(() =>
     ? []
     : getDraggableParticipantIds({
         participants: props.encounter.participants,
-        positions: positions.value,
+        positions: placementPositions.value,
         isDm: props.isDm,
         phase: props.encounter.phase,
         myParticipantIds: props.myParticipantIds,
-      })
+      }).filter(id => !placementPreviews.value[id])
 )
 
 const attackPreview = ref<{ participantId: string; position: Vec3 } | null>(null)
 const placementPreviews = ref<Record<string, Vec3>>({})
 const pendingPlacementRequests = new Map<string, string>()
-watch(() => props.encounter.id, () => { placementPreviews.value = {}; pendingPlacementRequests.clear() })
+const placementQueue = createSerialTaskQueue()
+const placementError = ref('')
+let lastMovementRevision: { encounterId: string; revision: number } | null = null
+watch(() => props.encounter.id, () => { placementPreviews.value = {}; pendingPlacementRequests.clear(); placementError.value = ''; lastMovementRevision = null })
+const placementPositions = computed(() => Object.keys(placementPreviews.value).length ? { ...positions.value, ...placementPreviews.value } : positions.value)
 const displayPositions = computed(() => {
-  const placed = Object.keys(placementPreviews.value).length ? { ...positions.value, ...placementPreviews.value } : positions.value
+  const placed = placementPositions.value
   return attackPreview.value ? { ...placed, [attackPreview.value.participantId]: attackPreview.value.position } : placed
 })
 let pendingAttackIntent: MapAttackIntent | null = null
@@ -548,6 +554,8 @@ function attackIntent(): MapAttackIntent {
 const hudDragId = ref<string | null>(null)
 
 function selectParticipant(id: string) {
+  if (pendingPlacementRequests.has(id)) return
+  gmMoveParticipantId.value = null
   if (selectedId.value === id) {
     selectedId.value = null
     return
@@ -558,8 +566,12 @@ function selectParticipant(id: string) {
 }
 
 async function onCanvasPlace(participantId: string, cell: Vec3) {
-  const result = await postMove(participantId, cell, [], 'placement')
-  if (result?.success && selectedId.value === participantId) selectedId.value = null
+  if (pendingPlacementRequests.has(participantId)) return
+  const placementEncounterId = props.encounter.id
+  const saving = postMove(participantId, cell, [], 'placement')
+  if (selectedId.value === participantId) selectedId.value = placeableIds.value.find(id => !placementPositions.value[id]) ?? null
+  const result = await saving
+  if (!result?.success && !mapDisposed && props.encounter.id === placementEncounterId && !selectedId.value && props.encounter.participants.some(p => p.id === participantId)) selectedId.value = participantId
 }
 
 // A drag finished on a valid cell: either a token moved on the canvas or a HUD card dropped on it.
@@ -616,21 +628,40 @@ async function postMove(participantId: string, destination: Vec3, path: Vec3[], 
     pendingPlacementRequests.set(participantId, operationId)
     placementPreviews.value = { ...placementPreviews.value, [participantId]: { ...destination } }
   }
-  try {
+  const submit = async () => {
+    if (mapDisposed || props.encounter.id !== encounterId || preview && pendingPlacementRequests.get(participantId) !== operationId) return
+    // Earlier queued placements may have advanced the revision before props update.
+    const expectedRevision = lastMovementRevision?.encounterId === encounterId
+      ? Math.max(lastMovementRevision.revision, (props.encounter as any).revision ?? 0)
+      : (props.encounter as any).revision
     const result = await $fetch<MoveResult>(`/api/encounters/${encounterId}/actions/move`, {
       method: 'POST',
-      body: { participantId, destination, kind, ...(path.length ? { path } : {}), origin, allowanceId, operationId, expectedRevision: (props.encounter as any).revision },
+      body: { participantId, destination, kind, ...(path.length ? { path } : {}), origin, allowanceId, operationId, expectedRevision },
     })
     if (mapDisposed || props.encounter.id !== encounterId) return
-    if (result.encounter) emit('encounter-updated', result.encounter)
+    if (result.encounter) {
+      if (typeof result.encounter.revision === 'number') lastMovementRevision = { encounterId, revision: result.encounter.revision }
+      emit('encounter-updated', result.encounter)
+    }
     const current = positions.value[participantId]
     const stillAtOrigin = origin ? sameVec3(current, origin) : !current
     // A newer WebSocket move may already have arrived while this response was
     // in flight. Do not replace it with this earlier acknowledgement.
     if (result.position && stillAtOrigin) positions.value = { ...positions.value, [participantId]: result.position }
     return result
+  }
+  try {
+    return await (preview ? placementQueue.run(submit) : submit())
   } catch (error: any) {
-    if (!mapDisposed && props.encounter.id === encounterId) alert(error?.data?.message ?? 'The movement could not be saved')
+    if (!mapDisposed && props.encounter.id === encounterId) {
+      const message = error?.data?.message ?? 'The movement could not be saved'
+      if (preview) {
+        const participant = props.encounter.participants.find(p => p.id === participantId)
+        const name = participant && (participant.type === 'tamer' ? props.tamerMap[participant.entityId] : props.digimonMap[participant.entityId])?.name
+        placementError.value = `${name ?? 'Token'}: ${message}. Place this token again to retry.`
+      }
+      else alert(message)
+    }
   } finally {
     if (preview && pendingPlacementRequests.get(participantId) === operationId) {
       pendingPlacementRequests.delete(participantId)
@@ -642,6 +673,7 @@ async function postMove(participantId: string, destination: Vec3, path: Vec3[], 
 // GM free-move: enter reposition mode for a participant (cancels any other move mode). The GM then
 // aims at any height with a ghost and scroll wheel → onGmMove. No movement budget or capability check.
 function onGmMoveStart(participantId: string) {
+  selectedId.value = null
   gmMoveParticipantId.value = participantId
   npcMoveParticipantId.value = null
   chargeMoveParticipantId.value = null
@@ -650,8 +682,10 @@ function onGmMoveStart(participantId: string) {
 
 // GM free-move destination chosen: the validated intent grants free repositioning.
 async function onGmMove(participantId: string, position: Vec3) {
-  const result = await postMove(participantId, position, [], 'gm')
-  if (result?.success && gmMoveParticipantId.value === participantId) gmMoveParticipantId.value = null
+  if (pendingPlacementRequests.has(participantId)) return
+  const saving = postMove(participantId, position, [], 'gm')
+  if (gmMoveParticipantId.value === participantId) gmMoveParticipantId.value = null
+  await saving
 }
 
 // ── Doors ──────────────────────────────────────────────────────────────────
@@ -1154,6 +1188,11 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
   position: absolute; top: 12px; left: 12px; z-index: 30; pointer-events: none;
   padding: 6px 10px; border-radius: 6px; background: #151526e6; color: #ccddee; font-size: 12px;
 }
+.placement-save-error {
+  position: absolute; top: 48px; left: 12px; z-index: 30; max-width: 420px;
+  padding: 8px 12px; border-radius: 6px; background: #441e2a; color: #ffd5d5; font-size: 12px;
+}
+.placement-save-error button { margin-left: 8px; text-decoration: underline; }
 .no-map {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;

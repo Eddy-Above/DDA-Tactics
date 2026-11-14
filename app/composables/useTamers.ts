@@ -122,7 +122,7 @@ export function useTamers() {
       tamers.value = tamers.value.filter((t) => t.id !== id)
       return true
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to delete tamer'
+      error.value = requestErrorMessage(e, 'Failed to delete tamer')
       console.error('Failed to delete tamer:', e)
       return false
     } finally {

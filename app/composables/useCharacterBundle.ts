@@ -348,6 +348,17 @@ export function useCharacterBundle() {
     const result: BundleImportResult = { tamerId: null, digimonIds: [], evolutionLineIds: [], errors: [] }
     const campaignId = target.sandbox ? null : target.campaignId ?? null
     const creationRules = target.sandbox ? bundle.rules ?? defaultCreationRules() : null
+    // An explicitly chosen existing partner must also belong to the Workshop.
+    // Source-file IDs are never accepted as imported relationships.
+    if (target.sandbox && !bundle.tamer && target.partnerTamerId) {
+      try {
+        const partner = await $fetch<Tamer>(`/api/tamers/${encodeURIComponent(target.partnerTamerId)}`)
+        if (partner.campaignId) throw new Error('Choose a Workshop Tamer; campaign Tamers cannot be linked to a Workshop import.')
+      } catch (cause: any) {
+        result.errors.push(cause?.data?.message ?? cause?.message ?? 'Could not verify the Workshop Tamer')
+        return result
+      }
+    }
 
     // 1. Tamer
     if (bundle.tamer) {
@@ -454,7 +465,7 @@ export function useCharacterBundle() {
         description: line.description ?? '',
         chain,
         partnerId: partnerTamerId ?? undefined,
-        campaignId: campaignId ?? undefined,
+        campaignId,
       })
       if (created) {
         result.evolutionLineIds.push(created.id)

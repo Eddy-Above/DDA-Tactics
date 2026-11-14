@@ -5,8 +5,8 @@ definePageMeta({
   title: 'Workshop',
 })
 
-const { tamers, loading: tamersLoading, fetchTamers, deleteTamer, updateTamer, calculateDerivedStats } = useTamers()
-const { digimonList, loading: digimonLoading, fetchDigimon, deleteDigimon, updateDigimon } = useDigimon()
+const { tamers, fetchTamers, deleteTamer, updateTamer, calculateDerivedStats, error: tamerError } = useTamers()
+const { digimonList, fetchDigimon, deleteDigimon, updateDigimon, error: digimonError } = useDigimon()
 const mapStore = useMap()
 const initialLoading = ref(true)
 const { parseBundleFile, importBundle } = useCharacterBundle()
@@ -31,7 +31,21 @@ function handleMenuFocusOut(event: FocusEvent) {
 const importFeedback = ref<{ tone: 'success' | 'warning' | 'error'; message: string; errors: string[] } | null>(null)
 const showOnlyMine = ref(false)
 
-const loading = computed(() => initialLoading.value || tamersLoading.value || digimonLoading.value || mapStore.loading.value)
+const loading = computed(() => initialLoading.value)
+const pendingCharacters = ref(new Set<string>())
+const actionError = ref('')
+async function mutateCharacter(key: string, work: () => Promise<unknown>) {
+  if (pendingCharacters.value.has(key)) return
+  pendingCharacters.value.add(key)
+  actionError.value = ''
+  try {
+    if (!await work()) throw new Error((key.startsWith('tamer:') ? tamerError.value : digimonError.value) || 'The change could not be saved. Please try again.')
+  } catch (cause: any) {
+    actionError.value = cause?.data?.message ?? cause?.message ?? 'The change could not be saved.'
+  } finally {
+    pendingCharacters.value.delete(key)
+  }
+}
 
 const tamerNameById = computed(() => {
   const map: Record<string, string> = {}
@@ -87,29 +101,29 @@ function levelColor(rules?: { level?: string } | null) {
 // card from the owner's own list.
 async function toggleTamerHidden(tamer: { id: string; hidden?: boolean; ownerId?: string | null }) {
   if (!isMine(tamer)) return
-  await updateTamer(tamer.id, { hidden: !tamer.hidden })
-  await loadAll()
+  await mutateCharacter(`tamer:${tamer.id}`, () => updateTamer(tamer.id, { hidden: !tamer.hidden }))
 }
 
 async function toggleDigimonHidden(d: { id: string; hidden?: boolean; ownerId?: string | null }) {
   if (!isMine(d)) return
-  await updateDigimon(d.id, { hidden: !d.hidden })
-  await loadAll()
+  await mutateCharacter(`digimon:${d.id}`, () => updateDigimon(d.id, { hidden: !d.hidden }))
 }
 
 async function handleDeleteTamer(tamer: { id: string; name: string; ownerId?: string | null }) {
   if (!canModify(tamer)) return
-  if (confirm(`Delete ${tamer.name}? Their partner digimon stay in the workshop.`)) {
-    await deleteTamer(tamer.id)
-    await loadAll()
+  if (confirm(`Delete ${tamer.name}? Their partner Digimon and evolution lines stay in the Workshop without a Tamer.`)) {
+    await mutateCharacter(`tamer:${tamer.id}`, async () => {
+      if (!await deleteTamer(tamer.id)) return false
+      digimonList.value = digimonList.value.map(d => d.partnerId === tamer.id ? { ...d, partnerId: null } : d)
+      return true
+    })
   }
 }
 
 async function handleDeleteDigimon(d: { id: string; name: string; ownerId?: string | null }) {
   if (!canModify(d)) return
   if (confirm(`Delete ${d.name}?`)) {
-    await deleteDigimon(d.id)
-    await loadAll()
+    await mutateCharacter(`digimon:${d.id}`, () => deleteDigimon(d.id))
   }
 }
 
@@ -228,6 +242,7 @@ async function handleImportFile(event: Event) {
       </ul>
     </div>
 
+    <p v-if="actionError" role="alert" class="mb-4 text-red-400">{{ actionError }}</p>
     <WorkshopMaps v-show="!loading" ref="workshopMaps" :only-mine="showOnlyMine" :store="mapStore" />
 
     <div v-if="loading" class="text-center py-12">
@@ -306,6 +321,7 @@ async function handleImportFile(event: Event) {
                 <CharacterExportMenu kind="tamer" :record="tamer" />
                 <button
                   v-if="isMine(tamer)"
+                  :disabled="pendingCharacters.has(`tamer:${tamer.id}`)"
                   :title="tamer.hidden ? 'Make visible to everyone' : 'Hide from other users'"
                   class="px-3 py-1.5 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
@@ -314,7 +330,7 @@ async function handleImportFile(event: Event) {
                   {{ tamer.hidden ? 'Unhide' : 'Hide' }}
                 </button>
                 <button
-                  :disabled="!canModify(tamer)"
+                  :disabled="!canModify(tamer) || pendingCharacters.has(`tamer:${tamer.id}`)"
                   :title="!canModify(tamer) ? 'Owned by another account — you can\'t delete this character' : ''"
                   class="px-3 py-1.5 text-sm bg-red-900/30 hover:bg-red-900/50 disabled:opacity-40
                          disabled:cursor-not-allowed disabled:hover:bg-red-900/30
@@ -399,6 +415,7 @@ async function handleImportFile(event: Event) {
                 <CharacterExportMenu kind="digimon" :record="d" />
                 <button
                   v-if="isMine(d)"
+                  :disabled="pendingCharacters.has(`digimon:${d.id}`)"
                   :title="d.hidden ? 'Make visible to everyone' : 'Hide from other users'"
                   class="px-3 py-1 text-sm bg-digimon-dark-700 hover:bg-digimon-dark-600
                          text-white rounded transition-colors"
@@ -407,7 +424,7 @@ async function handleImportFile(event: Event) {
                   {{ d.hidden ? 'Unhide' : 'Hide' }}
                 </button>
                 <button
-                  :disabled="!canModify(d)"
+                  :disabled="!canModify(d) || pendingCharacters.has(`digimon:${d.id}`)"
                   :title="!canModify(d) ? 'Owned by another account — you can\'t delete this character' : ''"
                   class="px-3 py-1 text-sm bg-red-900/30 hover:bg-red-900/50 disabled:opacity-40
                          disabled:cursor-not-allowed disabled:hover:bg-red-900/30
