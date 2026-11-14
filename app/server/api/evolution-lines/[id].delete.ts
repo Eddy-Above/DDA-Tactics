@@ -1,4 +1,5 @@
-import { requireEntityAccess } from '../../utils/entitySecurity'
+import { requireEntityAccess, entityCampaignId } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines } from '../../db'
 
@@ -23,9 +24,11 @@ export default defineEventHandler(async (event) => {
   }
 
   await requireEntityAccess(event, 'evolution-line', existing, true)
+  const scope = await entityCampaignId('evolution-line', existing)
 
   // Delete evolution line
   await db.delete(evolutionLines).where(eq(evolutionLines.id, id))
+  notifyCharacterUpdated(scope, { ownerTamerIds: existing.partnerId ? [existing.partnerId] : [], evolutionLines: true })
 
   return { success: true, id }
 })

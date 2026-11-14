@@ -1,4 +1,5 @@
 import { entityWrite } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { eq } from 'drizzle-orm'
@@ -87,6 +88,10 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   // Return updated evolution line
   const [updated] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
+  notifyCharacterUpdated(scope, {
+    ownerTamerIds: [...new Set([existing.partnerId, updated.partnerId].filter((value): value is string => !!value))],
+    evolutionLines: true,
+  })
 
   return updated
 }))

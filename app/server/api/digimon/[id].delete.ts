@@ -1,4 +1,5 @@
-import { requireEntityAccess } from '../../utils/entitySecurity'
+import { requireEntityAccess, entityCampaignId } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { eq } from 'drizzle-orm'
 import { db, digimon } from '../../db'
 import { assertCanModifySandboxCharacter } from '../../utils/ownership'
@@ -24,9 +25,14 @@ export default defineEventHandler(async (event) => {
   }
 
   await requireEntityAccess(event, 'digimon', existing, true)
+  const scope = await entityCampaignId('digimon', existing)
 
   // Delete digimon
   await db.delete(digimon).where(eq(digimon.id, id))
+  notifyCharacterUpdated(scope, {
+    digimonIds: [id], ownerTamerIds: existing.partnerId ? [existing.partnerId] : [],
+    partnerDigimon: true, evolutionLines: true,
+  })
 
   return { success: true, id }
 })

@@ -1,4 +1,5 @@
 import { requireEntityAccess } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { eq } from 'drizzle-orm'
 import { db, tamers, type Tamer } from '../../db'
@@ -27,7 +28,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // Lock the current budget through validation and saving, including against concurrent GM rewards.
-  return db.transaction(async tx => {
+  const updated = await db.transaction(async tx => {
     const [existing] = await tx.select().from(tamers).where(eq(tamers.id, id)).for('update')
     if (!existing) {
       throw createError({ statusCode: 404, message: `Tamer with ID ${id} not found` })
@@ -54,4 +55,6 @@ export default defineEventHandler(async (event) => {
     const [updated] = await tx.select().from(tamers).where(eq(tamers.id, id))
     return updated
   })
+  notifyCharacterUpdated(updated.campaignId, { tamerIds: [updated.id] })
+  return updated
 })

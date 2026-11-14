@@ -374,9 +374,9 @@ test('socket messages: pushes go through the gate; the update fallback still rel
 
 test('the page no longer reloads everything after combat actions', () => {
   const source = readFileSync(new URL(`../${PLAYER_PAGE}`, import.meta.url), 'utf8')
-  // The explicit Refresh button and the periodic poll remain full loads.
+  // Explicit refresh remains available; background refreshes are event-driven.
   assert.match(source, /@click="loadData"/)
-  assert.match(source, /setInterval\(loadData/)
+  assert.doesNotMatch(source, /setInterval\(loadData/)
   const actionHandlers = ['submitDodgeRoll', 'handleIntercedeClaim', 'handleIntercedeSkip', 'handleSpendInspiration', 'handleUseSpecialOrder', 'confirmAccuracyReview']
   for (const name of actionHandlers) {
     const start = source.indexOf(`async function ${name}`)

@@ -58,6 +58,7 @@ import { useReactionOrders, type ReactionOrderOption } from '~/composables/useRe
 import { isRequestAnswered } from '~/utils/requestState'
 import { prepareAttackAccuracy, snapshotAttackRiders, type AccuracyRollResult } from '~/utils/attackAccuracy'
 import { buildParticipantDisplayNames } from '~/utils/participantDisplayNames'
+import { playerCharacterRefreshPlan } from '~/utils/characterUpdates'
 
 definePageMeta({
   layout: 'player',
@@ -416,22 +417,47 @@ const { fetchEvolutionLines, evolutionLines, getCurrentStage } = useEvolution()
 const digimonMap = computed(() => {
   const map = new Map<string, any>()
   digimonList.value.forEach((d) => map.set(d.id, d))
+  allDigimon.value.forEach((d) => map.set(d.id, d))
+  partnerDigimon.value.forEach((d) => map.set(d.id, d))
   return map
 })
-
-// Auto-refresh as a low-frequency fallback; the WebSocket below handles
-// near-instant updates while connected.
-let refreshInterval: ReturnType<typeof setInterval>
 
 // Realtime sync: push-based refresh via the encounter's WebSocket room.
 const activeEncounterIdForWs = computed(() => activeEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(activeEncounterIdForWs)
-const rewardsWs = useMapWebSocket(computed(() => campaignId.value || null), 'campaigns')
+const campaignWs = useMapWebSocket(computed(() => campaignId.value || null), 'campaigns')
 function handleCampaignRewardMessage(msg: any) {
   if (msg.type === 'rewards-granted' && msg.campaignId === campaignId.value && Array.isArray(msg.tamerIds) && msg.tamerIds.includes(tamer.value?.id)) void loadData()
 }
-rewardsWs.onMessage(handleCampaignRewardMessage)
-rewardsWs.onReconnect(() => { void loadData() })
+function handleCampaignUpdateMessage(msg: any) {
+  const owner = tamer.value
+  if (!owner || msg.campaignId !== campaignId.value) return
+  if (msg.type === 'rewards-granted') {
+    handleCampaignRewardMessage(msg)
+  } else if (msg.type === 'character-updated') {
+    if (msg.deletedTamerIds?.includes(owner.id)) {
+      tamer.value = null
+      activeEncounter.value = null
+      currentEncounter.value = null
+      myRequests.value = []
+      encounterGate.reset()
+      return
+    }
+    const plan = playerCharacterRefreshPlan(msg, owner.id, ownedDigimonIds())
+    if (!isEmptyPlan(plan)) void refreshAffectedRecords(plan)
+  } else if (msg.type === 'encounter-availability-changed') {
+    if (msg.encounterId === activeEncounter.value?.id && !msg.deleted) return
+    const owned = ownedDigimonIds()
+    if (!msg.tamerIds.includes(owner.id) && !msg.digimonIds.some((id: string) => owned.has(id))) return
+    if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
+    encounterUpdateDebounce = setTimeout(() => {
+      encounterUpdateDebounce = null
+      void loadData()
+    }, 200)
+  }
+}
+campaignWs.onMessage(handleCampaignUpdateMessage)
+campaignWs.onReconnect(() => { void loadData() })
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
 // One gate for everything that can replace the encounter on this page: pushes, the encounter GET
 // and the response to an action the player just took. See utils/encounterSnapshot.ts.
@@ -559,7 +585,7 @@ async function resyncCombatState(action?: CombatActionKind) {
     return
   }
   const fetched = await $fetch<Encounter>(`/api/encounters/${id}`).catch(() => null)
-  if (!fetched) return // the next push or the 120 s poll retries
+  if (!fetched) return // A later push, reconnect or manual page refresh can retry.
   await applyEncounterUpdate(fetched, 'fetch', { action })
 }
 
@@ -587,7 +613,7 @@ function handleEncounterSocketMessage(msg: any) {
 }
 
 encounterWs.onMessage((msg) => handleEncounterSocketMessage(msg))
-// A dropped socket misses pushes; resync once it is back (the 120 s poll remains the backstop).
+// A dropped socket misses pushes; resync once it is back.
 encounterWs.onReconnect(() => { void resyncCombatState() })
 
 // Reconstruct attack results from persisted responses (handles page refresh
@@ -790,13 +816,9 @@ async function enforceSpecificTamerScope() {
 onMounted(async () => {
   await enforceSpecificTamerScope()
   await loadData()
-  // Low-frequency fallback; the WebSocket above handles near-instant updates
-  // while connected.
-  refreshInterval = setInterval(loadData, 120000)
 })
 
 onUnmounted(() => {
-  clearInterval(refreshInterval)
   if (encounterUpdateDebounce) clearTimeout(encounterUpdateDebounce)
 })
 

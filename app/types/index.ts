@@ -204,6 +204,8 @@ export interface ScenePreset {
 export const MAX_SCENE_PRESETS = 10
 
 export type WebSocketMapMessage =
+  | import('../utils/characterUpdates').CharacterUpdate
+  | { type: 'encounter-availability-changed'; campaignId: string; encounterId: string; tamerIds: string[]; digimonIds: string[]; deleted: boolean }
   | { type: 'unit-moved';       encounterId: string; participantId: string; position: Vec3; path: Vec3[]; version: number }
   | { type: 'map-edited';       encounterId: string; changeType: 'add' | 'remove'; tileType: 'ground' | 'space' | 'voxel' | 'wall' | 'window' | 'door' | 'ceiling' | 'stairs'; data: unknown }
   | { type: 'door-toggled';     encounterId: string; doorId: string; isOpen: boolean }

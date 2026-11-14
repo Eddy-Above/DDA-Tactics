@@ -1,4 +1,5 @@
 import { entityWrite } from '../../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../../utils/characterUpdates'
 import { requireEntityAccess, requireLinkedEntity, filterReadableEntities, entityCampaignId } from '../../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, evolutionLines, digimon as digimonTable, type EvolutionLine, type Digimon } from '../../../db'
@@ -116,6 +117,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   // Return updated evolution line
   const [updated] = await db.select().from(evolutionLines).where(eq(evolutionLines.id, id))
+  notifyCharacterUpdated(scope, { ownerTamerIds: existing.partnerId ? [existing.partnerId] : [], evolutionLines: true })
 
   return {
     ...updated,

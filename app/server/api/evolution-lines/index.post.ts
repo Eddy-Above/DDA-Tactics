@@ -1,4 +1,5 @@
 import { entityWrite } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { db, evolutionLines, type NewEvolutionLine } from '../../db'
@@ -40,7 +41,8 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   await requireEntityAccess(event, 'evolution-line', body, true)
-  await requireEvolutionGmFields(event, await entityCampaignId('evolution-line', body), body)
+  const scope = await entityCampaignId('evolution-line', body)
+  await requireEvolutionGmFields(event, scope, body)
   await requireLinkedEntity(event, 'tamer', body.partnerId, body.campaignId ?? null)
   for (const entry of body.chain) await requireLinkedEntity(event, 'digimon', entry.digimonId, body.campaignId ?? null)
 
@@ -67,6 +69,7 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   }
 
   await db.insert(evolutionLines).values(newEvolutionLine)
+  notifyCharacterUpdated(scope, { ownerTamerIds: body.partnerId ? [body.partnerId] : [], evolutionLines: true })
 
   return newEvolutionLine
 }))

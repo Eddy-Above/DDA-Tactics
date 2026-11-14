@@ -1,4 +1,5 @@
 import { entityWrite } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { requireEntityAccess } from '../../utils/entitySecurity'
 import { eq } from 'drizzle-orm'
 import { db, tamers, digimon, evolutionLines, tamerAccessGrants } from '../../db'
@@ -55,6 +56,9 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   // Delete tamer
   await db.delete(tamers).where(eq(tamers.id, id))
+  notifyCharacterUpdated(existing.campaignId, {
+    tamerIds: [id], deletedTamerIds: [id], ownerTamerIds: [id], partnerDigimon: true, evolutionLines: true,
+  })
 
   return { success: true, id }
 }))

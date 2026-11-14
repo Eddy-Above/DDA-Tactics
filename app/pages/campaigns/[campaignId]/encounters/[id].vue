@@ -2957,6 +2957,7 @@ let refreshInterval: ReturnType<typeof setInterval>
 // Realtime sync: push-based refresh via the encounter's WebSocket room.
 const currentEncounterIdForWs = computed(() => currentEncounter.value?.id ?? null)
 const encounterWs = useMapWebSocket(currentEncounterIdForWs)
+const characterWs = useMapWebSocket(computed(() => campaignId.value || null), 'campaigns')
 let encounterUpdateDebounce: ReturnType<typeof setTimeout> | null = null
 // One gate for everything that can replace the encounter on this page: pushes, GETs and the
 // responses to GM actions. See utils/encounterSnapshot.ts.
@@ -3040,6 +3041,27 @@ async function applyActionResult(result: any, action?: CombatActionKind) {
   }
   await resyncEncounter(action)
 }
+
+async function handleCampaignCharacterMessage(msg: any) {
+  if (msg.type !== 'character-updated' || msg.campaignId !== campaignId.value) return
+  if (msg.partnerDigimon) {
+    await recordRefreshQueue.run(() => fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }))
+  }
+  await refreshAffectedRecords({
+    tamerIds: msg.tamerIds, digimonIds: msg.partnerDigimon ? [] : msg.digimonIds,
+    evolutionLines: msg.evolutionLines, partnerDigimon: false,
+  })
+}
+characterWs.onMessage(msg => { void handleCampaignCharacterMessage(msg) })
+characterWs.onReconnect(() => {
+  void recordRefreshQueue.run(async () => {
+    await Promise.all([
+      fetchDigimon({ campaignId: campaignId.value, pageSize: 500 }),
+      fetchTamers(campaignId.value), fetchEvolutionLines(undefined, campaignId.value),
+    ])
+    await syncEncounterDigimon()
+  })
+})
 
 function handleEncounterSocketMessage(msg: any) {
   if (msg.type === 'rewards-granted') {

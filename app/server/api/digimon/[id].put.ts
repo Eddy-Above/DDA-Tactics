@@ -1,4 +1,5 @@
 import { entityWrite } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { requireEntityAccess, requireLinkedEntity, entityCampaignId } from '../../utils/entitySecurity'
 import { tableWriteBody } from '../../utils/securityValidation'
 import { eq, inArray } from 'drizzle-orm'
@@ -139,6 +140,13 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
 
   // Return updated digimon
   const [updated] = await db.select().from(digimon).where(eq(digimon.id, id))
+  notifyCharacterUpdated(scope, {
+    digimonIds: linksProvided || body.syncBonusDP
+      ? [id, ...linked].filter((value): value is string => typeof value === 'string') : [id],
+    ownerTamerIds: [...new Set([existing.partnerId, updated.partnerId].filter((value): value is string => !!value))],
+    partnerDigimon: linksProvided || !!body.syncBonusDP || existing.partnerId !== updated.partnerId,
+    evolutionLines: linksProvided,
+  })
   return updated
 }))
 

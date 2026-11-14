@@ -12,6 +12,7 @@ import { validateEncounterStateScope } from './encounterStateScope'
 import { validateEncounterContextScope } from './encounterContextScope'
 import { shapeEncounterResult } from '../../utils/encounterSnapshot'
 import { withEncounterCommandReceipt } from './encounterCommandReceipt'
+import { notifyEncounterAudienceChanged } from './characterUpdates'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -40,6 +41,12 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
         finiteNumber(body.expectedRevision, 'expectedRevision', { integer: true, min: 0 })
         if (body.expectedRevision !== context.encounter.revision) throw createError({ statusCode: 409, message: 'The encounter changed. Review the action and try again.' })
       }
+      const audienceBefore = {
+        id: context.encounter.id, campaignId: context.encounter.campaignId,
+        visibleToPlayers: context.encounter.visibleToPlayers, phase: context.encounter.phase,
+        participants: context.encounter.participants.map(p => ({ type: p.type, entityId: p.entityId })),
+        pendingRequests: (context.encounter.pendingRequests ?? []).map(r => ({ targetTamerId: r.targetTamerId })),
+      }
       const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, () => work(context))
       if (operationId && !saved) {
         const [fresh] = await db.select().from(encounters).where(eq(encounters.id, id))
@@ -50,6 +57,10 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
           const [updated] = await db.update(encounters).set({ participants, updatedAt: new Date() }).where(eq(encounters.id, id)).returning()
           if (value && typeof value === 'object' && (value as any).id === id) Object.assign(value, updated)
         }
+      }
+      if (operation === 'delete') notifyEncounterAudienceChanged(audienceBefore, null)
+      else if (value && typeof value === 'object' && (value as any).id === id) {
+        notifyEncounterAudienceChanged(audienceBefore, value as any)
       }
       return value
     }), committed))

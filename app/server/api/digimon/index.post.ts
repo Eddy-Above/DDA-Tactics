@@ -1,4 +1,5 @@
 import { entityWrite } from '../../utils/entitySecurity'
+import { notifyCharacterUpdated } from '../../utils/characterUpdates'
 import { requireCampaignMember, requireCampaignDm } from '../../utils/campaignSecurity'
 import { requireLinkedEntity } from '../../utils/entitySecurity'
 import { tableWriteBody } from '../../utils/securityValidation'
@@ -173,5 +174,9 @@ export default defineEventHandler(async (event) => entityWrite(async () => {
   // Fetch and return the created digimon
   if (hasEvolutionLinks) await syncEvolutionLines(event, [id], body.campaignId ?? null)
   const [created] = await db.select().from(digimon).where(eq(digimon.id, id))
+  notifyCharacterUpdated(created.campaignId, {
+    digimonIds: [id], ownerTamerIds: created.partnerId ? [created.partnerId] : [],
+    partnerDigimon: true, evolutionLines: hasEvolutionLinks,
+  })
   return created
 }))
