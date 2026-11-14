@@ -49,6 +49,8 @@ import {
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
 import { useClashAttack } from '~/composables/useClashAttack'
 import { useAutoDismiss } from '~/composables/useAutoDismiss'
+import { useAutoEndTurn } from '~/composables/useAutoEndTurn'
+import { exhaustedPlayerTurnKey, hasUnresolvedTurnRequests } from '~/utils/autoEndTurn'
 import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
 import { useSpecialOrderTargets, type SpecialOrderChoice } from '~/composables/useSpecialOrderTargets'
 import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/useFatefulIntervention'
@@ -4481,6 +4483,12 @@ function onThrowAllyLandingSelected(interceptorParticipantId: string, allyPartic
   throwAllyAimContext.value = null
   handleIntercedeClaim(interceptorParticipantId, { allyId: allyParticipantId, landingPos })
 }
+
+useAutoEndTurn({
+  key: () => isMyTurn.value ? exhaustedPlayerTurnKey(activeEncounter.value, digimonMap.value) : null,
+  blocked: () => endingTurn.value || hasUnresolvedTurnRequests(activeEncounter.value),
+  endTurn: handleEndTurn,
+})
 
 async function handleEndTurn() {
   if (!activeEncounter.value || endingTurn.value || !isMyTurn.value) return

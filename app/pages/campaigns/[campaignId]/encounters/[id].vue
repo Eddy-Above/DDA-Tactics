@@ -39,6 +39,8 @@ import { useFatefulIntervention, type FatefulRollTarget } from '~/composables/us
 import { usePendingAttackFateful } from '~/composables/usePendingAttackFateful'
 import { useReactionOrders } from '~/composables/useReactionOrders'
 import { useAutomaticDefenses } from '~/composables/useAutomaticDefenses'
+import { useAutoEndTurn } from '~/composables/useAutoEndTurn'
+import { exhaustedPlayerTurnKey, hasUnresolvedTurnRequests } from '~/utils/autoEndTurn'
 import { isRequestAnswered } from '~/utils/requestState'
 import type { Stance, Vec3 } from '~/types'
 import type { AttackRadialRider, MapRadialItem, MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
@@ -934,6 +936,13 @@ watch(npcAutoEndTurnSignal, (val) => {
   if (autoEndingNpcTurn.value) return
   autoEndingNpcTurn.value = true
   handleNextTurn().finally(() => { autoEndingNpcTurn.value = false })
+})
+
+// The GM also runs the player timer so it works when the player tab is closed.
+useAutoEndTurn({
+  key: () => exhaustedPlayerTurnKey(currentEncounter.value, digimonMap.value),
+  blocked: () => hasUnresolvedTurnRequests(currentEncounter.value),
+  endTurn: handleNextTurn,
 })
 
 // Determine if a participant is on the enemy side
