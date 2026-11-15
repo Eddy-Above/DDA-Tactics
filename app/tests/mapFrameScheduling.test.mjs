@@ -12,6 +12,7 @@ function fixture(canvasDisposed = false) {
   const deps = {
     props: { isDm: false },
     rafId: 0, canvasDisposed, renderer: { render: () => calls.render++ }, camera: new THREE.PerspectiveCamera(), scene: {}, terrain: null,
+    lightAnimationClock: { visible: true, cancel() {} },
     requestAnimationFrame: callback => { frames.push(callback); return frames.length },
     controls: { update: () => {} }, keysHeld: new Set(), azimuthTween: null,
     overlaysDirty: true, highlightsDirty: true, reticulesDirty: true, pendingPointerEvent: null,

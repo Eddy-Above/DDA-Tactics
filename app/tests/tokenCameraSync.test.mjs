@@ -107,6 +107,7 @@ function fixture({ width = 1200, height = 800, dragging = false, ghost = false }
       },
     },
     rafId: 0, canvasDisposed: false, pendingPointerEvent: null,
+    lightAnimationClock: { visible: true, cancel() {} },
     overlaysDirty: true, highlightsDirty: false, reticulesDirty: false,
     keysHeld: new Set(), azimuthTween: null, AZIMUTH_STEP: Math.PI / 4, AZIMUTH_TWEEN_MS: 220,
     rightDragActive: dragging, rightDragLastX: 0,

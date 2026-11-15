@@ -121,6 +121,7 @@ import { buildVoxelSurface } from '~/utils/voxelSurface'
 import { createMapTerrainChunks } from '~/utils/mapTerrainChunks'
 import { getMapGeometryRevision } from '~/utils/mapEdits'
 import { clearMapGroup, disposeMapObjects, mapPreviewChanged } from '~/utils/mapRenderResources'
+import { createMapLightAnimationClock } from '~/utils/mapLightAnimationClock'
 import { createVoxelGeometry, createStairGeometry, stairDirectionForFace } from '~/utils/voxelGeometry'
 import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePassLanding } from '~/utils/areaShapes'
 import type { AreaShapeData } from '~/utils/areaShapes'
@@ -640,6 +641,7 @@ let fogReferenceDistance = 28
 let fogReferenceDensity = 0.04
 let rafId = 0
 let canvasDisposed = false
+const lightAnimationClock = createMapLightAnimationClock(requestRender)
 let terrain: ReturnType<typeof createMapTerrainChunks> | null = null
 let overlaysDirty = true
 let highlightsDirty = true
@@ -814,6 +816,7 @@ function renderPassLandingMarker(anchor: Vec3, dims: FootprintDims, valid: boole
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
+  lightAnimationClock.setVisible(!document.hidden)
   initScene()
   syncEditorCameraControls()
   buildMap()
@@ -822,6 +825,7 @@ onMounted(() => {
   requestRender()
 
   window.addEventListener('resize', onResize)
+  document.addEventListener('visibilitychange', onMapVisibilityChange)
   window.addEventListener('keydown', queueKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', resetEditorInput)
@@ -844,6 +848,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   canvasDisposed = true
+  lightAnimationClock.dispose()
+  document.removeEventListener('visibilitychange', onMapVisibilityChange)
   cancelAnimationFrame(rafId)
   rafId = 0
   pendingPointerEvent = null
@@ -879,6 +885,9 @@ function initScene() {
   renderer.setPixelRatio(window.devicePixelRatio)
   renderer.setSize(container.clientWidth, container.clientHeight)
   renderer.shadowMap.enabled = true
+  // Flickering point lights do not cast shadows. Reuse the sun's shadow map until geometry changes.
+  renderer.shadowMap.autoUpdate = false
+  renderer.shadowMap.needsUpdate = true
 
   scene = new THREE.Scene()
   scene.background = new THREE.Color(0x1a1a2e)
@@ -975,6 +984,7 @@ function tickAzimuthTween() {
 
 // ── Chunked terrain and structure geometry ──────────────────────────────────
 function buildMap() {
+  invalidateShadows()
   losIndex = null
   if (!props.map) {
     terrain?.dispose(); terrain = null
@@ -1466,8 +1476,27 @@ function refreshBoxDragPreview(ctrlKey: boolean) {
 }
 
 function requestRender() {
-  if (canvasDisposed || !renderer || rafId) return
+  if (canvasDisposed || !renderer || !lightAnimationClock.visible) return
+  // Input and state changes preempt a waiting light tick and share the next display frame.
+  lightAnimationClock.cancel()
+  if (rafId) return
   rafId = requestAnimationFrame(animate)
+}
+
+function onMapVisibilityChange() {
+  lightAnimationClock.setVisible(!document.hidden)
+  if (document.hidden) {
+    cancelAnimationFrame(rafId)
+    rafId = 0
+    pendingPointerEvent = null
+    resetEditorInput()
+  } else {
+    invalidateFrame()
+  }
+}
+
+function invalidateShadows() {
+  if (renderer) renderer.shadowMap.needsUpdate = true
 }
 
 function invalidateFrame() {
@@ -1515,6 +1544,7 @@ function queueKeyDown(event: KeyboardEvent) {
 
 function animate(timeMs = performance.now()) {
   rafId = 0
+  if (canvasDisposed || !lightAnimationClock.visible) return
   applyKeyMovement()
   tickAzimuthTween()
   controls.update()
@@ -1546,7 +1576,8 @@ function animate(timeMs = performance.now()) {
   }
   const lightsAnimating = terrain?.updateAnimation(timeMs / 1000) ?? false
   renderer.render(scene, camera)
-  if (keysHeld.size || azimuthTween || lightsAnimating) requestRender()
+  if (keysHeld.size || azimuthTween) requestRender()
+  else if (lightsAnimating) lightAnimationClock.schedule(timeMs)
 }
 
 function worldToScreen2D(v: THREE.Vector3): { x: number; y: number } | null {
@@ -3232,6 +3263,7 @@ watchBurstPreview()
 watch([() => props.selection, () => props.selectionPreview], () => { if (scene) updateSelectionOutline() }, { deep: true })
 
 watch(clipY, (y) => {
+  invalidateShadows()
   for (const obj of buildMeshes) {
     const fY = (obj as any).userData?.floorY
     if (fY !== undefined) obj.visible = fY <= y
@@ -3246,6 +3278,7 @@ watch(() => props.showSpawnIndicators, (show) => {
 })
 
 watch(ghostWalls, (ghost) => {
+  invalidateShadows()
   for (const obj of buildMeshes) {
     const type = (obj as any).userData?.type
     if (type !== 'wall' && type !== 'ceiling') continue
