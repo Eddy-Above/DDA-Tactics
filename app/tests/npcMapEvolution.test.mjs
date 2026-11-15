@@ -30,7 +30,7 @@ function fixture() {
   ] })
   const participant = encounter.value.participants[0]
   const calls = [], applied = []
-  const deps = { computed, currentEncounter: encounter, digimonMap: ref(new Map([
+  const deps = { computed, ...loadTypeScript('utils/combatStances.ts'), currentEncounter: encounter, digimonMap: ref(new Map([
     ['rookie', { id: 'rookie', name: 'Rookie', isEnemy: true }], ['champion', { id: 'champion', isEnemy: true }],
   ])), tamerMap: ref(new Map()), evolutionLines: ref([{ id: 'line', currentStageIndex: 0, chain: [
     { digimonId: 'rookie', species: 'Rookie', evolvesFromIndex: null, isUnlocked: true },
@@ -44,14 +44,14 @@ function fixture() {
     openWillpower: () => { throw new Error('An NPC must not need a Tamer Willpower roll') },
     console: { error: () => {} }, alert: error => { throw new Error(error) },
   }
-  const handlers = loadPageFunctions(page, ['canParticipantAct', 'getParticipantEvolutionOptions',
+  const handlers = loadPageFunctions(page, ['getParticipantStances', 'canParticipantAct', 'getParticipantEvolutionOptions',
     'getTamerForDigimonParticipant', 'handleDigivolve', 'onMapActionSelected'], deps)
   Object.assign(deps, handlers)
   const options = initializer(page, 'mapRadialOptions', deps)
   deps.mapRadialOptions = options
   // Rebind the action handler to the live options computed.
   const actions = loadPageFunctions(page, ['onMapActionSelected'], deps)
-  const props = { isDm: true, activeParticipantId: 'npc', digimonMap: {}, participants: encounter.value.participants, get radialOptions() { return options.value } }
+  const props = { isDm: true, activeParticipantId: 'npc', participantPositions: {}, digimonMap: {}, participants: encounter.value.participants, get radialOptions() { return options.value } }
   const radialParticipantId = ref('npc')
   const radialDeps = { props, radialParticipantId, npcRadialId: ref('npc'), gmRadialId: ref(null),
     npcClashButtons: ref(null), npcOutOfActions: computed(() => participant.actionsRemaining.simple < 1), npcDoorButtons: ref([]),

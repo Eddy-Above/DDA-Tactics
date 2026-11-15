@@ -7,6 +7,7 @@ import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { effectiveAttackArmor } from '~/utils/attackArmor'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
+import { availableCombatStances } from '~/utils/combatStances'
 import { calculateSwimSpeed, calculateJumpProfile, calculateSpecialMovementSpeeds } from '~/utils/movementRules'
 import { getNaturewalkBonuses } from '~/utils/naturewalk'
 import { buildCombatEvolutionOptions } from '~/utils/combatEvolutionOptions'
@@ -1769,6 +1770,11 @@ function hasPartnerTamerInEncounter(digimonParticipant: CombatParticipant): bool
   return participants.some(p => p.type === 'tamer' && p.entityId === digimon.partnerId)
 }
 
+function getParticipantStances(participant: CombatParticipant | null | undefined): Stance[] {
+  if (!participant) return []
+  return availableCombatStances(participant, participant.type === 'digimon' ? digimonMap.value.get(participant.entityId)?.qualities ?? [] : [])
+}
+
 function getParticipantAttacks(participant: CombatParticipant): any[] {
   if (participant.type !== 'digimon') return []
   const digimon = partnerDigimon.value.find((d) => d.id === participant.entityId)
@@ -1850,7 +1856,7 @@ const mapRadialOptions = computed(() => {
     options[p.id] = {
       attacks: getParticipantAttacks(p).map(attack => radialAttackItem(p, attack, getMapAttackContext(p),
         radialAttackDraft.value?.participantId === p.id && radialAttackDraft.value.attackId === attack.id ? radialAttackDraft.value.riders : [])),
-      stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
+      stances: getParticipantStances(p).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),
         description: p.currentStance === stance ? 'Current stance' : '1 Simple Action',
@@ -2055,7 +2061,7 @@ function getParticipantImage(participant: CombatParticipant): string | null {
 // Check if a participant can act (either their turn or their partner's turn)
 // Player combat actions (stance, movement, tamer direct)
 async function changePlayerStance(participant: CombatParticipant, stance: CombatParticipant['currentStance']) {
-  if (!activeEncounter.value) return
+  if (!activeEncounter.value || !getParticipantStances(participant).includes(stance)) return
   const updated = await performIntent(activeEncounter.value.id, 'stance', { participantId: participant.id, stance, operationId: crypto.randomUUID() })
   await applyActionResult(updated, 'stance')
 }
@@ -5092,7 +5098,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select Stance (1 Simple)</div>
               <div class="flex flex-wrap gap-2 justify-center">
                 <button
-                  v-for="stance in (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const)"
+                  v-for="stance in getParticipantStances(mapStanceParticipant)"
                   :key="stance"
                   class="px-3 py-2 rounded text-sm capitalize bg-digimon-dark-700 text-digimon-dark-200 hover:bg-digimon-dark-600"
                   @click="changePlayerStance(mapStanceParticipant!, stance); mapStanceDigimonParticipantId = null"
@@ -5413,7 +5419,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   <label class="block text-xs text-digimon-dark-400 mb-1">Stance (1 Simple)</label>
                   <div class="flex flex-wrap gap-1">
                     <button
-                      v-for="stance in (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const)"
+                      v-for="stance in getParticipantStances(participant)"
                       :key="stance"
                       :disabled="participant.actionsRemaining.simple < 1 && participant.currentStance !== stance"
                       :class="[

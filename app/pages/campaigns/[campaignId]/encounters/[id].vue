@@ -7,6 +7,7 @@ import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
+import { availableCombatStances } from '~/utils/combatStances'
 import { buildCombatEvolutionOptions, resolveCombatEvolutionIndex } from '~/utils/combatEvolutionOptions'
 
 import { combatAttackStats } from '~/utils/combatDice'
@@ -503,6 +504,12 @@ function canParticipantAct(participant: CombatParticipant): boolean {
 }
 
 // Get attacks for a participant
+function getParticipantStances(value: CombatParticipant | string | null | undefined): Stance[] {
+  const participant = typeof value === 'string' ? currentEncounter.value?.participants.find(p => p.id === value) : value
+  if (!participant) return []
+  return availableCombatStances(participant, participant.type === 'digimon' ? digimonMap.value.get(participant.entityId)?.qualities ?? [] : [])
+}
+
 function getParticipantAttacks(participant: CombatParticipant): Digimon['attacks'] {
   if (participant.type !== 'digimon') return []
   const digimon = digimonMap.value.get(participant.entityId)
@@ -607,7 +614,7 @@ const mapRadialOptions = computed(() => {
     options[p.id] = {
       attacks: getParticipantAttacks(p).map(attack => radialAttackItem(p, attack, getMapAttackContext(p),
         radialAttackDraft.value?.participantId === p.id && radialAttackDraft.value.attackId === attack.id ? radialAttackDraft.value.riders : [])),
-      stances: (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const).map(stance => ({
+      stances: getParticipantStances(p).map(stance => ({
         id: stance,
         label: stance[0].toUpperCase() + stance.slice(1),
         description: p.currentStance === stance ? 'Current stance' : '1 Simple Action',
@@ -2526,7 +2533,7 @@ function onMapPlayerAction(participantId: string, action: 'attack' | 'direct' | 
 async function changeStance(stance: CombatParticipant['currentStance'], participantId?: string) {
   if (!currentEncounter.value) return
   const participant = participantId ?? activeParticipant.value?.id
-  if (!participant) return
+  if (!participant || !getParticipantStances(participant).includes(stance)) return
   const result = await performIntent(currentEncounter.value.id, 'stance', { participantId: participant, stance, operationId: crypto.randomUUID() })
   if (!result) alert('The stance could not be saved')
 }
@@ -2728,7 +2735,7 @@ async function forceChangeStance(participantId: string, stance: CombatParticipan
   if (!currentEncounter.value) return
   const participants = currentEncounter.value.participants as CombatParticipant[]
   const participant = participants.find((p) => p.id === participantId)
-  if (!participant || (participant as any).clash) return
+  if (!participant || (participant as any).clash || !getParticipantStances(participant).includes(stance)) return
   participant.currentStance = stance
   await updateEncounter(currentEncounter.value.id, { participants })
   const entity = getEntityDetails(participant)
@@ -3838,7 +3845,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <div class="text-sm text-digimon-dark-400 mb-3 text-center">Select NPC Stance (1 Simple Action)</div>
           <div class="grid grid-cols-3 gap-2">
             <button
-              v-for="stance in ['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const"
+              v-for="stance in getParticipantStances(npcStanceParticipantId)"
               :key="stance"
               class="px-2 py-2 rounded text-xs capitalize bg-digimon-dark-700 text-digimon-dark-300 hover:bg-digimon-dark-600"
               @click="changeStance(stance, npcStanceParticipantId!); npcStanceParticipantId = null"
@@ -4932,7 +4939,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <label class="block text-sm text-digimon-dark-400 mb-2">Change Stance (1 Simple)</label>
               <div class="grid grid-cols-2 gap-2">
                 <button
-                  v-for="stance in ['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const"
+                  v-for="stance in getParticipantStances(activeParticipant)"
                   :key="stance"
                   :disabled="activeParticipant.actionsRemaining.simple < 1 && activeParticipant.currentStance !== stance"
                   :class="[
@@ -5625,7 +5632,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               <h3 class="font-semibold text-white mb-3">Stance</h3>
               <div class="grid grid-cols-5 gap-1">
                 <button
-                  v-for="s in (['neutral', 'defensive', 'offensive', 'sniper', 'brave'] as const)"
+                  v-for="s in getParticipantStances(selectedParticipant)"
                   :key="s"
                   :class="[
                     'py-1 rounded text-xs capitalize transition-colors',

@@ -5,6 +5,8 @@ import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorizati
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
 import { STANCE_COLORS } from '../../../../../utils/stanceModifiers'
+import { combatStanceError } from '../../../../../utils/combatStances'
+import { loadParticipantDigimon } from '../../../../utils/combatSpatial'
 import { createParticipantActionLog } from '../../../../utils/participantActionLog'
 import { includeEncounterCommandReceipt, markEncounterCommandReceiptSaved } from '../../../../utils/encounterCommandReceipt'
 
@@ -18,6 +20,10 @@ export default defineEncounterCommand(async (event, commandContext) => {
     const actor = encounter?.participants.find((p: any) => p.id === body.participantId)
     if (!actor || actor.inReserve || actor.clash || encounter.phase !== 'combat') throw createError({ statusCode: 400, message: 'This character cannot change stance' })
     if ((actor as any).lastStanceOperationId === body.operationId || actor.currentStance === body.stance) return encounter
+    const record = actor.type === 'digimon' && (body.stance === 'sniper' || body.stance === 'brave')
+      ? (await loadParticipantDigimon([actor])).get(actor.entityId) : undefined
+    const stanceError = combatStanceError(actor, body.stance, record?.qualities ?? [])
+    if (stanceError) throw createError({ statusCode: 400, message: stanceError })
     if ((actor.actionsRemaining?.simple ?? 0) < 1 || !await canActOnEncounterTurn(actor, encounter, id => db.select().from(digimon).where(eq(digimon.id, id)))) throw createError({ statusCode: 403, message: 'Changing stance requires one action on this character’s turn' })
     const participants = encounter.participants.map((p: any) => p.id === actor.id ? { ...p, currentStance: body.stance, lastStanceOperationId: body.operationId, pendingChargeMove: undefined, actionsRemaining: { simple: p.actionsRemaining.simple - 1 } } : p)
     const entry = await createParticipantActionLog(encounter, actor, 'Changed stance', `Switched to ${body.stance} stance`)

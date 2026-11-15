@@ -14,6 +14,7 @@ import { shapeEncounterResult } from '../../utils/encounterSnapshot'
 import { withEncounterCommandReceipt } from './encounterCommandReceipt'
 import { notifyEncounterAudienceChanged } from './characterUpdates'
 import { finishTankBusterHealthChange } from './tankBuster'
+import { finishBraveStanceHealthChange } from './braveStance'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -53,7 +54,8 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
       })) }
       const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, async () => {
         const result = await work(context)
-        return operation === 'delete' || operation === 'duplicate' ? result : finishTankBusterHealthChange(id, healthBefore, result)
+        if (operation === 'delete' || operation === 'duplicate') return result
+        return finishBraveStanceHealthChange(id, context.encounter, await finishTankBusterHealthChange(id, healthBefore, result))
       })
       if (operationId && !saved) {
         const [fresh] = await db.select().from(encounters).where(eq(encounters.id, id))

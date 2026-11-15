@@ -144,7 +144,7 @@ function pageFixture() {
   const specialOrders = [{ name: 'Fateful Intervention', type: 'Passive', effect: 'Choose dice' }, { name: 'Swagger', type: 'Simple Action', effect: 'Taunt' },
     { name: 'Passive order', type: 'Passive', effect: 'Always on' }]
   const skillOrders = [{ name: 'Bravado', type: 'Complex Action', effect: 'A skill order' }]
-  const deps = { computed, chebyshev, ...modeChange, ...orders, ...skills,
+  const deps = { computed, chebyshev, ...modeChange, ...orders, ...skills, ...loadTypeScript('utils/combatStances.ts'),
     currentEncounter: encounter, eddySoulRules: ref({}), campaignLevel: ref('standard'),
     tamers: ref([{ id: 'owner', usedPerDayOrders: [], usedPerDaySkillOrders: [] }]),
     digimonMap: ref(new Map([['partner', { id: 'partner', partnerId: 'owner', qualities: [{ id: 'mode-change', ranks: 1, choiceId: 'accuracy-damage' }] }],
@@ -173,7 +173,7 @@ function pageFixture() {
   }
   encounter.value.participants[0].currentInspiration = 7
   encounter.value.participants[1].evolutionLineId = 'line'
-  Object.assign(deps, loadPageFunctions(page, ['canParticipantAct', 'canMapDirect', 'getMapAttackTamer', 'canUseGmSpecialOrder', 'isPassiveSkillOrder', 'canUseGmSkillOrder'], deps))
+  Object.assign(deps, loadPageFunctions(page, ['getParticipantStances', 'canParticipantAct', 'canMapDirect', 'getMapAttackTamer', 'canUseGmSpecialOrder', 'isPassiveSkillOrder', 'canUseGmSkillOrder'], deps))
   deps.directRanges = initializer(page, 'directRanges', deps)
   deps.directMapTargetIds = initializer(page, 'directMapTargetIds', deps)
   deps.mapRadialOptions = initializer(page, 'mapRadialOptions', deps)

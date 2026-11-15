@@ -18,6 +18,7 @@ import { applyNaturewalkEnvironment } from './naturewalk'
 import { getNaturewalkEnvironmentSettings } from '../../utils/naturewalk'
 import { validateEncounterStateScope, clearInvalidChargeMoves } from './encounterStateScope'
 import { includeEncounterCommandReceipt, markEncounterCommandReceiptSaved } from './encounterCommandReceipt'
+import { combatStanceError } from '../../utils/combatStances'
 
 export type UpdateEncounterBody = Partial<Omit<Encounter, 'id' | 'createdAt' | 'updatedAt' | 'revision'>> & { movementActionParticipantId?: string }
 
@@ -54,6 +55,14 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
         ? [{ type: 'digimon', entityId: state.entityId }] : [])
       : [])
     const records = await loadParticipantDigimon([...roster, ...forms])
+    if ((body.phase ?? existing.phase) === 'combat' && body.participants) {
+      const previous = new Map(existing.participants.map(p => [p.id, p.currentStance]))
+      for (const participant of roster) {
+        if (!participant.currentStance || participant.currentStance === previous.get(participant.id)) continue
+        const error = combatStanceError(participant, participant.currentStance, records.get(participant.entityId)?.qualities ?? [])
+        if (error) throw createError({ statusCode: 400, message: error })
+      }
+    }
     await loadTamersByIds([...records.values()].flatMap(record => record.partnerId ? [record.partnerId] : []))
   }
 

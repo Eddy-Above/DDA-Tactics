@@ -22,6 +22,7 @@ function createMapActions(role) {
   const logs = []
   const rejected = []
   const dependencies = {
+    ...loadTypeScript('utils/combatStances.ts'),
     ...attackOptions,
     ...radialAttackOptions,
     radialAttackDraft: ref(null),
@@ -68,7 +69,7 @@ function createMapActions(role) {
     addBattleLogEntry: async (...args) => { logs.push(args) },
   }
   const handlers = loadPageFunctions(pages[role], [
-    'getParticipantAttacks', 'canUseAttack', 'selectAttackAndShowTargets',
+    'getParticipantStances', 'getParticipantAttacks', 'canUseAttack', 'selectAttackAndShowTargets',
     'onMapAttackSelected', 'onMapAttackRiderSelected', 'onMapStanceSelected', role === 'gm' ? 'changeStance' : 'changePlayerStance',
   ], dependencies)
   return { ...handlers, dependencies, actor, record, attack, areaAttack, encounter, updates, logs, rejected }

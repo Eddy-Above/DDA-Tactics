@@ -46,6 +46,9 @@ function fixture(initial = {}) {
       .map(p => [p.entityId, { attacks: [{ tags: ['Tank Buster'] }] }])) },
   })
   const module = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
+    './braveStance': loadTypeScriptWithMocks('server/utils/braveStance.ts', {
+      '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
+    }),
     './tankBuster': tankBuster,
     '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
     './intercedeClaims': queue, './databaseScope': scopes, './combatRecordCache': records,
@@ -76,6 +79,28 @@ test('unauthorised commands fail before starting a transaction, draining rooms o
   assert.equal(f.control.transactions, 0); assert.equal(f.control.prepares, 0)
   assert.equal(f.control.writes, 0); assert.equal(f.control.work, 0)
   assert.equal(f.state().participants[0].actionsRemaining.simple, 2)
+})
+
+test('healing commands reset Brave above half health inside the same durable command', async () => {
+  const f = fixture({ phase: 'combat', participants: [{ id: 'unit', type: 'digimon', entityId: 'mon', currentStance: 'brave',
+    maxWounds: 20, currentWounds: 12, actionsRemaining: { simple: 2 } }] })
+  const heal = (operationId, currentWounds, fail = false) => f.run({ operationId }, async context => {
+    await f.db.update(f.table).set({ participants: context.encounter.participants.map(p => ({ ...p, currentWounds })) }).where('enc')
+    if (fail) throw Error('Healing failed')
+    return (await f.db.select().from(f.table).where('enc'))[0]
+  })
+  await assert.rejects(heal('failed-heal', 5, true), /Healing failed/)
+  assert.equal(f.state().participants[0].currentStance, 'brave')
+  assert.equal(f.state().participants[0].currentWounds, 12)
+  await heal('half-health', 10)
+  assert.equal(f.state().participants[0].currentStance, 'brave')
+  const result = await heal('above-half-health', 9)
+  assert.equal(result.participants[0].currentStance, 'neutral')
+  assert.equal(f.state().participants[0].currentStance, 'neutral')
+  assert.equal(f.state().participants[0].actionsRemaining.simple, 2)
+  const writes = f.control.writes
+  await heal('above-half-health', 9)
+  assert.equal(f.control.writes, writes, 'retries cannot repeat the healing or passive transition')
 })
 
 test('health commands grant Tank Buster crossings once, preserve earned uses through healing, and roll back failures', async () => {
