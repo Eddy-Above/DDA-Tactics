@@ -27,6 +27,7 @@ function harness(size = 'large', giganticDimensions = null) {
   const dependencies = {
     spacePanning: ref(false), panGesture: false, editorHint: ref(null),
     props, movingParticipantId, pathHighlightGroup, hoverGhostGroup, hoveredMoveScreen,
+    displayedMovementCells: { get value() { return props.reachableCells } },
     movementGhost: ref(null), movementGhostOverlay: ref(null), movementGapLabel: ref(null),
     updateMovementGhostOverlay: () => {}, renderMovementGap: () => {},
     THREE, getFootprintDimensions, vec3Key, TILE_SIZE: 1, TILE_H: 0.1,

@@ -278,7 +278,7 @@ export function getMovementCostProfile(
         return withinSpeed(digSpeed, spent, ignoresPenalty ? 1 : destination.dig)
       }
       destination.walk ??= Boolean(getGroundTile(map, to)) || hasSolidVoxelSupport(map, to) || hasSolidStairSupport(map, to)
-      const walking = destination.walk && !(to.y > from.y && to.x === from.x && to.z === from.z)
+      const walking = (destination.walk || canStepOffPlatform(from, to, map)) && !(to.y > from.y && to.x === from.x && to.z === from.z)
       let speed = Math.max(walking ? landSpeed : 0, flySpeed)
       if (caps.canClimb) {
         destination.climb ??= hasClimbSupport(map, to, caps, destroyedStructures)
@@ -366,6 +366,27 @@ export function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
   return map.stairs.some(s => s.x === pos.x && s.y === pos.y - 1 && s.z === pos.z)
 }
 
+// Walking may end just beyond an edge, but cannot continue out into open air.
+export function isAdjacentToFooting(pos: Vec3, map: GameMap): boolean {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      if (!dx && !dz) continue
+      const cell = { x: pos.x + dx, y: pos.y, z: pos.z + dz }
+      const ground = getGroundTile(map, cell)
+      if ((ground && ground.terrain !== 'water' && ground.terrain !== 'earth')
+        || hasSolidVoxelSupport(map, cell) || hasSolidStairSupport(map, cell)) return true
+    }
+  }
+  return false
+}
+
+function canStepOffPlatform(from: Vec3, to: Vec3, map: GameMap): boolean {
+  return from.y === to.y
+    && Math.max(Math.abs(to.x - from.x), Math.abs(to.z - from.z)) <= 1
+    && (!isPositionInAir(from, map) || isAdjacentToFooting(from, map))
+    && isAdjacentToFooting(to, map)
+}
+
 function canMoveOntoSupportedStairTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap, jumpAllowed = caps.canJump): boolean {
   if (!hasSolidStairSupport(map, to)) return false
   const dx = to.x - from.x
@@ -438,6 +459,8 @@ export function canPassThrough(
     return true
   }
 
+  if (canStepOffPlatform(from, to, map)) return true
+
   if (spaceTile) {
     if (spaceTile.spaceType === 'water') return caps.canSwim
     if (spaceTile.spaceType === 'earth') return caps.canDig
@@ -449,9 +472,8 @@ export function canPassThrough(
       return false
     }
     if (to.y < from.y) {
-      // Searches keep descending jumps within their horizontal range; omitted origins retain
-      // legacy unrestricted descent for displacement/gravity callers.
-      return !origin || caps.canFly || canJumpTo(to, origin, caps, map)
+      // A jump may return toward its launch height, but cannot descend below it.
+      return caps.canFly || canJumpTo(to, origin, caps, map)
     }
     // Moving laterally through air
     if (caps.canFly) return true
@@ -464,12 +486,12 @@ export function canPassThrough(
   if (canMoveOntoSupportedVoxelTop(from, to, caps, map, jumpAllowed)) return true
   if (canMoveOntoSupportedStairTop(from, to, caps, map, jumpAllowed)) return true
   if (caps.canFly && isWithinMapFootprint(map, to)) return true  // fliers traverse open (unpainted) air
-  if ((origin ? canJumpTo(to, origin, caps, map) : caps.canJump && dy <= caps.jumpHeight) && isWithinMapFootprint(map, to)) return true
+  if ((origin ? canJumpTo(to, origin, caps, map) : caps.canJump && dy >= 0 && dy <= caps.jumpHeight) && isWithinMapFootprint(map, to)) return true
   return false
 }
 
 // Airborne jump landings are measured from the move's origin in both height and horizontal range.
-// Descending is unrestricted vertically; omitting the origin keeps the stricter fliers-only rule.
+// Jump destinations cannot be below their launch point; descending further requires a fall.
 export function canStartJump(origin: Vec3, map: GameMap, caps: MovementCapabilities): boolean {
   if (isSwimmingCell(map, origin)) return caps.canJumpFromWater === true
   if (mapVoxelBlocksMovement(map, origin) || hasStairAt(map, origin)) return false
@@ -479,6 +501,7 @@ export function canStartJump(origin: Vec3, map: GameMap, caps: MovementCapabilit
 function canJumpTo(pos: Vec3, origin: Vec3 | undefined, caps: MovementCapabilities, map: GameMap): boolean {
   return !!origin && caps.canJump
     && canStartJump(origin, map, caps)
+    && pos.y >= origin.y
     && (pos.y - origin.y) <= caps.jumpHeight
     && Math.max(Math.abs(pos.x - origin.x), Math.abs(pos.z - origin.z)) <= caps.jumpRange
 }
@@ -507,6 +530,8 @@ export function canLandOn(
     if (groundTile.terrain === 'earth') return caps.canDig
     return true
   }
+
+  if (isAdjacentToFooting(pos, map)) return true
 
   const spaceTile = getSpaceTile(map, pos)
   if (spaceTile) {

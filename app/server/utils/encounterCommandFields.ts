@@ -11,6 +11,7 @@ const fields: Record<string, readonly string[]> = {
   digivolve: ['participantId', 'targetChainIndex', 'rollTotal'],
   direct: ['participantId', 'targetDigimonId', 'bolstered'],
   doors: ['participantId', 'doorIds', 'isOpen'],
+  fall: ['participantId'],
   'end-turn': ['participantId', 'turnKey'],
   'gm-digivolve': ['participantId', 'targetChainIndex'],
   'grant-inspiration': ['participantId', 'amount'],

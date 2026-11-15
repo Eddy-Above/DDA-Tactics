@@ -92,9 +92,10 @@
           @gm-manage="(id) => emit('gm-manage', id)"
           @gm-moved="onGmMove"
           @cell-hovered="onCellHovered"
-          @movement-cancelled="() => { npcMoveParticipantId = null; chargeMoveParticipantId = null; gmMoveParticipantId = null; movement.clearMovement() }"
+          @movement-cancelled="onMovementCancelled"
           @wall-selected="onWallSelected"
           @door-toggle="(doorId, isOpen) => setDoorsOpen([doorId], isOpen)"
+          @fall="onFall"
         />
         <div v-else class="no-map">
           <div class="no-map-msg">
@@ -634,6 +635,19 @@ async function onCombatMove(participantId: string, position: Vec3, path: Vec3[])
 // can wait for it before its attack and the two server writes can't overwrite each other.
 // `defeated`: Burn knocked the (enemy) mover out and it left the encounter.
 type MoveResult = { success: boolean; defeated?: boolean; encounter?: Encounter; position?: Vec3 }
+async function onFall(participantId: string) {
+  const encounterId = props.encounter.id
+  try {
+    const result = await $fetch<Encounter>(`/api/encounters/${encounterId}/actions/fall`, {
+      method: 'POST', body: { participantId, operationId: crypto.randomUUID() },
+    })
+    if (mapDisposed || props.encounter.id !== encounterId) return
+    emit('encounter-updated', result)
+    movement.clearMovement()
+  } catch (error: any) {
+    if (!mapDisposed && props.encounter.id === encounterId) placementError.value = error?.data?.message ?? 'The fall could not be saved'
+  }
+}
 async function postMove(participantId: string, destination: Vec3, path: Vec3[], kind: 'normal' | 'placement' | 'gm' | 'charge-after', allowanceId?: string): Promise<MoveResult | void> {
   const queuePlacement = kind === 'placement' || kind === 'gm'
   if (pendingPlacementRequests.has(participantId)) return
@@ -859,6 +873,17 @@ function startChargeBefore() {
   chargeMode.value = 'before'
 }
 
+function onMovementCancelled() {
+  npcMoveParticipantId.value = null
+  chargeMoveParticipantId.value = null
+  gmMoveParticipantId.value = null
+  movement.clearMovement()
+  if (chargeMode.value === 'before') {
+    chargeMode.value = null
+    emit('attack-cancelled')
+  }
+}
+
 function onChargeTargetSelected(attackerId: string, destination: Vec3, targetId: string | null) {
   const origin = positions.value[attackerId]
   if (!origin) return
@@ -1042,6 +1067,7 @@ watch([npcMoveParticipantId, chargeMoveParticipantId, throwAimContext, throwAlly
 
 function onCellHovered(cell: Vec3 | null) {
   const participantId = npcMoveParticipantId.value ?? chargeMoveParticipantId.value
+    ?? (chargeMode.value === 'before' ? props.selectedAttack?.attackerParticipantId ?? activeParticipantId.value : null)
   if (!cell || !participantId || !map.value) {
     lastHoveredMovementCell = null
     movement.activePath.value = []

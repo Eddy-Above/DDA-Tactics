@@ -23,6 +23,7 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     actionFeedback: { previewMovement() {}, cancelMovementPreview() {} },
     ref: Vue.ref, computed: Vue.computed, watch: Vue.watch, props, positions, pendingAttackIntent: null,
     map: Vue.ref({ id: 'map' }), activeParticipantId: Vue.ref('tamer'),
+    npcMoveParticipantId: Vue.ref(null), gmMoveParticipantId: Vue.ref(null),
     getAreaShape, computePassLanding, chebyshev,
     npcMoveCaps: id => { calls.movers.push(id); return caps },
     movement: { computeReachable: (...args) => calls.reach.push(args), clearMovement: () => calls.clear++ },
@@ -40,7 +41,7 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     assert.ok(declaration, name)
     return `const ${declaration.getText(source)};`
   })
-  const handlers = ['attackIntent', 'sameVec3', 'startChargeBefore', 'onChargeTargetSelected', 'onTargetSelected', 'onAreaAttackConfirmed']
+  const handlers = ['attackIntent', 'sameVec3', 'startChargeBefore', 'onMovementCancelled', 'onChargeTargetSelected', 'onTargetSelected', 'onAreaAttackConfirmed']
   const functions = handlers.map(name => {
     const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)
     assert.ok(node, name)
@@ -91,6 +92,27 @@ test('Move Before uses the partner context and keeps movement local until the fi
   assert.equal(h.calls.emitted[0][2].movement.kind, 'charge-before')
   assert.deepEqual(h.positions.value.partner, { x: 0, y: 0, z: 0 })
   assert.deepEqual(h.attackPreview.value.position, { x: 1, y: 0, z: 0 })
+})
+
+test('Move Before retains the chosen tile until a later melee target click', async t => {
+  const h = chargeHarness(t)
+  await h.select('before')
+  h.onChargeTargetSelected('partner', { x: 2, y: 0, z: 0 }, null)
+  assert.deepEqual(h.calls.emitted, [])
+  assert.deepEqual(h.positions.value.partner, { x: 0, y: 0, z: 0 })
+  h.onTargetSelected('enemy')
+  const [event, target, intent] = h.calls.emitted[0]
+  assert.equal(event, 'target-selected')
+  assert.equal(target, 'enemy')
+  assert.deepEqual(intent.movement, { kind: 'charge-before', origin: { x: 0, y: 0, z: 0 }, destination: { x: 2, y: 0, z: 0 } })
+})
+
+test('cancelling the Charge tile aimer cancels attack targeting', async t => {
+  const h = chargeHarness(t)
+  await h.select('before')
+  h.onMovementCancelled()
+  assert.equal(h.chargeMode.value, null)
+  assert.deepEqual(h.calls.emitted, [['attack-cancelled']])
 })
 
 for (const area of [false, true]) {

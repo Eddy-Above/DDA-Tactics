@@ -19,6 +19,7 @@ export async function computeGravityDrops(
   round: number,
   destroyedStructures: Set<string> = new Set(),
   tamerById: Map<string, any> = new Map(),
+  voluntary = false,
 ): Promise<{ patch: Record<string, Vec3>; logEntries: any[] }> {
   const patch: Record<string, Vec3> = {}
   const logEntries: any[] = []
@@ -30,6 +31,11 @@ export async function computeGravityDrops(
     if (!isFootprintAirborne(pos, dims, map)) continue
 
     const profile = { ...await getFallerProfile(p, digimonById, true), destroyedStructures }
+    if (voluntary) {
+      profile.canFly = false
+      profile.canClimb = false
+      profile.canDig = false
+    }
     if (profile.canFly) continue   // flyers hover — no drop, no damage
     if (profile.floatsOnWater && !isFootprintAirborne(pos, dims, map, true)) continue
 

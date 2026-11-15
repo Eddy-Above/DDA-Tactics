@@ -31,6 +31,7 @@ function fixture(isDm) {
   const deps = {
     spacePanning: ref(false), panGesture: false, editorHint: ref(null),
     props, THREE, camera, controls, movement,
+    displayedMovementCells: { get value() { return props.reachableCells } },
     canvasRef: ref({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 1000, height: 1000 }) }),
     containerRef: ref({ clientWidth: 1000, clientHeight: 1000 }),
     mouse: new THREE.Vector2(), raycaster: new THREE.Raycaster(), scene: new THREE.Scene(),

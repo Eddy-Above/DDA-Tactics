@@ -124,7 +124,7 @@ import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePas
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
-import { getFootprintDimensions, getFootprintCells, canLandOn, sizeInteraction } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, canLandOn, sizeInteraction, isFootprintAirborne } from '~/utils/movementRules'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
@@ -216,6 +216,7 @@ const emit = defineEmits<{
   (e: 'wall-selected', wallId: string): void
   (e: 'map-changed'): void
   (e: 'door-toggle', doorId: string, isOpen: boolean): void
+  (e: 'fall', participantId: string): void
   (e: 'attack-selected', participantId: string, attackId: string, riders?: AttackRadialRider[]): void
   (e: 'attack-rider-selected', participantId: string, attackId: string, rider: AttackRadialRider): void
   (e: 'stance-selected', participantId: string, stance: Stance): void
@@ -228,6 +229,7 @@ const emit = defineEmits<{
 const effectiveAttackerId = computed(() =>
   props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId
 )
+const displayedMovementCells = computed(() => chargeMovementCells())
 
 const participantDisplayNames = computed(() => buildParticipantDisplayNames(
   props.participants,
@@ -431,6 +433,10 @@ const radialItems = computed<MapRadialItem[]>(() => {
     items.push(...clashButtons.map(button => ({ id: button.action, label: button.label, icon: 'clash', disabled: button.disabled })))
   } else {
     items.push({ id: 'move', label: 'Move', icon: 'move', disabled: outOfActions })
+    const pos = participant && props.participantPositions[participant.id]
+    if (pos && props.map && isFootprintAirborne(pos, getParticipantFootprintDims(participant!.id), props.map)) {
+      items.push({ id: 'fall', label: 'Fall', icon: 'move', cost: 'Free', description: 'Fall straight down to the ground' })
+    }
     if (isNpc || playerRadialParticipantType.value === 'digimon') {
       items.push(radialChoiceGroup('attack', outOfActions))
     } else if (playerRadialParticipantType.value === 'tamer') {
@@ -525,6 +531,9 @@ function onRadialSelect(item: MapRadialItem) {
   } else if (item.id.startsWith('door:')) {
     const door = props.map?.doors.find(door => door.id === item.id.slice(5))
     if (door) radialToggleDoor(door.id, !door.isOpen)
+  } else if (item.id === 'fall') {
+    closeRadial()
+    emit('fall', participantId)
   } else if (item.id === 'gm-move') {
     gmMove(participantId)
   } else if (item.id === 'gm-manage') {
@@ -1534,12 +1543,12 @@ function worldToScreen2D(v: THREE.Vector3): { x: number; y: number } | null {
 let lastReachableKey = ''
 function updateMovementHighlights() {
   const yFilter = movingParticipantId.value !== null ? npcMoveY.value : null
-  const key = Array.from(props.reachableCells).sort().join('|') + (yFilter !== null ? `|y:${yFilter}` : '')
+  const key = Array.from(displayedMovementCells.value).sort().join('|') + (yFilter !== null ? `|y:${yFilter}` : '')
   if (key === lastReachableKey) return
   lastReachableKey = key
 
   clearMapGroup(movementHighlightGroup)
-  for (const k of props.reachableCells) {
+  for (const k of displayedMovementCells.value) {
     const [x, y, z] = k.split(',').map(Number)
     if (yFilter !== null && y !== yFilter) continue
     const geo = new THREE.BoxGeometry(TILE_SIZE, 0.05, TILE_SIZE)
@@ -1595,12 +1604,17 @@ function updateReticules() {
   clearMapGroup(reticuleGroup)
   const ids: string[] = []
 
+  if (props.chargeMode === 'before') {
+    reticuleParticipantIds.value = []
+    return
+  }
+
   if (!props.selectedAttack || !attackerPos) {
     reticuleParticipantIds.value = props.selectableParticipantIds?.slice() ?? []
     return
   }
 
-  const isMelee = props.selectedAttack.range === 'melee'
+  const isMelee = props.selectedAttack.range === 'melee' || props.selectedAttack.chargeMode === 'before'
   const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
   const isAreaAttack = props.selectedAttack.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
   const isMeleeSupportSingle = props.selectedAttack.type === 'support' && isMelee && !isAreaAttack
@@ -1623,12 +1637,7 @@ function updateReticules() {
     } else if (isMelee) {
       // Melee: min Chebyshev distance across all footprint cell pairs (handles large digimon + diagonals)
       const targetDims = getParticipantFootprintDims(p.id)
-      let inRange = meleeInRange(attackerPos, pos, attackerDims, targetDims, maxDist)
-      if (!inRange && props.chargeMode === 'before') {
-        for (const k of props.reachableCells) {
-          if (meleeInRange(parseVec3Key(k), pos, attackerDims, targetDims, maxDist)) { inRange = true; break }
-        }
-      }
+      const inRange = meleeInRange(attackerPos, pos, attackerDims, targetDims, maxDist)
       if (!inRange) continue
     } else {
       // Ranged: 3D Euclidean distance from anchor to anchor, and some part of the target in view
@@ -2389,7 +2398,7 @@ function onMouseMove(event: MouseEvent) {
     hoveredMoveScreen.value = null
     const cell = moveCellAt(event, moveAim.y)
     if (cell) {
-      const valid = moveAim.isGm ? validGmMoveCell(cell, moveAim.participantId) : props.reachableCells.has(vec3Key(cell))
+      const valid = moveAim.isGm ? validGmMoveCell(cell, moveAim.participantId) : displayedMovementCells.value.has(vec3Key(cell))
       if (valid || moveAim.isGm) {
         const dims = getParticipantFootprintDims(moveAim.participantId)
         const ghostGeo = new THREE.CircleGeometry(TILE_SIZE * 0.42, 24)
@@ -2508,28 +2517,18 @@ function onMouseUp(event: MouseEvent) {
   cancelEditorGesture()
 }
 
-// Charge "before" mode: find the closest reachable anchor (or current position) from which
-// `targetId` is in melee range, and emit charge-target-selected to move the attacker there.
-// Returns true if a valid anchor was found and the move was emitted.
-function tryChargeMove(targetId: string): boolean {
+// Charge starts by choosing a reachable tile that puts a potential target in melee range.
+function chargeMovementCells(): Set<string> {
+  if (props.chargeMode !== 'before') return props.reachableCells
   const attackerId = effectiveAttackerId.value
-  const attackerPos = attackerId ? props.participantPositions[attackerId] : null
-  const targetPos = props.participantPositions[targetId]
-  if (!attackerId || !attackerPos || !targetPos) return false
-  const attackerDims = getParticipantFootprintDims(attackerId)
-  const targetDims = getParticipantFootprintDims(targetId)
-  const anchors: Vec3[] = [attackerPos, ...Array.from(props.reachableCells, parseVec3Key)]
-  let best: Vec3 | null = null
-  let bestDist = Infinity
-  for (const anchor of anchors) {
-    if (!meleeInRange(anchor, targetPos, attackerDims, targetDims, props.attackerMeleeRange)) continue
-    if (footprintOccupied(anchor, attackerDims, attackerId)) continue
-    const dist = Math.max(Math.abs(anchor.x - attackerPos.x), Math.abs(anchor.y - attackerPos.y), Math.abs(anchor.z - attackerPos.z))
-    if (dist < bestDist) { bestDist = dist; best = anchor }
-  }
-  if (!best) return false
-  emit('charge-target-selected', attackerId, best, targetId)
-  return true
+  if (!attackerId) return new Set()
+  const dims = getParticipantFootprintDims(attackerId)
+  const targets = props.participants.filter(p => p.id !== attackerId && !p.inReserve && props.participantPositions[p.id])
+  return new Set([...props.reachableCells].filter(k => {
+    const anchor = parseVec3Key(k)
+    return !footprintOccupied(anchor, dims, attackerId) && targets.some(p =>
+      meleeInRange(anchor, props.participantPositions[p.id]!, dims, getParticipantFootprintDims(p.id), props.attackerMeleeRange))
+  }))
 }
 
 // The participant a click on these raycast hits would pick as a single-target attack/intercede target:
@@ -2583,11 +2582,8 @@ function updateTargetHover(event: MouseEvent) {
 // Returns true if the target was selected (caller should stop further click handling).
 function tryReticuleTarget(participantId: string): boolean {
   if (!reticuleParticipantIds.value.includes(participantId)) return false
-  if (props.chargeMode === 'before') {
-    tryChargeMove(participantId)
-  } else {
-    emit('target-selected', participantId)
-  }
+  if (props.chargeMode === 'before') return false
+  emit('target-selected', participantId)
   return true
 }
 
@@ -2837,37 +2833,15 @@ function onCanvasClick(event: MouseEvent) {
           hoveredMoveScreen.value = null
           emit('gm-moved', moveAim.participantId, cell)
         }
-      } else if (props.reachableCells.has(vec3Key(cell))) {
+      } else if (displayedMovementCells.value.has(vec3Key(cell))) {
         const pid = moveAim.participantId
         const isChargeAfter = pid === props.chargeMoveParticipantId
         if (!isChargeAfter || !footprintOccupied(cell, getParticipantFootprintDims(pid), pid)) {
           movingParticipantId.value = null
           clearMapGroup(hoverGhostGroup)
           hoveredMoveScreen.value = null
-          emit('unit-moved', pid, cell, props.activePath)
-        }
-      }
-    }
-    return
-  }
-
-  // Charge "before" + area attack: first click picks the move destination from reachableCells.
-  // onChargeTargetSelected moves the attacker and clears chargeMode, letting the normal AOE
-  // aiming/placement flow take over from the new position on the next click.
-  if (props.chargeMode === 'before' && props.selectedAttack && getAreaShape(props.selectedAttack.tags)) {
-    const surfaceHit = hits.find(h => h.object.userData.type === 'ground' || h.object.userData.type === 'space' || h.object.userData.type === 'voxel')
-    if (surfaceHit) {
-      const hitType = surfaceHit.object.userData.type
-      const tile = surfaceHit.object.userData.tile as { y: number } | undefined
-      const voxel = surfaceHit.object.userData.voxel as { x: number; y: number; z: number } | undefined
-      const cell: Vec3 = hitType === 'voxel' && voxel
-        ? { x: voxel.x, y: voxel.y + 1, z: voxel.z }
-        : { x: Math.floor(surfaceHit.point.x), y: tile?.y ?? 0, z: Math.floor(surfaceHit.point.z) }
-      const attackerId = effectiveAttackerId.value
-      if (attackerId && props.reachableCells.has(vec3Key(cell))) {
-        const attackerDims = getParticipantFootprintDims(attackerId)
-        if (!footprintOccupied(cell, attackerDims, attackerId)) {
-          emit('charge-target-selected', attackerId, cell, null)
+          if (props.chargeMode === 'before') emit('charge-target-selected', pid, cell, null)
+          else emit('unit-moved', pid, cell, props.activePath)
         }
       }
     }
@@ -3115,6 +3089,17 @@ watch(() => props.drawMode, () => cancelEditorGesture())
 watch(() => props.externalDragParticipantId, (id) => {
   if (!id && hoverGhostGroup) clearMapGroup(hoverGhostGroup)
   requestRender()
+})
+
+// Charge move-before uses the normal tile aimer, then returns to attack targeting.
+watch(() => props.chargeMode, (mode, previous) => {
+  if (mode === 'before') {
+    const id = props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId
+    movingParticipantId.value = id
+    npcMoveY.value = id ? props.participantPositions[id]?.y ?? 0 : 0
+  } else if (previous === 'before' && !props.npcMoveParticipantId && !props.chargeMoveParticipantId) {
+    movingParticipantId.value = null
+  }
 })
 
 // Enter NPC movement mode when EncounterMap signals reachable cells are ready

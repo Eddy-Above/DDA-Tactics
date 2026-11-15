@@ -8,6 +8,7 @@ import {
   getMovementCostProfile,
   createJumpTraversal,
   isSwimmingCell,
+  isWaterCell,
   getDigTerrainMultiplier,
   hasClimbSupport,
   isWithinMapFootprint,
@@ -16,6 +17,7 @@ import {
   hasSolidVoxelSupport,
   hasSolidStairSupport,
   isPositionInAir,
+  isAdjacentToFooting,
   computeFallDamage,
   isFootprintAirborne,
   settleFootprintY,
@@ -105,6 +107,7 @@ export function isValidLandingPosition(
     if (digTerrain > 0) return true
     if (caps.canSwim && isSwimmingCell(map, pos)) return true
     if (hasClimbSupport(map, pos, caps)) return true
+    if (!isWaterCell(map, pos) && isAdjacentToFooting(pos, map)) return true
   }
   const index = getMovementMapIndex(map)
   if (index ? index.ground.has(key(pos)) : (map.groundTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true

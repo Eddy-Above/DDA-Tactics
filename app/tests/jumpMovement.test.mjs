@@ -46,7 +46,7 @@ for (const painted of [false, true]) {
     const destinations = [point(4, 5, 4), point(4, -5, 4), point(4, 6, 4), point(5, 2, 1)]
     if (painted) map.spaceTiles = destinations.map(pos => ({ ...pos, spaceType: 'air' }))
     assert.equal(canLandOn(destinations[0], caps, map, new Set(), origin), true, 'simultaneous maximum height and diagonal range are legal')
-    assert.equal(canLandOn(destinations[1], caps, map, new Set(), origin), true, 'descending still respects horizontal range')
+    assert.equal(canLandOn(destinations[1], caps, map, new Set(), origin), false, 'jumping cannot descend below its launch point')
     assert.equal(canLandOn(destinations[2], caps, map, new Set(), origin), false, 'height is measured from the original anchor')
     assert.equal(canLandOn(destinations[3], caps, map, new Set(), origin), false)
     assert.equal(canLandOn(destinations[0], caps, map, new Set()), false, 'the optional origin retains existing strict behavior')
@@ -81,12 +81,12 @@ for (const painted of [false, true]) {
       [point(3, 3), point(3, 4), false],
       [point(3, 0), point(4, 0), false],
       [point(3, 0), point(4, -1), false],
-      [point(2, 0), point(3, -1), true],
+      [point(2, 0), point(3, -1), false],
     ]
     if (painted) map.spaceTiles = transitions.map(([, to]) => ({ ...to, spaceType: 'air' }))
     for (const [from, to, expected] of transitions) {
       assert.equal(canPassThrough(from, to, caps, map, new Set(), origin), expected)
-      assert.equal(canPassThrough(from, to, caps, map), true, 'omitted origin preserves legacy local traversal')
+      assert.equal(canPassThrough(from, to, caps, map), to.y >= from.y, 'local jumps cannot move downward without a launch point')
       assert.equal(canPassThrough(from, to, { ...caps, canFly: true }, map, new Set(), origin), true)
     }
   })

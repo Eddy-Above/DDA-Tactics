@@ -45,6 +45,9 @@ function harness(t, isDm = false) {
   let handlers
   const deps = {
     ...refs, props, THREE, ...rules, ...voxels, ...renderResources, watch,
+    effectiveAttackerId: computed(() => props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId),
+    parseVec3Key: k => { const [x, y, z] = k.split(',').map(Number); return { x, y, z } },
+    displayedMovementCells: computed(() => handlers?.chargeMovementCells() ?? props.reachableCells),
     vec3Key: p => `${p.x},${p.y},${p.z}`, TILE_SIZE: 1, TILE_H: 0.1,
     participantDisplayNames: ref({ partner: 'Partner', ally: 'Ally', enemy: 'Enemy' }),
     participantChoiceItems: computed(() => handlers?.participantChoiceOptions() ?? []),
@@ -75,14 +78,14 @@ function harness(t, isDm = false) {
     },
   }
   handlers = loadPageFunctions('components/MapCanvas.vue', [
-    'getParticipantSize', 'getParticipantFootprintDims', 'footprintIntersectsArea', 'footprintOccupied',
+    'chargeMovementCells', 'meleeInRange', 'getParticipantSize', 'getParticipantFootprintDims', 'footprintIntersectsArea', 'footprintOccupied',
     'participantCandidatesAt', 'participantRegionFromHits', 'participantChoiceOptions',
     'closeRadial', 'onParticipantChoice', 'onParticipantChoiceHover', 'updateRadialScreen', 'canUseTurnRadial', 'selectMapParticipant',
     'tryReticuleTarget', 'getMoveAim', 'moveCellAt', 'validGmMoveCell', 'cancelMoveAim', 'movementPreviewCenter',
     'onCanvasClick', 'onMouseMove', 'onMouseDown', 'onWheel',
   ], deps)
   const source = readFileSync(new URL('../components/MapCanvas.vue', import.meta.url), 'utf8')
-  const watches = source.slice(source.indexOf('// Enter NPC movement mode'), source.indexOf('watch(() => props.selectedAttack, (attack, prevAttack)'))
+  const watches = source.slice(source.indexOf('// Charge move-before uses the normal tile aimer'), source.indexOf('watch(() => props.selectedAttack, (attack, prevAttack)'))
   const compiled = ts.transpileModule(watches, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
   const watchDeps = { ...deps, ...handlers }
   const scope = effectScope()
@@ -99,6 +102,37 @@ test('clicking overlapping tokens opens the chooser before health, actions or ta
   assert.deepEqual(h.events, [])
   assert.equal(h.clickedHealthBar.value, null)
   assert.equal(h.playerRadialId.value, null)
+})
+
+test('Charge move-before filters reachable tiles, selects a tile first, then permits target selection', async t => {
+  const h = harness(t)
+  h.props.participantPositions.partner = point(0)
+  h.props.participantPositions.ally = point(40)
+  h.props.participantPositions.enemy = point(4)
+  h.props.digimonMap['partner-record'].size = 'medium'
+  h.props.digimonMap['enemy-record'].size = 'medium'
+  h.props.attackerMeleeRange = 1
+  h.props.selectedAttack = { attackerParticipantId: 'partner', range: 'melee', tags: ['Charge Attack'] }
+  h.props.reachableCells = new Set(['1,0,0', '2,0,0', '3,0,0', '4,0,0', '3,2,0'])
+  h.props.chargeMode = 'before'
+  await nextTick()
+  assert.equal(h.movingParticipantId.value, 'partner')
+  assert.deepEqual([...h.chargeMovementCells()], ['3,0,0'], 'reject distant, occupied and vertically out-of-range cells')
+  h.raycaster.ray.origin.set(2.5, 10, 0.5)
+  h.onCanvasClick({})
+  assert.deepEqual(h.events, [], 'an unhighlighted reachable tile cannot be selected')
+  h.reticuleParticipantIds.value = ['enemy']
+  assert.equal(h.tryReticuleTarget('enemy'), false, 'target clicks cannot skip choosing the movement tile')
+  h.raycaster.ray.origin.set(3.5, 10, 0.5)
+  h.onCanvasClick({})
+  assert.deepEqual(h.events[0], ['charge-target-selected', 'partner', point(3), null])
+  assert.ok(!h.events.some(event => event[0] === 'unit-moved'), 'movement is committed with the attack')
+  h.props.chargeMode = null
+  h.props.participantPositions.partner = point(3)
+  await nextTick()
+  assert.equal(h.movingParticipantId.value, null)
+  assert.equal(h.tryReticuleTarget('enemy'), true)
+  assert.deepEqual(h.events.at(-1), ['target-selected', 'enemy'])
 })
 
 for (const [id, expectedHealth] of [['ally', 0.7], ['enemy', 0.3]]) {
