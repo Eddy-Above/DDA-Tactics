@@ -10,10 +10,10 @@ afterEach(() => { if (originalError === undefined) delete globalThis.createError
 const copy = value => structuredClone(value)
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 
-function fixture() {
+function fixture(initial = {}) {
   globalThis.createError = options => Object.assign(new Error(options.message), options)
   const table = { id: 'encounters.id' }
-  let state = { id: 'enc', revision: 7, participants: [{ id: 'unit', actionsRemaining: { simple: 2 } }], doors: [] }
+  let state = { id: 'enc', revision: 7, participants: [{ id: 'unit', actionsRemaining: { simple: 2 } }], doors: [], ...initial }
   const control = { allowed: true, transactions: 0, locks: 0, writes: 0, prepares: 0, committed: 0, rolledBack: 0, work: 0, events: [] }
   function database(read, write) {
     return {
@@ -40,7 +40,13 @@ function fixture() {
     } catch (error) { control.rolledBack++; throw error }
   }
   const db = new Proxy({}, { get: (_target, key) => (scopes.scopedDatabase() ?? live)[key] })
+  const tankBuster = loadTypeScriptWithMocks('server/utils/tankBuster.ts', {
+    '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
+    './combatSpatial': { loadParticipantDigimon: async participants => new Map(participants.filter(p => p.type === 'digimon')
+      .map(p => [p.entityId, { attacks: [{ tags: ['Tank Buster'] }] }])) },
+  })
   const module = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
+    './tankBuster': tankBuster,
     '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
     './intercedeClaims': queue, './databaseScope': scopes, './combatRecordCache': records,
     './encounterRoom': { prepareRoomCommit: async () => { control.prepares++ } },
@@ -70,6 +76,38 @@ test('unauthorised commands fail before starting a transaction, draining rooms o
   assert.equal(f.control.transactions, 0); assert.equal(f.control.prepares, 0)
   assert.equal(f.control.writes, 0); assert.equal(f.control.work, 0)
   assert.equal(f.state().participants[0].actionsRemaining.simple, 2)
+})
+
+test('health commands grant Tank Buster crossings once, preserve earned uses through healing, and roll back failures', async () => {
+  const f = fixture({ phase: 'combat', participants: [{ id: 'unit', type: 'digimon', entityId: 'boss',
+    maxWounds: 100, currentWounds: 0, tankBusterUses: 0, actionsRemaining: { simple: 2 } }] })
+  const change = (operationId, wounds, fail = false) => f.run({ operationId }, async context => {
+    const participants = context.encounter.participants.map(p => ({ ...p, currentWounds: wounds }))
+    await f.db.update(f.table).set({ participants }).where('enc')
+    if (fail) throw new Error('reject health change')
+    return (await f.db.select().from(f.table).where('enc'))[0]
+  })
+  assert.equal((await change('first', 25)).participants[0].tankBusterUses, 1)
+  assert.equal((await change('first', 25)).participants[0].tankBusterUses, 1, 'retry does not grant twice')
+  assert.equal((await change('heal', 0)).participants[0].tankBusterUses, 1)
+  assert.equal((await change('cross-again', 25)).participants[0].tankBusterUses, 2)
+  assert.equal((await change('cross-two-more', 80)).participants[0].tankBusterUses, 4)
+  await assert.rejects(change('rejected', 0, true), /reject health change/)
+  assert.equal(f.state().participants[0].currentWounds, 80)
+  assert.equal(f.state().participants[0].tankBusterUses, 4)
+  assert.equal((await change('heal-again', 0)).participants[0].tankBusterUses, 4)
+  assert.equal((await change('cross-all-again', 80)).participants[0].tankBusterUses, 7)
+  const restarted = await f.run({ operationId: 'reset-combat' }, async context => {
+    await f.db.update(f.table).set({ phase: 'ended' }).where('enc')
+    return (await f.db.select().from(f.table).where('enc'))[0]
+  })
+  assert.equal(restarted.participants[0].tankBusterUses, 7)
+  const fresh = await f.run({ operationId: 'new-combat' }, async context => {
+    const participants = context.encounter.participants.map(p => ({ ...p, currentWounds: 0 }))
+    await f.db.update(f.table).set({ phase: 'combat', participants }).where('enc')
+    return { encounter: (await f.db.select().from(f.table).where('enc'))[0] }
+  })
+  assert.equal(fresh.encounter.participants[0].tankBusterUses, 0)
 })
 
 test('overlapping commands serialize and each reads the preceding committed action balance', async () => {

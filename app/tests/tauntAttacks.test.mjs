@@ -4,6 +4,45 @@ import { afterEach, test } from 'node:test'
 import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const { combatAttackStats } = loadTypeScript('utils/combatDice.ts')
+
+for (const declaration of ['tag', 'effect']) for (const route of ['damage', 'npc', 'respond', 'legacy']) {
+  test(`Tank Buster ${declaration} halves Armor in ${route} resolution and its breakdown`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const f = fixture('damage', declaration === 'tag' ? ['Tank Buster'] : [], declaration === 'effect' ? 'Tank Buster' : undefined)
+    f.participants[0].tankBusterUses = 1
+    f.records[1].baseStats = { ...f.records[1].baseStats, armor: 9 }
+    const result = await f[route]()
+    if (route === 'damage') {
+      assert.equal(result.targetArmor, 9)
+      assert.equal(result.effectiveArmor, 4)
+      assert.equal(result.damageDealt, 7)
+      assert.equal(result.secondaryEffectData.name, 'Stun')
+    } else {
+      assert.equal(result.participants.find(p => p.id === 'defender-token').currentWounds, 7)
+      const entry = result.battleLog.findLast(entry => entry.effectiveArmor !== undefined)
+      assert.equal(entry.targetArmor, 9)
+      assert.equal(entry.effectiveArmor, 4)
+      assert.equal(entry.finalDamage, 7)
+      const defender = result.participants.find(p => p.id === 'defender-token')
+      assert.equal(defender.activeEffects.find(e => e.name === 'Stun')?.duration, 1)
+      assert.equal(defender.actionsRemaining.simple, 1)
+    }
+  })
+}
+
+for (const declaration of ['tag', 'effect']) for (const route of ['player', 'GM', 'GM area', 'legacy', 'Clash']) {
+  test(`Tank Buster ${declaration} consumes one earned use in ${route} declaration`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const f = fixture('damage', declaration === 'tag' ? ['Tank Buster'] : [], declaration === 'effect' ? 'Tank Buster' : undefined)
+    f.participants[0].tankBusterUses = 2
+    await signatureDeclarations[route](f)
+    assert.equal(f.encounter.participants.find(p => p.id === 'taunter-token').tankBusterUses, 1)
+    const empty = fixture('damage', declaration === 'tag' ? ['Tank Buster'] : [], declaration === 'effect' ? 'Tank Buster' : undefined)
+    empty.participants[0].tankBusterUses = 0
+    await assert.rejects(signatureDeclarations[route](empty), /Tank Buster requires a use/)
+    assert.equal(empty.participants[0].actionsRemaining.simple, 2)
+  })
+}
 const globals = ['defineEventHandler', 'getRouterParam', 'readBody', 'createError', '$fetch']
 const originals = new Map(globals.map(name => [name, globalThis[name]]))
 for (const area of [false, true]) for (const variant of ['ordinary', 'bolster', 'lifesteal', 'haste', 'lag', 'shield', 'shield-complex', 'pass', 'charge-pass', 'already-paid']) {

@@ -121,7 +121,7 @@ export const EFFECT_POTENCY_STAT: Record<string, 'bit' | 'ram' | 'cpu'> = {
   'Charm': 'bit',       // Mind control duration; GM enforces action control
   'Demoralize': 'bit',  // Tamer attribute reduction; GM applies (permanent)
   'Frenzy': 'bit',      // Damage buff = BIT½ (GM halves stored potency); forced-attack GM-resolved
-  'Tank Buster': 'bit', // Armor halving + conditional Stun; GM applies at wound thresholds
+  'Tank Buster': 'bit', // Armor halving + conditional Stun; uses are earned at health thresholds
   // Attacker CPU-based
   'Knockback': 'cpu',   // Push distance = user's CPU + Stage Bonus
   'Pull': 'cpu',        // Pull distance = user's CPU + Stage Bonus

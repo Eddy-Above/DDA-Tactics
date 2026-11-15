@@ -2,6 +2,9 @@ import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
 import { startCleanseCast, recordCleanseOutcome } from '../../../../utils/cleanse'
 import { eq } from 'drizzle-orm'
 import { getNaturewalkBonuses } from '../../../../../utils/naturewalk'
+import { effectiveAttackArmor, isTankBusterAttack } from '../../../../../utils/attackArmor'
+import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
+import { applyTankBusterStun } from '../../../../utils/tankBusterStun'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
 import { canActOnEncounterTurn } from '../../../../utils/participantTurn'
@@ -150,6 +153,8 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
   // Check actions
   const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
   const declaredAttack = attackerDigimon?.attacks?.find((attack: any) => attack.id === body.attackId)
+  const tankBusterError = tankBusterUseError(actor, declaredAttack)
+  if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
   const signatureError = signatureMoveError(actor, declaredAttack, { round: encounter.round, houseRules })
   if (signatureError) throw createError({ statusCode: 400, message: signatureError })
   const isSignatureMove = !!houseRules?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
@@ -176,6 +181,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
         usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
         ...(isSignatureMove ? { battery: 0, usedSignatureMoveThisTurn: true } : {}),
         ...(declaredAttack?.effect === 'Shield' ? { lastShieldRound: encounter.round } : {}),
+        ...(isTankBusterAttack(declaredAttack) ? { tankBusterUses: availableTankBusterUses(p) - 1 } : {}),
         // Consume Directed effect on attacker (bonus was applied client-side to accuracy pool by GM)
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
       }
@@ -452,7 +458,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
       attackBaseDamage += attackerCombatMonsterBonus
     }
 
-    const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+    const effectiveArmor = effectiveAttackArmor(targetArmor, armorPiercing, npcAttackDef)
     damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
   }
 
@@ -481,7 +487,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
       }
 
       // Immunity also blocks instant-effect side effects such as displacement and Stun action costs.
-      if (npcAttackDef?.effect && !effectBlocked) {
+      if (npcAttackDef?.effect && npcAttackDef.effect !== 'Tank Buster' && !effectBlocked) {
         const shouldApply = npcAttackDef.type === 'damage' ? damageDealt >= 2 : true
         if (shouldApply) {
           const effectDuration = Math.max(1, netSuccesses)
@@ -507,6 +513,8 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
         }
       }
 
+      if (hit && applyTankBusterStun(updated, npcAttackDef, damageDealt, { source: attackerDigimon?.name ?? 'Attack',
+        round: encounter.round, qualities: targetQualities, hasGone: !!p.hasActed })) appliedEffectName ??= 'Stun'
       return updated
     }
     return p
@@ -735,7 +743,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
     netSuccesses: netSuccesses,
     targetArmor: targetArmor,
     armorPiercing: armorPiercing,
-    effectiveArmor: hit ? Math.max(0, targetArmor - armorPiercing) : undefined,
+    effectiveArmor: hit ? effectiveAttackArmor(targetArmor, armorPiercing, npcAttackDef) : undefined,
     finalDamage: hit ? damageDealt : 0,
     hit: hit,
   }

@@ -67,6 +67,11 @@ function fixture({ roster = [participant('actor')], forms = [], lines = [], owne
     return { encounter: current, access: { isMember: true, isDm } }
   } }
   const command = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
+    './tankBuster': loadTypeScriptWithMocks('server/utils/tankBuster.ts', {
+      '../db': store, 'drizzle-orm': sql,
+      './combatSpatial': { loadParticipantDigimon: async roster => new Map(roster.filter(p => p.type === 'digimon')
+        .map(p => [p.entityId, rows.digimon.get(p.entityId)])) },
+    }),
     '../db': store, 'drizzle-orm': sql, './databaseScope': databaseScope, './combatRecordCache': cache,
     './intercedeClaims': queue, './encounterRoom': { prepareRoomCommit: async () => {} },
     './encounterAuthorization': authorization, './encounterStateScope': stateScope, './encounterContextScope': contextScope,

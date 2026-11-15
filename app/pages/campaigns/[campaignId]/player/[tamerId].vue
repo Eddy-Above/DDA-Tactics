@@ -5,6 +5,7 @@ import type { MapAttackIntent } from '~/types/mapAttackIntent'
 import { useCleanseSelection } from '~/composables/useCleanseSelection'
 import { getAttackOrderModifiers } from '~/utils/specialOrderCombat'
 import { availableCombatAttacks, canUseCombatAttack, canBolsterCombatAttack, hugePowerAvailability } from '~/utils/combatAttackOptions'
+import { effectiveAttackArmor } from '~/utils/attackArmor'
 import { buildMapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import { calculateSwimSpeed, calculateJumpProfile, calculateSpecialMovementSpeeds } from '~/utils/movementRules'
 import { getNaturewalkBonuses } from '~/utils/naturewalk'
@@ -2804,7 +2805,7 @@ function showAttackResult(
     if (matchingLogEntry?.finalDamage != null) {
       finalDamage = matchingLogEntry.finalDamage
     } else {
-      const effectiveArmor = Math.max(0, targetArmor - armorPiercing)
+      const effectiveArmor = effectiveAttackArmor(targetArmor, armorPiercing, attackDef, dodgeRequest.data?.counterBlow)
       finalDamage = Math.max(1, baseDamage + netSuccesses - effectiveArmor)  // Minimum 1 damage on hit
     }
 

@@ -41,6 +41,8 @@ import { serializeIntercedeClaim } from '~/server/utils/intercedeClaims'
 import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatRecordCache'
 import { getAttackOrderModifiers, consumeAttackOrders } from '~/utils/specialOrderCombat'
 import { attackActionCost, effectActionError, signatureMoveError } from '~/utils/combatAttackOptions'
+import { availableTankBusterUses, tankBusterUseError } from '~/utils/tankBuster'
+import { isTankBusterAttack } from '~/utils/attackArmor'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
 import { runAttackCommand } from '~/server/utils/attackCommand'
@@ -222,6 +224,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     if (!participants.some((p: any) => p.id === id && !p.inReserve)) throw createError({ statusCode: 400, message: 'Target does not belong to this encounter' })
   }
   if (!body.skipActionDeduction) {
+    const tankBusterError = tankBusterUseError(attacker, actionAttack)
+    if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
     const signatureError = signatureMoveError(attacker, declaredAttack, { round: encounter.round, houseRules })
     if (signatureError) throw createError({ statusCode: 400, message: signatureError })
     body.isSignatureMove = !!houseRules?.signatureMoveBattery && !!declaredAttack?.tags?.some((tag: string) => /signature/i.test(tag))
@@ -283,6 +287,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
           }
           if (actionAttack.effect === 'Shield') updated.lastShieldRound = encounter.round
+          if (isTankBusterAttack(actionAttack)) updated.tankBusterUses = availableTankBusterUses(p) - 1
           if (body.bolstered && p.type === 'digimon') {
             updated.digimonBolsterCount = (p.digimonBolsterCount ?? 0) + 1
             if (body.bolsterType === 'bit-cpu') {
@@ -855,6 +860,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         }
         // Track bolster usage for digimon
         if (actionAttack.effect === 'Shield') updated.lastShieldRound = encounter.round
+        if (isTankBusterAttack(actionAttack)) updated.tankBusterUses = availableTankBusterUses(p) - 1
         if (body.bolstered && p.type === 'digimon') {
           updated.digimonBolsterCount = (p.digimonBolsterCount ?? 0) + 1
           if (body.bolsterType === 'bit-cpu') {

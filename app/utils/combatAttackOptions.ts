@@ -2,6 +2,7 @@ import type { Attack, EddySoulRules, HouseRules, Quality } from '../types'
 import type { CombatParticipant } from '../types/combat'
 import { signatureReadyRound } from './specialOrderCombat'
 import { getAreaShape } from './areaShapes'
+import { tankBusterUseError } from './tankBuster'
 
 export interface CombatAttackOption {
   id: Attack['id']
@@ -13,6 +14,7 @@ export interface CombatAttackOption {
 export type AttackOptionParticipant = Pick<CombatParticipant, 'type'> & Partial<Pick<CombatParticipant,
   | 'actionsRemaining' | 'usedAttackIds' | 'battery' | 'clash' | 'combatMonsterBonus'
   | 'digimonBolsterCount' | 'lastHugePowerRound' | 'lastHugePowerRank2Round' | 'decimationReady' | 'lastShieldRound'
+  | 'tankBusterUses' | 'currentWounds' | 'maxWounds'
 >>
 
 type AttackOptionRules = Pick<EddySoulRules, 'combatMonsterAreaAttackRequiresComplex' | 'hugePowerOncePerTurn'>
@@ -49,6 +51,7 @@ export function availableCombatAttacks<T extends CombatAttackOption>(
   const filtered = attacks.filter(attack => {
     if (usedIds.has(attack.id)) return false
     if (attack.effect === 'Shield' && participant.lastShieldRound === context.round) return false
+    if (tankBusterUseError(participant, attack)) return false
     return !signatureMoveError(participant, attack, context)
   })
   return [...filtered, ...basicAttacks.filter(attack => !usedIds.has(attack.id))]
@@ -95,7 +98,8 @@ export function canUseCombatAttack(
   attack: Pick<CombatAttackOption, 'tags' | 'effect'>,
   rules?: AttackOptionRules | null,
 ): boolean {
-  return !participant.clash && (participant.actionsRemaining?.simple || 0) >= requiredAttackActions(participant, attack, rules)
+  return !participant.clash && !tankBusterUseError(participant, attack)
+    && (participant.actionsRemaining?.simple || 0) >= requiredAttackActions(participant, attack, rules)
 }
 
 /** Bolster requires a Complex Action and cannot accompany an attack already requiring one. */
@@ -105,7 +109,7 @@ export function canBolsterCombatAttack(
   rules?: AttackOptionRules | null,
 ): boolean {
   if (participant.type !== 'digimon') return false
-  if ((participant.actionsRemaining?.simple || 0) < 2) return false
+  if ((participant.actionsRemaining?.simple || 0) < 2 || tankBusterUseError(participant, attack)) return false
   if ((participant.digimonBolsterCount ?? 0) >= 2) return false
   return !isSignatureAttack(attack)
     && requiredAttackActions(participant, attack, rules) === 1

@@ -20,6 +20,7 @@ import { isAttackedFromOutsideClash } from '../../utils/clashRules'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { lifestealHealing } from '../../utils/lifesteal'
 import { applyPositiveSupportEffect } from './positiveSupportEffect'
+import { applyTankBusterStun } from './tankBusterStun'
 
 interface ResolveNpcAttackParams {
   pendingRequests?: any[]
@@ -190,9 +191,6 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
           else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.appliedEffectName
-          if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
-          }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
@@ -317,9 +315,6 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, params.houseRules, targetQualities))
           else updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.effectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.appliedEffectName
-          if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, params.houseRules, targetQualities, params.round, p.naturewalkActiveElements)
-          }
           // Stun: immediately reduce actions if target hasn't taken their turn yet this round
           if (attackDef?.effect === 'Stun' && !targetHasGone) {
             updated.actionsRemaining = { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 1) }
@@ -331,6 +326,9 @@ export async function resolveNpcAttack(params: ResolveNpcAttackParams): Promise<
           }
         }
       }
+
+      if (hit && applyTankBusterStun(updated, attackDef, damageDealt, { source: params.attackerName,
+        round: params.round, qualities: targetQualities, hasGone: targetHasGone, allowed: !!damageCalc.secondaryEffectData })) appliedEffectName ??= 'Stun'
 
       // Boss quality: Adaptive Intelligence — record this attack ID for future dodge bonuses
       if (targetQualities.some((q: any) => q.id === 'adaptive-intelligence')) {

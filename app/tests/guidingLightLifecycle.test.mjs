@@ -163,6 +163,15 @@ test('manual encounter updates cap incoming Stun at one round', async () => {
   assert.equal(f.auraCalls[0].participants[0].activeEffects.find(effect => effect.name === 'Stun').duration, 1)
 })
 
+test('stale manual saves cannot create or replace Tank Buster uses', async () => {
+  for (const uses of [undefined, 2]) {
+    const source = unit('source', uses === undefined ? {} : { tankBusterUses: uses })
+    const f = fixture({ participants: [source, unit('ally')] })
+    await f.put({ participants: [{ ...source, tankBusterUses: 999 }, unit('ally')] })
+    assert.equal(f.auraCalls[0].participants[0].tankBusterUses, uses)
+  }
+})
+
 function assertOneAuraWrite(f) {
   assert.equal(f.auraCalls.length, 1)
   const writes = f.writes.filter(write => write.table === 'encounters')

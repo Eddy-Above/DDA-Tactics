@@ -5,6 +5,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
 import { applyEffectToParticipant } from '../../../../utils/applyEffect'
+import { applyTankBusterStun } from '../../../../utils/tankBusterStun'
 import { type AreaAttackClaim, allAreaTargetsDecided, resolveAreaIntercedeGroup, isAreaTargetCovered } from '~/server/utils/resolveAreaIntercedeGroup'
 import { computeAttackDamage } from '~/server/utils/computeAttackDamage'
 import { recordCleanseOutcome } from '~/server/utils/cleanse'
@@ -604,9 +605,6 @@ async function resolveIntercedeClaim(
           if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
           else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
           appliedEffectName = damageCalc.attackDef?.effect ?? null
-          if (damageCalc.secondaryEffectData) {
-            updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
-          }
         }
 
         // Fall damage from jumping to intercede position
@@ -792,11 +790,13 @@ async function resolveIntercedeClaim(
         if (damageCalc.effectData.name === 'Shield' || damageCalc.effectData.name === 'Haste') Object.assign(updated, applyPositiveSupportEffect(updated, damageCalc.effectData, houseRules, interceptorDigRec?.qualities))
         else updated.activeEffects = applyEffectToParticipant(updated.activeEffects || [], damageCalc.effectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
         appliedEffectName = damageCalc.attackDef?.effect ?? null
-        if (damageCalc.secondaryEffectData) {
-          updated.activeEffects = applyEffectToParticipant(updated.activeEffects, damageCalc.secondaryEffectData, houseRules, interceptorDigRec?.qualities, encounter.round, p.naturewalkActiveElements)
-        }
       }
 
+      if (applyTankBusterStun(updated, npcAttackDef, damageDealt, { source: request.data.attackerName || 'Attack', round: encounter.round,
+        qualities: interceptorDigRec?.qualities, hasGone: turnHasGone, allowed: !!damageCalc.secondaryEffectData, deferEffect: isAreaAttack })) {
+        appliedEffectName ??= 'Stun'
+        stunActionReducedThisRound = true
+      }
       return updated
     }
     // Dodge penalty on target: deferred for area attacks (resolveAreaIntercedeGroup handles it)
@@ -826,8 +826,9 @@ async function resolveIntercedeClaim(
       interceptorName,
       targetName: effectiveTargetName,
       damageDealt,
-      appliedEffectName: damageCalc.appliedEffectName,
+      appliedEffectName: damageCalc.appliedEffectName ?? appliedEffectName,
       effectData: damageCalc.effectData ?? null,
+      secondaryEffectData: damageCalc.secondaryEffectData ?? null,
       stunActionReducedThisRound,
       interceptorArmor,
       armorPiercing,

@@ -324,6 +324,22 @@ function participant(fixture, id) {
   return fixture.state().participants.find(p => p.id === id)
 }
 
+for (const area of [false, true]) for (const declaration of ['tag', 'effect']) {
+  test(`${area ? 'area' : 'single-target'} Tank Buster ${declaration} applies secondary Stun without a primary effect`, async () => {
+    const f = fixture({ area, targets: ['target'] })
+    f.control.damageOverrides = { damageDealt: 4,
+      attackDef: { id: 'attack', type: 'damage', ...(declaration === 'tag' ? { tags: ['Tank Buster'] } : { effect: 'Tank Buster' }) },
+      effectData: null, appliedEffectName: null,
+      secondaryEffectData: { name: 'Stun', type: 'debuff', duration: 1, source: 'attacker', potency: 1 } }
+    await f.claim()
+    const guard = participant(f, 'guard-a')
+    assert.equal(guard.currentWounds, 4)
+    assert.equal(guard.activeEffects.find(effect => effect.name === 'Stun')?.duration, 1)
+    assert.equal(guard.actionsRemaining.simple, 0, 'one action for interceding and one for Stun')
+    if (area) assert.equal(f.areaResolutions[0][0].secondaryEffectData.name, 'Stun')
+  })
+}
+
 for (const area of [false, true]) {
   test(`${area ? 'area' : 'single-target'} interceding preserves doubled Lifesteal and caps healing at actual attack damage`, async () => {
     const f = fixture({ area, targets: ['target'] })

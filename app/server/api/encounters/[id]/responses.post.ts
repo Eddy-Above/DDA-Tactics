@@ -10,6 +10,8 @@ import { applyPushPullDisplacement, resolveInstantSupportEffect } from '../../..
 import { EFFECT_ALIGNMENT, getEffectStatModifiers, CLASH_ENDING_EFFECTS } from '../../../../data/attackConstants'
 import { applyEffectToParticipant } from '../../../utils/applyEffect'
 import { getNaturewalkBonuses } from '../../../../utils/naturewalk'
+import { effectiveAttackArmor } from '../../../../utils/attackArmor'
+import { applyTankBusterStun } from '../../../utils/tankBusterStun'
 import { applyPositiveSupportEffect } from '../../../utils/positiveSupportEffect'
 import { getDigimonDerivedStats, calculateEffectPotency } from '../../../utils/resolveSupportAttack'
 import { triggerCounterattack } from '../../../utils/triggerCounterattack'
@@ -712,7 +714,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       // Calculate final damage
       let damageDealt = 0
       if (hit) {
-        const effectiveArmor = Math.max(0, (request.data?.counterBlow ? Math.floor(targetArmor / 2) : targetArmor) - armorPiercing)
+        const effectiveArmor = effectiveAttackArmor(targetArmor, armorPiercing, attackDef, request.data?.counterBlow)
         damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
         // Selective Targeting: area attacks don't damage allies
         if (selectiveTargetingBlocksDamage(selectiveTargetingFilter)) damageDealt = 0
@@ -856,7 +858,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
             }
 
             // Auto-apply effect if attack has one and conditions are met (Naturewalk: Fire can't be [Burned])
-            if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
+            if (attackDef?.effect && attackDef.effect !== 'Tank Buster' && !isImmuneToEffect(attackDef.effect, targetQualitiesForDodge)) {
               const alignment = EFFECT_ALIGNMENT[attackDef.effect]
               const shouldApply = (attackDef.type === 'damage' ? damageDealt >= 2 : true)
                 && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)
@@ -886,6 +888,9 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
                 }
               }
             }
+            if (applyTankBusterStun(updated, attackDef, damageDealt, { source: request.data.attackerName || 'Attack',
+              round: encounter.round, qualities: targetQualitiesForDodge, hasGone: targetHasGone,
+              allowed: !selectiveTargetingBlocksEffect(selectiveTargetingFilter, 'N') })) appliedEffectName ??= 'Stun'
           }
 
           return updated
@@ -971,7 +976,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
         targetArmor: targetArmor,
         ...(hit && clashArmorBonus > 0 ? { clashArmorBonus } : {}),
         armorPiercing: armorPiercing,
-        effectiveArmor: hit ? Math.max(0, (request.data?.counterBlow ? Math.floor(targetArmor / 2) : targetArmor) - armorPiercing) : undefined,
+        effectiveArmor: hit ? effectiveAttackArmor(targetArmor, armorPiercing, attackDef, request.data?.counterBlow) : undefined,
         finalDamage: hit ? damageDealt : 0,
         hit: hit,
         dodgeDicePool: body.response.dodgeDicePool,

@@ -982,15 +982,24 @@ watch(() => props.selectedAttack, (val, previous) => {
 
 })
 
-watch(() => props.encounter.participants.map(p => [p.id, (p as any).pendingChargeMove?.castId]), () => {
-  const actor = props.encounter.participants.find(p => (p as any).pendingChargeMove)
-  if (!actor || !map.value) return
+function canControlChargeMove(participantId: string): boolean {
+  return props.isDm || myParticipantIds.value.includes(participantId)
+}
+
+function refreshPendingChargeMove() {
+  const actor = props.encounter.participants.find(p => (p as any).pendingChargeMove && canControlChargeMove(p.id))
+  if (!actor || !map.value) {
+    if (chargeMoveParticipantId.value) { chargeMoveParticipantId.value = null; movement.clearMovement() }
+    return
+  }
   const ctx = npcMoveCaps(actor.id)
   if (ctx) {
     movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)
     chargeMoveParticipantId.value = actor.id
   }
-}, { deep: true })
+}
+watch([() => props.encounter.participants.map(p => [p.id, (p as any).pendingChargeMove?.castId]),
+  () => props.isDm, () => myParticipantIds.value], refreshPendingChargeMove, { deep: true })
 
 function onNpcMove(participantId: string) {
   if (!map.value) return
@@ -1035,7 +1044,7 @@ function onClashMove(participantId: string) {
 // Post-attack charge move (charge clash attack, "move after"): the clash has already ended, so
 // the controller may charge away freely. Enters the normal free-move mode (no contact restriction).
 function startChargeAfterMove(participantId: string) {
-  if (!map.value) return
+  if (!map.value || !canControlChargeMove(participantId)) return
   const ctx = npcMoveCaps(participantId)
   if (!ctx) return
   movement.computeReachable(ctx.pos, ctx.budget, ctx.caps, map.value, destroyedIds(), ctx.occupied, ctx.dInfo?.size ?? 'medium', ctx.moverIsEnemy, ctx.moverGig)

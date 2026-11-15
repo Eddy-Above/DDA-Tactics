@@ -2539,8 +2539,8 @@ Rank 2 (requires Agility Rank 2): After Agility triggers (both ranks), must rero
     maxRanks: 1,
     prerequisites: [],
     bossOnly: true,
-    description: '[N] Anti-armor attack; half Armor on hit, [Stun] if dealing 4+ damage. Available at 75%/50%/25% wound thresholds.',
-    effect: `Apply [Tank Buster] tag to one Attack. Cannot be used at the beginning of combat; only usable when the Boss's Wound Box Pool reaches (at or below) 75%, 50%, and 25% thresholds. On use, the target's Armor is treated as halved. If the attack does more than 4 damage, it inflicts a secondary [Stun] effect. [Tank Buster] cannot be combined with: [Signature Move], [Counterattack], [Counterblow], [Hazard], [Armor Piercing], or [Certain Strike].`,
+    description: '[N] Anti-armor attack; half Armor on hit, [Stun] if dealing 4+ damage. Earn a use each time health drops to 75%, 50%, or 25%, including after healing.',
+    effect: `Apply [Tank Buster] tag to one Attack. Gain one use whenever remaining health reaches or crosses 75%, 50%, or 25%. Healing above a threshold allows crossing it again to grant another use; unused uses are retained. Each attack spends one use. On use, the target's Armor is treated as halved. If the attack deals 4 or more damage, it inflicts a secondary [Stun] effect for one round. [Tank Buster] cannot be combined with: [Signature Move], [Counterattack], [Counterblow], [Hazard], [Armor Piercing], or [Certain Strike].`,
   },
 ]
 

@@ -13,6 +13,7 @@ import { validateEncounterContextScope } from './encounterContextScope'
 import { shapeEncounterResult } from '../../utils/encounterSnapshot'
 import { withEncounterCommandReceipt } from './encounterCommandReceipt'
 import { notifyEncounterAudienceChanged } from './characterUpdates'
+import { finishTankBusterHealthChange } from './tankBuster'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -47,7 +48,13 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
         participants: context.encounter.participants.map(p => ({ type: p.type, entityId: p.entityId })),
         pendingRequests: (context.encounter.pendingRequests ?? []).map(r => ({ targetTamerId: r.targetTamerId })),
       }
-      const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, () => work(context))
+      const healthBefore = { phase: context.encounter.phase, participants: context.encounter.participants.map((p: any) => ({
+        id: p.id, currentWounds: p.currentWounds, maxWounds: p.maxWounds, tankBusterUses: p.tankBusterUses,
+      })) }
+      const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, async () => {
+        const result = await work(context)
+        return operation === 'delete' || operation === 'duplicate' ? result : finishTankBusterHealthChange(id, healthBefore, result)
+      })
       if (operationId && !saved) {
         const [fresh] = await db.select().from(encounters).where(eq(encounters.id, id))
         if (fresh?.participants?.some((p: any) => p.id === actorId)) {

@@ -9,6 +9,7 @@ import { getOutsideClashArmorBonus } from './clashArmor'
 import { isImmuneToEffect } from './damageOverTime'
 import { readCombatRecord, withCombatRecords } from './combatRecordCache'
 import { getNaturewalkBonuses } from '../../utils/naturewalk'
+import { effectiveAttackArmor, tankBusterStunEffect } from '../../utils/attackArmor'
 
 export interface ComputeAttackDamageParams {
   shieldComplex?: boolean
@@ -262,13 +263,8 @@ export async function computeAttackDamage(
     targetArmor = Math.max(0, targetArmor - attackerFinesseRanks)
   }
 
-  // Boss quality: Tank Buster — halve target armor on hit
-  const hasTankBusterTag = attackDef?.tags?.some((t: string) => t === 'Tank Buster')
-
   // ── Final damage ──────────────────────────────────────────────────────────
-  let effectiveTargetArmor = targetArmor
-  if (hasTankBusterTag || params.counterBlow) effectiveTargetArmor = Math.floor(effectiveTargetArmor / 2)
-  const effectiveArmor = Math.max(0, effectiveTargetArmor - armorPiercing)
+  const effectiveArmor = effectiveAttackArmor(targetArmor, armorPiercing, attackDef, params.counterBlow)
   let damageDealt = 0
   if (hit && attackDef?.type !== 'support') {
     damageDealt = Math.max(1, attackBaseDamage + netSuccesses - effectiveArmor)
@@ -306,19 +302,12 @@ export async function computeAttackDamage(
   let secondaryEffectData: any | null = null
 
   // Boss quality: Tank Buster secondary Stun when damage ≥ 4
-  if (hit && hasTankBusterTag && damageDealt >= 4 && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, 'N')) {
-    secondaryEffectData = {
-      name: 'Stun',
-      type: 'debuff' as const,
-      duration: 1,
-      source: attackerName,
-      description: 'Tank Buster: stunned by overwhelming strike.',
-      potency: 1,
-    }
+  if (hit && !targetQualities.some(q => q.id === 'immunity') && !isImmuneToEffect('Stun', targetQualities) && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, 'N')) {
+    secondaryEffectData = tankBusterStunEffect(attackDef, damageDealt, attackerName)
   }
 
   // Naturewalk: Fire can't be [Burned]
-  if (attackDef?.effect && !isImmuneToEffect(attackDef.effect, targetQualities)) {
+  if (attackDef?.effect && attackDef.effect !== 'Tank Buster' && !isImmuneToEffect(attackDef.effect, targetQualities)) {
     const alignment = EFFECT_ALIGNMENT[attackDef.effect]
     const shouldApply = (attackDef.type === 'damage' ? damageDealt >= (attackDef.effect === 'Lifesteal' ? 1 : 2) : true)
       && !selectiveTargetingBlocksEffect(selectiveTargetingFilter, alignment)

@@ -128,7 +128,8 @@ export interface CombatParticipant {
   buggedSpecValues?: { bit: number; cpu: number; ram: number }
   demoralizedAttributes?: Partial<Record<'agility' | 'body' | 'charisma' | 'intelligence' | 'willpower', number>>
   tormentorBonusStacks?: number           // +2 per participant who failed the check
-  tankBusterUsedAtThresholds?: number[]   // Already-consumed wound-% thresholds (e.g. 0.75, 0.50)
+  tankBusterUsedAtThresholds?: number[]   // Legacy history; no longer limits threshold reuse
+  tankBusterUses?: number                // Unspent uses earned on downward health-threshold crossings
   blackArmorRoundBonus?: { armor: number; dodge: number } // Rolled fresh each round
   brownArmorAutoDodgeAvailable?: boolean  // One free dodge success, reset each round
 }

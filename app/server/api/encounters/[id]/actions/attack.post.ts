@@ -14,6 +14,8 @@ import { combatAttackStats } from '../../../../../utils/combatDice'
 import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { effectActionError, signatureMoveError } from '../../../../../utils/combatAttackOptions'
+import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
+import { isTankBusterAttack } from '../../../../../utils/attackArmor'
 import { runAttackCommand } from '../../../../utils/attackCommand'
 import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
 import { commitAttackMovement, grantChargeAfter, finishPassClash, validateAttackTargets, type AttackMovementRequest } from '../../../../utils/attackMovement'
@@ -134,6 +136,8 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
     if (orderModifiers.successThreshold === 4) body.accuracySuccesses = body.accuracyDiceResults.filter(d => d >= 4).length
       + combatAttackStats(actorRecord, actor, attack).automaticSuccesses
     const signatureError = signatureMoveError(actor, attack, { round: encounter.round, houseRules: campaign?.rulesSettings?.houseRules })
+    const tankBusterError = tankBusterUseError(actor, attack)
+    if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
     if (signatureError) throw createError({ statusCode: 400, message: signatureError })
   }
 
@@ -359,6 +363,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCostSimple),
         },
         usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+        ...(isTankBusterAttack(actorRecord?.attacks?.find(a => a.id === body.attackId)) ? { tankBusterUses: availableTankBusterUses(p) - 1 } : {}),
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
       }
       // Track bolster usage for digimon

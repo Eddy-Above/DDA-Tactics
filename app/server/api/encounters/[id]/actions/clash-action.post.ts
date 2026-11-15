@@ -28,6 +28,8 @@ import { grantChargeAfter, isChargeAttack, commitAttackMovement, type AttackMove
 import { resolveAttackOffers } from './intercede-offer.post'
 import { BASIC_ATTACKS } from '../../../../../data/attackConstants'
 import { signatureMoveError } from '../../../../../utils/combatAttackOptions'
+import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
+import { isTankBusterAttack } from '../../../../../utils/attackArmor'
 
 interface ClashActionBody extends AttackMovementRequest {
   clashId: string
@@ -481,6 +483,8 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
       ? await db.select().from(campaigns).where(eq(campaigns.id, encounter.campaignId)) : []
     const houseRules = campaign?.rulesSettings?.houseRules
     const signatureError = signatureMoveError(actor, attackDefForClash, { round: encounter.round, houseRules })
+    const tankBusterError = tankBusterUseError(actor, attackDefForClash)
+    if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
     if (signatureError) throw createError({ statusCode: 400, message: signatureError })
     const isSignatureMove = !!houseRules?.signatureMoveBattery && signatureTagged
     const batteryCount = isSignatureMove ? actor.battery ?? 0 : 0
@@ -527,6 +531,7 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
           ...p,
           actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - 2) },
           usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+          ...(isTankBusterAttack(attackDefForClash) ? { tankBusterUses: availableTankBusterUses(p) - 1 } : {}),
           ...(isSignatureMove ? { battery: 0, usedSignatureMoveThisTurn: true } : {}),
         }
       }
