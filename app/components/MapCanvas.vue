@@ -1717,7 +1717,7 @@ function updateReticules() {
 
   reticuleParticipantIds.value = ids
 
-  // Range rings on ground — for ranged single-target attacks AND area shapes (to show valid placement/reach zone)
+  // Green always means melee reach; orange is the ranged effective limit.
   if (preview || (!isMelee && (!aoeCellSet || isAreaTargeting.value))) {
     const addRing = (radius: number, color: number) => {
       const geo = new THREE.RingGeometry(radius - 0.05, radius + 0.05, 64)
@@ -1727,7 +1727,7 @@ function updateReticules() {
       mesh.position.set(attackerPos.x + (preview ? attackerDims.width / 2 : 0.5), attackerPos.y * TILE_SIZE + TILE_H + 0.015, attackerPos.z + (preview ? attackerDims.depth / 2 : 0.5))
       reticuleGroup.add(mesh)
     }
-    addRing(isMelee ? meleeRange : stats?.range ?? props.attackerRange, 0x00ff00)
+    addRing(meleeRange, 0x00ff00)
     if (!isMelee) addRing(maxDist, 0xffaa00)
   }
 }

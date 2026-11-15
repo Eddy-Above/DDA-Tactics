@@ -12,6 +12,7 @@ function renderRings(y, area) {
   const reticuleGroup = new THREE.Group()
   const { updateReticules } = loadPageFunctions('components/MapCanvas.vue', ['updateReticules'], {
     THREE, TILE_H, TILE_SIZE: 1, reticuleGroup,
+    getMoveAim: () => null,
     props: {
       selectedAttack: { range: 'ranged', type: 'damage', tags: area ? ['Area Attack: Blast'] : [] },
       participantPositions: { attacker: position }, participants: [],
@@ -41,7 +42,7 @@ for (const area of [false, true]) {
 
         try {
           for (const [index, ring] of reticuleGroup.children.entries()) {
-            const radius = index === 0 ? 2 : 4
+            const radius = index === 0 ? 1 : 4
             close(ring.geometry.parameters.innerRadius, radius - 0.05)
             close(ring.geometry.parameters.outerRadius, radius + 0.05)
             assert.equal(ring.geometry.parameters.thetaSegments, 64)

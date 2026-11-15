@@ -91,3 +91,19 @@ export function loadPageFunctions(relativePath, functionNames, dependencies) {
   })
   return new Function(...Object.keys(dependencies), `${outputText}\nreturn { ${functionNames.join(', ')} }`)(...Object.values(dependencies))
 }
+
+/** Execute one real setup initializer with Vue refs and explicit dependencies. */
+export function loadPageComputed(relativePath, variableName, dependencies) {
+  const filename = resolve(appDirectory, relativePath)
+  const { descriptor, errors } = parse(readFileSync(filename, 'utf8'), { filename })
+  if (errors.length) throw errors[0]
+  const source = ts.createSourceFile(filename, descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const declaration = source.statements.filter(ts.isVariableStatement)
+    .flatMap(statement => [...statement.declarationList.declarations])
+    .find(candidate => ts.isIdentifier(candidate.name) && candidate.name.text === variableName)
+  if (!declaration?.initializer) throw Error(`Missing initializer: ${variableName}`)
+  const { outputText } = ts.transpileModule(`const extracted = ${declaration.initializer.getText(source)}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  })
+  return new Function(...Object.keys(dependencies), `${outputText}\nreturn extracted`)(...Object.values(dependencies))
+}
