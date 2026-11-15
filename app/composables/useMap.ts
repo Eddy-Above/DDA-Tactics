@@ -43,6 +43,12 @@ export function useMap() {
     return data
   }
 
+  async function duplicateMap(mapId: string) {
+    const data = await $fetch<GameMap>(`/api/maps/${mapId}/duplicate`, { method: 'POST' })
+    maps.value.push(data)
+    return data
+  }
+
   async function updateMap(mapId: string, body: Partial<GameMap>) {
     const data = await $fetch<GameMap>(`/api/maps/${mapId}`, { method: 'PUT', body })
     const idx = maps.value.findIndex(m => m.id === mapId)
@@ -63,5 +69,5 @@ export function useMap() {
     if (currentMap.value?.id === mapId) currentMap.value = null
   }
 
-  return { maps, currentMap, loading, error, fetchMaps, fetchMap, createMap, updateMap, updateMapMinimal, deleteMap }
+  return { maps, currentMap, loading, error, fetchMaps, fetchMap, createMap, duplicateMap, updateMap, updateMapMinimal, deleteMap }
 }

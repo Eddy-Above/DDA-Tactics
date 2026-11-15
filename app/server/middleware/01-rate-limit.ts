@@ -13,7 +13,7 @@ export default defineEventHandler(event => {
     // Login separately limits failed guesses; successful logins do not use that budget.
     consumeHttpLimit(event, `account-auth:${ip}`, 30)
   }
-  if (method === 'DELETE' || method === 'POST' && (/^\/api\/(campaigns|tamers|digimon|maps|encounters|evolution-lines)$/i.test(path) || /^\/api\/auth\/register$/i.test(path))) {
+  if (method === 'DELETE' || method === 'POST' && (/^\/api\/(campaigns|tamers|digimon|maps|encounters|evolution-lines)$/i.test(path) || /^\/api\/maps\/[^/]+\/duplicate$/i.test(path) || /^\/api\/auth\/register$/i.test(path))) {
     consumeHttpLimit(event, `create-delete:${ip}`, 10)
   }
   // A generous first boundary protects work before campaign authentication resolves.

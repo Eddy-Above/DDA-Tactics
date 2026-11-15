@@ -44,6 +44,8 @@
       <button class="mt-2 text-xs text-digimon-dark-400 hover:text-white" @click="importResult = null">Dismiss</button>
     </div>
 
+    <div v-if="duplicateError" role="alert" class="mb-4 rounded-lg border border-red-700 bg-red-900/30 p-4 text-sm text-red-300">{{ duplicateError }}</div>
+
     <div v-if="loading || initialLoading" role="status" class="text-center py-12 text-digimon-dark-400">Loading maps...</div>
 
     <div v-else-if="initialLoadError" role="alert" class="text-red-300 py-8">Maps could not be loaded. Reload this page to try again.</div>
@@ -82,9 +84,10 @@
           </NuxtLink>
           <button
             class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
+            :disabled="duplicatingMapIds.has(map.id)"
             @click="duplicateMap(map)"
           >
-            ⧉ Duplicate
+            {{ duplicatingMapIds.has(map.id) ? 'Duplicating…' : '⧉ Duplicate' }}
           </button>
           <button
             class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
@@ -121,6 +124,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { mapContentSizeLabel } from '~/utils/mapContentBounds'
+import { requestErrorMessage } from '~/utils/requestError'
 import { useMap } from '~/composables/useMap'
 import { useLibraryImportExport } from '~/composables/useLibraryImportExport'
 import type { GameMap } from '~/types'
@@ -129,7 +133,7 @@ definePageMeta({ middleware: ['dm-access'] })
 
 const route = useRoute()
 const campaignId = computed(() => route.params.campaignId as string)
-const { maps, loading, fetchMaps, createMap, deleteMap } = useMap()
+const { maps, loading, fetchMaps, duplicateMap: duplicateSavedMap, deleteMap } = useMap()
 const { exportMap, exportMaps, importMaps } = useLibraryImportExport()
 
 // Forward the viewer's cookies during SSR and hydrate from that same result.
@@ -144,6 +148,8 @@ const { data: initialMaps, error: initialLoadError, pending: initialLoading } = 
 watch(initialMaps, value => { maps.value = value ?? [] }, { immediate: true })
 
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
+const duplicatingMapIds = ref(new Set<string>())
+const duplicateError = ref('')
 const importFileInput = ref<HTMLInputElement | null>(null)
 const importResult = ref<{ successful: number; failed: number; errors: Array<{ index: number; name: string; error: string }> } | null>(null)
 
@@ -158,12 +164,16 @@ async function doDelete() {
 }
 
 async function duplicateMap(map: GameMap) {
-  await createMap({
-    name: `${map.name} (copy)`,
-    description: map.description,
-    campaignId: campaignId.value,
-    dimensions: map.dimensions,
-  })
+  if (duplicatingMapIds.value.has(map.id)) return
+  duplicatingMapIds.value.add(map.id)
+  duplicateError.value = ''
+  try {
+    await duplicateSavedMap(map.id)
+  } catch (error) {
+    duplicateError.value = requestErrorMessage(error, 'Map could not be duplicated. Please try again.')
+  } finally {
+    duplicatingMapIds.value.delete(map.id)
+  }
 }
 
 async function handleImport(event: Event) {

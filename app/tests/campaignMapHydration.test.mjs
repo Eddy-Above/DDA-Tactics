@@ -49,6 +49,8 @@ function page(payload, { failure = false } = {}) {
       return Vue
     if (name === '~/utils/mapContentBounds')
       return loadTypeScript('utils/mapContentBounds.ts')
+    if (name === '~/utils/requestError')
+      return loadTypeScript('utils/requestError.ts')
     if (name === '~/composables/useMap')
       return loadTypeScript('composables/useMap.ts')
     if (name === '~/composables/useLibraryImportExport')
