@@ -5,7 +5,7 @@ import { loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 globalThis.createError = value => Object.assign(new Error(value.message), value)
 const point = (x = 0, y = 0, z = 0) => ({ x, y, z })
 
-function fixture({ newSize = 'large', qualities = [], obstacle = { ...point(1, 1), materialId: 'steel' }, placed = true, mapId = 'map', phase = 'combat' } = {}) {
+function fixture({ newSize = 'large', qualities = [], obstacle = { ...point(1, 1), materialId: 'steel' }, placed = true, mapId = 'map', phase = 'combat', partner = false, blockedSight = false } = {}) {
   const tables = Object.fromEntries(['encounters', 'digimon', 'evolutionLines', 'tamers'].map(name => [name, { name, id: name }]))
   const actor = { id: 'actor', type: 'digimon', entityId: 'before', evolutionLineId: 'line', isEnemy: true,
     currentWounds: 2, maxWounds: 10, totalHealth: 10, actionsRemaining: { simple: 2 }, activeEffects: [] }
@@ -22,6 +22,18 @@ function fixture({ newSize = 'large', qualities = [], obstacle = { ...point(1, 1
   ] }
   const map = { groundTiles: Array.from({ length: 25 }, (_, n) => point(n % 5 - 2, 0, Math.floor(n / 5) - 2)),
     voxels: [obstacle], walls: [], doors: [], ceilings: [], stairs: [], spaceTiles: [] }
+  if (partner) {
+    actor.isEnemy = false
+    for (const record of records.values()) Object.assign(record, { isEnemy: false, partnerId: 'owner' })
+    encounter.participants.push({ id: 'tamer', type: 'tamer', entityId: 'owner', actionsRemaining: { simple: 2 } })
+    encounter.turnOrder = ['tamer']
+    positions.tamer = point(-3)
+  }
+  if (blockedSight) map.walls.push({ id: 'wall', ...point(-2), face: 'east' })
+  const sight = loadTypeScriptWithMocks('server/utils/tamerSight.ts', {
+    './combatSpatial': { loadEncounterMap: async () => map },
+    './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: positions, destructibleStates: [] }), getDestroyedStructureIds: () => new Set() },
+  })
   const writes = [], published = [], auraPositions = []
   let mapsLoaded = 0
   const db = {
@@ -37,6 +49,7 @@ function fixture({ newSize = 'large', qualities = [], obstacle = { ...point(1, 1
     } }) }),
   }
   const { performDigivolution } = loadTypeScriptWithMocks('server/utils/digivolutionAction.ts', {
+    './tamerSight': sight,
     '../db': { db, ...tables }, 'drizzle-orm': { eq: (_column, value) => ({ value }) },
     './combatRecordCache': { invalidateCombatRecord() {} },
     './entitySecurity': { entityCampaignId: async (_type, record) => record.campaignId },
@@ -67,6 +80,16 @@ for (const forced of [false, true]) test(`${forced ? 'GM forced' : 'ordinary'} d
   assert.deepEqual(f.published, [{ actor: point(-1) }])
   assert.deepEqual(f.auraPositions, [{ actor: point(-1), other: point(10) }])
   assert.equal(f.writes.filter(write => write.table === 'encounters').length, 1)
+})
+
+for (const force of [false, true]) test(`partner digivolution checks sight before writing (force=${force})`, async () => {
+  const blocked = fixture({ partner: true, blockedSight: true })
+  await assert.rejects(blocked.run(force), /requires line of sight/)
+  assert.deepEqual(blocked.writes, [])
+  assert.deepEqual(blocked.published, [])
+  const visible = fixture({ partner: true })
+  await visible.run(force)
+  assert.equal(visible.encounter.participants[0].entityId, 'after')
 })
 
 for (const options of [

@@ -4859,6 +4859,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               :selected-attack="mapSelectedAttackProp"
               :radial-options="mapRadialOptions"
               :selectable-participant-ids="intercedeMapTargetIds.length ? intercedeMapTargetIds : directMapTargetIds"
+              :target-sight-source-id="!intercedeMapTargetIds.length && mapDirectMode?.bolstered ? myTamerParticipant?.id : null"
               :player-placement-mode="playerPlacementMode"
               :my-participant-ids="myParticipantIds"
               :eddy-soul-rules="eddySoulRules"

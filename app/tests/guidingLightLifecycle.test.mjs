@@ -107,6 +107,7 @@ function fixture({ participants = [unit('source'), unit('ally')], phase = 'comba
     },
     '../../../../db': dbModule,
     '../../../../utils/combatContext': combatContext,
+    '../../../../utils/tamerSight': { requireTamerDigimonSight: async () => {} },
     '../../../../utils/partnerDevolution': partnerDevolution,
     '../../../../utils/digizoidArmor': { getDigizoidArmorBonus: () => ({ health: 0, armor: 0, dodge: 0 }) },
     '../../../../utils/encounterRoom': { getRoomPositions: async () => structuredClone(room.participantPositions) },

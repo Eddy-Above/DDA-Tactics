@@ -128,6 +128,7 @@ import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
 import { getFootprintDimensions, getFootprintCells, sizeInteraction, footprintDistance, isFootprintAirborne, getMovementOccupancy, createMovementMapView } from '~/utils/movementRules'
 import { chargeDestinationCells } from '~/utils/chargeMovement'
+import { createTamerSightCheck } from '~/utils/tamerSight'
 import { movementPathError, passMovementCapabilities, straightMovementPath } from '~/utils/movementPath'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
@@ -295,6 +296,12 @@ const radialDigimonPartnerTamer = computed(() => {
   return props.participants.find(p => p.type === 'tamer' && p.entityId === partnerId) ?? null
 })
 const digivolveRange = computed(() => props.eddySoulRules?.directRangeOverrides?.digivolve ?? 15)
+function canTamerSeeDigimon(tamerId: string, digimonId: string): boolean {
+  if (!props.map) return true
+  const destroyed = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
+  return createTamerSightCheck(props.map, props.participantPositions[tamerId], destroyed)(
+    props.participantPositions[digimonId], getParticipantFootprintDims(digimonId))
+}
 const digivolveDisabled = computed(() => {
   const d = radialDigimonParticipant.value
   const t = radialDigimonPartnerTamer.value
@@ -307,7 +314,7 @@ const digivolveDisabled = computed(() => {
   if (!dPos || !tPos) return true
 
   const dist = Math.max(Math.abs(dPos.x - tPos.x), Math.abs(dPos.y - tPos.y), Math.abs(dPos.z - tPos.z))
-  return dist > digivolveRange.value
+  return dist > digivolveRange.value || (!!props.map && !canTamerSeeDigimon(t.id, d.id))
 })
 // Out of own actions: grays the shared player Move button (tamer or digimon) and the digimon Attack button.
 const radialPlayerOutOfActions = computed(() => {
@@ -769,11 +776,11 @@ function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: strin
     if (p.id === attackerId || !pos) return []
     return [{ pos, size: getParticipantSize(p.id), giganticDimensions: getParticipantFootprintDims(p.id) }]
   })
-  const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(getParticipantSize(attackerId), units)
+  const { landingBlockedPositions } = getMovementOccupancy(getParticipantSize(attackerId), units)
   const destroyed = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
   const map = createMovementMapView({ ...props.map, doors: props.map.doors.map(door => ({ ...door, isOpen: true })) })
   return movementPathError(straightMovementPath(attackerPos, anchor), passCaps, movement + ram, map, dims,
-    blockedPositions, landingBlockedPositions, destroyed) === null
+    new Set(), landingBlockedPositions, destroyed) === null
 }
 
 // Whether ANY ram value in [0, ramMax] yields a valid landing for this (attackerPos, dir,

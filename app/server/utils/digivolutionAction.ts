@@ -14,6 +14,7 @@ import { loadCampaignCombatContext } from './combatContext'
 import { buildCombatDevolutionState } from './partnerDevolution'
 import { resolveCombatEvolutionIndex } from '../../utils/combatEvolutionOptions'
 import { entityCampaignId } from './entitySecurity'
+import { requireTamerDigimonSight } from './tamerSight'
 
 export interface DigivolveBody {
   participantId: string
@@ -201,6 +202,11 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
   const [newDigimon] = await db.select().from(digimon).where(eq(digimon.id, targetEntry.digimonId))
   if (!newDigimon || await entityCampaignId('digimon', newDigimon) !== encounter.campaignId) {
     throw createError({ statusCode: 404, message: 'Target digimon not found in library' })
+  }
+
+  if (encounter.mapId && (isPartner || tamerParticipant)) {
+    if (!tamerParticipant) throw createError({ statusCode: 400, message: 'Digivolution requires the partner Tamer to be placed on the map' })
+    await requireTamerDigimonSight(encounter, tamerParticipant, participant, digimonEntity, 'Digivolution')
   }
 
   // Calculate new max wounds

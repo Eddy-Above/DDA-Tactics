@@ -53,7 +53,7 @@
           :active-participant-id="activeParticipantId"
           :secondary-active-participant-id="secondaryActiveParticipantId"
           :selected-attack="selectedAttack"
-          :selectable-participant-ids="selectableParticipantIds"
+          :selectable-participant-ids="sightFilteredTargetIds"
           :attacker-range="attackerStats.range"
           :attacker-effective-limit="attackerStats.effectiveLimit"
           :attacker-melee-range="attackerStats.meleeRange"
@@ -201,6 +201,7 @@ import { chebyshev } from '~/utils/pathfinding'
 import { dropRoute, getDraggableParticipantIds, getPlaceableParticipantIds, isSetupPhase } from '~/utils/placementRules'
 import { closedDoorsCrossedByPath } from '~/utils/mapDoors'
 import { straightMovementPath } from '~/utils/movementPath'
+import { createTamerSightCheck } from '~/utils/tamerSight'
 import type { MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
@@ -229,6 +230,7 @@ const props = defineProps<{
   editorMode?: boolean
   initialMap?: GameMap | null
   selectableParticipantIds?: string[]
+  targetSightSourceId?: string | null
   eddySoulRules?: EddySoulRules
   radialOptions?: Record<string, MapRadialOptions>
   bottomOverlayOffset?: number   // px from viewport bottom for bottom-anchored overlays; defaults to 10 via CSS fallback
@@ -254,6 +256,20 @@ const emit = defineEmits<{
 // ── Map state ──────────────────────────────────────────────────────────────
 const mapStore = useMap()
 const map = shallowRef<GameMap | null>(props.initialMap ?? null)
+function filterTargetSight(ids: string[]): string[] {
+  const sourceId = props.targetSightSourceId
+  if (!sourceId) return ids
+  const source = props.encounter.participants.find(p => p.id === sourceId && p.type === 'tamer' && !p.inReserve)
+  if (!map.value || !source) return []
+  const visible = createTamerSightCheck(map.value, positions.value[sourceId], destroyedIds())
+  return ids.filter(id => {
+    const target = props.encounter.participants.find(p => p.id === id && !p.inReserve)
+    if (!target) return false
+    const record = props.digimonMap[target.entityId]
+    return visible(positions.value[id], getFootprintDimensions(record?.size ?? 'medium', record?.giganticDimensions))
+  })
+}
+const sightFilteredTargetIds = computed(() => filterTargetSight(props.selectableParticipantIds ?? []))
 const doorPreviews = ref<Record<string, { isOpen: boolean; operationId: string }>>({})
 const displayMap = computed(() => !map.value || !Object.keys(doorPreviews.value).length ? map.value : {
   ...map.value,

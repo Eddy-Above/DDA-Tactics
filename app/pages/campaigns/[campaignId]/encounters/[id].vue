@@ -3742,6 +3742,7 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           :selected-attack="mapSelectedAttackProp"
           :radial-options="mapRadialOptions"
           :selectable-participant-ids="directMapTargetIds"
+          :target-sight-source-id="mapDirectMode?.bolstered ? mapDirectMode.participantId : null"
           :player-placement-mode="false"
           :eddy-soul-rules="eddySoulRules"
           @encounter-updated="(snapshot: any) => applyActionResult(snapshot, 'move')"

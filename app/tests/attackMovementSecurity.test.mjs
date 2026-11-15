@@ -313,7 +313,7 @@ test('Pass can launch a jump from lower footing along the route', async () => {
   assert.deepEqual(result.position, destination)
 })
 
-for (const obstacle of ['jump height', 'wall', 'occupied route']) {
+for (const obstacle of ['jump height', 'wall', 'occupied landing']) {
   test(`Pass preview rejects a supported endpoint when its route exceeds ${obstacle}`, async () => {
     const f = fixture({ realMovement: true })
     f.positions.target = point(20)
@@ -324,13 +324,31 @@ for (const obstacle of ['jump height', 'wall', 'occupied route']) {
     } else if (obstacle === 'wall') {
       f.map.walls = [{ id: 'wall', ...point(1), face: 'east' }]
     } else {
-      f.positions.target = point(1)
+      f.positions.target = destination
     }
     assert.equal(passPreview(f, destination), false, 'hover must not show an invalid route as valid')
     await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Area Attack: Pass'], range: 'melee' }, {
       operationId: 'cast', expectedRevision: 7,
       movement: { kind: 'pass', origin: point(), destination, direction: destination, movement: Math.hypot(destination.x, destination.y), ram: 0 },
-    }, f.access), /movement path is blocked/)
+    }, f.access), obstacle === 'occupied landing' ? /cannot finish movement there/ : /movement path is blocked/)
     assert.deepEqual(f.writes, [])
+  })
+}
+
+for (const size of ['tiny', 'small', 'medium', 'large', 'huge', 'gigantic']) for (const isEnemy of [false, true]) {
+  test(`Pass preview and commit cross a ${size} ${isEnemy ? 'enemy' : 'ally'}`, async () => {
+    const f = fixture({ realMovement: true })
+    Object.assign(f.caps, { movementSpeed: 16, canJump: false, jumpHeight: 0, jumpRange: 0 })
+    f.map.groundTiles = Array.from({ length: 30 }, (_, x) => point(x))
+    f.positions.target = point(5)
+    Object.assign(f.records.get('target-mon'), { size, giganticDimensions: { width: 5, height: 5, depth: 5 } })
+    f.encounter.participants[1].isEnemy = isEnemy
+    const destination = point(12)
+    assert.equal(passPreview(f, destination), true)
+    await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Area Attack: Pass'], range: 'melee' }, {
+      operationId: 'cast', expectedRevision: 7,
+      movement: { kind: 'pass', origin: point(), destination, direction: point(1), movement: 12, ram: 0 },
+    }, f.access)
+    assert.deepEqual(f.positions.actor, destination)
   })
 }

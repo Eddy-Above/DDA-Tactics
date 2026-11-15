@@ -2,6 +2,7 @@ import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, tamers } from '../../../../db'
+import { requireTamerDigimonSight } from '../../../../utils/tamerSight'
 
 interface DirectActionBody {
   participantId: string
@@ -109,6 +110,7 @@ export default defineEncounterCommand(async (event, commandContext) => {
 
   // Determine partner status
   const [targetDigimonEntity] = await db.select().from(digimon).where(eq(digimon.id, targetParticipant.entityId))
+  if (body.bolstered) await requireTamerDigimonSight(encounter, actor, targetParticipant, targetDigimonEntity, 'Bolster Direct')
   const isPartner = targetDigimonEntity?.partnerId === actor.entityId
 
   // Calculate bonus

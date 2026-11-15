@@ -76,7 +76,9 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     }
     path = origin ? [origin, intent.destination] : [intent.destination]
   } else {
-    const blocked = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
+    // Pass crosses characters of every size; only its final footprint must be clear.
+    const blocked = intent.kind === 'pass' ? new Set<string>()
+      : buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
     const tamers = await loadTamersByIds(actor.type === 'tamer' ? [actor.entityId] : record?.partnerId ? [record.partnerId] : [])
     const currentActor = initial.participants.find(p => p.id === actor.id)
     const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards), options.campaignLevel)
