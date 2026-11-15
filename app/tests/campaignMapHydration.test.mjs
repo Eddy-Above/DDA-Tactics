@@ -69,6 +69,7 @@ test('campaign maps use request-aware SSR data, reuse the payload on reload and 
   for (const name of ['Crossing', 'Town'])
     assert.ok(serverHtml.includes(name))
   assert.doesNotMatch(serverHtml, /Loading maps|No maps yet/)
+  assert.equal((serverHtml.match(/>Rename<\/button>/g) ?? []).length, 2)
   const hydrate = page(payload)
   assert.equal(await renderToString(hydrate.app), serverHtml)
   assert.equal(hydrate.calls.length, 0, 'hydration reuses the server payload')

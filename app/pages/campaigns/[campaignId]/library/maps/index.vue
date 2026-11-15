@@ -61,9 +61,30 @@
         :key="map.id"
         class="bg-digimon-dark-800 rounded-xl border border-digimon-dark-700 p-5 hover:border-digimon-dark-500 transition-colors"
       >
-        <div class="flex justify-between items-start mb-3">
-          <div>
-            <h3 class="font-semibold text-white text-lg">{{ map.name }}</h3>
+        <div class="flex justify-between items-start gap-3 mb-3">
+          <div class="flex-1 min-w-0">
+            <form v-if="renameTarget?.id === map.id" class="space-y-2" @submit.prevent="saveRename">
+              <label :for="`map-name-${map.id}`" class="block text-sm text-digimon-dark-300">Map name</label>
+              <input
+                :id="`map-name-${map.id}`"
+                v-model="renameName"
+                v-focus
+                type="text"
+                required
+                maxlength="1000"
+                :disabled="renameSaving"
+                :aria-describedby="renameError ? `map-name-error-${map.id}` : undefined"
+                :aria-invalid="renameError ? true : undefined"
+                class="w-full rounded border border-digimon-dark-500 bg-digimon-dark-900 px-3 py-2 text-white"
+                @keydown.esc.prevent="cancelRename"
+              >
+              <p v-if="renameError" :id="`map-name-error-${map.id}`" role="alert" class="text-sm text-red-300">{{ renameError }}</p>
+              <div class="flex gap-2">
+                <button type="submit" :disabled="renameSaving || !renameName.trim()" class="rounded bg-digimon-orange-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">{{ renameSaving ? 'Saving…' : 'Save' }}</button>
+                <button type="button" :disabled="renameSaving" class="rounded bg-digimon-dark-700 px-3 py-1.5 text-sm text-white disabled:opacity-50" @click="cancelRename">Cancel</button>
+              </div>
+            </form>
+            <h3 v-else class="font-semibold text-white text-lg break-words">{{ map.name }}</h3>
             <p v-if="map.description" class="text-digimon-dark-400 text-sm mt-1">{{ map.description }}</p>
           </div>
           <span class="text-xs text-digimon-dark-500 bg-digimon-dark-700 px-2 py-1 rounded">
@@ -82,6 +103,13 @@
           >
             ✏ Edit
           </NuxtLink>
+          <button
+            v-if="renameTarget?.id !== map.id"
+            type="button"
+            :disabled="renameSaving"
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+            @click="startRename(map)"
+          >Rename</button>
           <button
             class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-digimon-dark-200 px-3 py-1.5 rounded text-sm transition-colors"
             :disabled="duplicatingMapIds.has(map.id)"
@@ -133,7 +161,7 @@ definePageMeta({ middleware: ['dm-access'] })
 
 const route = useRoute()
 const campaignId = computed(() => route.params.campaignId as string)
-const { maps, loading, fetchMaps, duplicateMap: duplicateSavedMap, deleteMap } = useMap()
+const { maps, loading, fetchMaps, updateMap, duplicateMap: duplicateSavedMap, deleteMap } = useMap()
 const { exportMap, exportMaps, importMaps } = useLibraryImportExport()
 
 // Forward the viewer's cookies during SSR and hydrate from that same result.
@@ -148,10 +176,50 @@ const { data: initialMaps, error: initialLoadError, pending: initialLoading } = 
 watch(initialMaps, value => { maps.value = value ?? [] }, { immediate: true })
 
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
+const renameTarget = ref<{ id: string; name: string } | null>(null)
+const renameName = ref('')
+const renameSaving = ref(false)
+const renameError = ref('')
+const vFocus = { mounted(input: HTMLInputElement) { input.focus(); input.select() } }
 const duplicatingMapIds = ref(new Set<string>())
 const duplicateError = ref('')
 const importFileInput = ref<HTMLInputElement | null>(null)
 const importResult = ref<{ successful: number; failed: number; errors: Array<{ index: number; name: string; error: string }> } | null>(null)
+
+function startRename(map: GameMap) {
+  if (renameSaving.value) return
+  renameTarget.value = { id: map.id, name: map.name }
+  renameName.value = map.name
+  renameError.value = ''
+}
+
+function cancelRename() {
+  if (renameSaving.value) return
+  renameTarget.value = null
+  renameName.value = ''
+  renameError.value = ''
+}
+
+async function saveRename() {
+  if (!renameTarget.value || renameSaving.value) return
+  const name = renameName.value.trim()
+  if (!name || name.length > 1000) {
+    renameError.value = 'Enter a map name between 1 and 1,000 characters.'
+    return
+  }
+  if (name === renameTarget.value.name) { cancelRename(); return }
+  renameSaving.value = true
+  renameError.value = ''
+  try {
+    await updateMap(renameTarget.value.id, { name })
+    renameTarget.value = null
+    renameName.value = ''
+  } catch (error) {
+    renameError.value = requestErrorMessage(error, 'Map could not be renamed. Please try again.')
+  } finally {
+    renameSaving.value = false
+  }
+}
 
 function confirmDelete(id: string, name: string) {
   deleteTarget.value = { id, name }
