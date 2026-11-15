@@ -3579,6 +3579,8 @@ const digimonMapForMap = computed(() => {
       baseStats: d.baseStats,
       qualities: parsedQualities,
       attacks: participant ? getParticipantAttacks(participant) : (typeof d.attacks === 'string' ? JSON.parse(d.attacks) : (d.attacks ?? [])),
+      range: derived.range,
+      effectiveLimit: derived.effectiveLimit,
       movement: derived.movement ?? 4,
       baseMovement: derived.baseMovement,
       ram: derived.ram,

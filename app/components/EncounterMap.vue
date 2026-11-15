@@ -216,6 +216,8 @@ const props = defineProps<{
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
     attacks?: Array<{ range: 'melee' | 'ranged' }>
+    range?: number
+    effectiveLimit?: number
     movement?: number
     baseMovement?: number
     ram?: number
@@ -488,7 +490,8 @@ const attackerStats = computed(() => {
   if (!participant || participant.type !== 'digimon') return { range: 0, effectiveLimit: 0, meleeRange: 1 }
   const d = props.digimonMap[participant.entityId]
   if (!d) return { range: 0, effectiveLimit: 0, meleeRange: 1 }
-  const derived = applyDerivedStatEffects(calculateDigimonDerivedStats(d.baseStats, d.stage, d.size), participant.activeEffects ?? [])
+  const base = calculateDigimonDerivedStats(d.baseStats, d.stage, d.size)
+  const derived = applyDerivedStatEffects({ range: d.range ?? base.range, effectiveLimit: d.effectiveLimit ?? base.effectiveLimit }, participant.activeEffects ?? [])
   const reachRanks = (d.qualities as any[]).find(q => q.id === 'reach')?.ranks ?? 0
   return {
     range: derived.range,
@@ -504,7 +507,10 @@ const movementAttackStats = computed(() => {
   if (participant?.type !== 'digimon') return null
   const d = props.digimonMap[participant.entityId]
   if (!d) return null
-  const derived = applyDerivedStatEffects(calculateDigimonDerivedStats(d.baseStats, d.stage, d.size), participant.activeEffects ?? [])
+  // The page's calculator includes bonus stats, Dark Evolution and quality bonuses.
+  // Use that same baseline as selected attacks, then apply live effects exactly once.
+  const base = calculateDigimonDerivedStats(d.baseStats, d.stage, d.size)
+  const derived = applyDerivedStatEffects({ range: d.range ?? base.range, effectiveLimit: d.effectiveLimit ?? base.effectiveLimit }, participant.activeEffects ?? [])
   const reach = d.qualities.find(q => q.id === 'reach')?.ranks ?? 0
   return { range: derived.range, effectiveLimit: derived.effectiveLimit, meleeRange: Math.max(1, reach * 2),
     hasRanged: d.attacks?.some(attack => attack.range === 'ranged') ?? false }

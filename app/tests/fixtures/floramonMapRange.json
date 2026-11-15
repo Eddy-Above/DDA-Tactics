@@ -1,0 +1,90 @@
+{
+  "eddySoulRules": {
+    "accuracyIsAgilityAthletics": true,
+    "damageIsBodyFeatsOfStrength": true,
+    "armorIsWillpowerEndurance": true,
+    "baseStatRangesEnabled": true,
+    "chargeAttackCosts3DP": true,
+    "instinctBoostsDodgeArmorSpeed": true,
+    "bonusDPMinPerCategory": true
+  },
+  "digimon": {
+    "name": "Floramon",
+    "stage": "rookie",
+    "size": "medium",
+    "baseStats": {
+      "armor": 3,
+      "dodge": 3,
+      "damage": 3,
+      "health": 3,
+      "accuracy": 5
+    },
+    "bonusStats": {
+      "armor": 3,
+      "dodge": 3,
+      "damage": 3,
+      "health": 3,
+      "accuracy": 5
+    },
+    "isDarkEvolution": false,
+    "dataOptimization": "",
+    "giganticDimensions": null,
+    "id": "floramon",
+    "qualities": [
+      {
+        "id": "instinct",
+        "ranks": 1
+      },
+      {
+        "id": "armor-piercing",
+        "ranks": 1
+      },
+      {
+        "id": "data-optimization",
+        "ranks": 1,
+        "choiceId": "effect-warrior"
+      },
+      {
+        "id": "naturewalk",
+        "ranks": 1,
+        "choiceId": "wood"
+      },
+      {
+        "id": "huge-power",
+        "ranks": 1
+      },
+      {
+        "id": "agility",
+        "ranks": 1
+      },
+      {
+        "id": "effect-stun",
+        "ranks": 1
+      },
+      {
+        "id": "effect-pacify",
+        "ranks": 1
+      }
+    ],
+    "attacks": [
+      {
+        "id": "attack-1775484420577",
+        "name": "Seed Barrage",
+        "range": "ranged",
+        "type": "damage",
+        "tags": [
+          "Armor Piercing 1"
+        ],
+        "effect": "Stun"
+      },
+      {
+        "id": "attack-1775484432793",
+        "name": "Allergy Shower",
+        "range": "ranged",
+        "type": "support",
+        "tags": [],
+        "effect": "Pacify"
+      }
+    ]
+  }
+}

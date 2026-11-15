@@ -1,8 +1,45 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import * as THREE from 'three'
 import { computed, ref } from 'vue'
 import { loadPageComputed, loadPageFunctions, loadTypeScript } from './helpers/loadTypeScript.mjs'
+
+const floramon = JSON.parse(readFileSync(new URL('./fixtures/floramonMapRange.json', import.meta.url), 'utf8'))
+
+function calculateFullStats(record, rules, partnerStrikeFirst) {
+  const previous = globalThis.ref
+  globalThis.ref = ref
+  try { return loadTypeScript('composables/useDigimon.ts').useDigimon().calculateDerivedStats(record, rules, partnerStrikeFirst) }
+  finally { previous === undefined ? delete globalThis.ref : globalThis.ref = previous }
+}
+
+function compareRenderedRanges(stats, descriptor) {
+  const group = new THREE.Group(), ids = ref([])
+  let moving = true
+  const props = { selectedAttack: null, chargeMode: null, movementAttackStats: stats,
+    attackerRange: stats.range, attackerEffectiveLimit: descriptor.effectiveLimit, attackerMeleeRange: descriptor.meleeRange,
+    participants: [{ id: 'target' }], participantPositions: { actor: { x: 0, y: 0, z: 0 }, target: { x: 12, y: 0, z: 0 } } }
+  const { updateReticules } = loadPageFunctions('components/MapCanvas.vue', ['meleeInRange', 'updateReticules'], {
+    THREE, ...loadTypeScript('utils/movementRules.ts'), props,
+    movementGhost: ref({ participantId: 'actor', cell: { x: 1, y: 0, z: 0 }, valid: true }),
+    getMoveAim: () => moving ? { participantId: 'actor', isGm: false } : null,
+    effectiveAttackerId: ref('actor'), areaHighlightCells: ref([]), lastAttackKey: '', lastAoeKey: '', isAreaTargeting: ref(false),
+    reticuleGroup: group, reticuleParticipantIds: ids, TILE_SIZE: 1, TILE_H: 0.1,
+    getParticipantFootprintDims: () => ({ width: 1, height: 1, depth: 1 }), currentLosIndex: () => null,
+  })
+  try {
+    updateReticules()
+    const movement = group.children.map(ring => ring.geometry.parameters.outerRadius - 0.05)
+    assert.deepEqual(ids.value, ['target'], 'movement preview includes targets beyond its old incorrect 8 m limit')
+    moving = false; props.selectedAttack = descriptor
+    updateReticules()
+    const selected = group.children.map(ring => ring.geometry.parameters.outerRadius - 0.05)
+    assert.deepEqual(ids.value, ['target'])
+    assert.deepEqual(movement, [1, 15], 'green is 1 m melee; orange is 15 m effective limit')
+    assert.deepEqual(movement, selected, 'actual movement and selected-attack ring geometry must match')
+  } finally { loadTypeScript('utils/mapRenderResources.ts').clearMapGroup(group) }
+}
 
 test('movement range and target outlines follow the ghost with range and line-of-sight checks', () => {
   const rules = loadTypeScript('utils/movementRules.ts')
@@ -53,11 +90,9 @@ test('movement range and target outlines follow the ghost with range and line-of
 for (const [role, page] of [
   ['player', 'pages/campaigns/[campaignId]/player/[tamerId].vue'],
   ['GM', 'pages/campaigns/[campaignId]/encounters/[id].vue'],
-]) test(`${role} movement previews receive available basic attacks and preserve melee Reach`, () => {
-  const record = { id: 'agumon', name: 'Agumon', size: 'medium', stage: 'rookie',
-    baseStats: { accuracy: 10, dodge: 10, health: 10, armor: 10, damage: 10 },
-    qualities: [{ id: 'reach', ranks: 2 }], attacks: [{ id: 'claw', range: 'melee', tags: [] }] }
-  const encounter = ref({ round: 1, participants: [{ id: 'actor', entityId: 'agumon', type: 'digimon', usedAttackIds: [] }] })
+]) test(`${role} Floramon movement and selected attacks agree on full ranges, effects and available attacks`, () => {
+  const record = structuredClone(floramon.digimon)
+  const encounter = ref({ round: 1, participants: [{ id: 'actor', entityId: record.id, type: 'digimon', usedAttackIds: [], activeEffects: [] }] })
   const records = ref([record])
   const constants = loadTypeScript('data/attackConstants.ts')
   const { availableCombatAttacks } = loadTypeScript('utils/combatAttackOptions.ts')
@@ -68,8 +103,8 @@ for (const [role, page] of [
   })
   const projected = loadPageComputed(page, 'digimonMapForMap', {
     computed, activeEncounter: encounter, currentEncounter: encounter, allDigimon: records, digimonList: records,
-    allTamers: ref([]), tamers: ref([]), campaignLevel: ref(1), eddySoulRules: ref({}),
-    hasPartnerStrikeFirst: () => false, _calcDigimonStats: () => ({ movement: 4, baseMovement: 4, ram: 1, cpu: 1, woundBoxes: 10 }),
+    allTamers: ref([]), tamers: ref([]), campaignLevel: ref(1), eddySoulRules: ref(floramon.eddySoulRules),
+    hasPartnerStrikeFirst: () => false, _calcDigimonStats: calculateFullStats,
     getParticipantAttacks,
   })
   const movementStats = loadPageComputed('components/EncounterMap.vue', 'movementAttackStats', {
@@ -78,10 +113,25 @@ for (const [role, page] of [
     calculateDigimonDerivedStats: loadTypeScript('types/index.ts').calculateDigimonDerivedStats,
     applyDerivedStatEffects: constants.applyDerivedStatEffects,
   })
-  assert.ok(projected.value.agumon.attacks.some(a => a.id === 'basic-ranged'))
-  assert.equal(movementStats.value.hasRanged, true, 'basic ranged attacks count even with only custom melee attacks')
-  assert.equal(movementStats.value.meleeRange, 4)
-  encounter.value.participants[0].usedAttackIds.push('basic-ranged')
+  assert.ok(projected.value[record.id].attacks.some(a => a.id === 'basic-ranged'))
+  assert.equal(movementStats.value.hasRanged, true)
+  assert.equal(movementStats.value.meleeRange, 1)
+  const selectedAttack = computed(() => loadTypeScript('utils/mapAttackDescriptor.ts').buildMapAttackDescriptor({
+    participant: encounter.value.participants[0], attack: constants.BASIC_ATTACKS.find(a => a.id === 'basic-ranged'),
+  }, { digimon: records.value[0], stats: calculateFullStats(records.value[0]) }))
+  assert.equal(calculateFullStats(record).range, 11)
+  assert.equal(selectedAttack.value.effectiveLimit, 15)
+  assert.equal(movementStats.value.range, 11, 'movement must retain Floramon bonus Accuracy and Effect Warrior BIT')
+  assert.equal(movementStats.value.effectiveLimit, 15, 'movement orange ring must match selected ranged attack')
+  compareRenderedRanges(movementStats.value, selectedAttack.value)
+  encounter.value.participants[0].activeEffects.push({ name: 'Bastion', potency: 2 })
+  assert.equal(movementStats.value.range, 13)
+  assert.equal(movementStats.value.effectiveLimit, 17, 'effects apply exactly once to the full stat values')
+  assert.equal(movementStats.value.effectiveLimit, selectedAttack.value.effectiveLimit)
+  encounter.value.participants[0].activeEffects.length = 0
+  records.value[0].qualities.push({ id: 'reach', ranks: 2 })
+  assert.equal(movementStats.value.meleeRange, 4, 'Reach still affects melee independently')
+  encounter.value.participants[0].usedAttackIds.push(...projected.value[record.id].attacks.filter(a => a.range === 'ranged').map(a => a.id))
   assert.equal(movementStats.value.hasRanged, false, 'used ranged attacks do not keep an unavailable orange preview')
   assert.equal(movementStats.value.meleeRange, 4)
 })
