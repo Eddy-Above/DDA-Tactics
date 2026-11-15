@@ -38,6 +38,7 @@ import { useAreaDefenseBatch, type DefenseRoll, type SubmitOutcome } from '~/com
 import { useMapWebSocket } from '~/composables/useMapWebSocket'
 import { diffCreationRules, extractCreationRules, type CreationRulesDiffEntry } from '~/utils/creationRules'
 import { getTargetOptOuts, isOfferSuppressed } from '~/utils/intercedeOptOuts'
+import { INTERCEDE_SELECTION_PRESETS, selectIntercedeTargets, type IntercedeSelectionPreset } from '~/utils/intercedeSelections'
 import { useIntercedePass } from '~/composables/useIntercedePass'
 import {
   createEncounterSnapshotGate, shapeActionResponse, battleLogTotal, newBattleLogEntries, isEncounterShownToTamer, needsFullReload,
@@ -3703,6 +3704,16 @@ async function handleIntercedeOptOut() {
   } finally {
     intercedeLoading.value = false
   }
+}
+
+const intercedeOptionTargets = computed(() =>
+  (visibleParticipants.value as CombatParticipant[]).filter(p =>
+    !p.inReserve && p.id !== myTamerParticipant.value?.id && (p.type === 'tamer' || p.type === 'digimon'))
+)
+
+function selectIntercedeGroup(preset: IntercedeSelectionPreset) {
+  if (!tamer.value) return
+  intercedeOptionsSelections.value = selectIntercedeTargets(intercedeOptionTargets.value, digimonMap.value, tamer.value.id, preset)
 }
 
 // Everyone except me (and the GM metadata row), minus the targets I've already opted out of
@@ -8114,9 +8125,27 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <IntercedePassNotice :busy="intercedePassBusy" @resume="resumeIntercedePass" />
           <p class="text-xs text-digimon-dark-400 mt-1">Your selections below are kept and apply again once the pass ends.</p>
         </div>
+        <div class="flex flex-wrap gap-2 mb-3">
+          <button
+            v-for="preset in INTERCEDE_SELECTION_PRESETS"
+            :key="preset.id"
+            type="button"
+            :disabled="savingIntercedeOptions"
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+            @click="selectIntercedeGroup(preset.id)"
+          >{{ preset.label }}</button>
+          <button
+            type="button"
+            :disabled="savingIntercedeOptions || intercedeOptionsSelections.size === 0"
+            class="bg-digimon-dark-700 hover:bg-digimon-dark-600 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+            @click="intercedeOptionsSelections = new Set()"
+          >
+            Deselect all
+          </button>
+        </div>
         <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
           <button
-            v-for="p in (visibleParticipants as any[]).filter((p: any) => p.type !== 'gm' && !p.inReserve && p.id !== myTamerParticipant!.id)"
+            v-for="p in intercedeOptionTargets"
             :key="p.id"
             class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
             @click="intercedeOptionsSelections.has(p.id)

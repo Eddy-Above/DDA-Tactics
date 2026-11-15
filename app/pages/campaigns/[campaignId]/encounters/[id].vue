@@ -28,6 +28,7 @@ import { getAttackBadges } from '~/utils/attackBadges'
 import { radialAttackItem, toggleAttackRider, validAttackRiders, attackRiderSelection, type RadialAttackSelection } from '~/utils/attackRadialOptions'
 import { isAttackedFromOutsideClash } from '~/utils/clashRules'
 import { getTargetOptOuts, getGmCharacterOptOuts, isOfferFullyOptedOut, GM_OPT_OUT_OWNER } from '~/utils/intercedeOptOuts'
+import { INTERCEDE_SELECTION_PRESETS, selectIntercedeTargets, type IntercedeSelectionPreset } from '~/utils/intercedeSelections'
 import { createEncounterSnapshotGate, shapeActionResponse } from '~/utils/encounterSnapshot'
 import { ACTION_RECORD_HINTS, planRecordRefresh, isEmptyPlan, mergeRecordsById, createRecordRefreshQueue, type CombatActionKind, type RecordRefreshPlan } from '~/utils/combatRecords'
 import { useDigivolveWillpower } from '~/composables/useDigivolveWillpower'
@@ -1398,6 +1399,23 @@ async function handleGmSaveCharacterOptOuts() {
   if (request && !request.data?.isAreaAttack && gmIntercedeOptionsWithNames.value.length === 0) {
     autoSkipGmOffer(request.id)
   }
+}
+
+const gmIntercedeTargets = computed(() =>
+  ((presentedEncounter.value?.participants ?? []) as CombatParticipant[]).filter(p =>
+    !p.inReserve && (p.type === 'tamer' || p.type === 'digimon'))
+)
+
+function selectGmIntercedeGroup(preset: IntercedeSelectionPreset | 'none') {
+  const selected = preset === 'none' ? new Set<string>()
+    : selectIntercedeTargets(gmIntercedeTargets.value, digimonMap.value, GM_OPT_OUT_OWNER, preset)
+  // GM state stores unchecked targets, while the player dialog stores checked targets.
+  const optOuts = new Set(intercedeOptOutSelections.value)
+  for (const p of gmIntercedeTargets.value) {
+    if (selected.has(p.id)) optOuts.delete(p.id)
+    else optOuts.add(p.id)
+  }
+  intercedeOptOutSelections.value = optOuts
 }
 
 function openGmIntercedeTargets() {
@@ -5262,9 +5280,23 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
           <div class="bg-digimon-dark-800 rounded-xl p-6 w-full max-w-md border border-digimon-dark-700">
             <h2 class="font-display text-xl font-semibold text-white mb-1">Intercede Targets</h2>
             <p class="text-sm text-digimon-dark-400 mb-4">Select which participants you want to be queried to intercede for. Unchecked participants will be skipped.</p>
+            <div class="flex flex-wrap gap-2 mb-3">
+              <button
+                v-for="preset in INTERCEDE_SELECTION_PRESETS"
+                :key="preset.id"
+                type="button"
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                @click="selectGmIntercedeGroup(preset.id)"
+              >{{ preset.label }}</button>
+              <button
+                type="button"
+                class="bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                @click="selectGmIntercedeGroup('none')"
+              >Deselect all</button>
+            </div>
             <div class="space-y-2 mb-6 max-h-80 overflow-y-auto">
               <button
-                v-for="p in (presentedEncounter.participants as any[]).filter((p: any) => p.type !== 'gm')"
+                v-for="p in gmIntercedeTargets"
                 :key="p.id"
                 class="w-full flex items-center gap-3 bg-digimon-dark-700 hover:bg-digimon-dark-600 text-white p-3 rounded-lg transition-colors text-left"
                 @click="intercedeOptOutSelections.has(p.id) ? intercedeOptOutSelections.delete(p.id) : intercedeOptOutSelections.add(p.id); intercedeOptOutSelections = new Set(intercedeOptOutSelections)"
