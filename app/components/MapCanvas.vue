@@ -124,7 +124,8 @@ import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePas
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
-import { getFootprintDimensions, getFootprintCells, canLandOn, sizeInteraction, isFootprintAirborne } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, sizeInteraction, isFootprintAirborne, getMovementOccupancy, createMovementMapView } from '~/utils/movementRules'
+import { movementPathError, passMovementCapabilities, straightMovementPath } from '~/utils/movementPath'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
 import { doorsAdjacentTo } from '~/utils/mapDoors'
@@ -758,13 +759,23 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
   })
 }
 
-// A [Pass] landing is valid if the attacker's footprint at `anchor` doesn't overlap any
-// other participant except a Tiny pairing, and the anchor cell itself is supported terrain/voxel/stairs (or
-// open air the attacker can fly in, or jump into from `attackerPos`).
+// Preview the complete route with the same jump state, mode speeds and occupancy as the server.
 function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities, attackerPos: Vec3): boolean {
   if (footprintOccupied(anchor, dims, attackerId)) return false
   if (!props.map) return true
-  return canLandOn(anchor, caps, props.map, new Set(), attackerPos)
+  const ram = props.selectedAttack?.ram ?? 0
+  const movement = caps.movementSpeed ?? props.selectedAttack?.movement ?? 0
+  const passCaps = passMovementCapabilities(caps, movement, ram)
+  const units = props.participants.flatMap(p => {
+    const pos = props.participantPositions[p.id]
+    if (p.id === attackerId || !pos) return []
+    return [{ pos, size: getParticipantSize(p.id), giganticDimensions: getParticipantFootprintDims(p.id) }]
+  })
+  const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(getParticipantSize(attackerId), units)
+  const destroyed = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
+  const map = createMovementMapView({ ...props.map, doors: props.map.doors.map(door => ({ ...door, isOpen: true })) })
+  return movementPathError(straightMovementPath(attackerPos, anchor), passCaps, movement + ram, map, dims,
+    blockedPositions, landingBlockedPositions, destroyed) === null
 }
 
 // Whether ANY ram value in [0, ramMax] yields a valid landing for this (attackerPos, dir,
@@ -2011,7 +2022,8 @@ function computeAndRenderAoe(event: MouseEvent) {
       const landingAnchor = computePassLanding(attackerPos, dir, movementLen, 0)
       passLandingValid = anyPassLandingValid(attackerPos, dir, movementLen, attack.ram ?? 0, dims, effectiveAttackerId.value!, caps)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
-      updateAoeHighlight(los ? cells : [], los ? [] : cells)
+      const valid = los && passLandingValid
+      updateAoeHighlight(valid ? cells : [], valid ? [] : cells)
       return
     } else {
       const nd = passLockedDir!
@@ -2027,7 +2039,8 @@ function computeAndRenderAoe(event: MouseEvent) {
       const landingAnchor = computePassLanding(attackerPos, nd, passMovementLength, extra)
       passLandingValid = isPassLandingValid(landingAnchor, dims, effectiveAttackerId.value!, caps, attackerPos)
       renderPassLandingMarker(landingAnchor, dims, passLandingValid)
-      updateAoeHighlight(los ? cells : [], los ? [] : cells)
+      const valid = los && passLandingValid
+      updateAoeHighlight(valid ? cells : [], valid ? [] : cells)
       return
     }
   }
@@ -2352,6 +2365,19 @@ function recordBrushPoint(event: MouseEvent) {
       if (brushPreview.cells.size > MAX_DRAW_CELLS) { brushPreview.invalid = true; return }
     }
   }
+}
+
+function focusParticipant(participantId: string) {
+  const pos = props.participantPositions[participantId]
+  if (!pos || !camera || !controls) return
+  const dims = getParticipantFootprintDims(participantId)
+  const target = new THREE.Vector3(pos.x + dims.width / 2, pos.y * TILE_SIZE + TILE_H + dims.height / 2, pos.z + dims.depth / 2)
+  camera.position.add(target.clone().sub(controls.target))
+  controls.target.copy(target)
+  azimuthTween = null
+  controls.update()
+  camera.updateMatrixWorld(true)
+  invalidateFrame()
 }
 
 function cameraAction(action: string) {
@@ -3222,7 +3248,7 @@ function healthBarClass(pct: number) {
 }
 
 // Expose for parent use
-defineExpose({ movingParticipantId, cameraAction })
+defineExpose({ movingParticipantId, cameraAction, focusParticipant })
 </script>
 
 <style scoped>

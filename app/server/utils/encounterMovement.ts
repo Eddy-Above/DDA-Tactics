@@ -5,7 +5,7 @@ import { getRoomSnapshot } from './encounterRoom'
 import { getMovementProfile, loadEncounterMap, loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 import { canActOnEncounterTurn } from './participantTurn'
 import { getMovementReachability, getFootprintDimensions, getFootprintCells, buildFootprintOccupiedSet, isFootprintValid } from './mapMovement'
-import { canLandOn, canPassThrough, createJumpTraversal, createMovementMapView, getMovementCostProfile } from '../../utils/movementRules'
+import { createMovementMapView, getMovementCostProfile } from '../../utils/movementRules'
 import { closedDoorsCrossedByPath } from '../../utils/mapDoors'
 import { makeSpawnCellChecker, isSetupPhase } from '../../utils/placementRules'
 import { voxelBlocksMovement } from '../../utils/mapVoxels'
@@ -15,6 +15,7 @@ import { applyMovementBurn, loadCampaignDamageOverTimeRules } from './damageOver
 import { combatTurnKey } from '../../utils/specialOrderCombat'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
 import { scopedDatabase } from './databaseScope'
+import { movementPathError, passMovementCapabilities } from '../../utils/movementPath'
 
 export interface MovementIntent {
   participantId: string
@@ -76,7 +77,6 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     path = origin ? [origin, intent.destination] : [intent.destination]
   } else {
     const blocked = buildFootprintOccupiedSet(positions, encounter.participants, records, excluded, actor, 'traversal')
-    const footprintBlocked = (position: Vec3) => getFootprintCells(position, dims).some(cell => blocked.has(key(cell)))
     const tamers = await loadTamersByIds(actor.type === 'tamer' ? [actor.entityId] : record?.partnerId ? [record.partnerId] : [])
     const currentActor = initial.participants.find(p => p.id === actor.id)
     const profile = getMovementProfile(currentActor, records, tamers, getNaturewalkEnvironmentSettings(encounter.hazards), options.campaignLevel)
@@ -100,13 +100,7 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     const traversable = createMovementMapView({ ...map, doors: (map.doors ?? []).map(d => ({ ...d, isOpen: true })) })
     const passExtra = intent.kind === 'pass' ? Math.max(0, record ? (await getDigimonDerivedStats(record.id, currentActor))?.ram ?? 0 : 0) : 0
     const budget = profile.budget + passExtra
-    const caps = intent.kind === 'pass' ? {
-      ...profile.caps, movementSpeed: budget,
-      swimSpeed: profile.caps.canSwim ? (profile.caps.swimSpeed ?? 0) + passExtra : 0,
-      digSpeed: profile.caps.canDig ? (profile.caps.digSpeed ?? 0) + passExtra : 0,
-      climbSpeed: profile.caps.canClimb ? (profile.caps.climbSpeed ?? 0) + passExtra : 0,
-      flySpeed: profile.caps.canFly ? (profile.caps.flySpeed ?? 0) + passExtra : 0,
-    } : profile.caps
+    const caps = intent.kind === 'pass' ? passMovementCapabilities(profile.caps, profile.budget, passExtra) : profile.caps
     const supplied = intent.path
     if (intent.kind === 'charge-before' && options.chargeTargetId) {
       const target = encounter.participants.find((p: any) => p.id === options.chargeTargetId && !p.inReserve)
@@ -116,7 +110,7 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
       const targetDims = getFootprintDimensions(targetRecord?.size ?? 'medium', targetRecord?.giganticDimensions)
       const reach = Math.max(1, (record?.qualities?.find((q: any) => q.id === 'reach')?.ranks ?? 0) * 2)
       const reachable = getMovementReachability(origin, budget, caps, traversable, destroyed, blocked, dims)
-      let destination: Vec3 | undefined, closest = Infinity
+      let destination: Vec3 | undefined, closest = Infinity, fewestDiagonals = Infinity
       for (const cell of reachable.cells) {
         const [x, y, z] = cell.split(',').map(Number)
         const candidate = { x, y, z }
@@ -126,11 +120,16 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
           z - (targetPosition.z + targetDims.depth - 1), targetPosition.z - (z + dims.depth - 1),
         )
         const distance = Math.max(Math.abs(x - origin.x), Math.abs(y - origin.y), Math.abs(z - origin.z))
-        if (gap > reach || distance >= closest) continue
+        if (gap > reach || distance > closest) continue
         const launch = reachable.launchOriginTo(candidate) ?? (same(candidate, origin) ? origin : undefined)
         if (!isFootprintValid(candidate, dims, traversable, occupied, caps, launch)) continue
+        const route = reachable.pathTo(candidate)!
+        const diagonals = route.slice(1).filter((step, i) =>
+          Number(step.x !== route[i].x) + Number(step.y !== route[i].y) + Number(step.z !== route[i].z) > 1).length
+        if (distance === closest && diagonals >= fewestDiagonals) continue
         destination = candidate
         closest = distance
+        fewestDiagonals = diagonals
       }
       if (!destination) throw createError({ statusCode: 400, message: 'No reachable Charge position is within melee range of the target' })
       // The browser's square is a preview. Select and commit the landing from
@@ -140,19 +139,8 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
     } else if (supplied) {
       const maximumPath = getMovementCostProfile(caps, budget, destroyed, origin)?.budget ?? budget
       if (!Array.isArray(supplied) || supplied.length > Math.max(2, maximumPath + 2) || supplied.some(p => !validMapCell(p)) || !same(supplied[0], origin) || !same(supplied[supplied.length - 1], intent.destination)) throw createError({ statusCode: 400, message: 'The movement path is invalid' })
-      const costs = getMovementCostProfile(caps, budget, destroyed, origin)
-      const jump = costs && caps.canJump ? createJumpTraversal(origin, caps, traversable, costs, destroyed, footprintBlocked) : null
-      let state = jump?.initial ?? null, spent = 0
-      for (let i = 1; i < supplied.length; i++) {
-        const from = supplied[i - 1], to = supplied[i]
-        if (Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), Math.abs(to.z - from.z)) !== 1) throw createError({ statusCode: 400, message: 'Movement paths require adjacent cells' })
-        const edge = jump?.step(from, to, spent, state)
-        if (jump ? !edge : footprintBlocked(to) || !canPassThrough(from, to, caps, traversable, destroyed, origin)) throw createError({ statusCode: 400, message: 'The movement path is blocked' })
-        spent += edge?.cost ?? costs?.stepCost(from, to, traversable, spent) ?? 1
-        if (jump) state = edge!.state
-        if (!Number.isFinite(spent) || spent > (costs?.budget ?? budget)) throw createError({ statusCode: 400, message: 'The movement exceeds this character’s speed' })
-      }
-      if (!canLandOn(intent.destination, jump && !state ? { ...caps, canJump: false } : caps, traversable, occupied, jump ? state ?? undefined : origin, destroyed)) throw createError({ statusCode: 400, message: 'The character cannot finish movement there' })
+      const error = movementPathError(supplied, caps, budget, traversable, dims, blocked, occupied, destroyed)
+      if (error) throw createError({ statusCode: 400, message: error })
       path = supplied
     } else {
       const reachable = getMovementReachability(origin, budget, caps, traversable, destroyed, blocked, dims)

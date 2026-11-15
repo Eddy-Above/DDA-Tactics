@@ -13,7 +13,7 @@ function fixture() {
     chargeMode: ref('before'), activeParticipantId: ref('actor'), movement: { clearMovement() {} },
     movePathTo: (_actor, destination) => [point(0), point(1), destination],
     computePassLanding: loadTypeScript('utils/areaShapes.ts').computePassLanding,
-    segmentCells: loadTypeScript('utils/lineOfSight.ts').segmentCells,
+    straightMovementPath: loadTypeScript('utils/movementPath.ts').straightMovementPath,
     emit: (...args) => emitted.push(args),
     ws: { send() { throw new Error('Previews must not write to the WebSocket') } },
     $fetch() { throw new Error('Previews must not send HTTP commands') },
@@ -42,4 +42,11 @@ test('Pass confirmation submits its origin, direction and destination with the f
   assert.equal(intent.movement.kind, 'pass')
   assert.deepEqual(intent.movement.destination, point(4))
   assert.deepEqual(intent.movement.origin, point(0))
+})
+
+test('vertical Pass preview submits the same adjacent diagonal route the server validates', () => {
+  const f = fixture()
+  f.onAreaAttackConfirmed(['target'], { shape: 'pass', attackerPos: point(0), dir: point(2, 2), movement: Math.hypot(2, 2), ram: 0 })
+  const intent = f.emitted[0][3]
+  assert.deepEqual(intent.movement.path, [point(0), point(1, 1), point(2, 2)])
 })

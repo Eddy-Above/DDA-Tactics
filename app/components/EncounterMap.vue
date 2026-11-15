@@ -189,7 +189,7 @@ import { getFootprintDimensions, getFootprintCells } from '~/utils/movementRules
 import { chebyshev } from '~/utils/pathfinding'
 import { dropRoute, getDraggableParticipantIds, getPlaceableParticipantIds, isSetupPhase } from '~/utils/placementRules'
 import { closedDoorsCrossedByPath } from '~/utils/mapDoors'
-import { segmentCells } from '~/utils/lineOfSight'
+import { straightMovementPath } from '~/utils/movementPath'
 import type { MapRadialOptions, MapRadialChoiceAction } from '~/types/mapRadial'
 
 type ClashRadialAction = 'clash-attack' | 'clash-pin' | 'clash-throw' | 'clash-end' | 'clash-check' | 'clash-move'
@@ -341,7 +341,7 @@ ws.onMessage((msg) => {
 
 // ── Editor ─────────────────────────────────────────────────────────────────
 const editor = useMapEditor(map)
-const builderCanvas = ref<{ cameraAction: (action: string) => void } | null>(null)
+const builderCanvas = ref<{ cameraAction: (action: string) => void; focusParticipant: (participantId: string) => void } | null>(null)
 onMounted(() => editor.loadStamps())
 let lastQueuedRevision = 0
 const autosave = useMapAutosave({
@@ -908,7 +908,7 @@ function onAreaAttackConfirmed(targetIds: string[], areaShapeData: AreaShapeData
     const origin = attackerId ? positions.value[attackerId] : undefined
     if (!origin) return
     const destination = computePassLanding(origin, areaShapeData.dir, areaShapeData.movement ?? 0, areaShapeData.ram ?? 0)
-    intent.movement = { kind: 'pass', origin, destination, path: segmentCells(origin, destination), direction: areaShapeData.dir }
+    intent.movement = { kind: 'pass', origin, destination, path: straightMovementPath(origin, destination), direction: areaShapeData.dir }
     attackPreview.value = { participantId: attackerId!, position: destination }
     actionFeedback.previewMovement(props.encounter.id, intent.operationId, attackerId!, destination)
   }
@@ -1212,7 +1212,11 @@ function onStructureSave(id: string, type: string, woundBoxes: number | null, fa
   selectedStructure.value = null
 }
 
-defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim, startChargeAfterMove, flushMapSaves: autosave.flush })
+function focusParticipant(participantId: string) {
+  builderCanvas.value?.focusParticipant(participantId)
+}
+
+defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAllyAim, startChargeAfterMove, focusParticipant, flushMapSaves: autosave.flush })
 </script>
 
 <style scoped>

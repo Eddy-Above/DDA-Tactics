@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
+import { loadPageFunctions, loadTypeScript, loadTypeScriptWithMocks } from './helpers/loadTypeScript.mjs'
 
 const originalError = globalThis.createError
 afterEach(() => { if (originalError === undefined) delete globalThis.createError; else globalThis.createError = originalError })
@@ -19,13 +19,14 @@ function fixture({ realMovement = false, realStats = false } = {}) {
     '../db': {}, './combatRecordCache': {}, './resolveSupportAttack': {},
   }) : null
   const loadTamersByIds = async ids => { loadedTamerIds.push(...ids); return new Map(ids.filter(id => tamers.has(id)).map(id => [id, tamers.get(id)])) }
-  const getMovementProfile = (...args) => spatial ? spatial.getMovementProfile(...args) : { caps, budget: 4 }
+  const getMovementProfile = (...args) => spatial ? spatial.getMovementProfile(...args) : { caps, budget: caps.movementSpeed }
   const movement = realMovement ? loadTypeScriptWithMocks('server/utils/encounterMovement.ts', {
     '../db': { db: {}, maps: { id: 'id' } },
     './databaseScope': { scopedDatabase: () => undefined },
     './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: positions, destructibleStates: [] }) },
     './combatSpatial': { loadParticipantDigimon: async () => records, loadTamersByIds, loadEncounterMap: async () => map, getMovementProfile },
     './naturewalk': { applyNaturewalkEnvironment: async (_enc, participants) => ({ participants }) },
+    './resolveSupportAttack': { getDigimonDerivedStats: async () => ({ ram: 1 }) },
     './damageOverTime': { loadCampaignDamageOverTimeRules: async () => undefined, applyMovementBurn: participants => ({ participants, logEntries: [] }) },
   }) : null
   const module = loadTypeScriptWithMocks('server/utils/attackMovement.ts', {
@@ -223,3 +224,71 @@ test('targets must be deployed participants in this encounter', () => {
   f.encounter.participants[1].inReserve = true
   assert.throws(() => f.validateAttackTargets(f.encounter, { targetId: 'target' }), { statusCode: 400 })
 })
+
+function passPreview(f, destination) {
+  const rules = loadTypeScript('utils/movementRules.ts')
+  const methods = loadPageFunctions('components/MapCanvas.vue', [
+    'getParticipantSize', 'getParticipantFootprintDims', 'footprintIntersectsArea', 'footprintOccupied', 'isPassLandingValid',
+  ], {
+    ...rules, ...loadTypeScript('utils/movementPath.ts'),
+    props: { map: f.map, participants: f.encounter.participants, participantPositions: f.positions,
+      digimonMap: Object.fromEntries(f.records), tamerMap: {}, destructibleStates: [], selectedAttack: { movement: f.caps.movementSpeed, ram: 1 } },
+  })
+  return methods.isPassLandingValid(destination, { width: 1, height: 1, depth: 1 }, 'actor', f.caps, f.positions.actor)
+}
+
+for (const surface of ['groundTiles', 'stairs', 'voxels']) for (const slope of [-1, 1]) {
+  test(`Pass preview and commit agree on ${slope > 0 ? 'ascending' : 'descending'} ${surface}`, async () => {
+    const f = fixture({ realMovement: true })
+    f.positions.target = point(20)
+    f.caps.canJump = false
+    f.map.groundTiles = [point()]
+    for (let x = 1; x <= 2; x++) {
+      f.map[surface].push({ id: `step-${x}`, ...point(x, x * slope - (surface === 'groundTiles' ? 0 : 1)), materialId: 'steel', face: 'north' })
+    }
+    const destination = point(2, slope * 2)
+    assert.equal(passPreview(f, destination), true)
+    const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Area Attack: Pass'], range: 'melee' }, {
+      operationId: 'cast', expectedRevision: 7,
+      movement: { kind: 'pass', origin: point(), destination, direction: destination, movement: Math.hypot(2, 2), ram: 0 },
+    }, f.access)
+    assert.deepEqual(result.path, [point(), point(1, slope), destination], 'vertical diagonal steps are not split into axis steps')
+  })
+}
+
+test('Pass can launch a jump from lower footing along the route', async () => {
+  const f = fixture({ realMovement: true })
+  Object.assign(f.caps, { movementSpeed: 8, jumpHeight: 8, jumpRange: 8 })
+  f.positions.actor = point(0, 8)
+  f.positions.target = point(20)
+  f.map.groundTiles = [0, 1, 2, 3].map(x => point(x, 8)).concat(point(4, 7))
+  const destination = point(6, 7)
+  assert.equal(passPreview(f, destination), true, 'the landing is below the move origin but level with the actual launch')
+  const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Area Attack: Pass'], range: 'melee' }, {
+    operationId: 'cast', expectedRevision: 7,
+    movement: { kind: 'pass', origin: f.positions.actor, destination, direction: point(6, -1), movement: Math.hypot(6, 1), ram: 0 },
+  }, f.access)
+  assert.deepEqual(result.position, destination)
+})
+
+for (const obstacle of ['jump height', 'wall', 'occupied route']) {
+  test(`Pass preview rejects a supported endpoint when its route exceeds ${obstacle}`, async () => {
+    const f = fixture({ realMovement: true })
+    f.positions.target = point(20)
+    let destination = point(3)
+    if (obstacle === 'jump height') {
+      destination = point(0, 4)
+      f.map.groundTiles = [point(), destination]
+    } else if (obstacle === 'wall') {
+      f.map.walls = [{ id: 'wall', ...point(1), face: 'east' }]
+    } else {
+      f.positions.target = point(1)
+    }
+    assert.equal(passPreview(f, destination), false, 'hover must not show an invalid route as valid')
+    await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Area Attack: Pass'], range: 'melee' }, {
+      operationId: 'cast', expectedRevision: 7,
+      movement: { kind: 'pass', origin: point(), destination, direction: destination, movement: Math.hypot(destination.x, destination.y), ram: 0 },
+    }, f.access), /movement path is blocked/)
+    assert.deepEqual(f.writes, [])
+  })
+}

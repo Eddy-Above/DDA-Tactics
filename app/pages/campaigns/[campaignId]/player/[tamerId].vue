@@ -4903,7 +4903,10 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                   <div class="p-3 max-h-64 overflow-y-auto">
                     <div v-for="p in visibleTurnOrder" :key="p.id" class="text-sm py-1 border-b border-digimon-dark-700 last:border-0"
                       :class="currentTurnParticipant?.id === p.id ? 'text-yellow-400 font-bold' : 'text-digimon-dark-300'">
-                      {{ getParticipantName(p) }}
+                      <button type="button" class="text-left hover:underline focus-visible:underline"
+                        title="Center map on this character" @click="encounterMapRef?.focusParticipant(p.id)">
+                        {{ getParticipantName(p) }}
+                      </button>
                     </div>
                   </div>
                 </div>

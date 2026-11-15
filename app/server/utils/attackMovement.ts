@@ -6,8 +6,8 @@ import { prepareEncounterMovement } from './encounterMovement'
 import { getRoomPositions, getRoomSnapshot, getDestroyedStructureIds, publishCommittedPositions, broadcast } from './encounterRoom'
 import { getMovementProfile, loadParticipantDigimon, loadTamersByIds, loadEncounterMap } from './combatSpatial'
 import { getDigimonDerivedStats } from './resolveSupportAttack'
-import { getCellsOnLine } from './mapMovement'
-import { getFootprintDimensions, canLandOn, getFootprintCells } from '../../utils/movementRules'
+import { straightMovementPath } from '../../utils/movementPath'
+import { getFootprintDimensions, getFootprintCells } from '../../utils/movementRules'
 import { computeAreaCellsFromData, computePassLanding, getAreaShape } from '../../utils/areaShapes'
 import { combatTurnKey } from '../../utils/specialOrderCombat'
 import { getNaturewalkEnvironmentSettings } from '../../utils/naturewalk'
@@ -71,9 +71,9 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
     const extra = finiteNumber(move.ram ?? body.areaShapeData?.ram ?? 0, 'Pass extra movement', { min: 0, max: Math.max(0, derived.ram ?? 0) })
     const expected = computePassLanding(origin, direction, length, extra)
     if (!same(destination, expected)) throw createError({ statusCode: 400, message: 'The Pass endpoint does not match its allowed movement' })
-    const map = await loadEncounterMap(encounter.mapId)
-    if (!map || !canLandOn(destination, profile.caps, map, new Set(), origin)) throw createError({ statusCode: 400, message: 'The attacker cannot land at the Pass endpoint' })
-    path = same(origin, destination) ? [origin] : [origin, ...getCellsOnLine(origin, destination), destination]
+    // The complete route below validates landing against its actual jump launch,
+    // which can change after walking onto lower or higher footing.
+    path = straightMovementPath(origin, destination)
     body.areaShapeData = { shape: 'pass', rangeType: attack.range, attackerPos: origin, dir: direction, bit: derived.bit ?? 1,
       movement: length, ram: extra, attackerDims: getFootprintDimensions(records.get(actor.entityId)?.size ?? 'medium', records.get(actor.entityId)?.giganticDimensions) }
     Object.defineProperty(body.areaShapeData, CANONICAL_AREA, { value: true })

@@ -30,7 +30,7 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     destroyedIds: () => new Set(),
     movePathTo: (id, destination) => [positions.value[id], destination],
     moveDistance: (_id, _destination, path) => path.length - 1,
-    openDoorsAlong: () => {}, segmentCells: () => [],
+    openDoorsAlong: () => {}, straightMovementPath: loadTypeScript('utils/movementPath.ts').straightMovementPath,
     ws: { send: message => calls.moved.push(message) }, postMove: saveMove,
     emit: (...args) => calls.emitted.push(args),
   }
