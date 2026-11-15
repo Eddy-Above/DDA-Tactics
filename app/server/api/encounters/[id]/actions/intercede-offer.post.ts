@@ -19,7 +19,7 @@ import {
   hasValidThrowOutOfAreaCell,
 } from '~/server/utils/mapMovement'
 import { calculateDigimonDerivedStats } from '~/types'
-import { sizeInteraction, hasClimbSupport, getDigTerrainMultiplier } from '~/utils/movementRules'
+import { sizeInteraction, hasClimbSupport, getDigTerrainMultiplier, createMovementMapView } from '~/utils/movementRules'
 import { resolveParticipantName } from '~/server/utils/participantName'
 import { getEffectResolutionType, EFFECT_ALIGNMENT, BASIC_ATTACKS } from '~/data/attackConstants'
 import { resolvePositiveAuto, resolvePositiveHealth, resolveNegativeSupportNpc, getPositiveSupportResolutionType, getDigimonDerivedStats } from '~/server/utils/resolveSupportAttack'
@@ -409,6 +409,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
     const areaIntercedeEligibility = new Map<string, string[]>() // participantId -> eligible target participantIds
     if (mapRecord && body.areaShapeData) {
       const areaCells = new Set(computeAreaCellsFromData(body.areaShapeData).map(c => `${c.x},${c.y},${c.z}`))
+      const areaMap = createMovementMapView(mapRecord)
 
       for (const p of participants) {
         if (allTargetIdSet.has(p.id) || p.id === body.attackerId) continue
@@ -433,12 +434,12 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           // Rule 2: can the candidate reach an in-AoE cell adjacent to the target?
           const repositionOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, tid]), p)
           const repositionBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([p.id, tid]), p, 'traversal')
-          if (!findAreaIntercedePosition(targetPos, targetDims, pPos, budget, caps, pDims, mapRecord, repositionOccupied, areaCells, new Set(), repositionBlocked)) continue
+          if (!findAreaIntercedePosition(targetPos, targetDims, pPos, budget, caps, pDims, areaMap, repositionOccupied, areaCells, new Set(), repositionBlocked)) continue
 
           // Rule 3: from the target's current position, is there a valid throw-out cell within range?
           const throwOccupied = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([tid]), targetParticipant)
           const throwBlocked = buildFootprintOccupiedSet(participantPositions, participants, digimonById, new Set([tid]), targetParticipant, 'traversal')
-          if (!hasValidThrowOutOfAreaCell(targetPos, bodyStat, targetDims, mapRecord, throwOccupied, areaCells, new Set(), throwBlocked)) continue
+          if (!hasValidThrowOutOfAreaCell(targetPos, bodyStat, targetDims, areaMap, throwOccupied, areaCells, new Set(), throwBlocked)) continue
 
           eligibleTargets.push(tid)
         }

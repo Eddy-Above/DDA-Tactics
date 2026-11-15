@@ -17,6 +17,8 @@ function fixture({ realMovement = false, realStats = false } = {}) {
   const caps = detectCapabilities([], 4, 1, 1)
   const tamers = new Map(), loadedTamerIds = []
   let searches = 0
+  let sightCalls = 0
+  const sight = loadTypeScript('utils/lineOfSight.ts')
   const spatial = realStats ? loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
     '../db': {}, './combatRecordCache': {}, './resolveSupportAttack': {},
   }) : null
@@ -33,6 +35,7 @@ function fixture({ realMovement = false, realStats = false } = {}) {
     './damageOverTime': { loadCampaignDamageOverTimeRules: async () => undefined, applyMovementBurn: participants => ({ participants, logEntries: [] }) },
   }) : null
   const module = loadTypeScriptWithMocks('server/utils/attackMovement.ts', {
+    '../../utils/lineOfSight': { ...sight, losClear: (...args) => { sightCalls++; return sight.losClear(...args) } },
     '../db': { db: { update: () => ({ set: value => ({ where: async () => { writes.push(value); Object.assign(encounter, value) } }) }), select: () => ({ from: () => ({ where: async () => [encounter] }) }) }, encounters: { id: 'id' } },
     'drizzle-orm': { eq: () => null },
     './encounterRoom': { getRoomPositions: async () => positions, getRoomSnapshot: async () => ({ destructibleStates: [] }), getDestroyedStructureIds: () => new Set(), publishCommittedPositions: async (_id, patch) => Object.assign(positions, patch), broadcast: () => {} },
@@ -45,7 +48,7 @@ function fixture({ realMovement = false, realStats = false } = {}) {
     './resolveSupportAttack': { getDigimonDerivedStats: async () => ({ ram: 1, bit: 2, movement: 4, effectiveLimit: 10 }) },
   })
   const body = () => ({ operationId: 'cast', expectedRevision: 7, movement: { kind: 'pass', origin: point(), destination: point(3), direction: point(1), movement: 2, ram: 1 } })
-  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, tamers, loadedTamerIds, body, searches: () => searches, access: { isDm: false, campaign: { level: 'standard', rulesSettings: {} } } }
+  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, tamers, loadedTamerIds, body, searches: () => searches, sightCalls: () => sightCalls, access: { isDm: false, campaign: { level: 'standard', rulesSettings: {} } } }
 }
 
 test('forged Charge timing and movement without a stored Charge attack cannot write', async () => {
@@ -244,6 +247,20 @@ test('serialized Pass geometry cannot impersonate a server-validated movement', 
   await assert.rejects(f.canonicalizeAreaAttack(f.encounter, f.actor, attack, forged, f.records), { statusCode: 400 })
 })
 
+for (const blocked of [false, true]) test(`Pass confirmation checks only target cells and preserves sight rejection (blocked=${blocked})`, async () => {
+  const f = fixture(), attack = { tags: ['Area Attack: Pass'], range: 'melee' }
+  const body = f.body()
+  body.movement.movement = 4
+  body.movement.destination = point(5)
+  await f.commitAttackMovement(f.encounter, 'actor', attack, body, f.access)
+  body.targetIds = ['target']
+  if (blocked) f.map.walls = [{ id: 'blocker', ...point(), face: 'east' }]
+  const result = f.canonicalizeAreaAttack(f.encounter, f.actor, attack, body, f.records)
+  if (blocked) await assert.rejects(result, /outside the aimed attack area/)
+  else await result
+  assert.equal(f.sightCalls(), 1, 'unoccupied beam cells never need sight checks')
+})
+
 test('directionless Burst derives aiming geometry from stored actor stats when none is supplied', async () => {
   const f = fixture()
   const body = { targetIds: ['target'], areaShapeData: null }
@@ -273,6 +290,7 @@ function passPreview(f, destination) {
     'getParticipantSize', 'getParticipantFootprintDims', 'footprintIntersectsArea', 'footprintOccupied', 'isPassLandingValid',
   ], {
     ...rules, ...loadTypeScript('utils/movementPath.ts'),
+    passTraversalMap: { value: rules.createMovementMapView({ ...f.map, doors: f.map.doors.map(door => ({ ...door, isOpen: true })) }) },
     props: { map: f.map, participants: f.encounter.participants, participantPositions: f.positions,
       digimonMap: Object.fromEntries(f.records), tamerMap: {}, destructibleStates: [], selectedAttack: { movement: f.caps.movementSpeed, ram: 1 } },
   })

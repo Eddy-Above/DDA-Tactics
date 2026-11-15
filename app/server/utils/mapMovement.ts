@@ -378,7 +378,6 @@ export function findAreaIntercedePosition(
   destroyed: Set<string> = new Set(),
   blockedPositions: Set<string> = occupied,
 ): Vec3 | null {
-  map = createMovementMapView(map)
   const footprintCells = getFootprintCells(targetPos, targetDims)
   const footprintKeys = new Set(footprintCells.map(key))
 
@@ -389,10 +388,8 @@ export function findAreaIntercedePosition(
     minZ = Math.min(minZ, c.z); maxZ = Math.max(maxZ, c.z)
   }
 
-  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
-
-  let best: Vec3 | null = null
-  let bestDist = Infinity
+  const maximumSteps = getMovementCostProfile(caps, budget, destroyed, interceptorPos)?.budget ?? budget
+  const candidates: Vec3[] = []
   for (let x = minX - 1; x <= maxX + 1; x++) {
     for (let y = minY - 1; y <= maxY + 1; y++) {
       for (let z = minZ - 1; z <= maxZ + 1; z++) {
@@ -400,15 +397,23 @@ export function findAreaIntercedePosition(
         const k = key(cell)
         if (footprintKeys.has(k)) continue
         if (!areaCells.has(k)) continue
-        if (!reachable.has(k)) continue
-        if (!isFootprintValid(cell, interceptorDims, map, occupied, caps, interceptorPos)) continue
-        const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
-        if (dist < bestDist) {
-          bestDist = dist
-          best = cell
-        }
+        if (Math.max(Math.abs(x - interceptorPos.x), Math.abs(y - interceptorPos.y), Math.abs(z - interceptorPos.z)) > maximumSteps) continue
+        candidates.push(cell)
       }
     }
+  }
+  // Most encounter participants cannot reach this target. Avoid a complete movement
+  // search (especially a flight volume) unless an in-area adjacent square is in range.
+  if (!candidates.length) return null
+  map = createMovementMapView(map)
+  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
+  let best: Vec3 | null = null
+  let bestDist = Infinity
+  for (const cell of candidates) {
+    if (!reachable.has(key(cell))) continue
+    if (!isFootprintValid(cell, interceptorDims, map, occupied, caps, interceptorPos)) continue
+    const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
+    if (dist < bestDist) { bestDist = dist; best = cell }
   }
   return best
 }

@@ -764,6 +764,10 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
   })
 }
 
+const passTraversalMap = computed(() => props.map ? createMovementMapView({
+  ...props.map, doors: (props.map.doors ?? []).map(door => ({ ...door, isOpen: true })),
+}) : null)
+
 // Preview the complete route with the same jump state, mode speeds and occupancy as the server.
 function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: string, caps: MovementCapabilities, attackerPos: Vec3): boolean {
   if (footprintOccupied(anchor, dims, attackerId)) return false
@@ -778,7 +782,7 @@ function isPassLandingValid(anchor: Vec3, dims: FootprintDims, attackerId: strin
   })
   const { landingBlockedPositions } = getMovementOccupancy(getParticipantSize(attackerId), units)
   const destroyed = new Set((props.destructibleStates ?? []).filter(s => s.currentWounds <= 0).map(s => s.structureId))
-  const map = createMovementMapView({ ...props.map, doors: props.map.doors.map(door => ({ ...door, isOpen: true })) })
+  const map = passTraversalMap.value!
   return movementPathError(straightMovementPath(attackerPos, anchor), passCaps, movement + ram, map, dims,
     new Set(), landingBlockedPositions, destroyed) === null
 }

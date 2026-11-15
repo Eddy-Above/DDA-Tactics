@@ -159,9 +159,41 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number, t
   const cells: Vec3[] = []
   const r = Math.ceil(length + Math.max(halfP, halfUpP) + 1)
   const ox = Math.round(origin.x), oy = Math.round(origin.y), oz = Math.round(origin.z)
-  for (let x = ox - r; x <= ox + r; x++) {
-    for (let y = oy - r; y <= oy + r; y++) {
-      for (let z = oz - r; z <= oz + r; z++) {
+  const axes = ['x', 'y', 'z'] as const
+  const primary = axes.reduce((a, b) => Math.abs(nd[a]) >= Math.abs(nd[b]) ? a : b)
+  const others = axes.filter(axis => axis !== primary)
+  const perp = { x: pdx, y: 0, z: pdz }, up = { x: vdx, y: vdy, z: vdz }
+  const centre = { x: ox, y: oy, z: oz }
+  const span = (coefficient: number, lo: number, hi: number) => coefficient >= 0
+    ? [coefficient * lo, coefficient * hi] : [coefficient * hi, coefficient * lo]
+  const offsets = Object.fromEntries(axes.map(axis => {
+    const u = span(perp[axis], -halfN - 0.5, halfP + 0.5)
+    const v = span(up[axis], -halfUpN - 0.5, halfUpP + 0.5)
+    return [axis, [u[0]! + v[0]!, u[1]! + v[1]!]]
+  })) as Record<typeof axes[number], number[]>
+  // Slice the beam along its dominant axis. Each slice visits only its cross-section,
+  // rather than the cube of empty space surrounding a long, thin attack.
+  // Preserve the existing degenerate frame for exactly vertical directions.
+  const bounded = pLen > 1e-6
+  for (let a = centre[primary] - r; a <= centre[primary] + r; a++) {
+    let lo = 0, hi = length + 0.5
+    if (bounded) {
+      const ends = [(a - origin[primary] - offsets[primary][0]!) / nd[primary],
+        (a - origin[primary] - offsets[primary][1]!) / nd[primary]]
+      lo = Math.max(lo, Math.min(...ends) - 1e-9)
+      hi = Math.min(hi, Math.max(...ends) + 1e-9)
+      if (lo > hi) continue
+    }
+    const bounds = others.map(axis => {
+      if (!bounded) return [centre[axis] - r, centre[axis] + r]
+      const along = span(nd[axis], lo, hi)
+      return [Math.max(centre[axis] - r, Math.ceil(origin[axis] + along[0]! + offsets[axis][0]! - 1e-9)),
+        Math.min(centre[axis] + r, Math.floor(origin[axis] + along[1]! + offsets[axis][1]! + 1e-9))]
+    })
+    for (let b = bounds[0]![0]!; b <= bounds[0]![1]!; b++) {
+      for (let c = bounds[1]![0]!; c <= bounds[1]![1]!; c++) {
+        const cell = { [primary]: a + 0, [others[0]!]: b + 0, [others[1]!]: c + 0 } as unknown as Vec3
+        const { x, y, z } = cell
         const px = x - origin.x, py = y - origin.y, pz = z - origin.z
         const along = px * nd.x + py * nd.y + pz * nd.z
         if (along < 0 || along > length + 0.5) continue
@@ -174,6 +206,7 @@ function lineCells(origin: Vec3, nd: Vec3, length: number, totalWidth: number, t
       }
     }
   }
+  if (primary !== 'x') cells.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z)
   return cells
 }
 

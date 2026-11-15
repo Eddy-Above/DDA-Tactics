@@ -205,11 +205,11 @@ export async function canonicalizeAreaAttack(encounter: any, actor: any, attack:
   const data = body.areaShapeData
   const cells = computeAreaCellsFromData(data)
   const source = data.blastCenter ?? data.attackerPos
-  const hit = new Set(cells.filter(cell => !index || losClear(index, source, cell)).map(cell => `${cell.x},${cell.y},${cell.z}`))
+  const hit = new Set(cells.map(cell => `${cell.x},${cell.y},${cell.z}`))
   for (const id of body.targetIds ?? [body.targetId]) {
     const target = encounter.participants.find((p: any) => p.id === id)
     const position = positions[id]
     const record = records.get(target?.entityId)
-    if (!position || !getFootprintCells(position, getFootprintDimensions(record?.size ?? 'medium', record?.giganticDimensions)).some(cell => hit.has(`${cell.x},${cell.y},${cell.z}`))) throw createError({ statusCode: 400, message: 'A target is outside the aimed attack area' })
+    if (!position || !getFootprintCells(position, getFootprintDimensions(record?.size ?? 'medium', record?.giganticDimensions)).some(cell => hit.has(`${cell.x},${cell.y},${cell.z}`) && (!index || losClear(index, source, cell)))) throw createError({ statusCode: 400, message: 'A target is outside the aimed attack area' })
   }
 }

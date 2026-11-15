@@ -26,7 +26,10 @@ const EPS = 1e-4
 // World units ignored at each end of a sight line (matches the old raycaster's near/far).
 const END_TRIM = 0.1
 
-interface LosBox { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; stamp: number }
+interface LosBox {
+  x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; stamp: number
+  slope?: { axis: 'x' | 'z'; sign: number; limit: number }
+}
 
 export interface LosIndex {
   boxes: LosBox[]                  // every blocking box (grown by EPS)
@@ -53,12 +56,22 @@ export function buildLosIndex(map: GameMap, destroyedIds: Set<string> = new Set(
           if (list) list.push(box)
           else index.cells.set(key, [box])
         }
+    return box
   }
 
   for (const t of map.groundTiles ?? []) add(t.x, t.y, t.z, t.x + 1, t.y + TILE_H, t.z + 1)
   for (const v of getMapVoxels(map)) {
     if (viewer?.canSeeDarkness && getVoxelMaterialId(v) === 'darkness' && !voxelBlocksMovement(v)) continue
-    if (voxelBlocksTargeting(v)) add(v.x, v.y, v.z, v.x + 1, v.y + 1, v.z + 1)
+    if (voxelBlocksTargeting(v)) {
+      const box = add(v.x, v.y, v.z, v.x + 1, v.y + 1, v.z + 1)
+      if (v.shape === 'ramp') {
+        const direction = v.rampDirection ?? 'north'
+        const axis = direction === 'east' || direction === 'west' ? 'x' : 'z'
+        const sign = direction === 'east' || direction === 'south' ? -1 : 1
+        // Solid half-space below the rendered slope: y + sign * axis <= limit.
+        box.slope = { axis, sign, limit: v.y + sign * v[axis] + (sign > 0 ? 1 : 0) + EPS }
+      }
+    }
   }
   for (const c of map.ceilings ?? []) {
     if (!destroyedIds.has(c.id)) add(c.x, c.y + 1, c.z, c.x + 1, c.y + 1 + CEILING_H, c.z + 1)
@@ -156,6 +169,19 @@ function segmentEntersBox(p0: Vec3, dx: number, dy: number, dz: number, b: LosBo
   slabLo = tLo
   slabHi = tHi
   if (!clipSlab(p0.x, dx, b.x0, b.x1) || !clipSlab(p0.y, dy, b.y0, b.y1) || !clipSlab(p0.z, dz, b.z0, b.z1)) return null
+  if (b.slope) {
+    const { axis, sign, limit } = b.slope
+    const value = p0.y + sign * p0[axis]
+    const delta = dy + sign * (axis === 'x' ? dx : dz)
+    if (delta === 0) {
+      if (value >= limit) return null
+    } else {
+      const t = (limit - value) / delta
+      if (delta > 0) slabHi = Math.min(slabHi, t)
+      else slabLo = Math.max(slabLo, t)
+      if (slabLo >= slabHi) return null
+    }
+  }
   return slabLo
 }
 
