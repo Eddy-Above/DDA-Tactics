@@ -44,7 +44,7 @@ function harness(t, isDm = false) {
   } }
   let handlers
   const deps = {
-    ...refs, props, THREE, ...rules, ...voxels, ...renderResources, watch,
+    ...refs, props, THREE, ...rules, ...loadTypeScript('utils/chargeMovement.ts'), ...voxels, ...renderResources, watch,
     effectiveAttackerId: computed(() => props.selectedAttack?.attackerParticipantId ?? props.activeParticipantId),
     parseVec3Key: k => { const [x, y, z] = k.split(',').map(Number); return { x, y, z } },
     displayedMovementCells: computed(() => handlers?.chargeMovementCells() ?? props.reachableCells),

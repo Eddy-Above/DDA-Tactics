@@ -126,7 +126,8 @@ import { getAreaShape, computeAreaCells, computePassBeam, normalize3, computePas
 import type { AreaShapeData } from '~/utils/areaShapes'
 import type { MapAttackDescriptor } from '~/utils/mapAttackDescriptor'
 import type { FootprintDims, MovementCapabilities } from '~/utils/movementRules'
-import { getFootprintDimensions, getFootprintCells, sizeInteraction, isFootprintAirborne, getMovementOccupancy, createMovementMapView } from '~/utils/movementRules'
+import { getFootprintDimensions, getFootprintCells, sizeInteraction, footprintDistance, isFootprintAirborne, getMovementOccupancy, createMovementMapView } from '~/utils/movementRules'
+import { chargeDestinationCells } from '~/utils/chargeMovement'
 import { movementPathError, passMovementCapabilities, straightMovementPath } from '~/utils/movementPath'
 import { STANCE_COLORS } from '~/utils/stanceModifiers'
 import { MAP_GEOMETRY, buildLosIndex, losClear, losClip, canSeeFootprint, type LosIndex } from '~/utils/lineOfSight'
@@ -740,13 +741,7 @@ function footprintIntersectsArea(anchor: Vec3, dims: FootprintDims, cellSet: Set
 // True if an attacker's full 3D box anchored at `attackerAnchor` is within `maxDist`
 // (Chebyshev) of a target's full 3D box anchored at `targetAnchor`, for any pair of cells.
 function meleeInRange(attackerAnchor: Vec3, targetAnchor: Vec3, attackerDims: FootprintDims, targetDims: FootprintDims, maxDist: number): boolean {
-  for (const a of getFootprintCells(attackerAnchor, attackerDims)) {
-    for (const t of getFootprintCells(targetAnchor, targetDims)) {
-      const d = Math.max(Math.abs(a.x - t.x), Math.abs(a.y - t.y), Math.abs(a.z - t.z))
-      if (d <= maxDist) return true
-    }
-  }
-  return false
+  return footprintDistance(attackerAnchor, attackerDims, targetAnchor, targetDims) <= maxDist
 }
 
 // True if a footprint of `dims` anchored at `anchor` would overlap any other participant's
@@ -758,8 +753,7 @@ function footprintOccupied(anchor: Vec3, dims: FootprintDims, excludeId: string)
     if (sizeInteraction(moverSize, getParticipantSize(p.id)) === 'shared') return false
     const oPos = props.participantPositions[p.id]
     if (!oPos) return false
-    const oCellSet = new Set(getFootprintCells(oPos, getParticipantFootprintDims(p.id)).map(c => `${c.x},${c.y},${c.z}`))
-    return footprintIntersectsArea(anchor, dims, oCellSet)
+    return footprintDistance(anchor, dims, oPos, getParticipantFootprintDims(p.id)) === 0
   })
 }
 
@@ -1974,19 +1968,9 @@ function computeAndRenderAoe(event: MouseEvent) {
     return
   }
 
-  // Burst: omnidirectional from the whole footprint — no aiming.
+  // Burst: omnidirectional from the whole footprint ? no aiming.
   if (shape === 'burst') {
-    const cells = computeAreaCells(
-      shape, attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims,
-    )
-    lastAreaShapeData.value = {
-      shape, rangeType: attack.range, attackerPos, dir: { x: 0, y: 0, z: 0 },
-      bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0,
-      attackerDims: dims,
-    }
-    const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
-    updateAoeHighlight(hitCells, blockedCells)
+    renderBurstPreview(attack, attackerPos, dims)
     return
   }
 
@@ -2563,12 +2547,15 @@ function chargeMovementCells(): Set<string> {
   const attackerId = effectiveAttackerId.value
   if (!attackerId) return new Set()
   const dims = getParticipantFootprintDims(attackerId)
-  const targets = props.participants.filter(p => p.id !== attackerId && !p.inReserve && props.participantPositions[p.id])
-  return new Set([...props.reachableCells].filter(k => {
-    const anchor = parseVec3Key(k)
-    return !footprintOccupied(anchor, dims, attackerId) && targets.some(p =>
-      meleeInRange(anchor, props.participantPositions[p.id]!, dims, getParticipantFootprintDims(p.id), props.attackerMeleeRange))
-  }))
+  const pos = props.participantPositions[attackerId]
+  if (!pos) return new Set()
+  const units = props.participants.flatMap(p => {
+    const targetPos = props.participantPositions[p.id]
+    return p.id === attackerId || p.inReserve || !targetPos ? [] : [{
+      pos: targetPos, dims: getParticipantFootprintDims(p.id), size: getParticipantSize(p.id),
+    }]
+  })
+  return chargeDestinationCells(props.reachableCells, { pos, dims, size: getParticipantSize(attackerId) }, units, props.attackerMeleeRange)
 }
 
 // The participant a click on these raycast hits would pick as a single-target attack/intercede target:
@@ -3190,6 +3177,22 @@ watch([movingParticipantId, () => props.gmMoveParticipantId], ([normalId, gmId],
   }
 })
 
+function renderBurstPreview(attack: MapAttackDescriptor, attackerPos: Vec3, dims: FootprintDims) {
+  const dir = { x: 0, y: 0, z: 0 }
+  lastAreaShapeData.value = { shape: 'burst', rangeType: attack.range, attackerPos, dir,
+    bit: attack.bit, ram: attack.ram ?? 0, movement: attack.movement ?? 0, attackerDims: dims }
+  const cells = computeAreaCells('burst', attack.range, attackerPos, dir, attack.bit, attack.ram ?? 0, attack.movement ?? 0, dims)
+  const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
+  updateAoeHighlight(hitCells, blockedCells)
+}
+
+function watchBurstPreview() {
+  watch([() => props.selectedAttack, () => effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null],
+    ([attack, pos]) => {
+      if (attack && pos && getAreaShape(attack.tags) === 'burst') renderBurstPreview(attack, pos, getParticipantFootprintDims(effectiveAttackerId.value))
+    }, { deep: true })
+}
+
 watch(() => props.selectedAttack, (attack, prevAttack) => {
   if (attack) closeRadial()
   if (!attack) {
@@ -3210,20 +3213,10 @@ watch(() => props.selectedAttack, (attack, prevAttack) => {
     blastLosBlocked.value = false
     lastBlastCenter.value = null
     lastAreaAimEvent = null
-    resetPassState()
-  }
-  if (shape === 'burst') {
-    // Burst has no direction — render immediately from the whole footprint.
-    const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
-    if (!attackerPos) return
-    const cells = computeAreaCells(
-      'burst', attack.range, attackerPos, { x: 0, y: 0, z: 0 },
-      attack.bit, attack.ram ?? 0, attack.movement ?? 0, getParticipantFootprintDims(effectiveAttackerId.value),
-    )
-    const { hitCells, blockedCells } = classifyCellsByLos(cells, attackerPos)
-    updateAoeHighlight(hitCells, blockedCells)
+    clearAoeState()
   }
 }, { immediate: false })
+watchBurstPreview()
 
 watch([() => props.selection, () => props.selectionPreview], () => { if (scene) updateSelectionOutline() }, { deep: true })
 

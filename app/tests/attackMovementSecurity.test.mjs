@@ -6,6 +6,7 @@ const originalError = globalThis.createError
 afterEach(() => { if (originalError === undefined) delete globalThis.createError; else globalThis.createError = originalError })
 const point = (x = 0, y = 0) => ({ x, y, z: 0 })
 const { detectCapabilities } = loadTypeScript('utils/movementRules.ts')
+const spatialMovement = loadTypeScript('server/utils/mapMovement.ts')
 function fixture({ realMovement = false, realStats = false } = {}) {
   globalThis.createError = options => Object.assign(new Error(options.message), options)
   const actor = { id: 'actor', entityId: 'mon', type: 'digimon', actionsRemaining: { simple: 2 }, currentWounds: 0, maxWounds: 10 }
@@ -15,12 +16,14 @@ function fixture({ realMovement = false, realStats = false } = {}) {
   const records = new Map([['mon', { id: 'mon', size: 'medium', qualities: [] }], ['target-mon', { id: 'target-mon', size: 'medium' }]])
   const caps = detectCapabilities([], 4, 1, 1)
   const tamers = new Map(), loadedTamerIds = []
+  let searches = 0
   const spatial = realStats ? loadTypeScriptWithMocks('server/utils/combatSpatial.ts', {
     '../db': {}, './combatRecordCache': {}, './resolveSupportAttack': {},
   }) : null
   const loadTamersByIds = async ids => { loadedTamerIds.push(...ids); return new Map(ids.filter(id => tamers.has(id)).map(id => [id, tamers.get(id)])) }
   const getMovementProfile = (...args) => spatial ? spatial.getMovementProfile(...args) : { caps, budget: caps.movementSpeed }
   const movement = realMovement ? loadTypeScriptWithMocks('server/utils/encounterMovement.ts', {
+    './mapMovement': { ...spatialMovement, getMovementReachability: (...args) => { searches++; return spatialMovement.getMovementReachability(...args) } },
     '../db': { db: {}, maps: { id: 'id' } },
     './databaseScope': { scopedDatabase: () => undefined },
     './encounterRoom': { getRoomSnapshot: async () => ({ participantPositions: positions, destructibleStates: [] }) },
@@ -42,7 +45,7 @@ function fixture({ realMovement = false, realStats = false } = {}) {
     './resolveSupportAttack': { getDigimonDerivedStats: async () => ({ ram: 1, bit: 2, movement: 4, effectiveLimit: 10 }) },
   })
   const body = () => ({ operationId: 'cast', expectedRevision: 7, movement: { kind: 'pass', origin: point(), destination: point(3), direction: point(1), movement: 2, ram: 1 } })
-  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, tamers, loadedTamerIds, body, access: { isDm: false, campaign: { level: 'standard', rulesSettings: {} } } }
+  return { ...module, actor, encounter, positions, writes, prepared, records, map, caps, tamers, loadedTamerIds, body, searches: () => searches, access: { isDm: false, campaign: { level: 'standard', rulesSettings: {} } } }
 }
 
 test('forged Charge timing and movement without a stored Charge attack cannot write', async () => {
@@ -53,8 +56,8 @@ test('forged Charge timing and movement without a stored Charge attack cannot wr
   assert.equal(f.writes.length, 0)
 })
 
-for (const browserPath of [undefined, [], [point(9), point(3)]]) {
-  test(`automatic Charge derives a valid route with browser path ${JSON.stringify(browserPath)}`, async () => {
+for (const browserPath of [undefined, [], [point(), point(1), point(2), point(3)]]) {
+  test(`Charge validates the chosen destination with browser path ${JSON.stringify(browserPath)}`, async () => {
     const f = fixture({ realMovement: true })
     f.positions.target = point(4)
     const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'] }, {
@@ -95,21 +98,45 @@ test('automatic Charge can attack from its current anchor when already in range'
   assert.equal(result.distance, 0)
 })
 
+test('melee Charge preserves the chosen tile and route after selecting a target', async () => {
+  const f = fixture({ realMovement: true })
+  f.positions.target = point(4)
+  const destination = { x: 4, y: 0, z: 1 }
+  const path = [point(), point(1), point(2), { x: 3, y: 0, z: 1 }, destination]
+  const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
+    operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
+    movement: { kind: 'charge-before', origin: point(), destination, path },
+  }, f.access)
+  assert.deepEqual(result.position, destination, 'do not replace the chosen tile with a closer automatic landing')
+  assert.deepEqual(result.path, path)
+  assert.deepEqual(f.positions.actor, destination)
+  assert.deepEqual(f.writes[0].participantPositions.actor, destination)
+  assert.equal(result.participants[0].actionsRemaining.simple, 2)
+  assert.equal(f.searches(), 0, 'validate the chosen preview route without loading movement locations again')
+})
+
 for (const destination of [point(4), point(9), point(0, 3)]) {
-  test(`melee Charge selects and publishes its own legal landing when the browser suggests ${JSON.stringify(destination)}`, async () => {
+  test(`Charge rejects an invalid chosen tile instead of moving elsewhere: ${JSON.stringify(destination)}`, async () => {
     const f = fixture({ realMovement: true })
     f.positions.target = point(4)
-    const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
+    await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
       operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
       movement: { kind: 'charge-before', origin: point(), destination },
-    }, f.access)
-    assert.deepEqual(result.position, point(3))
-    assert.deepEqual(result.path.at(-1), point(3))
-    assert.deepEqual(f.positions.actor, point(3), 'publish the validated landing, not the browser preview')
-    assert.deepEqual(f.writes[0].participantPositions.actor, point(3))
-    assert.equal(result.participants[0].actionsRemaining.simple, 2)
+    }, f.access), { statusCode: 400 })
+    assert.equal(f.writes.length, 0)
+    assert.deepEqual(f.positions.actor, point())
   })
 }
+
+test('Charge rejects a forged preview route', async () => {
+  const f = fixture({ realMovement: true })
+  f.positions.target = point(4)
+  await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
+    operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
+    movement: { kind: 'charge-before', origin: point(), destination: point(3), path: [point(), point(3)] },
+  }, f.access), /adjacent cells/)
+  assert.equal(f.writes.length, 0)
+})
 
 test('melee Charge rejects a target beyond all legal attack positions without writing', async () => {
   const f = fixture({ realMovement: true })
@@ -117,7 +144,7 @@ test('melee Charge rejects a target beyond all legal attack positions without wr
   await assert.rejects(f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
     operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
     movement: { kind: 'charge-before', origin: point(), destination: point(3) },
-  }, f.access), { statusCode: 400, message: 'No reachable Charge position is within melee range of the target' })
+  }, f.access), { statusCode: 400, message: 'The selected Charge position is outside melee range of the target' })
   assert.equal(f.writes.length, 0)
   assert.deepEqual(f.positions.actor, point())
 })
@@ -146,7 +173,7 @@ for (const [level, agility, allowed] of [['standard', 3, true], ['enhanced', 3, 
       assert.deepEqual(f.positions.actor, tile(11))
       assert.ok(result.path.some((cell, i) => i > 0 && cell.y < result.path[i - 1].y), 'the route descends to the road')
     } else {
-      await assert.rejects(charge, /No reachable Charge position/)
+      await assert.rejects(charge, /not reachable/)
       assert.equal(f.writes.length, 0)
     }
     assert.ok(f.loadedTamerIds.includes('tamer'), 'load the partner even when the tamer is not on the map')
@@ -166,7 +193,7 @@ for (const surface of ['ground', 'stairs', 'voxels']) for (const direction of [1
     f.positions.target = point(4, 4 * direction)
     const result = await f.commitAttackMovement(f.encounter, 'actor', { tags: ['Charge Attack'], range: 'melee' }, {
       operationId: 'cast', expectedRevision: 7, chargeTiming: 'before', targetId: 'target',
-      movement: { kind: 'charge-before', origin: point(), destination: point(3, 4) },
+      movement: { kind: 'charge-before', origin: point(), destination: point(3, 3 * direction) },
     }, f.access)
     assert.deepEqual(result.path, [point(), point(1, direction), point(2, 2 * direction), point(3, 3 * direction)])
     assert.deepEqual(f.positions.actor, point(3, 3 * direction))
@@ -215,6 +242,21 @@ test('serialized Pass geometry cannot impersonate a server-validated movement', 
   await f.canonicalizeAreaAttack(f.encounter, f.actor, attack, body, f.records)
   const forged = JSON.parse(JSON.stringify(body))
   await assert.rejects(f.canonicalizeAreaAttack(f.encounter, f.actor, attack, forged, f.records), { statusCode: 400 })
+})
+
+test('directionless Burst derives aiming geometry from stored actor stats when none is supplied', async () => {
+  const f = fixture()
+  const body = { targetIds: ['target'], areaShapeData: null }
+  await f.canonicalizeAreaAttack(f.encounter, f.actor, { tags: ['Area Attack: Burst'], range: 'melee' }, body, f.records)
+  assert.equal(body.areaShapeData.shape, 'burst')
+  assert.deepEqual(body.areaShapeData.attackerPos, point())
+  assert.equal(body.areaShapeData.bit, 2)
+})
+
+test('directional area attacks still require explicit aiming data', async () => {
+  const f = fixture()
+  await assert.rejects(f.canonicalizeAreaAttack(f.encounter, f.actor, { tags: ['Area Attack: Cone'], range: 'melee' },
+    { targetIds: ['target'], areaShapeData: null }, f.records), /Area attack aiming data is required/)
 })
 
 test('targets must be deployed participants in this encounter', () => {

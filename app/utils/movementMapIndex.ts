@@ -1,6 +1,7 @@
 import type { GameMap, Vec3, MapGroundTile, MapSpaceTile, MapVoxel, MapStair, MapWall, MapCeiling, MapDoor } from '~/types'
 
 interface MovementMapIndex {
+  footprintTerrain: Map<string, number>
   ground: ReadonlyMap<string, MapGroundTile>
   space: ReadonlyMap<string, MapSpaceTile>
   voxels: ReadonlyMap<string, MapVoxel>
@@ -41,6 +42,7 @@ export function createMovementMapView(map: GameMap): GameMap {
   const doors = new Map<string, MapDoor>()
   for (const door of map.doors ?? []) if (!doors.has(door.wallId)) doors.set(door.wallId, door)
   searchIndexes.set(view, {
+    footprintTerrain: new Map(),
     ground: firstByCell(map.groundTiles ?? []),
     space: firstByCell(map.spaceTiles ?? []),
     voxels: firstByCell(map.voxels ?? []),

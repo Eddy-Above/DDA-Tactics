@@ -48,6 +48,7 @@ export function useMapMovement() {
   ) {
     const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
     const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    caps = { ...caps, footprint: moverDims }
     const queryMap = createMovementMapView(map)
     const costProfile = getMovementCostProfile(caps, budget, destroyedStructures, origin)
 
@@ -93,6 +94,8 @@ export function useMapMovement() {
     moverIsEnemy: boolean = false,
     moverGiganticDimensions: GiganticDims = null,
   ) {
+    const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
+    caps = { ...caps, footprint: moverDims }
     const costProfile = getMovementCostProfile(caps, undefined, destroyedStructures, from)
     if (cachedSearch?.map === map && cachedSearch.contextKey === searchContextKey(
       from, caps, destroyedStructures, unitPositions, moverSize, moverIsEnemy, moverGiganticDimensions,
@@ -118,7 +121,6 @@ export function useMapMovement() {
       return null
     }
     const { blockedPositions, landingBlockedPositions } = getMovementOccupancy(moverSize, unitPositions.values())
-    const moverDims = getFootprintDimensions(moverSize, moverGiganticDimensions)
     const queryMap = createMovementMapView(map)
     if (vec3Key(from) !== vec3Key(to) && (
       getFootprintCells(to, moverDims).some(cell => landingBlockedPositions.has(vec3Key(cell)))

@@ -24,6 +24,15 @@ const floor = (width = 16, depth = 1) => ({
   voxels: [], spaceTiles: [], walls: [], doors: [], stairs: [], ceilings: [], windows: [],
 })
 
+// Occupancy tests need a corridor so the legal ledge-step rule cannot route around the blocker.
+function corridor(width, depth) {
+  const map = floor(width, depth)
+  for (let x = -1; x <= width; x++) for (const z of [-1, depth]) for (let y = 0; y < 2; y++) {
+    map.voxels.push({ id: `${x}-${y}-${z}`, ...point(x, y, z), materialId: 'steel' })
+  }
+  return map
+}
+
 test('size exceptions are reciprocal: Tiny shares, Small passes only, all other pairings block', () => {
   for (const mover of sizes) {
     sizes.forEach((blocker, i) => assert.equal(rules.sizeInteraction(mover, blocker), interactions[mover][i], `${mover} / ${blocker}`))
@@ -36,7 +45,7 @@ for (const moverSize of sizes) {
       for (const sameFaction of [true, false]) {
         for (const cached of [true, false]) {
           const movement = useMapMovement()
-          const map = floor()
+          const map = corridor(16, rules.getFootprintDimensions(moverSize).depth)
           const units = new Map([['blocker', { pos: point(5), size: blockerSize, isEnemy: !sameFaction }]])
           const args = [walking, map, new Set(), units, moverSize]
           const cells = movement.computeReachable(point(0), 12, ...args)
@@ -55,7 +64,7 @@ for (const moverSize of sizes) {
 
 test('a large mover cannot pass a unit that only overlaps the side of its footprint', () => {
   const movement = useMapMovement()
-  const map = floor(8, 2)
+  const map = corridor(8, 2)
   const units = new Map([['tamer', { pos: point(3, 0, 1), size: 'medium' }]])
   const args = [walking, map, new Set(), units, 'large']
   const cells = movement.computeReachable(point(0), 6, ...args)
@@ -65,7 +74,7 @@ test('a large mover cannot pass a unit that only overlaps the side of its footpr
 
 test('Tiny sharing still respects walls and solid terrain', () => {
   const movement = useMapMovement()
-  const map = floor()
+  const map = corridor(16, 1)
   map.walls.push({ id: 'wall', ...point(4), face: 'east' })
   const units = new Map([['tamer', { pos: point(3), size: 'medium' }]])
   const cells = movement.computeReachable(point(0), 12, walking, map, new Set(), units, 'tiny')

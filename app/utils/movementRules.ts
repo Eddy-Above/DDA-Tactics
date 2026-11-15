@@ -7,6 +7,7 @@ import type { ElementType } from '~/types'
 import type { StatefulTraversal } from '~/utils/pathfinding'
 
 export interface MovementCapabilities {
+  footprint?: FootprintDims
   canFly: boolean
   canJump: boolean
   jumpRange: number     // max jump distance in spaces
@@ -53,6 +54,14 @@ export function getFootprintCells(anchor: Vec3, dims: FootprintDims): Vec3[] {
       for (let dz = 0; dz < dims.depth; dz++)
         cells.push({ x: anchor.x + dx, y: anchor.y + dy, z: anchor.z + dz })
   return cells
+}
+
+// Minimum Chebyshev distance between the occupied cells of two rectangular bodies.
+export function footprintDistance(a: Vec3, ad: FootprintDims, b: Vec3, bd: FootprintDims): number {
+  return Math.max(0,
+    a.x - (b.x + bd.width - 1), b.x - (a.x + ad.width - 1),
+    a.y - (b.y + bd.height - 1), b.y - (a.y + ad.height - 1),
+    a.z - (b.z + bd.depth - 1), b.z - (a.z + ad.depth - 1))
 }
 
 function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
@@ -197,6 +206,26 @@ export function getDigTerrainMultiplier(
   return 0
 }
 
+// Cache body clearance for this search snapshot. Passable voxels never count as
+// solid terrain; legal burrowing uses the most expensive material the body touches.
+export function getFootprintTerrainMultiplier(pos: Vec3, dims: FootprintDims, caps: MovementCapabilities, map: GameMap): number {
+  const cache = getMovementMapIndex(map)?.footprintTerrain
+  const cacheKey = `${key(pos)}|${dims.width},${dims.height},${dims.depth}|${Number(caps.canDig)},${Number(!!caps.canDigHardSurfaces)}`
+  const cached = cache?.get(cacheKey)
+  if (cached !== undefined) return cached
+  let multiplier = 0
+  for (let dx = 0; dx < dims.width; dx++) for (let dy = 0; dy < dims.height; dy++) for (let dz = 0; dz < dims.depth; dz++) {
+    multiplier = Math.max(multiplier, getDigTerrainMultiplier(map, { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz }, caps))
+    if (!Number.isFinite(multiplier)) { cache?.set(cacheKey, multiplier); return multiplier }
+  }
+  cache?.set(cacheKey, multiplier)
+  return multiplier
+}
+
+export function canOccupyFootprint(pos: Vec3, dims: FootprintDims, caps: MovementCapabilities, map: GameMap): boolean {
+  return Number.isFinite(getFootprintTerrainMultiplier(pos, dims, caps, map))
+}
+
 // Vertical wall faces and neighbouring solid voxels provide footholds. Advanced climbers also
 // cling beneath a ceiling or a voxel above; none of these supports permits crossing that solid.
 export function hasClimbSupport(
@@ -270,7 +299,7 @@ export function getMovementCostProfile(
       const destination = cellAt(to, map)
       if (destination.water) return withinSpeed(swimSpeed, spent)
       if (destination.swimming) return withinSpeed(Math.max(swimSpeed, flySpeed), spent)
-      destination.dig ??= getDigTerrainMultiplier(map, to, caps)
+      destination.dig ??= caps.footprint ? getFootprintTerrainMultiplier(to, caps.footprint, caps, map) : getDigTerrainMultiplier(map, to, caps)
       if (destination.dig > 0) {
         const environment = caps.naturewalkElements?.length
           ? resolveNaturewalkEnvironment(map, to, caps.naturewalkEnvironment ?? { elements: [], useMapTerrain: true }) : []
@@ -279,7 +308,7 @@ export function getMovementCostProfile(
       }
       if (caps.canFly && flySpeed >= Math.max(landSpeed, climbSpeed, jumpSpeed)) return withinSpeed(flySpeed, spent)
       destination.walk ??= Boolean(getGroundTile(map, to)) || hasSolidVoxelSupport(map, to) || hasSolidStairSupport(map, to)
-      const walking = (destination.walk || canStepOffPlatform(from, to, map)) && !(to.y > from.y && to.x === from.x && to.z === from.z)
+      const walking = (destination.walk || canStepOffPlatform(from, to, map, caps.footprint)) && !(to.y > from.y && to.x === from.x && to.z === from.z)
       let speed = Math.max(walking ? landSpeed : 0, flySpeed)
       if (caps.canClimb) {
         destination.climb ??= hasClimbSupport(map, to, caps, destroyedStructures)
@@ -290,7 +319,7 @@ export function getMovementCostProfile(
       if (walking && caps.canJump) {
         const source = cellAt(from, map)
         source.walk ??= Boolean(getGroundTile(map, from)) || hasSolidVoxelSupport(map, from) || hasSolidStairSupport(map, from)
-        source.dig ??= getDigTerrainMultiplier(map, from, caps)
+        source.dig ??= caps.footprint ? getFootprintTerrainMultiplier(from, caps.footprint, caps, map) : getDigTerrainMultiplier(map, from, caps)
         // Reaching a platform can finish a legal jump. Subsequent supported steps
         // use walking speed, counting the distance already spent on that jump.
         jumpTransition = !source.walk && !source.swimming && source.dig === 0
@@ -381,9 +410,9 @@ export function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
 }
 
 // Walking may end just beyond an edge, but cannot continue out into open air.
-export function isAdjacentToFooting(pos: Vec3, map: GameMap): boolean {
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dz = -1; dz <= 1; dz++) {
+export function isAdjacentToFooting(pos: Vec3, map: GameMap, dims: FootprintDims = { width: 1, height: 1, depth: 1 }): boolean {
+  for (let dx = -1; dx <= dims.width; dx++) {
+    for (let dz = -1; dz <= dims.depth; dz++) {
       if (!dx && !dz) continue
       const cell = { x: pos.x + dx, y: pos.y, z: pos.z + dz }
       const ground = getGroundTile(map, cell)
@@ -394,11 +423,11 @@ export function isAdjacentToFooting(pos: Vec3, map: GameMap): boolean {
   return false
 }
 
-function canStepOffPlatform(from: Vec3, to: Vec3, map: GameMap): boolean {
+function canStepOffPlatform(from: Vec3, to: Vec3, map: GameMap, dims: FootprintDims = { width: 1, height: 1, depth: 1 }): boolean {
   return from.y === to.y
     && Math.max(Math.abs(to.x - from.x), Math.abs(to.z - from.z)) <= 1
-    && (!isPositionInAir(from, map) || isAdjacentToFooting(from, map))
-    && isAdjacentToFooting(to, map)
+    && (!isFootprintAirborne(from, dims, map) || isAdjacentToFooting(from, map, dims))
+    && isAdjacentToFooting(to, map, dims)
 }
 
 function canMoveOntoSupportedStairTop(from: Vec3, to: Vec3, caps: MovementCapabilities, map: GameMap, jumpAllowed = caps.canJump): boolean {
@@ -429,6 +458,7 @@ export function canPassThrough(
   const dy = to.y - from.y
   const dz = to.z - from.z
   const jumpAllowed = caps.canJump && (!origin || canStartJump(origin, map, caps))
+  if (caps.footprint && !canOccupyFootprint(to, caps.footprint, caps, map)) return false
 
   // Diagonal horizontal moves must not cut through walls on either cardinal axis.
   // Applies regardless of Y change so 3D diagonal moves can't bypass y=0 walls.
@@ -474,7 +504,7 @@ export function canPassThrough(
     return true
   }
 
-  if (canStepOffPlatform(from, to, map)) return true
+  if (canStepOffPlatform(from, to, map, caps.footprint)) return true
 
   if (spaceTile) {
     if (spaceTile.spaceType === 'water') return caps.canSwim
@@ -508,6 +538,14 @@ export function canPassThrough(
 // Airborne jump landings are measured from the move's origin in both height and horizontal range.
 // Jump destinations cannot be below their launch point; descending further requires a fall.
 export function canStartJump(origin: Vec3, map: GameMap, caps: MovementCapabilities): boolean {
+  const dims = caps.footprint
+  if (dims && (dims.width > 1 || dims.depth > 1)) {
+    const singleCell = { ...caps, footprint: undefined }
+    for (let dx = 0; dx < dims.width; dx++) for (let dz = 0; dz < dims.depth; dz++) {
+      if (canStartJump({ x: origin.x + dx, y: origin.y, z: origin.z + dz }, map, singleCell)) return true
+    }
+    return false
+  }
   if (isSwimmingCell(map, origin)) return caps.canJumpFromWater === true
   if (mapVoxelBlocksMovement(map, origin) || hasStairAt(map, origin)) return false
   return Boolean(getGroundTile(map, origin)) || hasSolidVoxelSupport(map, origin) || hasSolidStairSupport(map, origin)
@@ -533,6 +571,7 @@ export function canLandOn(
   destroyedStructures: Set<string> = new Set(),
 ): boolean {
   if (occupiedPositions.has(key(pos))) return false
+  if (caps.footprint && !canOccupyFootprint(pos, caps.footprint, caps, map)) return false
   const digMultiplier = getDigTerrainMultiplier(map, pos, caps)
   if (digMultiplier > 0) return Number.isFinite(digMultiplier)
   if (isWaterCell(map, pos)) return caps.canSwim
@@ -547,7 +586,7 @@ export function canLandOn(
     return true
   }
 
-  if (isAdjacentToFooting(pos, map)) return true
+  if (isAdjacentToFooting(pos, map, caps.footprint)) return true
 
   const spaceTile = getSpaceTile(map, pos)
   if (spaceTile) {

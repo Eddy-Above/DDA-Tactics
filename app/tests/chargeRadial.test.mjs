@@ -28,7 +28,7 @@ function chargeHarness(t, { saveMove = async () => ({}) } = {}) {
     npcMoveCaps: id => { calls.movers.push(id); return caps },
     movement: { computeReachable: (...args) => calls.reach.push(args), clearMovement: () => calls.clear++ },
     destroyedIds: () => new Set(),
-    movePathTo: (id, destination) => [positions.value[id], destination],
+    movePathTo: (id, destination) => loadTypeScript('utils/movementPath.ts').straightMovementPath(positions.value[id], destination),
     moveDistance: (_id, _destination, path) => path.length - 1,
     openDoorsAlong: () => {}, straightMovementPath: loadTypeScript('utils/movementPath.ts').straightMovementPath,
     ws: { send: message => calls.moved.push(message) }, postMove: saveMove,
@@ -104,7 +104,7 @@ test('Move Before retains the chosen tile until a later melee target click', asy
   const [event, target, intent] = h.calls.emitted[0]
   assert.equal(event, 'target-selected')
   assert.equal(target, 'enemy')
-  assert.deepEqual(intent.movement, { kind: 'charge-before', origin: { x: 0, y: 0, z: 0 }, destination: { x: 2, y: 0, z: 0 } })
+  assert.deepEqual(intent.movement, { kind: 'charge-before', origin: { x: 0, y: 0, z: 0 }, destination: { x: 2, y: 0, z: 0 }, path: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }] })
 })
 
 test('cancelling the Charge tile aimer cancels attack targeting', async t => {

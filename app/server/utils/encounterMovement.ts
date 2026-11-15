@@ -5,7 +5,7 @@ import { getRoomSnapshot } from './encounterRoom'
 import { getMovementProfile, loadEncounterMap, loadParticipantDigimon, loadTamersByIds } from './combatSpatial'
 import { canActOnEncounterTurn } from './participantTurn'
 import { getMovementReachability, getFootprintDimensions, getFootprintCells, buildFootprintOccupiedSet, isFootprintValid } from './mapMovement'
-import { createMovementMapView, getMovementCostProfile } from '../../utils/movementRules'
+import { createMovementMapView, getMovementCostProfile, footprintDistance } from '../../utils/movementRules'
 import { closedDoorsCrossedByPath } from '../../utils/mapDoors'
 import { makeSpawnCellChecker, isSetupPhase } from '../../utils/placementRules'
 import { voxelBlocksMovement } from '../../utils/mapVoxels'
@@ -109,34 +109,11 @@ export async function prepareEncounterMovement(encounter: any, intent: MovementI
       const targetRecord = records.get(target.entityId)
       const targetDims = getFootprintDimensions(targetRecord?.size ?? 'medium', targetRecord?.giganticDimensions)
       const reach = Math.max(1, (record?.qualities?.find((q: any) => q.id === 'reach')?.ranks ?? 0) * 2)
-      const reachable = getMovementReachability(origin, budget, caps, traversable, destroyed, blocked, dims)
-      let destination: Vec3 | undefined, closest = Infinity, fewestDiagonals = Infinity
-      for (const cell of reachable.cells) {
-        const [x, y, z] = cell.split(',').map(Number)
-        const candidate = { x, y, z }
-        const gap = Math.max(
-          0, x - (targetPosition.x + targetDims.width - 1), targetPosition.x - (x + dims.width - 1),
-          y - (targetPosition.y + targetDims.height - 1), targetPosition.y - (y + dims.height - 1),
-          z - (targetPosition.z + targetDims.depth - 1), targetPosition.z - (z + dims.depth - 1),
-        )
-        const distance = Math.max(Math.abs(x - origin.x), Math.abs(y - origin.y), Math.abs(z - origin.z))
-        if (gap > reach || distance > closest) continue
-        const launch = reachable.launchOriginTo(candidate) ?? (same(candidate, origin) ? origin : undefined)
-        if (!isFootprintValid(candidate, dims, traversable, occupied, caps, launch)) continue
-        const route = reachable.pathTo(candidate)!
-        const diagonals = route.slice(1).filter((step, i) =>
-          Number(step.x !== route[i].x) + Number(step.y !== route[i].y) + Number(step.z !== route[i].z) > 1).length
-        if (distance === closest && diagonals >= fewestDiagonals) continue
-        destination = candidate
-        closest = distance
-        fewestDiagonals = diagonals
+      if (footprintDistance(intent.destination, dims, targetPosition, targetDims) > reach) {
+        throw createError({ statusCode: 400, message: 'The selected Charge position is outside melee range of the target' })
       }
-      if (!destination) throw createError({ statusCode: 400, message: 'No reachable Charge position is within melee range of the target' })
-      // The browser's square is a preview. Select and commit the landing from
-      // the same authoritative search that validates the route and movement cost.
-      intent = { ...intent, destination }
-      path = reachable.pathTo(destination)!
-    } else if (supplied) {
+    }
+    if (supplied) {
       const maximumPath = getMovementCostProfile(caps, budget, destroyed, origin)?.budget ?? budget
       if (!Array.isArray(supplied) || supplied.length > Math.max(2, maximumPath + 2) || supplied.some(p => !validMapCell(p)) || !same(supplied[0], origin) || !same(supplied[supplied.length - 1], intent.destination)) throw createError({ statusCode: 400, message: 'The movement path is invalid' })
       const error = movementPathError(supplied, caps, budget, traversable, dims, blocked, occupied, destroyed)

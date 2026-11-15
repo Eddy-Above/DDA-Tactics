@@ -32,6 +32,7 @@ export function movementPathError(
   path: Vec3[], caps: MovementCapabilities, budget: number, map: GameMap, dims: FootprintDims,
   blocked: Set<string> = new Set(), occupied: Set<string> = blocked, destroyed: Set<string> = new Set(),
 ): string | null {
+  caps = { ...caps, footprint: dims }
   const origin = path[0], destination = path.at(-1)
   if (!origin || !destination) return 'The movement path is invalid'
   const footprintBlocked = (pos: Vec3) => getFootprintCells(pos, dims).some(cell => blocked.has(`${cell.x},${cell.y},${cell.z}`))

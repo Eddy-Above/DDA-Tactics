@@ -14,6 +14,7 @@ import {
   isWithinMapFootprint,
   canPassThrough,
   canLandOn,
+  canOccupyFootprint,
   hasSolidVoxelSupport,
   hasSolidStairSupport,
   isPositionInAir,
@@ -77,6 +78,7 @@ export function getMovementReachability(
   blockedPositions: Set<string> = new Set(),
   moverDims: FootprintDims = { width: 1, height: 1, depth: 1 },
 ): ReachableSearch & { launchOriginTo: (position: Vec3) => Vec3 | undefined } {
+  caps = { ...caps, footprint: moverDims }
   const queryMap = createMovementMapView(map)
   const costProfile = getMovementCostProfile(caps, budget, destroyed, origin)
   if (caps.canJump && costProfile) {
@@ -107,7 +109,7 @@ export function isValidLandingPosition(
     if (digTerrain > 0) return true
     if (caps.canSwim && isSwimmingCell(map, pos)) return true
     if (hasClimbSupport(map, pos, caps)) return true
-    if (!isWaterCell(map, pos) && isAdjacentToFooting(pos, map)) return true
+    if (!isWaterCell(map, pos) && isAdjacentToFooting(pos, map, caps.footprint)) return true
   }
   const index = getMovementMapIndex(map)
   if (index ? index.ground.has(key(pos)) : (map.groundTiles ?? []).some(t => t.x === pos.x && t.y === pos.y && t.z === pos.z)) return true
@@ -126,6 +128,8 @@ export function isFootprintValid(
   caps?: MovementCapabilities,
   origin?: Vec3,
 ): boolean {
+  if (caps) caps = { ...caps, footprint: dims }
+  if (caps && !canOccupyFootprint(center, dims, caps, map)) return false
   if (!isValidLandingPosition(center, map, occupiedSet, caps, origin)) return false
   return getFootprintCells(center, dims).every(cell => !occupiedSet.has(key(cell)))
 }

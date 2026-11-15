@@ -50,10 +50,9 @@ export async function commitAttackMovement(encounter: any, actorId: string, atta
   if (optionError) throw createError({ statusCode: 400, message: optionError })
   const actionCost = Math.max(actor.clash ? 2 : 1, attackActionCost(actor, attack, access?.campaign.rulesSettings?.eddySoulRules, body as any))
   if ((actor.actionsRemaining?.simple ?? 0) < actionCost) throw createError({ statusCode: 403, message: 'Not enough actions for the declared attack' })
-  // Charge selects a landing anchor automatically. Derive its route from the
-  // authoritative map instead of requiring a browser preview path (which may
-  // be empty or stale). Pass supplies its canonical straight route below.
-  let path: any[] | undefined
+  // Validate the route to the chosen square; never replace the player's landing.
+  // Older clients without a route can still ask the server to derive one.
+  let path: any[] | undefined = Array.isArray(move.path) && move.path.length ? move.path : undefined
   if (pass) {
     const records = await loadParticipantDigimon(encounter.participants)
     const partnerId = records.get(actor.entityId)?.partnerId
@@ -184,7 +183,8 @@ export async function canonicalizeAreaAttack(encounter: any, actor: any, attack:
     if (index && attack.range === 'ranged' && !canSeeFootprint(index, origin, dims, destination, targetDims)) throw createError({ statusCode: 400, message: 'The target is blocked from sight' })
     return
   }
-  const raw = body.areaShapeData
+  // Burst is centred on the actor and has no direction or selected blast point.
+  const raw = body.areaShapeData ?? (shape === 'burst' ? { shape: 'burst' } : null)
   if (!raw || raw.shape !== shape) throw createError({ statusCode: 400, message: 'Area attack aiming data is required' })
   const positions = await getRoomPositions(encounter.id)
   const origin = positions[actor.id]
