@@ -132,9 +132,13 @@ export function getMovementProfile(
   if (!tamerRecord) return { budget: 0, caps: detectCapabilities([], 0, 0, 0), bodyStat: 0 }
   const attrs = tamerRecord.attributes || {}
   const skills = tamerRecord.skills || {}
+  const xp = tamerRecord.xpBonuses
+  // Match the character sheet and map preview, including purchased stat ranks.
+  const movement = Math.max(0, (attrs.agility || 0) + (xp?.attributes?.agility || 0)
+    + (skills.survival || 0) + (xp?.skills?.survival || 0))
   return {
-    budget: (attrs.agility || 0) + (skills.survival || 0),
-    caps: detectCapabilities([], 0, 0, 0, 0, 0),
+    budget: movement,
+    caps: detectCapabilities([], movement, 0, 0, 0, 0),
     bodyStat: attrs.body || 0,
   }
 }
