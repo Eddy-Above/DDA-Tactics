@@ -25,8 +25,8 @@ import {
   detectCapabilities,
   PROJECTILE_CAPS,
 } from '../../utils/movementRules'
-import { searchReachable, searchReachableWithState, type ReachableSearch } from '../../utils/pathfinding'
-import { getMovementMapIndex } from '../../utils/movementMapIndex'
+import { searchReachable, searchReachableWithState, findPath, type ReachableSearch } from '../../utils/pathfinding'
+import { getMovementMapIndex, getMinimumSupportY } from '../../utils/movementMapIndex'
 
 // This module is the server's spatial/pathfinding layer. All pure map geometry (canPassThrough,
 // capabilities, fall/airborne helpers) now lives in `app/utils/movementRules.ts` — the single source
@@ -406,16 +406,35 @@ export function findAreaIntercedePosition(
   // search (especially a flight volume) unless an in-area adjacent square is in range.
   if (!candidates.length) return null
   map = createMovementMapView(map)
-  const reachable = getReachableCells(interceptorPos, budget, caps, map, destroyed, blockedPositions, interceptorDims)
-  let best: Vec3 | null = null
-  let bestDist = Infinity
+  caps = { ...caps, footprint: interceptorDims }
+  const costs = getMovementCostProfile(caps, budget, destroyed, interceptorPos)
+  const minimumLaunchY = getMinimumSupportY(map)
+  const blocked = (pos: Vec3) => getFootprintCells(pos, interceptorDims).some(cell => blockedPositions.has(key(cell)))
+  const distance = (pos: Vec3) => Math.abs(pos.x - interceptorPos.x) + Math.abs(pos.y - interceptorPos.y) + Math.abs(pos.z - interceptorPos.z)
+  candidates.sort((a, b) => distance(a) - distance(b))
   for (const cell of candidates) {
-    if (!reachable.has(key(cell))) continue
-    if (!isFootprintValid(cell, interceptorDims, map, occupied, caps, interceptorPos)) continue
-    const dist = Math.abs(cell.x - interceptorPos.x) + Math.abs(cell.y - interceptorPos.y) + Math.abs(cell.z - interceptorPos.z)
-    if (dist < bestDist) { bestDist = dist; best = cell }
+    if (!canOccupyFootprint(cell, interceptorDims, caps, map)
+      || getFootprintCells(cell, interceptorDims).some(part => occupied.has(key(part)))) continue
+    // A jump cannot finish below its launch. Skip air below every possible
+    // footing before searching; flight/swimming/climbing may still land there.
+    if (cell.y < minimumLaunchY && !isFootprintValid(cell, interceptorDims, map, occupied, { ...caps, canJump: false })) continue
+    // Only find a route to the requested interception square. An all-destinations
+    // search repeats a potentially huge jump/flight volume for every candidate.
+    if (caps.canJump && costs) {
+      const finish = (position: Vec3, launch: Vec3 | null | undefined) => isFootprintValid(position, interceptorDims, map, occupied,
+        launch ? caps : { ...caps, canJump: false }, launch ?? undefined)
+      const search = searchReachableWithState(interceptorPos, costs.budget,
+        createJumpTraversal(interceptorPos, caps, map, costs, destroyed, blocked), cell, finish)
+      if (search.cells.has(key(cell)) && finish(cell, search.stateTo(cell))) return cell
+    } else {
+      if (!isFootprintValid(cell, interceptorDims, map, occupied, caps, interceptorPos)) continue
+      const path = findPath(interceptorPos, cell, (from, to) => !blocked(to) && canPassThrough(from, to, caps, map, destroyed, interceptorPos),
+        Infinity, costs ? (from, to, spent) => costs.stepCost(from, to, map, spent)
+          : (_from, _to, spent = 0) => spent + 1 <= budget ? 1 : Infinity)
+      if (path) return cell
+    }
   }
-  return best
+  return null
 }
 
 // Rule 3 / throw-out-of-blast existence check: from `targetPos` (the protected ally's
@@ -435,13 +454,15 @@ export function hasValidThrowOutOfAreaCell(
   blockedPositions: Set<string> = occupied,
 ): boolean {
   map = createMovementMapView(map)
-  const reachable = getReachableCells(targetPos, maxDistance, PROJECTILE_CAPS, map, destroyed, blockedPositions, targetDims)
-  for (const k of reachable) {
-    const [x, y, z] = k.split(',').map(Number)
-    const cell = { x, y, z }
-    if (!isFootprintValid(cell, targetDims, map, occupied, PROJECTILE_CAPS)) continue
-    if (getFootprintCells(cell, targetDims).some(c => areaCells.has(key(c)))) continue
+  const caps = { ...PROJECTILE_CAPS, footprint: targetDims }
+  let found = false
+  searchReachable(targetPos, maxDistance, (from, to) =>
+    !getFootprintCells(to, targetDims).some(cell => blockedPositions.has(key(cell)))
+      && canPassThrough(from, to, caps, map, destroyed, targetPos), undefined, cell => {
+    if (getFootprintCells(cell, targetDims).some(part => areaCells.has(key(part)))
+      || !isFootprintValid(cell, targetDims, map, occupied, caps)) return false
+    found = true
     return true
-  }
-  return false
+  })
+  return found
 }

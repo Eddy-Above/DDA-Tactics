@@ -157,6 +157,16 @@ function mapVoxelBlocksMovement(map: GameMap, pos: Vec3): boolean {
 // Water can be stored in either legacy tile layer or as a material volume. An explicit solid
 // voxel still occupies its cell, even when a water tile is also painted there.
 export function isWaterCell(map: GameMap, pos: Vec3): boolean {
+  const cache = getMovementMapIndex(map)?.water
+  if (!cache) return waterCell(map, pos)
+  const cellKey = key(pos), cached = cache.get(cellKey)
+  if (cached !== undefined) return cached
+  const result = waterCell(map, pos)
+  cache.set(cellKey, result)
+  return result
+}
+
+function waterCell(map: GameMap, pos: Vec3): boolean {
   const voxel = mapVoxelAt(map, pos)
   if (voxel && voxelBlocksMovement(voxel)) return false
   return getGroundTile(map, pos)?.terrain === 'water'
@@ -174,6 +184,16 @@ function isWaterVolumeCell(map: GameMap, pos: Vec3): boolean {
 // A swimmer can occupy water or its upper volume surface, including when surfacing from depth.
 // Ground-water tiles already represent their surface at their saved Y.
 export function isSwimmingCell(map: GameMap, pos: Vec3): boolean {
+  const cache = getMovementMapIndex(map)?.swimming
+  if (!cache) return swimmingCell(map, pos)
+  const cellKey = key(pos), cached = cache.get(cellKey)
+  if (cached !== undefined) return cached
+  const result = swimmingCell(map, pos)
+  cache.set(cellKey, result)
+  return result
+}
+
+function swimmingCell(map: GameMap, pos: Vec3): boolean {
   if (mapVoxelBlocksMovement(map, pos) || hasStairAt(map, pos)) return false
   if (isWaterCell(map, pos)) return true
   if (getGroundTile(map, pos)) return false
@@ -357,8 +377,27 @@ export function createJumpTraversal(
       },
     }
   }
-  const supported = (pos: Vec3) => canStartJump(pos, map, caps)
+  const support = new Map<string, boolean>(), landings = new Map<string, boolean>()
+  const supported = (pos: Vec3) => {
+    const cellKey = key(pos), cached = support.get(cellKey)
+    if (cached !== undefined) return cached
+    const result = canStartJump(pos, map, caps)
+    support.set(cellKey, result)
+    return result
+  }
+  const landedAt = (pos: Vec3) => {
+    const cellKey = key(pos), cached = landings.get(cellKey)
+    if (cached !== undefined) return cached
+    const result = supported(pos) || isSwimmingCell(map, pos) || getDigTerrainMultiplier(map, pos, caps) > 0 || hasClimbSupport(map, pos, caps, destroyed)
+    landings.set(cellKey, result)
+    return result
+  }
+  // Advanced Jumper retains distinct launch positions. The terrain result for an
+  // edge depends only on whether jumping is active and whether its endpoint is
+  // inside the launch bounds, so those states can share the expensive edge check.
+  const jumpEdges = caps.jumpHeight !== caps.jumpRange ? new Map<string, boolean>() : null
   return {
+    reuseNeighbors: !!jumpEdges,
     initial: supported(origin) ? origin : null,
     // When height and length match, total distance already bounds horizontal
     // range. Launches at the same height then have identical continuations.
@@ -369,11 +408,19 @@ export function createJumpTraversal(
       // the Swimmer quality authorises a new launch from the current cell.
       const launch = supported(from) ? from : state
       const activeCaps = launch ? caps : noJump
-      if (!canPassThrough(from, to, activeCaps, map, destroyed, launch ?? from)) return null
       const cost = costProfile.stepCost(from, to, map, spent, launch)
       if (!Number.isFinite(cost)) return null
-      const landed = supported(to) || isSwimmingCell(map, to) || getDigTerrainMultiplier(map, to, caps) > 0 || hasClimbSupport(map, to, caps, destroyed)
-      return { cost, state: landed ? null : launch }
+      let passable: boolean
+      if (jumpEdges) {
+        const withinJump = !!launch && to.y >= launch.y && to.y - launch.y <= caps.jumpHeight
+          && Math.max(Math.abs(to.x - launch.x), Math.abs(to.z - launch.z)) <= caps.jumpRange
+        const edgeKey = `${key(from)}|${to.x - from.x},${to.y - from.y},${to.z - from.z}|${Number(!!launch)},${Number(withinJump)}`
+        const cached = jumpEdges.get(edgeKey)
+        passable = cached ?? canPassThrough(from, to, activeCaps, map, destroyed, launch ?? from)
+        if (cached === undefined) jumpEdges.set(edgeKey, passable)
+      } else passable = canPassThrough(from, to, activeCaps, map, destroyed, launch ?? from)
+      if (!passable) return null
+      return { cost, state: landedAt(to) ? null : launch }
     },
   }
 }
@@ -411,6 +458,16 @@ export function hasSolidStairSupport(map: GameMap, pos: Vec3): boolean {
 
 // Walking may end just beyond an edge, but cannot continue out into open air.
 export function isAdjacentToFooting(pos: Vec3, map: GameMap, dims: FootprintDims = { width: 1, height: 1, depth: 1 }): boolean {
+  const cache = getMovementMapIndex(map)?.adjacentFooting
+  if (!cache) return adjacentFooting(pos, map, dims)
+  const cellKey = `${key(pos)}|${dims.width},${dims.depth}`, cached = cache.get(cellKey)
+  if (cached !== undefined) return cached
+  const result = adjacentFooting(pos, map, dims)
+  cache.set(cellKey, result)
+  return result
+}
+
+function adjacentFooting(pos: Vec3, map: GameMap, dims: FootprintDims): boolean {
   for (let dx = -1; dx <= dims.width; dx++) {
     for (let dz = -1; dz <= dims.depth; dz++) {
       if (!dx && !dz) continue
@@ -538,6 +595,17 @@ export function canPassThrough(
 // Airborne jump landings are measured from the move's origin in both height and horizontal range.
 // Jump destinations cannot be below their launch point; descending further requires a fall.
 export function canStartJump(origin: Vec3, map: GameMap, caps: MovementCapabilities): boolean {
+  const cache = getMovementMapIndex(map)?.jumpSupport
+  if (!cache) return jumpSupport(origin, map, caps)
+  const cellKey = `${key(origin)}|${caps.footprint?.width ?? 1},${caps.footprint?.depth ?? 1}|${Number(!!caps.canJumpFromWater)}`
+  const cached = cache.get(cellKey)
+  if (cached !== undefined) return cached
+  const result = jumpSupport(origin, map, caps)
+  cache.set(cellKey, result)
+  return result
+}
+
+function jumpSupport(origin: Vec3, map: GameMap, caps: MovementCapabilities): boolean {
   const dims = caps.footprint
   if (dims && (dims.width > 1 || dims.depth > 1)) {
     const singleCell = { ...caps, footprint: undefined }
@@ -767,6 +835,16 @@ export function computeFallDamage(
 
 // A footprint is airborne when every cell of its base (bottom) layer sits in air (no support below).
 export function isFootprintAirborne(anchor: Vec3, dims: FootprintDims, map: GameMap, waterSupports = false): boolean {
+  const cache = getMovementMapIndex(map)?.airborne
+  if (!cache) return footprintAirborne(anchor, dims, map, waterSupports)
+  const cellKey = `${key(anchor)}|${dims.width},${dims.depth}|${Number(waterSupports)}`, cached = cache.get(cellKey)
+  if (cached !== undefined) return cached
+  const result = footprintAirborne(anchor, dims, map, waterSupports)
+  cache.set(cellKey, result)
+  return result
+}
+
+function footprintAirborne(anchor: Vec3, dims: FootprintDims, map: GameMap, waterSupports: boolean): boolean {
   for (let dx = 0; dx < dims.width; dx++)
     for (let dz = 0; dz < dims.depth; dz++)
       if (!isPositionInAir({ x: anchor.x + dx, y: anchor.y, z: anchor.z + dz }, map, waterSupports)) return false

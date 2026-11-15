@@ -186,6 +186,7 @@ export interface ReachableSearch {
 
 export interface StatefulTraversal<State> {
   initial: State
+  reuseNeighbors?: boolean
   key: (state: State) => string
   step: (from: Vec3, to: Vec3, spent: number, state: State) => { cost: number; state: State } | null
 }
@@ -193,29 +194,44 @@ export interface StatefulTraversal<State> {
 /** Different launch points at one airborne cell can have different legal continuations. */
 export function searchReachableWithState<State>(
   origin: Vec3, budget: number, traversal: StatefulTraversal<State>,
+  goal?: Vec3, canFinish?: (position: Vec3, state: State) => boolean,
 ): ReachableSearch & { stateTo: (goal: Vec3) => State | undefined } {
   type Node = WeightedNode & { state: State; stateKey: string; parent?: Node }
   const nodeKey = (pos: Vec3, state: State) => `${key(pos)}|${traversal.key(state)}`
-  const initial: Node = { pos: origin, state: traversal.initial, stateKey: nodeKey(origin, traversal.initial), cost: 0, verticalSteps: 0, diagonalSteps: 0, priority: 0, order: 0 }
+  const goalKey = goal ? key(goal) : undefined
+  const initial: Node = { pos: origin, state: traversal.initial, stateKey: nodeKey(origin, traversal.initial), cost: 0, verticalSteps: 0, diagonalSteps: 0, priority: goal ? chebyshev(origin, goal) : 0, order: 0 }
   const scores = new Map<string, SearchScore>([[initial.stateKey, initial]])
   const best = new Map<string, Node>([[key(origin), initial]])
   const queue = new SearchHeap()
   queue.push(initial)
   let order = 1
+  const adjacent = traversal.reuseNeighbors ? new Map<string, Vec3[]>() : null
   while (queue.size) {
     const current = queue.pop()! as Node
     const score = scores.get(current.stateKey)
-    if (!score || current.cost !== score.cost || current.verticalSteps !== score.verticalSteps || current.diagonalSteps !== score.diagonalSteps || current.cost >= budget - COST_EPSILON) continue
-    for (const pos of neighbours(current.pos)) {
+    if (!score || current.cost !== score.cost || current.verticalSteps !== score.verticalSteps || current.diagonalSteps !== score.diagonalSteps) continue
+    if (goalKey === key(current.pos) && (!canFinish || canFinish(current.pos, current.state))) {
+      best.set(goalKey, current)
+      break
+    }
+    if (current.cost >= budget - COST_EPSILON) continue
+    let nextCells: Vec3[]
+    if (adjacent) {
+      const cellKey = key(current.pos)
+      nextCells = adjacent.get(cellKey) ?? neighbours(current.pos)
+      adjacent.set(cellKey, nextCells)
+    } else nextCells = neighbours(current.pos)
+    for (const pos of nextCells) {
       const edge = traversal.step(current.pos, pos, current.cost, current.state)
       if (!edge || !Number.isFinite(edge.cost) || edge.cost < 1) continue
       const cost = current.cost + edge.cost
-      if (cost > budget + COST_EPSILON) continue
+      const priority = cost + (goal ? chebyshev(pos, goal) : 0)
+      if (priority > budget + COST_EPSILON) continue
       const verticalSteps = current.verticalSteps + Math.abs(pos.y - current.pos.y)
       const diagonalSteps = current.diagonalSteps + diagonalStep(current.pos, pos)
       const stateKey = nodeKey(pos, edge.state)
       if (!improvesScore(cost, verticalSteps, diagonalSteps, scores.get(stateKey))) continue
-      const next: Node = { pos, state: edge.state, stateKey, cost, verticalSteps, diagonalSteps, priority: cost, order: order++, parent: current }
+      const next: Node = { pos, state: edge.state, stateKey, cost, verticalSteps, diagonalSteps, priority, order: order++, parent: current }
       scores.set(stateKey, next)
       if (improvesScore(cost, verticalSteps, diagonalSteps, best.get(key(pos)))) best.set(key(pos), next)
       queue.push(next)
@@ -240,6 +256,7 @@ export function searchReachable(
   budget: number,
   canPass: (from: Vec3, to: Vec3) => boolean,
   stepCost?: MovementStepCost,
+  stopAt?: (position: Vec3) => boolean,
 ): ReachableSearch {
   if (stepCost) {
     const visited = new Map<string, SearchScore>([[key(origin), { cost: 0, verticalSteps: 0, diagonalSteps: 0 }]])
@@ -250,6 +267,7 @@ export function searchReachable(
     while (queue.size) {
       const current = queue.pop()!
       if (!currentScore(current, visited)) continue
+      if (stopAt?.(current.pos)) break
       if (current.cost >= budget - COST_EPSILON) continue
       for (const nb of neighbours(current.pos)) {
         if (!canPass(current.pos, nb)) continue
@@ -274,6 +292,7 @@ export function searchReachable(
   const queue: Array<{ pos: Vec3; cost: number }> = [{ pos: origin, cost: 0 }]
   for (let head = 0; head < queue.length; head++) {
     const { pos, cost } = queue[head]
+    if (stopAt?.(pos)) break
     if (cost >= budget) continue
     const verticalSteps = visited.get(key(pos))!.verticalSteps
     for (const nb of neighbours(pos)) {

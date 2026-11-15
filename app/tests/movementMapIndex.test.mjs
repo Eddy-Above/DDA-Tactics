@@ -111,3 +111,26 @@ test('indexed water, digging, stairs and neighbour supports match direct geometr
     }
   }
 })
+
+test('support caches distinguish swimmer permissions and footprint sizes and expire with the search view', () => {
+  const map = emptyMap()
+  map.voxels.push({ ...point(), materialId: 'water' })
+  map.groundTiles.push(point(2, 1))
+  const view = rules.createMovementMapView(map), index = getMovementMapIndex(view)
+  const small = { width: 1, height: 1, depth: 1 }, large = { width: 2, height: 2, depth: 2 }
+  let reads = 0
+  const get = index.voxels.get.bind(index.voxels)
+  index.voxels.get = cell => { reads++; return get(cell) }
+  const caps = { ...walking, canJump: true, footprint: small, canJumpFromWater: true }
+  assert.equal(rules.canStartJump(point(), view, caps), true)
+  const warmed = reads
+  for (let i = 0; i < 100; i++) assert.equal(rules.canStartJump(point(), view, caps), true)
+  assert.equal(reads, warmed, 'repeated launch checks do not rescan terrain')
+  assert.equal(rules.canStartJump(point(), view, { ...caps, canJumpFromWater: false }), false)
+  for (const dims of [small, large]) for (const waterSupports of [false, true]) {
+    assert.equal(rules.isFootprintAirborne(point(1, 1), dims, view, waterSupports), rules.isFootprintAirborne(point(1, 1), dims, map, waterSupports))
+    assert.equal(rules.isAdjacentToFooting(point(1, 1), view, dims), rules.isAdjacentToFooting(point(1, 1), map, dims))
+  }
+  map.voxels[0] = { ...point(), materialId: 'steel' }
+  assert.equal(rules.canStartJump(point(), rules.createMovementMapView(map), caps), false)
+})

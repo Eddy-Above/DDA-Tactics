@@ -1,7 +1,13 @@
 import type { GameMap, Vec3, MapGroundTile, MapSpaceTile, MapVoxel, MapStair, MapWall, MapCeiling, MapDoor } from '~/types'
 
 interface MovementMapIndex {
+  minimumSupportY: number
   footprintTerrain: Map<string, number>
+  water: Map<string, boolean>
+  swimming: Map<string, boolean>
+  jumpSupport: Map<string, boolean>
+  adjacentFooting: Map<string, boolean>
+  airborne: Map<string, boolean>
   ground: ReadonlyMap<string, MapGroundTile>
   space: ReadonlyMap<string, MapSpaceTile>
   voxels: ReadonlyMap<string, MapVoxel>
@@ -40,9 +46,12 @@ export function createMovementMapView(map: GameMap): GameMap {
   if (searchIndexes.has(map)) return map
   const view = { ...map }
   const doors = new Map<string, MapDoor>()
+  const minimumSupportY = getMinimumSupportY(map)
   for (const door of map.doors ?? []) if (!doors.has(door.wallId)) doors.set(door.wallId, door)
   searchIndexes.set(view, {
+    minimumSupportY,
     footprintTerrain: new Map(),
+    water: new Map(), swimming: new Map(), jumpSupport: new Map(), adjacentFooting: new Map(), airborne: new Map(),
     ground: firstByCell(map.groundTiles ?? []),
     space: firstByCell(map.spaceTiles ?? []),
     voxels: firstByCell(map.voxels ?? []),
@@ -56,4 +65,15 @@ export function createMovementMapView(map: GameMap): GameMap {
 
 export function getMovementMapIndex(map: GameMap): MovementMapIndex | undefined {
   return searchIndexes.get(map)
+}
+
+/** Conservative lower bound for every dry or water launch surface on this snapshot. */
+export function getMinimumSupportY(map: GameMap): number {
+  const index = searchIndexes.get(map)
+  if (index) return index.minimumSupportY
+  let minimum = Infinity
+  for (const layer of [map.groundTiles, map.spaceTiles, map.voxels, map.stairs]) {
+    for (const cell of layer ?? []) minimum = Math.min(minimum, cell.y ?? 0)
+  }
+  return minimum
 }
