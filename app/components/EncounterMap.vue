@@ -22,6 +22,7 @@
       <ClientOnly>
         <MapCanvas
           ref="builderCanvas"
+          :view-controls-target="!isDm && !editorMode ? playerViewControls : null"
           v-if="displayMap && displayMap.id === encounter.mapId"
           :map="displayMap"
           :participants="liveParticipants"
@@ -57,6 +58,7 @@
           :attacker-effective-limit="attackerStats.effectiveLimit"
           :attacker-melee-range="attackerStats.meleeRange"
           :attacker-caps="attackerCaps"
+          :movement-attack-stats="movementAttackStats"
           :reachable-cells="movement.reachableCells.value"
           :active-path="movement.activePath.value"
           :placing-participant-id="selectedId"
@@ -106,7 +108,7 @@
       </ClientOnly>
 
       <!-- Overlay: Battle Log (right side) -->
-      <div v-if="!editorMode" class="overlay overlay-right">
+      <div v-if="!editorMode" class="overlay" :class="isDm ? 'overlay-right' : 'overlay-player-right'">
         <MapBattleLog
           :participant-names="participantNames"
           :battle-log="encounter.battleLog"
@@ -115,6 +117,15 @@
           :battle-log-total="encounter._battleLogTotal"
           :battle-log-was-trimmed="encounter._battleLogWasTrimmed"
         />
+        <template v-if="!isDm">
+          <div class="player-map-tools">
+            <div ref="playerViewControls" data-map-view-controls-host />
+            <slot name="player-tools" />
+          </div>
+          <div class="player-map-actions">
+            <slot name="combat-controls" />
+          </div>
+        </template>
       </div>
 
       <!-- Overlay: Player HUD (bottom-left). Also the placement control: while placement is active
@@ -139,7 +150,7 @@
       </div>
 
       <!-- Overlay: Combat controls slot (bottom-right) -->
-      <div class="overlay overlay-bottom-right">
+      <div v-if="isDm || editorMode" class="overlay overlay-bottom-right">
         <slot name="combat-controls" />
       </div>
 
@@ -203,6 +214,7 @@ const props = defineProps<{
   digimonMap: Record<string, {
     name: string; spriteUrl?: string | null; currentWounds: number
     woundBoxes: number; size: any; stage: any; baseStats: any; qualities: any[]
+    attacks?: Array<{ range: 'melee' | 'ranged' }>
     movement?: number
     baseMovement?: number
     ram?: number
@@ -342,6 +354,7 @@ ws.onMessage((msg) => {
 // ── Editor ─────────────────────────────────────────────────────────────────
 const editor = useMapEditor(map)
 const builderCanvas = ref<{ cameraAction: (action: string) => void; focusParticipant: (participantId: string) => void } | null>(null)
+const playerViewControls = ref<HTMLElement | null>(null)
 onMounted(() => editor.loadStamps())
 let lastQueuedRevision = 0
 const autosave = useMapAutosave({
@@ -466,6 +479,19 @@ const attackerStats = computed(() => {
     effectiveLimit: derived.effectiveLimit,
     meleeRange: reachRanks > 0 ? reachRanks * 2 : 1,
   }
+})
+
+const movementAttackStats = computed(() => {
+  const id = npcMoveParticipantId.value ?? chargeMoveParticipantId.value
+    ?? (chargeMode.value === 'before' ? props.selectedAttack?.attackerParticipantId : null)
+  const participant = props.encounter.participants.find(p => p.id === id)
+  if (participant?.type !== 'digimon') return null
+  const d = props.digimonMap[participant.entityId]
+  if (!d) return null
+  const derived = applyDerivedStatEffects(calculateDigimonDerivedStats(d.baseStats, d.stage, d.size), participant.activeEffects ?? [])
+  const reach = d.qualities.find(q => q.id === 'reach')?.ranks ?? 0
+  return { range: derived.range, effectiveLimit: derived.effectiveLimit, meleeRange: Math.max(1, reach * 2),
+    hasRanged: d.attacks?.some(attack => attack.range === 'ranged') ?? false }
 })
 
 // Movement capabilities of the current attacker, for [Pass] landing validation in MapCanvas.
@@ -1272,5 +1298,22 @@ defineExpose({ startThrowAim, cancelThrowAim, startThrowAllyAim, cancelThrowAlly
 .overlay-right      { top: 10px; right: 10px; bottom: var(--overlay-bottom, 10px); display: flex; flex-direction: column; justify-content: flex-start; }
 .overlay-bottom-left  { bottom: var(--overlay-bottom, 10px); left: 10px; }
 .overlay-bottom-right { bottom: var(--overlay-bottom, 10px); right: 10px; }
+.overlay-player-right {
+  top: 10px; right: 10px; bottom: var(--overlay-bottom, 10px);
+  width: min(300px, calc(100% - 20px));
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.overlay-player-right > * { pointer-events: auto; }
+.overlay-player-right :deep(.battle-log-panel) { width: 100%; max-height: 40%; min-height: 0; flex-shrink: 1; }
+.player-map-tools { margin-top: auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.player-map-tools > * { flex-shrink: 0; }
+.player-map-actions { flex-shrink: 0; }
+.player-map-actions :deep(> div) { justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .overlay-player-right { width: calc(50% - 15px); }
+  .overlay-bottom-left { max-width: calc(50% - 15px); }
+  .overlay-bottom-left :deep(.player-hud) { max-width: 100%; }
+}
 .overlay-property   { top: 50%; right: 10px; transform: translateY(-50%); }
 </style>

@@ -29,19 +29,19 @@ async function descriptor(filename) {
   assert.deepEqual(result.errors, [])
   return result.descriptor
 }
-async function component(filename, context, scope) {
+async function component(filename, context, scope, templateSource) {
   const { template, styles } = await descriptor(filename)
   for (const style of styles) {
     const compiled = compileStyle({ source: style.content, filename, id: scope, scoped: style.scoped })
     assert.deepEqual(compiled.errors, [])
     css += compiled.code
   }
-  const compiled = compileTemplate({ source: template.content, filename, id: scope, scoped: true })
+  const compiled = compileTemplate({ source: templateSource ?? template.content, filename, id: scope, scoped: true })
   assert.deepEqual(compiled.errors, [])
   const module = { exports: {} }
   const code = ts.transpileModule(compiled.code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
   new Function('require', 'module', 'exports', code)(name => { assert.equal(name, 'vue'); return Vue }, module, module.exports)
-  return { __scopeId: scope, render() { return module.exports.render(context(), []) } }
+  return { __scopeId: scope, render() { const ctx = context(); ctx.$slots = this.$slots; return module.exports.render(ctx, []) } }
 }
 function mapContext(editorMode, isDm = true) {
   const encounter = { id: 'fixture', phase: 'setup', mapId: 'map', participants: [], battleLog: [], destructibleStates: [] }
@@ -49,7 +49,7 @@ function mapContext(editorMode, isDm = true) {
   const editor = loadTypeScript('composables/useMapEditor.ts').useMapEditor(Vue.shallowRef(map))
   const value = {
     editorMode, props: { editorMode, encounter }, encounter, isDm, bottomOverlayOffset: null, $slots: {},
-    map, liveParticipants: [],
+    map, displayMap: map, displayPositions: {}, placementPreviews: {}, placementError: null, playerViewControls: null, liveParticipants: [],
     ws: { accessError: { value: 'Campaign access has changed. Verify access and reload to reconnect.' } },
     saveStatus: 'Saved', autosave: { status: { value: 'saved' }, error: { value: null } },
     editor,
@@ -77,7 +77,20 @@ const playerView = await component('components/EncounterMap.vue', () => mapConte
 const editorView = await component('components/EncounterMap.vue', () => mapContext(true), 'data-v-map-layout')
 const canvasDescriptor = await descriptor('components/MapCanvas.vue')
 css += compileStyle({ source: canvasDescriptor.styles[0].content, filename: 'MapCanvas.vue', id: 'data-v-canvas-layout', scoped: true }).code
-const canvas = { __scopeId: 'data-v-canvas-layout', render: () => Vue.h('div', { class: 'map-canvas-container' }, Vue.h('canvas', { class: 'map-canvas' })) }
+const controlsMarkup = canvasDescriptor.template.content.slice(canvasDescriptor.template.content.indexOf('<div class="map-view-controls"'), canvasDescriptor.template.content.indexOf('</Teleport>'))
+const viewControls = await component('components/MapCanvas.vue', () => ({ viewControlsTarget: null, isDm: false, cameraAction() {}, ghostWalls: false, clipY: 20, aimedMoveParticipantId: null }), 'data-v-canvas-layout', controlsMarkup)
+const canvas = { __scopeId: 'data-v-canvas-layout', render: () => Vue.h('div', { class: 'map-canvas-container' }, [Vue.h('canvas', { class: 'map-canvas' }), Vue.h(viewControls)]) }
+for (const [filename, scope] of [['components/MapPlayerHUD.vue', 'data-v-hud-layout'], ['components/MapBattleLog.vue', 'data-v-log-layout']]) {
+  for (const style of (await descriptor(filename)).styles) css += compileStyle({ source: style.content, filename, id: scope, scoped: true }).code
+}
+const inspiration = await component('components/InspirationPanel.vue', () => ({ minimized: false, minimizable: true, currentInspiration: 2, maxInspiration: 7, actOfInspirationCost: 4, fatefulInterventionCost: 7, loading: false }), 'data-v-inspiration-layout')
+function findSlot(tree, name) {
+  if (tree.type === 1 && tree.tag === 'template' && tree.props.some(prop => prop.type === 7 && prop.name === 'slot' && prop.arg?.content === name)) return tree.loc.source.replace(/^<template[^>]*>/, '').replace(/<\/template>$/, '')
+  for (const child of tree.children ?? []) { const found = findSlot(child, name); if (found) return found }
+}
+const playerPageDescriptor = await descriptor('pages/campaigns/[campaignId]/player/[tamerId].vue')
+const playerTools = await component('pages/campaigns/[campaignId]/player/[tamerId].vue', () => ({ presentedEncounter: { phase: 'combat' }, myTamerParticipant: true, currentCombatInspiration: 2, maxCombatInspiration: 7, actOfInspirationCost: 4, fatefulInterventionCost: 7, inspirationSpendLoading: false }), 'data-v-player-layout', findSlot(playerPageDescriptor.template.ast, 'player-tools'))
+const playerActions = await component('pages/campaigns/[campaignId]/player/[tamerId].vue', () => ({ isMyTurn: true, presentedEncounter: { phase: 'combat' }, endingTurn: false, isPassingOnIntercede: false, myTamerParticipant: true }), 'data-v-player-layout', findSlot(playerPageDescriptor.template.ast, 'combat-controls'))
 const editorPage = await component('pages/campaigns/[campaignId]/library/maps/[mapId].vue', () => ({
   campaignId: 'campaign', mapData: { name: 'Layout fixture', dimensions: { width: 10, depth: 10 } }, fakeEncounter: {},
 }), 'data-v-editor-layout')
@@ -87,8 +100,10 @@ async function render(root, mapComponent) {
   app.component('MapToolbar', toolbar)
   app.component('ClientOnly', { setup: (_props, { slots }) => () => slots.default?.() })
   app.component('MapCanvas', canvas)
-  app.component('MapPlayerHUD', { render: () => Vue.h('div', { class: 'hud-fixture' }, 'All Participants') })
-  app.component('MapBattleLog', { render: () => null })
+  app.component('MapPlayerHUD', { __scopeId: 'data-v-hud-layout', render: () => Vue.h('div', { class: 'hud-fixture player-hud', style: 'height:220px' }, 'My Characters') })
+  app.component('InspirationPanel', inspiration)
+  app.component('IntercedePassNotice', { render: () => null })
+  app.component('MapBattleLog', { __scopeId: 'data-v-log-layout', render: () => Vue.h('div', { class: 'battle-log-panel', style: 'height:420px' }, 'Battle Log') })
   app.component('MapPropertyPanel', { render: () => null })
   app.component('NuxtLink', { props: ['to'], setup: (props, { slots }) => () => Vue.h('a', { href: props.to }, slots.default?.()) })
   return renderToString(app)
@@ -101,7 +116,7 @@ for (const [name, filename] of [
   const host = overlayHost((await descriptor(filename)).template.ast)
   assert.ok(host, `Missing actual ${name} map overlay host`)
   const view = name === 'player' ? playerView : mapView
-  const wrapper = { render: () => Vue.h('div', host, Vue.h(view)) }
+  const wrapper = { render: () => Vue.h('div', host, Vue.h(view, {}, name === 'player' ? { 'player-tools': () => Vue.h(playerTools), 'combat-controls': () => Vue.h(playerActions) } : {})) }
   html += `<section id="${name}">${await render(wrapper, view)}</section>`
 }
 if (previousComputed === undefined) delete globalThis.computed
@@ -112,6 +127,10 @@ css = utilities.css + css
 const probe = `
 const close=(a,b)=>Math.abs(a-b)<1.5;
 const checks=[];
+// Mirror Vue Teleport placement in this static, non-hydrated CSS fixture.
+const playerDock=document.querySelector('#player .player-map-tools');
+const playerControls=document.querySelector('#player .map-view-controls');
+playerDock.querySelector('[data-map-view-controls-host]').append(playerControls);playerControls.classList.add('docked');
 for(const name of ['editor','gm','player']){
  const host=document.querySelector('#'+name+' > div');
  const root=host.matches('.encounter-map-root')?host:host.querySelector('.encounter-map-root');
@@ -121,7 +140,9 @@ for(const name of ['editor','gm','player']){
  const parent=box(root.parentElement),drawing=box(canvas.querySelector('canvas'));
  const controls=[a,t,s,c].filter(Boolean);
  const ordered=controls.every((b,i)=>i===0||controls[i-1].bottom<=b.top+1);
- checks.push({name,pass:getComputedStyle(root).flexDirection==='column'&&ordered&&c.height>100&&close(r.width,parent.width)&&close(r.height,parent.height)&&close(c.bottom,r.bottom)&&close(h.bottom,innerHeight)&&close(drawing.width,c.width)&&close(drawing.height,c.height)&&(name!=='player'||close(r.top,56)&&!toolbar&&!status)&&(name!=='editor'||!root.querySelector('.hud-fixture')),host:h,root:r,alert:a,toolbar:t,status:s,canvas:c,drawing,parent});
+ const hud=box(root.querySelector('.overlay-bottom-left')),dock=box(root.querySelector('.overlay-player-right')),actions=box(root.querySelector('.player-map-actions')),tools=box(root.querySelector('.player-map-tools')),viewControls=box(root.querySelector('.map-view-controls'));
+ const playerPass=name!=='player'||close(hud.bottom,c.bottom-10)&&close(hud.left,c.left+10)&&close(actions.bottom,c.bottom-10)&&close(actions.right,c.right-10)&&hud.right<=dock.left&&Math.min(viewControls.bottom,tools.bottom)<=actions.top&&tools.bottom<=actions.top;
+ checks.push({name,pass:playerPass&&getComputedStyle(root).flexDirection==='column'&&ordered&&c.height>100&&close(r.width,parent.width)&&close(r.height,parent.height)&&close(c.bottom,r.bottom)&&close(h.bottom,innerHeight)&&close(drawing.width,c.width)&&close(drawing.height,c.height)&&(name!=='player'||close(r.top,56)&&!toolbar&&!status)&&(name!=='editor'||!root.querySelector('.hud-fixture')),host:h,root:r,alert:a,toolbar:t,status:s,canvas:c,drawing,parent,hud,dock,actions,tools,viewControls,playerPass});
 }
 document.getElementById('layout-results').textContent=JSON.stringify({viewport:{width:innerWidth,height:innerHeight},checks});
 `
@@ -141,7 +162,7 @@ try {
   console.log(JSON.stringify({ scope: 'actual rendered/static templates and scoped CSS; Vue hydration/WebGL/network excluded',
     results: results.map(({ viewport, checks }) => ({ viewport, checks: checks.map(check => ({ name: check.name, pass: check.pass,
       rootTop: check.root.top, rootHeight: check.root.height, toolbarHeight: check.toolbar?.height ?? null,
-      canvasWidth: check.canvas.width, canvasHeight: check.canvas.height })) })) }, null, 2))
+      canvasWidth: check.canvas.width, canvasHeight: check.canvas.height, ...(check.name === 'player' ? {hudBottom:check.hud.bottom,actionsBottom:check.actions.bottom,canvasBottom:check.canvas.bottom} : {}) })) })) }, null, 2))
   if (results.some(result => result.checks.some(check => !check.pass))) console.error(JSON.stringify(results, null, 2))
   assert.ok(results.every(result => result.checks.every(check => check.pass)), 'Map toolbar/status/canvas must stack and fill each actual host')
   assert.ok(results[1].checks.find(check => check.name === 'editor').toolbar.height > results[0].checks.find(check => check.name === 'editor').toolbar.height,

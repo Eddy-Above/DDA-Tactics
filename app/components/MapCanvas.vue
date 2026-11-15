@@ -10,18 +10,20 @@
     <canvas ref="canvasRef" class="map-canvas" :class="{ 'pan-cursor': spacePanning }" />
     <div v-if="editorHint && isDm && !spacePanning" class="builder-cursor-hint" :class="{invalid:editorHint.invalid}" :style="{left:editorHint.x+'px',top:editorHint.y+'px'}">{{ editorHint.text }}</div>
     <!-- Y-clip + ghost walls controls -->
-    <div class="map-view-controls">
-      <div class="map-view-row"><button @click="cameraAction('fit')">Fit map</button><button v-if="isDm" :disabled="!selection" @click="cameraAction('focus')">Focus selection</button><button @click="cameraAction('top')">Top down</button></div>
-      <div class="map-view-row"><span>Isometric</span><button v-for="corner in [0,1,2,3]" :key="corner" :title="'Isometric corner '+(corner+1)" @click="cameraAction('corner-'+corner)">{{ corner+1 }}</button></div>
-      <div class="map-view-row">
-        <span>Y-clip</span>
-        <input type="number" v-model.number="clipY" step="1" class="clip-input" />
+    <Teleport :to="viewControlsTarget ?? 'body'" :disabled="!viewControlsTarget">
+      <div class="map-view-controls" :class="{ docked: !!viewControlsTarget }">
+        <div class="map-view-row"><button @click="cameraAction('fit')">Fit map</button><button v-if="isDm" :disabled="!selection" @click="cameraAction('focus')">Focus selection</button><button @click="cameraAction('top')">Top down</button></div>
+        <div class="map-view-row"><span>Isometric</span><button v-for="corner in [0,1,2,3]" :key="corner" :title="'Isometric corner '+(corner+1)" @click="cameraAction('corner-'+corner)">{{ corner+1 }}</button></div>
+        <div class="map-view-row">
+          <span>Y-clip</span>
+          <input type="number" v-model.number="clipY" step="1" class="clip-input" />
+        </div>
+        <button :class="{ active: ghostWalls }" @click="ghostWalls = !ghostWalls">Ghost Walls</button>
+        <div v-if="aimedMoveParticipantId" class="map-view-row" title="Scroll to change movement height">
+          <span>Move Y</span><span>{{ aimedMoveY }}</span>
+        </div>
       </div>
-      <button :class="{ active: ghostWalls }" @click="ghostWalls = !ghostWalls">Ghost Walls</button>
-      <div v-if="aimedMoveParticipantId" class="map-view-row" title="Scroll to change movement height">
-        <span>Move Y</span><span>{{ aimedMoveY }}</span>
-      </div>
-    </div>
+    </Teleport>
     <!-- Click-to-show health bar (client-local) -->
     <div
       v-if="clickedHealthBar"
@@ -185,6 +187,8 @@ const props = defineProps<{
   selectableParticipantIds?: string[]
   eddySoulRules?: EddySoulRules
   radialOptions?: Record<string, MapRadialOptions>
+  viewControlsTarget?: HTMLElement | null
+  movementAttackStats?: { range: number; effectiveLimit: number; meleeRange: number; hasRanged: boolean } | null
 }>()
 
 const emit = defineEmits<{
@@ -1594,12 +1598,17 @@ function updatePathHighlights() {
 
 let lastAttackKey = ''
 function updateReticules() {
-  const aoeActive = areaHighlightCells.value.length > 0
-  const attackerPos = effectiveAttackerId.value ? props.participantPositions[effectiveAttackerId.value] : null
+  const aim = getMoveAim()
+  const preview = aim && !aim.isGm && movementGhost.value?.valid && props.movementAttackStats ? movementGhost.value : null
+  const stats = preview ? props.movementAttackStats! : null
+  const attackerId = preview?.participantId ?? effectiveAttackerId.value
+  const aoeActive = !preview && areaHighlightCells.value.length > 0
+  const attackerPos = preview?.cell ?? (attackerId ? props.participantPositions[attackerId] : null)
   const attackerPosKey = attackerPos ? `${attackerPos.x},${attackerPos.y},${attackerPos.z}` : 'none'
   const key = [
     props.selectedAttack ? JSON.stringify(props.selectedAttack) : '',
-    effectiveAttackerId.value ?? '',
+    attackerId ?? '',
+    JSON.stringify(stats),
     attackerPosKey,
     props.attackerEffectiveLimit,
     props.attackerRange,
@@ -1615,32 +1624,33 @@ function updateReticules() {
   clearMapGroup(reticuleGroup)
   const ids: string[] = []
 
-  if (props.chargeMode === 'before') {
+  if (props.chargeMode === 'before' && !preview) {
     reticuleParticipantIds.value = []
     return
   }
 
-  if (!props.selectedAttack || !attackerPos) {
+  if ((!props.selectedAttack && !preview) || !attackerPos) {
     reticuleParticipantIds.value = props.selectableParticipantIds?.slice() ?? []
     return
   }
 
-  const isMelee = props.selectedAttack.range === 'melee' || props.selectedAttack.chargeMode === 'before'
-  const maxDist = isMelee ? props.attackerMeleeRange : props.attackerEffectiveLimit
-  const isAreaAttack = props.selectedAttack.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false
-  const isMeleeSupportSingle = props.selectedAttack.type === 'support' && isMelee && !isAreaAttack
+  const isMelee = stats ? !stats.hasRanged : props.selectedAttack!.range === 'melee' || props.selectedAttack!.chargeMode === 'before'
+  const meleeRange = stats?.meleeRange ?? props.attackerMeleeRange
+  const maxDist = isMelee ? meleeRange : stats?.effectiveLimit ?? props.attackerEffectiveLimit
+  const isAreaAttack = !preview && (props.selectedAttack?.tags?.some((t: string) => t.startsWith('Area Attack')) ?? false)
+  const isMeleeSupportSingle = !preview && props.selectedAttack?.type === 'support' && isMelee && !isAreaAttack
 
   // When AOE is active or an area shape is being aimed, only show reticules on participants inside the highlighted area.
   // For area shapes (even when LoS-blocked), never fall back to single-target range check so no stray reticules appear.
-  const aoeCellSet = (aoeActive || isAreaTargeting.value)
+  const aoeCellSet = !preview && (aoeActive || isAreaTargeting.value)
     ? new Set(areaHighlightCells.value.map(c => `${c.x},${c.y},${c.z}`))
     : null
-  const attackerDims = getParticipantFootprintDims(effectiveAttackerId.value)
+  const attackerDims = getParticipantFootprintDims(attackerId)
 
   for (const p of props.participants) {
     const pos = props.participantPositions[p.id]
-    if (!pos) continue
-    if (p.id === effectiveAttackerId.value && !isMeleeSupportSingle) continue
+    if (!pos || p.inReserve) continue
+    if (p.id === attackerId && !isMeleeSupportSingle) continue
 
     if (aoeCellSet) {
       // Show reticule if ANY of the target's footprint cells is in the AOE (big targets count if partially covered)
@@ -1651,6 +1661,10 @@ function updateReticules() {
       const inRange = meleeInRange(attackerPos, pos, attackerDims, targetDims, maxDist)
       if (!inRange) continue
     } else {
+      if (preview && meleeInRange(attackerPos, pos, attackerDims, getParticipantFootprintDims(p.id), meleeRange)) {
+        ids.push(p.id)
+        continue
+      }
       // Ranged: 3D Euclidean distance from anchor to anchor, and some part of the target in view
       // (same blockers as area shapes: walls, floors, closed doors, all but water/air voxels)
       const dx = pos.x - attackerPos.x
@@ -1668,17 +1682,17 @@ function updateReticules() {
   reticuleParticipantIds.value = ids
 
   // Range rings on ground — for ranged single-target attacks AND area shapes (to show valid placement/reach zone)
-  if (!isMelee && (!aoeCellSet || isAreaTargeting.value)) {
+  if (preview || (!isMelee && (!aoeCellSet || isAreaTargeting.value))) {
     const addRing = (radius: number, color: number) => {
       const geo = new THREE.RingGeometry(radius - 0.05, radius + 0.05, 64)
       const mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.5 })
       const mesh = new THREE.Mesh(geo, mat)
       mesh.rotation.x = -Math.PI / 2
-      mesh.position.set(attackerPos.x + 0.5, attackerPos.y * TILE_SIZE + TILE_H + 0.015, attackerPos.z + 0.5)
+      mesh.position.set(attackerPos.x + (preview ? attackerDims.width / 2 : 0.5), attackerPos.y * TILE_SIZE + TILE_H + 0.015, attackerPos.z + (preview ? attackerDims.depth / 2 : 0.5))
       reticuleGroup.add(mesh)
     }
-    addRing(props.attackerRange, 0x00ff00)
-    addRing(props.attackerEffectiveLimit, 0xffaa00)
+    addRing(isMelee ? meleeRange : stats?.range ?? props.attackerRange, 0x00ff00)
+    if (!isMelee) addRing(maxDist, 0xffaa00)
   }
 }
 
@@ -2608,6 +2622,7 @@ function updateTargetHover(event: MouseEvent) {
 // Returns true if the target was selected (caller should stop further click handling).
 function tryReticuleTarget(participantId: string): boolean {
   if (!reticuleParticipantIds.value.includes(participantId)) return false
+  if (getMoveAim()) return false
   if (props.chargeMode === 'before') return false
   emit('target-selected', participantId)
   return true
@@ -3045,7 +3060,7 @@ watch([
   () => props.drawMode, () => props.brushSize, () => props.roundBrush, () => props.planeLock, () => props.stampTurns, () => props.stamp,
   () => props.chargeMode, () => props.chargeMoveParticipantId, () => props.npcMoveParticipantId,
   () => props.gmMoveParticipantId,
-  movingParticipantId, pendingMovePos, npcMoveY, gmMoveY, areaHighlightCells, radialParticipantId, participantChoice,
+  movingParticipantId, pendingMovePos, npcMoveY, gmMoveY, areaHighlightCells, radialParticipantId, participantChoice, movementGhost, () => props.movementAttackStats,
 ], invalidateFrame, { deep: true })
 
 // Snapshots recreate the entity maps even when only actions or the active turn changed.
@@ -3335,6 +3350,8 @@ defineExpose({ movingParticipantId, cameraAction, focusParticipant })
   z-index: 25;
   pointer-events: auto;
 }
+.map-view-controls.docked { position: static; }
+.map-view-controls.docked .map-view-row { flex-wrap: wrap; }
 .map-view-row {
   display: flex;
   align-items: center;

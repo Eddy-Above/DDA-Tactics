@@ -4853,7 +4853,6 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               ref="encounterMapRef"
               :encounter="presentedEncounter as any"
               :is-dm="false"
-              :bottom-overlay-offset="66"
               :my-tamer-id="tamerId"
               :tamer-map="tamerMapForMap"
               :digimon-map="digimonMapForMap"
@@ -4910,6 +4909,21 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
                     </div>
                   </div>
                 </div>
+              </template>
+              <template #player-tools>
+                <!-- Floating Inspiration panel — always available during combat in map view. Clicking
+                     "✦ Inspiration" minimises it to a ✦ n/m chip; no min-width, or the chip would stretch to it. -->
+                <InspirationPanel
+                  v-if="presentedEncounter?.phase === 'combat' && myTamerParticipant"
+                  minimizable
+                  class="shadow-xl"
+                  :current-inspiration="currentCombatInspiration"
+                  :max-inspiration="maxCombatInspiration"
+                  :act-of-inspiration-cost="actOfInspirationCost"
+                  :fateful-intervention-cost="fatefulInterventionCost"
+                  :loading="inspirationSpendLoading"
+                  @spend-inspiration="({ spendType, amount }) => spendFromPanel(spendType, amount)"
+                />
               </template>
               <template #combat-controls>
                 <div class="flex items-center gap-2">
@@ -5009,20 +5023,6 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
               </div>
               <button class="text-xs text-digimon-dark-500 hover:text-white" @click="onMapAttackCancelled">Cancel</button>
             </div>
-            <!-- Floating Inspiration panel — always available during combat in map view. Clicking
-                 "✦ Inspiration" minimises it to a ✦ n/m chip; no min-width, or the chip would stretch to it. -->
-            <InspirationPanel
-              v-if="presentedEncounter?.phase === 'combat' && myTamerParticipant"
-              minimizable
-              class="fixed z-50 shadow-xl max-h-[60vh] overflow-y-auto"
-              style="bottom: 120px; right: 16px; max-width: 380px;"
-              :current-inspiration="currentCombatInspiration"
-              :max-inspiration="maxCombatInspiration"
-              :act-of-inspiration-cost="actOfInspirationCost"
-              :fateful-intervention-cost="fatefulInterventionCost"
-              :loading="inspirationSpendLoading"
-              @spend-inspiration="({ spendType, amount }) => spendFromPanel(spendType, amount)"
-            />
             <!-- AOE intercede target picker — shown in place of full modal when map view is active -->
             <div
               v-if="hasIntercedeRequest && currentIntercedeRequest?.data?.isAreaAttack && !playerIntercedeAreaChosenTarget"

@@ -277,6 +277,7 @@ export function getMovementCostProfile(
         const ignoresPenalty = Number.isFinite(destination.dig) && caps.naturewalkElements?.some(element => environment.includes(element))
         return withinSpeed(digSpeed, spent, ignoresPenalty ? 1 : destination.dig)
       }
+      if (caps.canFly && flySpeed >= Math.max(landSpeed, climbSpeed, jumpSpeed)) return withinSpeed(flySpeed, spent)
       destination.walk ??= Boolean(getGroundTile(map, to)) || hasSolidVoxelSupport(map, to) || hasSolidStairSupport(map, to)
       const walking = (destination.walk || canStepOffPlatform(from, to, map)) && !(to.y > from.y && to.x === from.x && to.z === from.z)
       let speed = Math.max(walking ? landSpeed : 0, flySpeed)
@@ -314,6 +315,19 @@ export function createJumpTraversal(
   blocked: (position: Vec3) => boolean = () => false,
 ): StatefulTraversal<Vec3 | null> {
   const noJump = { ...caps, canJump: false }
+  // Flight already covers every jump edge in this case. Retaining a separate
+  // launch state for each platform multiplies identical airborne continuations.
+  if (caps.canFly && (caps.flySpeed ?? caps.movementSpeed ?? 0) >= Math.max(caps.jumpRange, caps.jumpHeight)) {
+    return {
+      initial: null,
+      key: () => '',
+      step: (from, to, spent) => {
+        if (blocked(to) || !canPassThrough(from, to, noJump, map, destroyed, origin)) return null
+        const cost = costProfile.stepCost(from, to, map, spent, null)
+        return Number.isFinite(cost) ? { cost, state: null } : null
+      },
+    }
+  }
   const supported = (pos: Vec3) => canStartJump(pos, map, caps)
   return {
     initial: supported(origin) ? origin : null,
@@ -436,6 +450,7 @@ export function canPassThrough(
   // Actual water requires swimming; its upper surface also permits ordinary flight/jumps.
   if (isWaterCell(map, to)) return caps.canSwim
   if (caps.canSwim && isSwimmingCell(map, to)) return true
+  if (caps.canFly && isWithinMapFootprint(map, to)) return true
   if (hasClimbSupport(map, to, caps, destroyedStructures)) return true
 
   const groundTile = getGroundTile(map, to)
@@ -522,6 +537,7 @@ export function canLandOn(
   if (digMultiplier > 0) return Number.isFinite(digMultiplier)
   if (isWaterCell(map, pos)) return caps.canSwim
   if (caps.canSwim && isSwimmingCell(map, pos)) return true
+  if (caps.canFly && isWithinMapFootprint(map, pos)) return true
   if (hasClimbSupport(map, pos, caps, destroyedStructures)) return true
 
   const groundTile = getGroundTile(map, pos)

@@ -50,6 +50,9 @@ test('client and server searches refresh their geometry after edits to the same 
   const map = emptyMap(), origin = point(0), movement = useMapMovement()
   const caps = { ...detectCapabilities([], 7, 0, 0, 4, 7), canJump: false, jumpHeight: 0, jumpRange: 0 }
   map.groundTiles = Array.from({ length: 9 }, (_, x) => ({ ...point(x), terrain: 'normal' }))
+  // Keep this a corridor: stepping beside a platform is now a legal alternative route.
+  map.walls = map.groundTiles.flatMap(tile => ['north', 'south'].map(face => ({ id: `${tile.x}-${face}`, ...tile, face })))
+  map.walls.push({ id: 'west-end', ...origin, face: 'west' })
   assert.ok(movement.computeReachable(origin, 7, caps, map).has(key(point(7))))
   assert.equal(movement.computePath(origin, point(7), caps, map).length - 1, 7)
 
