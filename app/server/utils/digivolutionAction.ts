@@ -2,9 +2,13 @@ import { invalidateCombatRecord } from './combatRecordCache'
 import { eq } from 'drizzle-orm'
 import { db, encounters, digimon, evolutionLines, tamers, type Digimon, type EvolutionLine, type Encounter } from '../db'
 import { STAGE_CONFIG } from '../../types'
-import type { DigimonStage } from '../../types'
+import type { DigimonStage, Vec3 } from '../../types'
 import { getDigizoidArmorBonus } from './digizoidArmor'
-import { getRoomPositions } from './encounterRoom'
+import { getRoomPositions, getRoomSnapshot, getDestroyedStructureIds, publishCommittedPositions } from './encounterRoom'
+import { loadEncounterMap, loadParticipantDigimon } from './combatSpatial'
+import { buildFootprintOccupiedSet } from './mapMovement'
+import { detectCapabilities, getFootprintDimensions } from '../../utils/movementRules'
+import { findExpansionAnchor } from '../../utils/footprintExpansion'
 import { refreshGuidingLightForParticipants } from './guidingLight'
 import { loadCampaignCombatContext } from './combatContext'
 import { buildCombatDevolutionState } from './partnerDevolution'
@@ -280,6 +284,33 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
     return updated
   })
 
+  let positions: Record<string, Vec3> | undefined
+  let positionPatch: Record<string, Vec3> | undefined
+  const evolved = participants.find(p => p.id === body.participantId)!
+  const resizedRecord = evolved.entityId === newDigimon.id ? newDigimon
+    : (await db.select().from(digimon).where(eq(digimon.id, evolved.entityId)))[0]
+  if (encounter.mapId && resizedRecord) {
+    const previousDims = getFootprintDimensions(digimonEntity?.size ?? 'medium', digimonEntity?.giganticDimensions)
+    const nextDims = getFootprintDimensions(resizedRecord.size, resizedRecord.giganticDimensions)
+    if (nextDims.width > previousDims.width || nextDims.height > previousDims.height || nextDims.depth > previousDims.depth) {
+      positions = { ...await getRoomPositions(encounterId) }
+      const origin = positions[body.participantId]
+      const map = origin ? await loadEncounterMap(encounter.mapId) : null
+      if (origin && map) {
+        const records = await loadParticipantDigimon(participants)
+        records.set(resizedRecord.id, resizedRecord)
+        const occupied = buildFootprintOccupiedSet(positions, participants, records, new Set([body.participantId]), evolved)
+        const caps = detectCapabilities(resizedRecord.qualities ?? [], 0, 0, 0)
+        const room = await getRoomSnapshot(encounterId)
+        const anchor = findExpansionAnchor(origin, previousDims, nextDims, map, caps, occupied, getDestroyedStructureIds(room.destructibleStates))
+        if (anchor.x !== origin.x || anchor.y !== origin.y || anchor.z !== origin.z) {
+          positionPatch = { [body.participantId]: anchor }
+          Object.assign(positions, positionPatch)
+        }
+      }
+    }
+  }
+
   // Update evolution line currentStageIndex (skip for NPCs, they track stage on participant)
   if (!isNpc) {
     await db.update(evolutionLines).set({
@@ -318,19 +349,21 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
     effects: [],
   }
 
-  // Evolution changes the source's BIT, footprint and Naturewalk choices while its map anchor stays put.
-  // Use the new form and live room positions before the same final encounter write.
+  // Recompute auras with the final form and expansion anchor in the same write.
   if (encounter.phase === 'combat') {
-    const positions = await getRoomPositions(encounterId)
+    positions ??= await getRoomPositions(encounterId)
     participants = await refreshGuidingLightForParticipants(encounterId, participants, positions)
   }
 
   // Update encounter
   await db.update(encounters).set({
     participants,
+    ...(positionPatch ? { participantPositions: positions } : {}),
     battleLog: [...battleLog, logEntry],
     updatedAt: new Date(),
   }).where(eq(encounters.id, encounterId))
+
+  if (positionPatch) await publishCommittedPositions(encounterId, positionPatch)
 
   const [updated] = await db.select().from(encounters).where(eq(encounters.id, encounterId))
 
