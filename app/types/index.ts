@@ -279,6 +279,7 @@ export interface EddySoulRules {
 }
 
 export interface HouseRules {
+  /** Legacy setting; Stun now always has a maximum duration of one round. */
   stunMaxDuration1?: boolean
   maxTempWoundsRule?: boolean
   signatureMoveBattery?: boolean

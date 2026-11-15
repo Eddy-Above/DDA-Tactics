@@ -217,7 +217,6 @@ const form = reactive({
     terrible: 0,
   },
   houseRules: {
-    stunMaxDuration1: false,
     maxTempWoundsRule: false,
     signatureMoveBattery: false,
     newDayHealsAllWounds: false,
@@ -277,7 +276,6 @@ onMounted(async () => {
     // Load house rules
     const houseRules = campaign.value.rulesSettings?.houseRules
     if (houseRules) {
-      form.houseRules.stunMaxDuration1 = houseRules.stunMaxDuration1 ?? false
       form.houseRules.maxTempWoundsRule = houseRules.maxTempWoundsRule ?? false
       form.houseRules.signatureMoveBattery = houseRules.signatureMoveBattery ?? false
       form.houseRules.newDayHealsAllWounds = houseRules.newDayHealsAllWounds ?? false
@@ -359,9 +357,8 @@ async function handleSave() {
   )
 
   data.rulesSettings = {
-    ...((form.houseRules.stunMaxDuration1 || form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits || form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z || form.houseRules.skillOrders || form.houseRules.burnStationaryIgnoresArmor) && {
+    ...((form.houseRules.maxTempWoundsRule || form.houseRules.signatureMoveBattery || form.houseRules.newDayHealsAllWounds || form.houseRules.allowDuplicateStatValues || form.houseRules.allowFlexCPSplits || form.houseRules.giganticMaxSize.x || form.houseRules.giganticMaxSize.y || form.houseRules.giganticMaxSize.z || form.houseRules.skillOrders || form.houseRules.burnStationaryIgnoresArmor) && {
       houseRules: {
-        ...(form.houseRules.stunMaxDuration1 && { stunMaxDuration1: true }),
         ...(form.houseRules.maxTempWoundsRule && { maxTempWoundsRule: true }),
         ...(form.houseRules.signatureMoveBattery && { signatureMoveBattery: true }),
         ...(form.houseRules.newDayHealsAllWounds && { newDayHealsAllWounds: true }),
@@ -751,17 +748,6 @@ async function handleDelete() {
             <div>
               <span class="text-digimon-dark-300">Skill Orders</span>
               <p class="text-xs text-digimon-dark-500">Unlocks a Skill Option per skill. Each requires the skill at {{ form.level === 'extreme' ? 6 : form.level === 'enhanced' ? 5 : 4 }}+ and the first Special Order of its governing attribute. Show unlocked options on tamer sheets and offer active ones in combat.</p>
-            </div>
-          </label>
-          <label class="flex items-start gap-3 cursor-pointer">
-            <input
-              v-model="form.houseRules.stunMaxDuration1"
-              type="checkbox"
-              class="w-4 h-4 rounded mt-1 shrink-0"
-            />
-            <div>
-              <span class="text-digimon-dark-300">Stun duration max 1 round</span>
-              <p class="text-xs text-digimon-dark-500">Default: Stun duration equals leftover accuracy successes</p>
             </div>
           </label>
           <label class="flex items-start gap-3 cursor-pointer">

@@ -94,6 +94,10 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
     participants = participants.map((p: any) => {
       const stored = existingById.get(p.id)
       let next = p
+      if (p.activeEffects?.some((effect: any) => effect.name === 'Stun' && effect.duration > 1)) {
+        next = { ...next, activeEffects: p.activeEffects.map((effect: any) => effect.name === 'Stun'
+          ? { ...effect, duration: Math.min(1, effect.duration) } : effect) }
+      }
       if (typeof stored?.lastMovedRound === 'number' && !(p.lastMovedRound >= stored.lastMovedRound)) next = { ...next, lastMovedRound: stored.lastMovedRound }
       if (typeof stored?.turnsStarted === 'number' && !(p.turnsStarted >= stored.turnsStarted)) next = { ...next, turnsStarted: stored.turnsStarted }
       if (stored) {

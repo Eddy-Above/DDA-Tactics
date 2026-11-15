@@ -96,9 +96,6 @@ export function applyEffectToParticipant(
   const resistance = resistant + getNaturewalkResistanceRanks(targetQualities, newEffect.name)
   if (resistance > 0) duration = Math.max(1, duration - resistance * 2)
   if (minimum !== undefined) duration = Math.max(minimum, duration)
-  if (houseRules?.stunMaxDuration1 && newEffect.name === 'Stun') {
-    duration = Math.min(1, duration)
-  }
 
   // Remove mutually exclusive effects
   let effects = [...activeEffects]

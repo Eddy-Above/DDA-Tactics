@@ -67,3 +67,14 @@ test('effects that do not depend on a source retain their existing Quick Apply f
   f.confirmQuickEffect()
   assert.deepEqual([f.events[0][1].name, f.events[0][1].source], ['Stun', 'Quick Apply'])
 })
+
+test('Quick Apply and custom Stun cannot request more than one round', () => {
+  const quick = fixture()
+  quick.pendingQuickEffect.value = { effect: { name: 'Stun', type: 'debuff' }, duration: 8, source: '', potency: 0 }
+  quick.confirmQuickEffect()
+  assert.equal(quick.events[0][1].duration, 1)
+  const custom = fixture()
+  Object.assign(custom.newEffect, { name: 'Stun', type: 'debuff', duration: 8 })
+  custom.addEffect()
+  assert.equal(custom.events[0][1].duration, 1)
+})

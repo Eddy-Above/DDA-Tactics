@@ -78,6 +78,7 @@ export const DAMAGE_OVER_TIME_EFFECTS = new Set(['Poison', 'Burn'])
  * Duration caps/floors per effect
  */
 export const EFFECT_DURATION_LIMITS: Record<string, { min?: number; max?: number }> = {
+  'Stun': { max: 1 },
   'Haste': { max: 1 },
   'Poison': { min: 3 },
   'Burn': { max: 3 },

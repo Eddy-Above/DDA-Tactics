@@ -5580,7 +5580,6 @@ const { request: cleanseRequest, busy: cleanseBusy, error: cleanseError, submit:
             <EffectManager
               :effects="selectedParticipant.activeEffects"
               :participant-name="getEntityDetails(selectedParticipant)?.name || 'Unknown'"
-              :stun-max-duration1="houseRules?.stunMaxDuration1 ?? false"
               :sources="effectSources"
               @add="(effect) => addEffect(selectedParticipant!.id, effect)"
               @remove="(effectId) => removeEffect(selectedParticipant!.id, effectId)"

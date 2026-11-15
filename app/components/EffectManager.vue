@@ -16,7 +16,6 @@ interface Effect {
 interface Props {
   effects: Effect[]
   participantName: string
-  stunMaxDuration1?: boolean
   sources?: Array<{ id: string; name: string; cpu?: number; bit?: number }>
 }
 
@@ -112,7 +111,7 @@ function addEffect() {
     id: `effect-${Date.now()}`,
     name: sourceName ?? newEffect.name,
     type: sourceName ? getEffectType(sourceName) : newEffect.type,
-    duration: (props.stunMaxDuration1 && newEffect.name === 'Stun') ? 1 : newEffect.duration,
+    duration: newEffect.name === 'Stun' ? 1 : newEffect.duration,
     source: sourceName ? newEffect.source : 'Manual',
     description: newEffect.description,
     ...(sourceName ? { potency: storedSourcePotency(sourceName, newEffect.potency), potencyStat: EFFECT_POTENCY_STAT[sourceName] } : {}),
@@ -136,7 +135,7 @@ function confirmQuickEffect() {
   if (!pendingQuickEffect.value) return
   const { effect, duration: rawDuration, potency, source } = pendingQuickEffect.value
   if (!hasValidSource(effect.name, source)) return
-  const duration = (props.stunMaxDuration1 && effect.name === 'Stun') ? 1 : rawDuration
+  const duration = effect.name === 'Stun' ? 1 : rawDuration
   const hasPotency = !!EFFECT_POTENCY_STAT[effect.name]
   emit('add', {
     id: `effect-${Date.now()}`,
@@ -243,7 +242,7 @@ function getEffectColor(type: string) {
           </select>
         </label>
         <template v-if="!PERMANENT_EFFECTS.has(pendingQuickEffect.effect.name)">
-          <template v-if="!(stunMaxDuration1 && pendingQuickEffect.effect.name === 'Stun')">
+          <template v-if="pendingQuickEffect.effect.name !== 'Stun'">
             <label class="text-digimon-dark-400">Duration</label>
             <input
               v-model.number="pendingQuickEffect.duration"
@@ -299,7 +298,7 @@ function getEffectColor(type: string) {
             <option value="debuff">Debuff</option>
             <option value="status">Status</option>
           </select>
-          <template v-if="!(stunMaxDuration1 && newEffect.name === 'Stun')">
+          <template v-if="newEffect.name !== 'Stun'">
             <input
               v-model.number="newEffect.duration"
               type="number"

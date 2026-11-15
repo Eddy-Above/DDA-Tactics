@@ -155,6 +155,14 @@ test('turn processing and the final aura pass share one campaign read per encoun
   assert.deepEqual(f.reads.filter(read => read.table === 'campaigns'), [{ table: 'campaigns', id: 'campaign' }])
 })
 
+test('manual encounter updates cap incoming Stun at one round', async () => {
+  const f = fixture()
+  await f.put({ participants: [unit('source', { activeEffects: [
+    { id: 'stun', name: 'Stun', type: 'debuff', duration: 8, source: 'Manual' },
+  ] }), unit('ally')] })
+  assert.equal(f.auraCalls[0].participants[0].activeEffects.find(effect => effect.name === 'Stun').duration, 1)
+})
+
 function assertOneAuraWrite(f) {
   assert.equal(f.auraCalls.length, 1)
   const writes = f.writes.filter(write => write.table === 'encounters')
