@@ -483,7 +483,7 @@ function adjacentFooting(pos: Vec3, map: GameMap, dims: FootprintDims): boolean 
 function canStepOffPlatform(from: Vec3, to: Vec3, map: GameMap, dims: FootprintDims = { width: 1, height: 1, depth: 1 }): boolean {
   return from.y === to.y
     && Math.max(Math.abs(to.x - from.x), Math.abs(to.z - from.z)) <= 1
-    && (!isFootprintAirborne(from, dims, map) || isAdjacentToFooting(from, map, dims))
+    && !isFootprintAirborne(from, dims, map)
     && isAdjacentToFooting(to, map, dims)
 }
 

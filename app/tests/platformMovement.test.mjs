@@ -29,6 +29,31 @@ for (const support of ['ground', 'voxel', 'stair']) {
     assert.ok(movement.computePath(origin, point(1, 8), caps, map))
     assert.equal(movement.computePath(origin, point(2, 8), caps, map), null)
   })
+
+  test(`walking cannot travel along the unsupported strip beside ${support} footing`, () => {
+    const footing = Array.from({ length: 7 }, (_, z) => point(0, 8, z))
+    const map = mapOf(support === 'ground' ? { groundTiles: footing }
+      : support === 'voxel' ? { voxels: footing.map(p => ({ ...p, y: 7, materialId: 'steel' })) }
+        : { stairs: footing.map((p, i) => ({ ...p, y: 7, id: `stairs-${i}`, face: 'north' })) })
+    const caps = rules.detectCapabilities([], 6, 0, 0, 0, 0)
+    const edge = point(1, 8, 1)
+    assert.ok(rules.canPassThrough(footing[0], edge, caps, map), 'one step off remains legal')
+    assert.equal(rules.canPassThrough(edge, point(1, 8, 2), caps, map), false)
+    assert.equal(rules.canPassThrough(edge, point(1, 8, 2), caps, rules.createMovementMapView(map)), false)
+    assert.ok(rules.canPassThrough(edge, footing[1], caps, map), 'returning to solid footing remains legal')
+
+    // Block the platform so a route to its far side would require chaining steps through air.
+    const blockers = footing.slice(1, 4)
+    const units = new Map(blockers.map((pos, i) => [`blocker-${i}`, { pos, size: 'medium' }]))
+    const movement = useMapMovement()
+    const client = movement.computeReachable(footing[0], 6, caps, map, new Set(), units)
+    const server = getReachableCells(footing[0], 6, caps, map, new Set(), new Set(blockers.map(key)))
+    server.delete(key(footing[0]))
+    assert.deepEqual(client, server)
+    assert.ok(client.has(key(edge)))
+    assert.ok(!client.has(key(footing[5])))
+    assert.equal(movement.computePath(footing[0], footing[5], caps, map, new Set(), units), null)
+  })
 }
 
 test('jump height is measured at the actual launch after walking down a platform', () => {
