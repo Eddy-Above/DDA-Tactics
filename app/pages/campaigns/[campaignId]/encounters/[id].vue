@@ -2269,7 +2269,7 @@ async function handleDigivolve(participant: CombatParticipant, targetChainIndex:
     await applyActionResult(updated, 'digivolve')
   } catch (e: any) {
     console.error('Digivolve failed:', e)
-    alert(e?.data?.message || 'Failed to digivolve')
+    alert(e?.data?.message || 'Failed to Digivolve')
   }
 }
 

@@ -71,8 +71,8 @@ const filteredLog = computed(() => {
       return { ...e, result: e.result + damageSuffix }
     }
 
-    if (/^failed to digivolve(?: to .+)?$/i.test(e.action)) {
-      return { ...e, action: 'failed to digivolve', target: null,
+    if (/^Failed to Digivolve(?: to .+)?$/i.test(e.action)) {
+      return { ...e, action: 'Failed to Digivolve', target: null,
         result: e.result.replace(/^Willpower check failed \(rolled (.+) vs DC (.+)\)\.?$/, 'Willpower check failed (rolled $1 vs DC $2).') }
     }
 

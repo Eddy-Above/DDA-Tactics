@@ -94,7 +94,7 @@ export default defineEncounterCommand(async (event, commandContext) => {
     round: encounter.round || 0,
     actorId: body.participantId,
     actorName: digimonEntity.name,
-    action: `failed to digivolve to ${body.targetSpecies}`,
+    action: `Failed to Digivolve to ${body.targetSpecies}`,
     target: null,
     result: `Willpower check failed (rolled ${body.rollTotal} vs DC ${body.dc})`,
     damage: null,

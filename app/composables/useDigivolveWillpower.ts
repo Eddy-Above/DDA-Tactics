@@ -169,7 +169,7 @@ export function useDigivolveWillpower(options: DigivolveWillpowerOptions) {
       }
     } catch (error: unknown) {
       console.error(passed ? 'Digivolve failed:' : 'Digivolve fail logging failed:', error)
-      if (passed) options.onError(errorMessage(error, 'Failed to digivolve'))
+      if (passed) options.onError(errorMessage(error, 'Failed to Digivolve'))
     } finally {
       reset()
       try {
