@@ -50,25 +50,25 @@ function fixture({
   }
 }
 
-test('saved combat history takes precedence for partners, NPCs and legacy rows without querying or mutating', async () => {
-  const f = fixture()
+test('matching natural-parent combat history restores wounds for partners and NPCs without mutating', async () => {
+  const f = fixture({ chain: [entry('oldest', null), entry('saved', 0), entry('current', 1)] })
   const older = Object.freeze({ entityId: 'oldest', stageIndex: 0, maxWounds: 5, wounds: 2 })
   const saved = Object.freeze({ entityId: 'saved', stageIndex: 1, maxWounds: 12, totalHealth: 7, wounds: 6 })
-  for (const flags of [{}, { isEnemy: true }, { type: 'tamer', evolutionLineId: undefined }]) {
+  for (const flags of [{}, { isEnemy: true }]) {
     const actor = Object.freeze(participant({ ...flags, woundsHistory: Object.freeze([older, saved]) }))
     assert.deepEqual(await f.resolve(actor), saved)
     assert.deepEqual(actor.woundsHistory, [older, saved])
   }
-  assert.deepEqual(f.reads, [])
+  assert.ok(!f.reads.some(([table, id]) => table === 'digimon' && id === 'saved'), 'saved wounds need no parent-sheet read')
 })
 
 test('legacy history without saved wounds restores zero without falling through to a sheet', async () => {
   const f = fixture()
-  const saved = { entityId: 'saved', stageIndex: 0, maxWounds: 6 }
+  const saved = { entityId: 'parent', stageIndex: 0, maxWounds: 6 }
   const actor = participant({ woundsHistory: [saved] })
   assert.deepEqual(await f.resolve(actor), { ...saved, wounds: 0 })
   assert.equal(Object.hasOwn(saved, 'wounds'), false)
-  assert.deepEqual(f.reads, [])
+  assert.deepEqual(f.reads, [['digimon', 'current'], ['evolutionLines', 'line']])
 })
 
 test('a partner that entered combat evolved can return to its locked parent at index zero without a Tamer record', async () => {
@@ -129,20 +129,24 @@ test('the stat builder retains saved zero wounds, defaults absent sheet values a
   }), 0, 'ultimate'), { entityId: 'parent', stageIndex: 0, totalHealth: 0, maxWounds: 7, wounds: 0 })
 })
 
-test('non-Digimon, explicit enemies and participants without a line do not attempt fallback reads', async () => {
-  for (const overrides of [{ type: 'tamer' }, { isEnemy: true }, { evolutionLineId: undefined }, { evolutionLineId: '' }]) {
+test('non-Digimon and participants without a line do not attempt fallback reads', async () => {
+  for (const overrides of [{ type: 'tamer' }, { evolutionLineId: undefined }, { evolutionLineId: '' }]) {
     const f = fixture()
     assert.equal(await f.resolve(participant(overrides)), null)
     assert.deepEqual(f.reads, [])
   }
 })
 
-test('missing, unowned and enemy current sheets cannot gain a parent fallback', async () => {
-  for (const current of [null, sheet('current', { partnerId: null }), sheet('current', { partnerId: '' }),
-    sheet('current', { partnerId: '   ' }), sheet('current', { isEnemy: true })]) {
-    const f = fixture({ sheets: current ? [current, sheet('parent')] : [sheet('parent')] })
-    assert.equal(await f.resolve(), null)
-    assert.deepEqual(f.reads, [['digimon', 'current']])
+test('missing current sheets cannot gain a parent fallback', async () => {
+  const f = fixture({ sheets: [sheet('parent')] })
+  assert.equal(await f.resolve(), null)
+  assert.deepEqual(f.reads, [['digimon', 'current']])
+})
+
+test('unowned and enemy Digimon use their natural parent even without combat history', async () => {
+  for (const current of [sheet('current', { partnerId: null }), sheet('current', { isEnemy: true })]) {
+    const f = fixture({ sheets: [current, sheet('parent')] })
+    assert.equal((await f.resolve()).entityId, 'parent')
   }
 })
 
@@ -201,8 +205,55 @@ const knockedOut = overrides => ({
   currentStance: 'aggressive', npcStageIndex: 99, ...overrides,
 })
 
+for (const enemy of [false, true]) {
+  test(`${enemy ? 'NPC' : 'partner'} warped from Rookie to Ultimate is knocked down to Champion, then Rookie`, async () => {
+    const f = fixture({ currentStageIndex: enemy ? 0 : 3,
+      chain: [entry('rookie', null), entry('champion', 0), entry('other-branch', 0), entry('ultimate', 1)],
+      sheets: [sheet('rookie'), sheet('champion', { stage: 'champion', currentWounds: 2 }),
+        sheet('ultimate', { stage: 'ultimate', isEnemy: enemy })],
+    })
+    const rookieState = { entityId: 'rookie', stageIndex: 0, maxWounds: 8, totalHealth: 6, wounds: 1 }
+    const history = [rookieState]
+    const actor = knockedOut({ entityId: 'ultimate', isEnemy: enemy, npcStageIndex: 3, woundsHistory: history })
+    assert.ok(await f.auto(actor))
+    assert.equal(actor.entityId, 'champion')
+    assert.equal(actor.currentWounds, 2)
+    assert.deepEqual(actor.woundsHistory, history, 'the unvisited Champion must not consume the Rookie snapshot')
+    assert.equal(enemy ? actor.npcStageIndex : f.writes.at(-1).currentStageIndex, 1)
+    actor.currentWounds = actor.maxWounds
+    assert.ok(await f.auto(actor))
+    assert.equal(actor.entityId, 'rookie')
+    assert.equal(actor.currentWounds, 1)
+    assert.deepEqual(actor.woundsHistory, [])
+    assert.equal(enemy ? actor.npcStageIndex : f.writes.at(-1).currentStageIndex, 0)
+    if (enemy) assert.deepEqual(f.writes, [], 'NPC stage changes must not change the shared line')
+  })
+}
+
+test('a saved form on a different branch never overrides the natural parent', async () => {
+  const f = fixture({ chain: [entry('root', null), entry('parent', 0), entry('wrong-branch', 0), entry('current', 1)], currentStageIndex: 3 })
+  const actor = knockedOut({ woundsHistory: [{ entityId: 'wrong-branch', stageIndex: 2, maxWounds: 9, wounds: 0 }] })
+  assert.ok(await f.auto(actor))
+  assert.equal(actor.entityId, 'parent')
+})
+
+test('the natural parent restores its own snapshot even when a different form is last in history', async () => {
+  const f = fixture({ chain: [entry('root', null), entry('parent', 0), entry('wrong-branch', 0), entry('current', 1)], currentStageIndex: 3 })
+  const root = { entityId: 'root', stageIndex: 0, maxWounds: 5, wounds: 0 }
+  const actor = knockedOut({ woundsHistory: [root,
+    { entityId: 'parent', stageIndex: 1, maxWounds: 12, wounds: 3 },
+    { entityId: 'wrong-branch', stageIndex: 2, maxWounds: 9, wounds: 0 },
+  ] })
+  assert.ok(await f.auto(actor))
+  assert.equal(actor.entityId, 'parent')
+  assert.equal(actor.currentWounds, 3)
+  assert.deepEqual(actor.woundsHistory, [root])
+  assert.equal(f.writes.at(-1).currentStageIndex, 1)
+})
+
 test('automatic partner devolution restores one saved state, synchronizes its line and preserves unrelated combat state', async () => {
-  const f = fixture({ sheets: [sheet('current'), sheet('parent', { qualities: [{ id: 'combat-monster' }] })] })
+  const f = fixture({ chain: [entry('oldest', null), entry('parent', 0), entry('current', 1)],
+    sheets: [sheet('current'), sheet('parent', { qualities: [{ id: 'combat-monster' }] })] })
   const older = { entityId: 'oldest', stageIndex: 0, maxWounds: 5, wounds: 0 }
   const saved = { entityId: 'parent', stageIndex: 1, maxWounds: 9, totalHealth: 6, wounds: 3 }
   const history = [older, saved]
@@ -276,7 +327,7 @@ test('explicit enemies, enemy library records and unowned Digimon keep NPC stage
 })
 
 test('automatic devolution consumes exactly one history state even when that restored state is already knocked out', async () => {
-  const f = fixture()
+  const f = fixture({ chain: [entry('oldest', null), entry('parent', 0), entry('current', 1)] })
   const older = { entityId: 'oldest', stageIndex: 0, maxWounds: 5, wounds: 0 }
   const actor = knockedOut({ woundsHistory: [older, { entityId: 'parent', stageIndex: 1, maxWounds: 12, wounds: 12 }] })
   assert.ok(await f.auto(actor))
@@ -304,7 +355,7 @@ test('automatic devolution guards missing legacy wound totals and non-knockouts 
 })
 
 test('unresolvable automatic devolution leaves the original participant and history untouched', async () => {
-  const f = fixture({ sheets: [sheet('current', { partnerId: null })] })
+  const f = fixture({ sheets: [sheet('current')] })
   const actor = knockedOut({ woundsHistory: [] })
   const history = actor.woundsHistory
   const before = structuredClone(actor)

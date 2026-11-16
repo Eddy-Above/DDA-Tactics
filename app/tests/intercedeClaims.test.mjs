@@ -17,6 +17,12 @@ afterEach(() => {
 
 const copy = value => structuredClone(value)
 const point = (x, y = 0, z = 0) => ({ x, y, z })
+function confineToSupportedCorridor(map) {
+  // These cases test occupied-square passage, so a ledge detour must not bypass the blocker.
+  map.walls.push(...map.groundTiles.flatMap(tile => ['north', 'south'].map(face => ({
+    ...tile, id: `corridor-${tile.x}-${face}`, face,
+  }))))
+}
 const unexpected = () => { throw new Error('unexpected combat side effect') }
 const deferred = () => {
   let resolve
@@ -406,6 +412,7 @@ function spatialClaim({ mover = 'medium', blocker = 'medium', target = 'small', 
 
 test('a Medium interceder cannot pass another Medium unit, including a previously offered path', async () => {
   const subject = spatialClaim()
+  confineToSupportedCorridor(subject.spatialMap)
   subject.state().pendingRequests[0].data.interceptePos = point(6)
   const original = copy(subject.state())
   await assert.rejects(subject.claim(), error => error.statusCode === 409 && /intercede path/.test(error.message))
@@ -511,6 +518,7 @@ for (const [mover, landing, allowed] of [
 ]) {
   test(`${mover} area interceder ${allowed ? 'can' : 'cannot'} pass a Medium blocker and land ${landing ? `with ${landing}` : 'on a free square'}`, async () => {
     const subject = fixture({ area: true, spatial: true, targets: ['target'] })
+    confineToSupportedCorridor(subject.spatialMap)
     subject.rooms.get('encounter').participantPositions = {
       'guard-a': point(4), target: point(1), attacker: point(7), 'other-target': point(2),
       ...(landing ? { 'guard-b': point(0) } : {}),
@@ -683,7 +691,10 @@ test('a rolled-back area auto-devolution preserves the evolution stage, offer, a
   guard.evolutionLineId = 'evolution'
   guard.woundsHistory = [{ entityId: 'previous-form', maxWounds: 10, wounds: 0, stageIndex: 1 }]
   subject.rows.digimon.get('guard-a').partnerId = 'owner'
-  subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3 })
+  subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3, chain: [
+    { digimonId: 'oldest', evolvesFromIndex: null }, { digimonId: 'previous-form', evolvesFromIndex: 0 },
+    { digimonId: 'sibling', evolvesFromIndex: 0 }, { digimonId: 'guard-a', evolvesFromIndex: 1 },
+  ] })
   const originalState = copy(subject.state())
   const originalRoom = copy(subject.rooms.get('encounter'))
   subject.control.failEncounterWrites = 1
@@ -712,7 +723,10 @@ test('the full area claim excludes a form restored by its nested resolver from t
     { entityId: 'previous-form', maxWounds: 10, wounds: 10, stageIndex: 1 },
   ]
   subject.rows.digimon.get('guard-a').partnerId = 'owner'
-  subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3 })
+  subject.rows.evolutionLines.set('evolution', { id: 'evolution', currentStageIndex: 3, chain: [
+    { digimonId: 'oldest', evolvesFromIndex: null }, { digimonId: 'previous-form', evolvesFromIndex: 0 },
+    { digimonId: 'sibling', evolvesFromIndex: 0 }, { digimonId: 'guard-a', evolvesFromIndex: 1 },
+  ] })
   const candidates = []
   subject.control.knockout = (state, _context, ids) => {
     candidates.push(...ids)

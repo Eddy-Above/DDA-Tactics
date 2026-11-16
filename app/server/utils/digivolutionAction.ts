@@ -204,7 +204,7 @@ export async function performDigivolution(encounterId: string, body: DigivolveBo
     throw createError({ statusCode: 404, message: 'Target digimon not found in library' })
   }
 
-  if (encounter.mapId && (isPartner || tamerParticipant)) {
+  if (!force && encounter.mapId && (isPartner || tamerParticipant)) {
     if (!tamerParticipant) throw createError({ statusCode: 400, message: 'Digivolution requires the partner Tamer to be placed on the map' })
     await requireTamerDigimonSight(encounter, tamerParticipant, participant, digimonEntity, 'Digivolution')
   }

@@ -8,7 +8,7 @@ import { getDigizoidArmorBonus } from './digizoidArmor'
 import { resolveParticipantName } from './participantName'
 
 export type CombatDevolutionState = NonNullable<CombatParticipant['woundsHistory']>[number]
-type DevolvingParticipant = Pick<CombatParticipant, 'type' | 'entityId' | 'evolutionLineId' | 'woundsHistory' | 'isEnemy'>
+type DevolvingParticipant = Pick<CombatParticipant, 'type' | 'entityId' | 'evolutionLineId' | 'woundsHistory' | 'isEnemy' | 'npcStageIndex'>
 type DevolutionRecord = Pick<Digimon, 'id' | 'baseStats' | 'bonusStats' | 'stage' | 'qualities' | 'currentWounds'>
 
 /** A sheet's wounds and wound totals, using the same health calculation as combat digivolution. */
@@ -29,22 +29,18 @@ export function buildCombatDevolutionState(
   }
 }
 
-/** Resolve an earlier combat form without changing history, participants or character sheets. */
+/** Follow the current form's direct parent; history supplies wounds, never the destination. */
 export async function resolveCombatDevolutionState(
   participant: DevolvingParticipant,
   database: Pick<typeof db, 'select'> = db,
 ): Promise<CombatDevolutionState | null> {
-  if (Array.isArray(participant.woundsHistory) && participant.woundsHistory.length > 0) {
-    const saved = participant.woundsHistory[participant.woundsHistory.length - 1]
-    return saved ? { ...saved, wounds: saved.wounds ?? 0 } : null
-  }
-
-  // NPCs keep their existing history-only behavior. A real partner need not have its Tamer in
-  // this encounter, or have digivolved during this combat, to return to its linked parent sheet.
-  if (participant.type !== 'digimon' || participant.isEnemy || !participant.evolutionLineId) return null
+  const history = Array.isArray(participant.woundsHistory) ? participant.woundsHistory : []
+  if (participant.type !== 'digimon' || !participant.evolutionLineId) return null
   const current = await readCombatRecord('digimon', participant.entityId,
     () => database.select().from(digimon).where(eq(digimon.id, participant.entityId)))
-  if (!current || current.isEnemy || typeof current.partnerId !== 'string' || !current.partnerId.trim()) return null
+  const isPartner = current && !current.isEnemy && !participant.isEnemy
+    && typeof current.partnerId === 'string' && !!current.partnerId.trim()
+  if (!current) return null
 
   const [line] = await database.select().from(evolutionLines).where(eq(evolutionLines.id, participant.evolutionLineId))
   if (!line) return null
@@ -54,9 +50,14 @@ export async function resolveCombatDevolutionState(
   }
   if (!Array.isArray(chain)) return null
   const entries = chain as EvolutionLine['chain']
-  const currentIndex = resolveCombatEvolutionIndex(entries, participant.entityId, line.currentStageIndex)
+  const currentIndex = resolveCombatEvolutionIndex(entries, participant.entityId,
+    isPartner ? line.currentStageIndex : participant.npcStageIndex ?? line.currentStageIndex)
   const parent = getCombatEvolutionParent(entries, currentIndex)
   if (typeof parent?.digimonId !== 'string' || !parent.digimonId.trim()) return null
+
+  // A warp may skip a form that was never visited. Restore its saved sheet wounds in that case.
+  const saved = history.findLast(state => state?.entityId === parent.digimonId && state.stageIndex === parent.chainIndex)
+  if (saved) return { ...saved, wounds: saved.wounds ?? 0 }
 
   const previous = await readCombatRecord('digimon', parent.digimonId,
     () => database.select().from(digimon).where(eq(digimon.id, parent.digimonId)))
@@ -102,7 +103,10 @@ export async function autoDevolveParticipant(
     }
 
     if (Array.isArray(participant.woundsHistory) && participant.woundsHistory.length > 0) {
-      participant.woundsHistory = participant.woundsHistory.slice(0, -1)
+      const restoredIndex = participant.woundsHistory.findLastIndex(state =>
+        state?.entityId === previousState.entityId && state.stageIndex === previousState.stageIndex)
+      // An unvisited intermediate form must leave earlier snapshots available for later knockdowns.
+      if (restoredIndex >= 0) participant.woundsHistory = participant.woundsHistory.slice(0, restoredIndex)
     }
     participant.entityId = previousState.entityId
     participant.maxWounds = previousState.maxWounds

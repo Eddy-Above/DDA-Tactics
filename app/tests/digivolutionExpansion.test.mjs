@@ -82,13 +82,31 @@ for (const forced of [false, true]) test(`${forced ? 'GM forced' : 'ordinary'} d
   assert.equal(f.writes.filter(write => write.table === 'encounters').length, 1)
 })
 
-for (const force of [false, true]) test(`partner digivolution checks sight before writing (force=${force})`, async () => {
+test('GM force evolution bypasses an associated Tamer blocked by walls, distant or absent', async () => {
+  for (const placement of ['blocked', 'distant', 'unplaced', 'absent']) {
+    const f = fixture({ partner: true, blockedSight: true, newSize: 'medium' })
+    if (placement === 'distant') f.positions.tamer = point(-1000)
+    if (placement === 'unplaced') delete f.positions.tamer
+    if (placement === 'absent') f.encounter.participants = f.encounter.participants.filter(p => p.id !== 'tamer')
+    const result = await f.run(true)
+    assert.equal(result.participants.find(p => p.id === 'actor').entityId, 'after')
+    if (placement !== 'absent') assert.equal(result.participants.find(p => p.id === 'tamer').actionsRemaining.simple, 2)
+  }
+})
+
+test('ordinary evolution still requires associated Tamer line of sight', async () => {
+  const f = fixture({ partner: true, blockedSight: true, newSize: 'medium' })
+  await assert.rejects(f.run(), /requires line of sight/)
+  assert.deepEqual(f.writes, [])
+})
+
+test('ordinary partner digivolution checks sight before writing and accepts visible partners', async () => {
   const blocked = fixture({ partner: true, blockedSight: true })
-  await assert.rejects(blocked.run(force), /requires line of sight/)
+  await assert.rejects(blocked.run(), /requires line of sight/)
   assert.deepEqual(blocked.writes, [])
   assert.deepEqual(blocked.published, [])
   const visible = fixture({ partner: true })
-  await visible.run(force)
+  await visible.run()
   assert.equal(visible.encounter.participants[0].entityId, 'after')
 })
 

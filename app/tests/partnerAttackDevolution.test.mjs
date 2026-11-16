@@ -121,7 +121,7 @@ test('the real NPC resolver restores a history-free partner sheet and persists i
   assert.equal(f.records.rookie.currentWounds, 3)
 })
 
-test('the real NPC resolver prefers its combat snapshot and consumes it without loading the line fallback', async () => {
+test('the real NPC resolver validates the natural parent and restores its matching combat snapshot', async () => {
   const f = fixture([{ entityId: 'rookie', stageIndex: 0, maxWounds: 7, totalHealth: 5, wounds: 1 }])
   f.target.npcStageIndex = 8
   const result = await hit(f)
@@ -131,7 +131,7 @@ test('the real NPC resolver prefers its combat snapshot and consumes it without 
   assert.equal(target.combatMonsterBonus, 5)
   assert.equal(target.npcStageIndex, undefined)
   assert.equal(f.line().currentStageIndex, 0)
-  assert.ok(f.reads.every(read => read.table !== 'evolutionLines'), 'saved snapshots must not depend on the line still existing')
+  assert.ok(f.reads.some(read => read.table === 'evolutionLines'), 'the line determines which saved form is the natural parent')
   assert.equal(f.refreshes.length, 1)
 })
 
@@ -146,14 +146,15 @@ test('a saved parent that is already knocked out is restored once without re-ent
   assert.equal(result.battleLog.filter(entry => entry.effects.includes('Auto-Devolve')).length, 1)
 })
 
-test('the real NPC resolver does not apply a partner sheet fallback to a history-free enemy', async () => {
+test('the real NPC resolver restores a history-free enemy to its natural parent without changing the shared line', async () => {
   const f = fixture(undefined, { enemy: true })
   const result = await hit(f)
   const target = result.participants.find(p => p.id === 'partner')
-  assert.equal(target.entityId, 'champion')
-  assert.equal(target.currentWounds, target.maxWounds)
+  assert.equal(target.entityId, 'rookie')
+  assert.equal(target.currentWounds, 3)
+  assert.equal(target.npcStageIndex, 0)
   assert.deepEqual(f.writes, [])
-  assert.deepEqual(f.refreshes, [])
+  assert.equal(f.refreshes.length, 1)
 })
 
 for (const { history, parentKnockedOut } of [

@@ -217,6 +217,10 @@ test('PUT recomputes after its in-place knockout devolution has restored the pri
   })
   const f = fixture({ participants: [source, unit('ally')] })
   f.rows.digimon.rookie = { id: 'rookie', qualities: [] }
+  f.rows.digimon.evolved = { id: 'evolved', qualities: [] }
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 1, chain: [
+    { digimonId: 'rookie', evolvesFromIndex: null }, { digimonId: 'evolved', evolvesFromIndex: 0 },
+  ] }
   await f.put({ participants: [source, unit('ally')] })
   assertOneAuraWrite(f)
   const restored = f.auraCalls[0].participants.find(p => p.id === 'source')
@@ -338,6 +342,9 @@ function damagingAttackFixture({ evolved = false, enemy = false } = {}) {
   }
   f.rows.digimon.champion = { id: 'champion', name: 'Greymon', qualities: [], baseStats: { armor: 0 } }
   f.rows.digimon.rookie = { id: 'rookie', name: 'Agumon', qualities: [], baseStats: { armor: 0 } }
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 1, chain: [
+    { digimonId: 'rookie', evolvesFromIndex: null }, { digimonId: 'champion', evolvesFromIndex: 0 },
+  ] }
   f.rows.encounters.encounter.pendingRequests = [{
     id: 'dodge', type: 'dodge-roll', targetTamerId: 'owner', targetParticipantId: 'source',
     data: { attackId: 'basic-melee', attackerParticipantId: 'attacker', attackerEntityId: 'attacker',
@@ -418,7 +425,7 @@ for (const mode of ['dodge response', 'legacy NPC attack']) {
 
   test(`${mode} keeps NPC stage changes local instead of changing the shared evolution line`, async () => {
     const f = damagingAttackFixture({ evolved: true })
-    f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 3 }
+    f.rows.evolutionLines.line.currentStageIndex = 3
     if (mode === 'dodge response') await f.respond(dodgeResponse)
     else await f.npcAttack(npcAttackBody)
     const target = f.rows.encounters.encounter.participants.find(p => p.id === 'source')

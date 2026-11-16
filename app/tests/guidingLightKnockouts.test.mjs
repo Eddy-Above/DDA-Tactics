@@ -15,6 +15,9 @@ function database(rows = []) {
     digimon, evolutionLines, encounters: {}, campaigns: {}, tamers: {}, writes,
     db: {
       select: () => ({ from: table => ({ where: async ({ value }) => {
+        if (table === evolutionLines) return [{ id: value, currentStageIndex: 1, chain: [
+          { digimonId: 'rookie', evolvesFromIndex: null }, { digimonId: 'evolved', evolvesFromIndex: 0 },
+        ] }]
         assert.equal(table, digimon)
         const record = records.get(value)
         return record ? [record] : []

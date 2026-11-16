@@ -241,6 +241,9 @@ test('preload uses the validated replacement roster and its history, reusing res
   const f = fixture({ participants: stored, records: [record('old'), record('evolved', { partnerId: 'owner' }), record('restored', {
     partnerId: 'owner', qualities: [{ id: 'combat-monster' }],
   }), record('ally')] })
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 1, chain: [
+    { digimonId: 'restored', evolvesFromIndex: null }, { digimonId: 'evolved', evolvesFromIndex: 0 },
+  ] }
   const result = await f.put({ participants: incoming, currentTurnIndex: 1 })
   assertOneBatch(f, 'digimon', ['evolved', 'restored', 'missing', 'ally'])
   assertOneBatch(f, 'tamers', ['owner'])
@@ -347,6 +350,9 @@ test('enemy auto-devolution single reads reuse the bulk history records in the s
     woundsHistory: [{ entityId: 'restored', stageIndex: 0, maxWounds: 6, totalHealth: 4, wounds: 2 }] })]
   const f = fixture({ participants, map: false, records: [record('evolved', { name: 'Large enemy' }),
     record('restored', { name: 'Small enemy', qualities: [{ id: 'combat-monster' }] })] })
+  f.rows.evolutionLines.line = { id: 'line', currentStageIndex: 1, chain: [
+    { digimonId: 'restored', evolvesFromIndex: null }, { digimonId: 'evolved', evolvesFromIndex: 0 },
+  ] }
   const result = await f.cache.withCombatRecords(async () => {
     await f.spatial.loadParticipantDigimon([...participants, { type: 'digimon', entityId: 'restored' }])
     return f.knockouts.resolveEnemyKnockouts({ participants, turnOrder: ['enemy'], currentTurnIndex: 0, round: 1 }, ['enemy'])
@@ -426,7 +432,10 @@ test('a turn-end NPC devolution changes only its local stage and restores one fo
       record('champion', { isEnemy: true, qualities: [{ id: 'combat-monster' }] }),
       record('rookie', { isEnemy: true }), record('ally'),
     ] })
-  f.rows.evolutionLines['shared-line'] = { id: 'shared-line', currentStageIndex: 2 }
+  f.rows.evolutionLines['shared-line'] = { id: 'shared-line', currentStageIndex: 2, chain: [
+    { digimonId: 'rookie', evolvesFromIndex: null }, { digimonId: 'champion', evolvesFromIndex: 0 },
+    { digimonId: 'ultimate', evolvesFromIndex: 1 },
+  ] }
   const result = await f.put({ participants: [npc, unit('ally')], currentTurnIndex: 1 })
   const restored = result.participants.find(p => p.id === 'npc')
   assert.equal(restored.entityId, 'champion')
