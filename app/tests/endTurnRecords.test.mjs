@@ -306,6 +306,17 @@ test('combat start without an incoming roster preloads existing partners for sta
   assert.ok(result.participants[1].activeEffects.some(e => e.name === 'Guiding Light'))
 })
 
+test('Ammo persists across round saves and stale roster updates, then resets for a new combat', async () => {
+  const f = fixture({ map: false, participants: [unit('source', { ammoUses: { shot: 5 } }), unit('ally')] })
+  const roster = f.state().participants.map(p => ({ ...p, ammoUses: {} }))
+  const nextRound = await f.put({ participants: roster, round: 2, currentTurnIndex: 0 })
+  assert.deepEqual(nextRound.participants[0].ammoUses, { shot: 5 })
+  const ended = await f.put({ phase: 'ended' })
+  assert.deepEqual(ended.participants[0].ammoUses, { shot: 5 })
+  const restarted = await f.put({ phase: 'combat', round: 1 })
+  assert.equal(restarted.participants[0].ammoUses, undefined)
+})
+
 test('card movement partner guard uses the preloaded Digimon record', async () => {
   const participants = [unit('tamer', { type: 'tamer', entityId: 'owner' }), unit('source')]
   const f = fixture({ participants, map: false })

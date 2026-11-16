@@ -15,6 +15,7 @@ import { offerStrikeLastOnMiss } from '../../../../utils/strikeLast'
 import { serializeIntercedeClaim } from '../../../../utils/intercedeClaims'
 import { effectActionError, signatureMoveError } from '../../../../../utils/combatAttackOptions'
 import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
+import { ammoAttackError, recordCombatAttackUse } from '../../../../../utils/ammo'
 import { isTankBusterAttack } from '../../../../../utils/attackArmor'
 import { runAttackCommand } from '../../../../utils/attackCommand'
 import { allowFields, finiteNumber } from '../../../../utils/securityValidation'
@@ -137,6 +138,8 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
       + combatAttackStats(actorRecord, actor, attack).automaticSuccesses
     const signatureError = signatureMoveError(actor, attack, { round: encounter.round, houseRules: campaign?.rulesSettings?.houseRules })
     const tankBusterError = tankBusterUseError(actor, attack)
+    const ammoError = ammoAttackError(actor, attack)
+    if (ammoError) throw createError({ statusCode: 400, message: ammoError })
     if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
     if (signatureError) throw createError({ statusCode: 400, message: signatureError })
   }
@@ -362,7 +365,7 @@ async function prepareAttack(encounterId: string, body: AttackActionBody): Promi
         actionsRemaining: {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCostSimple),
         },
-        usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+        ...recordCombatAttackUse(p, body.attackId, actorRecord?.attacks?.find(a => a.id === body.attackId)),
         ...(isTankBusterAttack(actorRecord?.attacks?.find(a => a.id === body.attackId)) ? { tankBusterUses: availableTankBusterUses(p) - 1 } : {}),
         activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
       }

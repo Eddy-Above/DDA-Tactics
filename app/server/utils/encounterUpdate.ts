@@ -113,7 +113,7 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
         // These are server-owned declarations/passives. A stale turn-save cannot restore a spent order.
         next = { ...next }
         for (const field of ['lastMovedTurnKey', 'strikeFastReady', 'strikeFastTurnKey', 'finishingTouchReady', 'decimationReady',
-          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus', 'lastShieldRound', 'lagBaseOrder', 'lagOrderRound', 'naturewalkActiveElements', 'naturewalkWaterGranted', 'tankBusterUses']) {
+          'enduringSoulAvailable', 'enduringSoulUsed', 'strikeLastCounter', 'fatefulSpentRollIds', 'quickReactionDiceBonus', 'lastShieldRound', 'lagBaseOrder', 'lagOrderRound', 'naturewalkActiveElements', 'naturewalkWaterGranted', 'tankBusterUses', 'ammoUses']) {
           if (Object.prototype.hasOwnProperty.call(stored, field)) next[field] = stored[field]
           else delete next[field]
         }
@@ -269,7 +269,7 @@ export async function updateEncounterState(id: string, body: UpdateEncounterBody
       const { campaignLevel, houseRules } = await getCampaignRules()
       // A fresh combat restarts at round 1: movement stamps from an earlier one mean nothing to Burn
       const basisParticipants = ((updateData.participants as any[] | undefined) ?? (existing.participants as any[]))
-        .map(({ lastMovedRound: _previousCombat, lastShieldRound: _previousShieldRound, lagBaseOrder: _previousOrder, lagOrderRound: _previousLagRound, tankBusterUses: _previousTankBusterUses, ...p }: any) => ({
+        .map(({ lastMovedRound: _previousCombat, lastShieldRound: _previousShieldRound, lagBaseOrder: _previousOrder, lagOrderRound: _previousLagRound, tankBusterUses: _previousTankBusterUses, ammoUses: _previousAmmoUses, ...p }: any) => ({
           ...p, activeEffects: (p.activeEffects ?? []).filter((effect: any) => effect.name !== 'Lag'),
         }))
       updateData.participants = await applyEncounterStartTriggers(basisParticipants, campaignLevel, houseRules)

@@ -17,6 +17,26 @@ const ranged = attack('pepper-breath', { range: 'ranged' })
 const area = attack('burst', { range: 'ranged', tags: ['Area Attack: Burst 3'] })
 const haste = attack('haste', { type: 'support', effect: 'Haste' })
 
+test('Ammo ignores the turn cooldown, has five uses per combat, and retains normal action costs', () => {
+  const ammo = attack('ammo', { tags: ['Ammo'] })
+  const participant = actor({ usedAttackIds: [ammo.id, melee.id] })
+  for (let uses = 0; uses < 5; uses++) {
+    participant.ammoUses = { [ammo.id]: uses }
+    assert.deepEqual(availableCombatAttacks(participant, [ammo, melee], [], { round: 1 }), [ammo])
+    assert.equal(canUseCombatAttack(participant, ammo), true)
+    assert.equal(canBolsterCombatAttack(participant, ammo), true)
+    assert.equal(requiredAttackActions(participant, ammo), 1)
+  }
+  participant.ammoUses[ammo.id] = 5
+  for (const round of [1, 2, 10]) {
+    participant.usedAttackIds = []
+    assert.deepEqual(availableCombatAttacks(participant, [ammo], [], { round }), [])
+    assert.equal(canUseCombatAttack(participant, ammo), false)
+    assert.equal(canBolsterCombatAttack(participant, ammo), false)
+  }
+  assert.deepEqual(availableCombatAttacks(participant, [attack('other-ammo', { tags: ['Ammo'] })], [], { round: 2 }).map(a => a.id), ['other-ammo'])
+})
+
 test('attack lists preserve custom order, append unused basics, and never mutate the inputs', () => {
   const used = Object.freeze(['used', BASIC_ATTACKS[0].id])
   const participant = actor({ usedAttackIds: used })

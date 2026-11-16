@@ -42,6 +42,7 @@ import { primeCombatRecords, withCombatRecords } from '~/server/utils/combatReco
 import { getAttackOrderModifiers, consumeAttackOrders } from '~/utils/specialOrderCombat'
 import { attackActionCost, effectActionError, signatureMoveError } from '~/utils/combatAttackOptions'
 import { availableTankBusterUses, tankBusterUseError } from '~/utils/tankBuster'
+import { ammoAttackError, recordCombatAttackUse } from '~/utils/ammo'
 import { isTankBusterAttack } from '~/utils/attackArmor'
 import { combatAttackStats } from '~/utils/combatDice'
 import { offerStrikeLastOnMiss } from '~/server/utils/strikeLast'
@@ -225,6 +226,8 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
   }
   if (!body.skipActionDeduction) {
     const tankBusterError = tankBusterUseError(attacker, actionAttack)
+    const ammoError = ammoAttackError(attacker, declaredAttack)
+    if (ammoError) throw createError({ statusCode: 400, message: ammoError })
     if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
     const signatureError = signatureMoveError(attacker, declaredAttack, { round: encounter.round, houseRules })
     if (signatureError) throw createError({ statusCode: 400, message: signatureError })
@@ -283,7 +286,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
           const updated: any = {
             ...p,
             actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost) },
-            usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+            ...recordCombatAttackUse(p, body.attackId, declaredAttack),
             activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
           }
           if (actionAttack.effect === 'Shield') updated.lastShieldRound = encounter.round
@@ -854,7 +857,7 @@ async function createIntercedeOffers(encounterId: string, body: IntercedeOfferBo
         const updated: any = {
           ...p,
           actionsRemaining: { simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost) },
-          usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+          ...recordCombatAttackUse(p, body.attackId, declaredAttack),
           // Consume Directed effect on attacker (bonus was applied client-side to accuracy pool)
           activeEffects: (p.activeEffects || []).filter((e: any) => e.name !== 'Directed'),
         }

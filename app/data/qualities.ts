@@ -107,8 +107,8 @@ export const QUALITY_DATABASE: QualityTemplate[] = [
     dpCost: 0,
     maxRanks: 1,
     prerequisites: [],
-    description: 'Gain use of [Ammo] tag for consecutive attacks (up to 5 times).',
-    effect: `Gain use of the [Ammo] Tag. Can only be applied to a move with three Attack Tags, including [Damage/Support] [Melee/Ranged]. Allows the move to be used up to 5 times consecutively within a round. Once out of ammo, cannot use that attack for the rest of battle. Cannot apply to [Signature Move].`,
+    description: 'Gain use of [Ammo] tag: five uses per combat, without a once-per-turn limit.',
+    effect: `Gain use of the [Ammo] Tag. Can only be applied to a move with three Attack Tags, including [Damage/Support] [Melee/Ranged]. Allows the move to be used up to 5 times per combat, including multiple times in the same turn. Each use costs its normal actions. Once out of ammo, cannot use that attack for the rest of battle. Cannot apply to [Signature Move].`,
   },
   {
     id: 'fragile-equipment',

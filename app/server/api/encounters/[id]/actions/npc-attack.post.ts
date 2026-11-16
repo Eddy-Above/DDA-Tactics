@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm'
 import { getNaturewalkBonuses } from '../../../../../utils/naturewalk'
 import { effectiveAttackArmor, isTankBusterAttack } from '../../../../../utils/attackArmor'
 import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
+import { ammoAttackError, recordCombatAttackUse } from '../../../../../utils/ammo'
 import { applyTankBusterStun } from '../../../../utils/tankBusterStun'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns } from '../../../../db'
@@ -154,6 +155,8 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
   const [attackerDigimon] = await db.select().from(digimon).where(eq(digimon.id, actor.entityId))
   const declaredAttack = attackerDigimon?.attacks?.find((attack: any) => attack.id === body.attackId)
   const tankBusterError = tankBusterUseError(actor, declaredAttack)
+  const ammoError = ammoAttackError(actor, declaredAttack)
+  if (ammoError) throw createError({ statusCode: 400, message: ammoError })
   if (tankBusterError) throw createError({ statusCode: 400, message: tankBusterError })
   const signatureError = signatureMoveError(actor, declaredAttack, { round: encounter.round, houseRules })
   if (signatureError) throw createError({ statusCode: 400, message: signatureError })
@@ -178,7 +181,7 @@ async function resolveNpcAttackBody(encounterId: string, body: NpcAttackBody) {
         actionsRemaining: {
           simple: Math.max(0, (p.actionsRemaining?.simple || 0) - actionCost),
         },
-        usedAttackIds: [...(p.usedAttackIds || []), body.attackId],
+        ...recordCombatAttackUse(p, body.attackId, declaredAttack),
         ...(isSignatureMove ? { battery: 0, usedSignatureMoveThisTurn: true } : {}),
         ...(declaredAttack?.effect === 'Shield' ? { lastShieldRound: encounter.round } : {}),
         ...(isTankBusterAttack(declaredAttack) ? { tankBusterUses: availableTankBusterUses(p) - 1 } : {}),

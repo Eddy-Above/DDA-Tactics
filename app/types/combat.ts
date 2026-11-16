@@ -60,6 +60,7 @@ export interface CombatParticipant {
   naturewalkActiveElements?: ElementType[]
   naturewalkWaterGranted?: boolean
   usedAttackIds?: string[]
+  ammoUses?: Record<string, number> // Uses per attack this combat; persists across rounds and form changes.
   dodgePenalty?: number
   evolutionLineId?: string
   woundsHistory?: Array<{ stageIndex: number; wounds: number; entityId: string; maxWounds: number; totalHealth?: number }>

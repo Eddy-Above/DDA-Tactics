@@ -243,6 +243,36 @@ const signatureDeclarations = {
   Clash: f => f.playerAttack({}, true),
 }
 
+for (const [route, declare] of Object.entries(signatureDeclarations)) {
+  test(`${route} Ammo permits the fifth shot, charges once, and rejects the sixth before spending actions`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const f = fixture('support', ['Ammo'])
+    f.participants[0].ammoUses = { [f.attack.id]: 4 }
+    f.participants[0].usedAttackIds = [f.attack.id]
+    await declare(f)
+    const actor = f.encounter.participants.find(p => p.id === f.participants[0].id)
+    assert.equal(actor.ammoUses[f.attack.id], 5)
+    assert.equal(actor.actionsRemaining.simple, route === 'Clash' ? 0 : 1)
+    actor.actionsRemaining.simple = 2
+    const before = structuredClone(f.encounter)
+    await assert.rejects(declare(f), /out of Ammo/)
+    assert.deepEqual(f.encounter, before)
+  })
+}
+
+for (const route of ['player', 'GM']) {
+  test(`${route} Ammo can fire twice in the same turn using the normal two simple actions`, async t => {
+    t.mock.method(Math, 'random', () => 0)
+    const f = fixture('support', ['Ammo'])
+    for (let shot = 1; shot <= 2; shot++) {
+      await signatureDeclarations[route](f)
+      const actor = f.encounter.participants.find(p => p.id === f.participants[0].id)
+      assert.equal(actor.ammoUses[f.attack.id], shot)
+      assert.equal(actor.actionsRemaining.simple, 2 - shot)
+    }
+  })
+}
+
 function signatureFixture(type, battery = 2) {
   const f = fixture(type, ['Signature Move'], type === 'support' ? 'Taunt' : undefined)
   if (type === 'damage') delete f.attack.effect
