@@ -10,6 +10,7 @@ import { knockedOutEnemyIds, resolveEnemyKnockouts } from './enemyKnockouts'
 import { chebyshev } from './gridDistance'
 import type { EddySoulRules } from '../../types'
 import { preserveEnduringSouls } from '../../utils/specialOrderCombat'
+import { applyFallDamage } from './fallDamage'
 
 // Pure core for Knockback (push) / Pull displacement: walks the target away from / toward the
 // attacker by `distance` cells (findPushPullLandingCell), settles it to the ground (resolveFall,
@@ -63,12 +64,14 @@ export async function computePushPull(args: {
   // Flyers hover at the pushed cell; everyone else settles to the ground and may take fall damage.
   const targetProfile = await getFallerProfile(targetPart, digimonById)
   const { landingPos, damage } = resolveFall(landingCell, targetDims, map, targetProfile)
+  let protectionPending = false
   if (damage > 0) {
-    participants = participants.map((p: any) =>
-      p.id === targetParticipantId
-        ? { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + damage) }
-        : p,
-    )
+    participants = participants.map((p: any) => {
+      if (p.id !== targetParticipantId) return p
+      const updated = { ...p }
+      protectionPending = applyFallDamage(updated, damage)
+      return updated
+    })
   }
 
   participants = preserveEnduringSouls(participants, args.participants)
@@ -81,7 +84,7 @@ export async function computePushPull(args: {
     burnDamage = moved.damageById[targetParticipantId] ?? 0
   }
 
-  const fallNote = damage > 0 ? ` + ${damage} fall damage` : ''
+  const fallNote = damage > 0 ? ` + ${damage} fall damage${protectionPending ? ' pending Divine Protection' : ''}` : ''
   const burnNote = burnDamage > 0 ? ` + ${burnDamage} Burn damage` : ''
   const logNote = `${effect}: displaced ${distance} cell(s)${fallNote}${burnNote}`
   return { participants, patch: { [targetParticipantId]: landingPos }, logNote }

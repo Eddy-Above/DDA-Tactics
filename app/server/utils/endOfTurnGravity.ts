@@ -4,8 +4,8 @@ import { loadEncounterMap, loadParticipantDigimon, loadTamersByIds, getFallerPro
 import { getFootprintDimsForParticipant } from './mapMovement'
 import { isFootprintAirborne, resolveFall } from '../../utils/movementRules'
 import { refreshGuidingLightForParticipants } from './guidingLight'
-import { preserveEnduringSoul } from '../../utils/specialOrderCombat'
 import { resolveParticipantName } from './participantName'
+import { applyFallDamage } from './fallDamage'
 
 // Pure core: drops every airborne, non-flying participant straight down to the surface. Mutates
 // wounds in place and returns the position patch + battle-log entries. Flyers hover (skipped
@@ -43,11 +43,7 @@ export async function computeGravityDrops(
     if (fallHeight <= 0) continue
 
     patch[p.id] = landingPos
-    if (damage > 0) {
-      const previousWounds = p.currentWounds || 0
-      p.currentWounds = Math.min(p.maxWounds, previousWounds + damage)
-      preserveEnduringSoul(p, previousWounds)
-    }
+    const protectionPending = applyFallDamage(p, damage, p.type === 'tamer' ? tamerById.get(p.entityId)?.name : undefined)
     if (p.airborneByJump) p.airborneByJump = false   // landed — clear the jump flag
 
     logEntries.push({
@@ -60,8 +56,9 @@ export async function computeGravityDrops(
         : tamerById.get(p.entityId)?.name || 'Tamer',
       action: 'Fall',
       target: null,
-      result: `Fell ${fallHeight} tile${fallHeight !== 1 ? 's' : ''}${damage > 0 ? ` (${damage} wound${damage !== 1 ? 's' : ''})` : ' (no damage)'}`,
-      damage: damage || null,
+      result: `Fell ${fallHeight} tile${fallHeight !== 1 ? 's' : ''}${damage > 0 ? protectionPending
+        ? ` (${damage} damage pending Divine Protection)` : ` (${damage} wound${damage !== 1 ? 's' : ''})` : ' (no damage)'}`,
+      damage: protectionPending ? null : damage || null,
       effects: ['Fall'],
     })
   }

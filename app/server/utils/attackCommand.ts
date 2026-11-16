@@ -15,6 +15,7 @@ import { withEncounterCommandReceipt } from './encounterCommandReceipt'
 import { notifyEncounterAudienceChanged } from './characterUpdates'
 import { finishTankBusterHealthChange } from './tankBuster'
 import { finishBraveStanceHealthChange } from './braveStance'
+import { finishFallProtection, withFallProtection } from './fallDamage'
 
 /** One durable command, including trusted nested attack/defense services and their broadcasts. */
 export async function runAttackCommand<T>(event: H3Event, id: string, body: any, operation: string,
@@ -25,7 +26,7 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
   return shapeEncounterResult(await serializeIntercedeClaim(id, async () => {
     await prepareRoomCommit(id)
     const committed: Array<() => void | Promise<void>> = []
-    const result = await db.transaction(async transaction => withDatabase(transaction, () => withCombatRecords(async () => {
+    const result = await db.transaction(async transaction => withDatabase(transaction, () => withCombatRecords(() => withFallProtection(async () => {
       const [lockedEncounter] = await db.select().from(encounters).where(eq(encounters.id, id)).for('update')
       const context = await authorizeEncounterIntent(event, id, body, operation, lockedEncounter)
       // Update can replace a tainted legacy roster; deletion needs no linked records.
@@ -55,7 +56,7 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
       const { value, saved } = await withEncounterCommandReceipt(id, actorId, operationId, fingerprint, async () => {
         const result = await work(context)
         if (operation === 'delete' || operation === 'duplicate') return result
-        return finishBraveStanceHealthChange(id, context.encounter, await finishTankBusterHealthChange(id, healthBefore, result))
+        return finishBraveStanceHealthChange(id, context.encounter, await finishTankBusterHealthChange(id, healthBefore, await finishFallProtection(id, result, context.encounter)))
       })
       if (operationId && !saved) {
         const [fresh] = await db.select().from(encounters).where(eq(encounters.id, id))
@@ -72,7 +73,7 @@ export async function runAttackCommand<T>(event: H3Event, id: string, body: any,
         notifyEncounterAudienceChanged(audienceBefore, value as any)
       }
       return value
-    }), committed))
+    })), committed))
     for (const publish of committed) await publish()
     return result
   }))

@@ -10,6 +10,7 @@ import { withDatabase } from '../../../../utils/databaseScope'
 import { validateEncounterStateScope } from '../../../../utils/encounterStateScope'
 import { withCombatRecords } from '../../../../utils/combatRecordCache'
 import { shapeEncounterResult } from '../../../../../utils/encounterSnapshot'
+import { finishFallProtection } from '../../../../utils/fallDamage'
 
 export default defineEventHandler(async event => {
   const id = getRouterParam(event, 'id')
@@ -50,7 +51,7 @@ export default defineEventHandler(async event => {
       participants = participants.map((p: any) => p.id === body.participantId ? { ...p, movementReceipts: [...(p.movementReceipts ?? []), { operationId: body.operationId, fingerprint, result: receiptResult }].slice(-50) } : p)
       await prepared.commitDoors(db)
       const [updated] = await db.update(encounters).set({ participants, participantPositions: prepared.participantPositions, battleLog, turnOrder, currentTurnIndex, round, updatedAt: new Date() }).where(eq(encounters.id, id!)).returning()
-      return { encounter: updated, ...receiptResult, patch, openedDoorIds: prepared.openedDoorIds }
+      return finishFallProtection(id!, { encounter: updated, ...receiptResult, patch, openedDoorIds: prepared.openedDoorIds })
     }), committed))
     for (const publish of committed) await publish()
     if (!('replayed' in result)) {

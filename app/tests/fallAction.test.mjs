@@ -42,8 +42,8 @@ function fixture({ y = 10, turn = true, actor = {} } = {}) {
   return { encounter, writes, patches, knockouts, run: () => route({ body: { participantId: 'actor' } }, { encounter }) }
 }
 
-test('Fall commits position, damage and log without spending an action', async () => {
-  const f = fixture()
+test('Fall commits position, damage and log without spending an action when protection is unavailable', async () => {
+  const f = fixture({ actor: { divineProtectionUsesThisBattle: 1 } })
   const result = await f.run()
   assert.equal(f.writes.length, 1)
   assert.deepEqual(result.participantPositions, { actor: point(0) })
@@ -53,6 +53,16 @@ test('Fall commits position, damage and log without spending an action', async (
   assert.deepEqual(f.patches, [{ actor: point(0) }])
   assert.deepEqual(f.knockouts, [['actor']])
   assert.equal(f.encounter.participants[0].currentWounds, 0, 'stored input is unchanged until committed')
+})
+
+test('Fall lands the Tamer and holds eligible damage for Divine Protection', async () => {
+  const f = fixture()
+  const result = await f.run()
+  assert.deepEqual(result.participantPositions, { actor: point(0) })
+  assert.equal(result.participants[0].currentWounds, 0)
+  assert.deepEqual(result.participants[0].pendingFallDamage, [{ damage: 4, targetName: 'Tai' }])
+  assert.match(result.battleLog[0].result, /pending Divine Protection/)
+  assert.deepEqual(f.patches, [{ actor: point(0) }])
 })
 
 for (const [label, options] of [

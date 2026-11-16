@@ -1,6 +1,7 @@
 import { defineEncounterCommand } from '../../../../utils/encounterCommand'
 import { authorizeEncounterIntent } from '../../../../utils/encounterAuthorization'
 import { autoDevolveParticipant } from '../../../../utils/partnerDevolution'
+import { applyFallDamage } from '../../../../utils/fallDamage'
 import { eq, inArray } from 'drizzle-orm'
 import { preserveEnduringSouls } from '../../../../../utils/specialOrderCombat'
 import { db, encounters, digimon, tamers, campaigns, maps } from '../../../../db'
@@ -620,7 +621,9 @@ async function resolveIntercedeClaim(
       }
       // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
       if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
-        return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
+        const updated = { ...p }
+        applyFallDamage(updated, throwAllyFallDamage)
+        return updated
       }
       return p
     })
@@ -805,7 +808,9 @@ async function resolveIntercedeClaim(
     }
     // Throw-claim: apply fall damage to the rescued ally landing outside the AoE
     if (isAreaAttack && p.id === effectiveTargetId && throwAllyFallDamage > 0) {
-      return { ...p, currentWounds: Math.min(p.maxWounds, (p.currentWounds || 0) + throwAllyFallDamage) }
+      const updated = { ...p }
+      applyFallDamage(updated, throwAllyFallDamage)
+      return updated
     }
     if (!isAreaAttack && p.id === attackerId) {
       const healing = npcAttackDef?.effect === 'Lifesteal' ? lifestealHealing(damageDealt, damageCalc.effectData?.potency ?? 0, request.data.lifestealed) : 0

@@ -97,7 +97,7 @@ test('a voluntary fall releases flight and applies the existing damage and landi
     './combatSpatial': { getFallerProfile: async () => ({ cpu: 1, ram: 0, canFly: true, hasTumbler: false, hasAdvJumper: false }) },
     './encounterRoom': {}, './guidingLight': {},
   })
-  const actor = { id: 'actor', type: 'tamer', currentWounds: 0, maxWounds: 20, actionsRemaining: { simple: 0 } }
+  const actor = { id: 'actor', type: 'tamer', currentWounds: 0, maxWounds: 20, actionsRemaining: { simple: 0 }, divineProtectionUsesThisBattle: 1 }
   const positions = { actor: point(0, 10) }
   const normal = await gravity.computeGravityDrops(positions, [actor], map, new Map(), 1)
   assert.deepEqual(normal.patch, {})

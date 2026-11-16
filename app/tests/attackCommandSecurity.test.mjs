@@ -45,7 +45,11 @@ function fixture(initial = {}) {
     './combatSpatial': { loadParticipantDigimon: async participants => new Map(participants.filter(p => p.type === 'digimon')
       .map(p => [p.entityId, { attacks: [{ tags: ['Tank Buster'] }] }])) },
   })
+  const fallProtection = loadTypeScriptWithMocks('server/utils/fallDamage.ts', {
+    '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
+  })
   const module = loadTypeScriptWithMocks('server/utils/attackCommand.ts', {
+    './fallDamage': fallProtection,
     './braveStance': loadTypeScriptWithMocks('server/utils/braveStance.ts', {
       '../db': { db, encounters: table }, 'drizzle-orm': { eq: (_column, value) => value },
     }),
@@ -70,7 +74,7 @@ function fixture(initial = {}) {
     return fresh
   }
   const run = (body, work = spend) => module.runAttackCommand({}, 'enc', { participantId: 'unit', ...body }, 'attack', work)
-  return { control, run, db, table, spend, state: () => copy(state) }
+  return { control, run, db, table, spend, fallProtection, state: () => copy(state) }
 }
 
 test('unauthorised commands fail before starting a transaction, draining rooms or changing state', async () => {
@@ -208,4 +212,46 @@ test('successful publications drain outside the transaction scope and cannot re-
   })
   assert.deepEqual(f.control.events, ['position'])
   assert.equal(f.control.committed, 1)
+})
+
+test('fall protection is committed with its command and an operation retry cannot create a second offer', async () => {
+  const f = fixture({ phase: 'combat', pendingRequests: [], participants: [{
+    id: 'unit', entityId: 'tamer', type: 'tamer', currentWounds: 0, maxWounds: 10,
+    actionsRemaining: { simple: 2 }, currentInspiration: 0,
+  }] })
+  const fall = async context => {
+    const participants = context.encounter.participants.map(p => ({ ...p, pendingFallDamage: [{ damage: 4, targetName: 'Tai' }, { damage: 3, targetName: 'Tai' }] }))
+    await f.db.update(f.table).set({ participants }).where('enc')
+    const [saved] = await f.db.select().from(f.table).where('enc')
+    return saved
+  }
+  const first = await f.run({ operationId: 'fall' }, fall)
+  assert.equal(first.participants[0].currentWounds, 0)
+  assert.equal(first.participants[0].pendingFallDamage, undefined, 'internal queue is removed from public snapshots')
+  assert.equal(first.pendingRequests.length, 1)
+  assert.equal(first.pendingRequests[0].data.pendingDamage, 4)
+  const second = await f.run({ operationId: 'fall' }, () => { throw new Error('retry must not execute') })
+  assert.equal(second.pendingRequests.length, 1)
+  assert.equal(second.pendingRequests[0].id, first.pendingRequests[0].id)
+  assert.equal(f.state().participants[0].currentWounds, 0)
+  assert.deepEqual(f.state().participants[0].pendingFallDamage, [{ damage: 3, targetName: 'Tai' }])
+})
+
+test('a fall queues protection even when its command returns only a movement result', async () => {
+  const f = fixture({ phase: 'combat', pendingRequests: [], participants: [{
+    id: 'unit', entityId: 'tamer', type: 'tamer', currentWounds: 0, maxWounds: 10,
+    actionsRemaining: { simple: 2 }, currentInspiration: 0,
+  }] })
+  await f.run({ operationId: 'move-fall' }, async context => {
+    const participants = context.encounter.participants.map(p => {
+      const updated = { ...p }
+      f.fallProtection.applyFallDamage(updated, 4, 'Tai')
+      return updated
+    })
+    await f.db.update(f.table).set({ participants }).where('enc')
+    return { success: true }
+  })
+  assert.equal(f.state().participants[0].currentWounds, 0)
+  assert.equal(f.state().pendingRequests.length, 1)
+  assert.equal(f.state().pendingRequests[0].data.pendingDamage, 4)
 })

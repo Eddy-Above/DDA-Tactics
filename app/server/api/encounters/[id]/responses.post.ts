@@ -1436,9 +1436,12 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       cleanseRecipient.id, cleanseRecipient, request.data.cleanseLeftover ?? 0, false)
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
-    const targetParticipantId = request.data?.targetParticipantId
-    const firstUse = request.data?.firstUse ?? true
-    const inspirationCost = request.data?.inspirationCost ?? 0
+    const targetParticipantId = request.targetParticipantId ?? request.data?.targetParticipantId
+    const protectedTamer = participants.find((p: any) => p.id === targetParticipantId)
+    if (protectedTamer?.type !== 'tamer') throw createError({ statusCode: 400, message: 'Divine Protection requires a Tamer' })
+    const firstUse = (protectedTamer.divineProtectionUsesThisBattle ?? 0) === 0
+    const inspirationCost = firstUse ? 0 : 2
+    if ((protectedTamer.currentInspiration ?? 0) < inspirationCost) throw createError({ statusCode: 400, message: 'Not enough Inspiration for Divine Protection' })
     const pendingDamage = request.data?.pendingDamage ?? 0
     const targetName = request.data?.targetName ?? 'Tamer'
 
@@ -1509,7 +1512,7 @@ async function submitResponse(encounterId: string, body: SubmitResponseBody) {
       cleanseRecipient.id, cleanseRecipient, request.data.cleanseLeftover ?? 0, (request.data.pendingDamage ?? 0) >= 2)
     const filteredRequests = pendingRequests.filter((r: any) => r.id !== body.requestId)
 
-    const targetParticipantId = request.data?.targetParticipantId
+    const targetParticipantId = request.targetParticipantId ?? request.data?.targetParticipantId
     const pendingDamage = request.data?.pendingDamage ?? 0
     const targetName = request.data?.targetName ?? 'Tamer'
 

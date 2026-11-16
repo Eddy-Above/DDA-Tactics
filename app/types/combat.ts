@@ -98,6 +98,7 @@ export interface CombatParticipant {
   currentInspiration?: number                // Tamer's live combat pool, initialized from DB totals
   divineProtectionUsesThisBattle?: number    // First use free; subsequent uses cost two Inspiration
   pendingDivineProtectionDamage?: number     // Damage held while the player answers the offer
+  pendingFallDamage?: Array<{ damage: number; targetName?: string }> // Server-owned falls awaiting protection decisions.
   pendingSimpleActionPenalty?: number        // Simple actions to deduct at the next turn start
 
   combatMonsterBonus?: number      // Cumulative damage bonus for the next successful attack

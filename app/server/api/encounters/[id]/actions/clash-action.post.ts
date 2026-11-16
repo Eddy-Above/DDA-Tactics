@@ -30,6 +30,7 @@ import { BASIC_ATTACKS } from '../../../../../data/attackConstants'
 import { signatureMoveError } from '../../../../../utils/combatAttackOptions'
 import { availableTankBusterUses, tankBusterUseError } from '../../../../../utils/tankBuster'
 import { ammoAttackError, recordCombatAttackUse } from '../../../../../utils/ammo'
+import { applyFallDamage } from '../../../../utils/fallDamage'
 import { isTankBusterAttack } from '../../../../../utils/attackArmor'
 
 interface ClashActionBody extends AttackMovementRequest {
@@ -286,6 +287,7 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
     // Positioning & displacement: resolve a player-aimed landing cell, with fall damage
     let updatedTargetPosition: Vec3 | null = null
     let fallDamageApplied = 0
+    let fallProtectionPending = false
     let thrownMeters = 0
     let wasDisplaced = false
     let landingParticipantPositions: Record<string, Vec3> | null = null
@@ -407,19 +409,21 @@ async function resolveClashAction(encounterId: string, body: ClashActionBody) {
       }
       if (p.id === actorClash.opponentParticipantId) {
         const { clash, ...rest } = p
-        return {
+        const updated = {
           ...rest,
-          currentWounds: Math.min((p.maxWounds || 999), (p.currentWounds || 0) + damageDealt),
+          currentWounds: Math.min((p.maxWounds || 999), (p.currentWounds || 0) + damageDealt - fallDamageApplied),
           clashCooldownUntilRound: (encounter.round || 0) + 1,
         }
+        fallProtectionPending = applyFallDamage(updated, fallDamageApplied, targetName)
+        return updated
       }
       return p
     })
 
     participants = preserveEnduringSouls(participants, encounter.participants)
-    const totalDamage = damageDealt + burnDamageApplied
+    const totalDamage = damageDealt + burnDamageApplied - (fallProtectionPending ? fallDamageApplied : 0)
     const throwResult = wasDisplaced
-      ? `${actorName} throws ${targetName}, dealing ${totalDamage} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage` : ''}${burnDamageApplied > 0 ? ` + ${burnDamageApplied} Burn damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`
+      ? `${actorName} throws ${targetName}, dealing ${totalDamage} wounds (${actorDamage} damage - ${targetArmor} armor, min 1${fallDamageApplied > 0 ? ` + ${fallDamageApplied} fall damage${fallProtectionPending ? ' pending Divine Protection' : ''}` : ''}${burnDamageApplied > 0 ? ` + ${burnDamageApplied} Burn damage` : ''}), sending them flying${fallDamageApplied > 0 ? ' and crashing down' : ''}${throwImpactRequest ? `, crashing into a group of enemies!` : ''}. Clash ends.`
       : `${actorName} throws ${targetName}, dealing ${damageDealt} wounds (${actorDamage} damage - ${targetArmor} armor, min 1). Clash ends.`
 
     battleLog = [...battleLog, {

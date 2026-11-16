@@ -41,7 +41,7 @@ export function trimBattleLog<T>(log: readonly T[] | null | undefined): { entrie
 export function normalizeActionsRemaining<T extends { actionsRemaining?: any }>(participants: readonly T[]): T[] {
   return participants.map((p) => {
     // Retry receipts include old movement paths and fingerprints; only the server uses them.
-    const { attackReceipts: _attacks, movementReceipts: _moves, ...visible } = p as T & { attackReceipts?: unknown; movementReceipts?: unknown }
+    const { attackReceipts: _attacks, movementReceipts: _moves, pendingFallDamage: _falls, ...visible } = p as T & { attackReceipts?: unknown; movementReceipts?: unknown; pendingFallDamage?: unknown }
     return {
       ...visible,
       actionsRemaining: p.actionsRemaining?.complex !== undefined

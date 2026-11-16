@@ -320,6 +320,21 @@ test('Ammo persists across round saves and stale roster updates, then resets for
   assert.equal(restarted.participants[0].ammoUses, undefined)
 })
 
+test('stale roster saves preserve pending fall decisions and Divine Protection use counts; new combat resets them', async () => {
+  const fall = { damage: 4, targetName: 'Tai' }
+  const f = fixture({ map: false, participants: [unit('tamer', { type: 'tamer', entityId: 'owner',
+    divineProtectionUsesThisBattle: 1, pendingDivineProtectionDamage: 3, pendingFallDamage: [fall] }), unit('source')] })
+  const stale = f.state().participants.map(p => ({ ...p, divineProtectionUsesThisBattle: 0, pendingFallDamage: [] }))
+  const saved = await f.put({ participants: stale })
+  assert.equal(saved.participants[0].divineProtectionUsesThisBattle, 1)
+  assert.deepEqual(saved.participants[0].pendingFallDamage, [fall])
+  await f.put({ phase: 'ended' })
+  const restarted = await f.put({ phase: 'combat', round: 1 })
+  assert.equal(restarted.participants[0].divineProtectionUsesThisBattle, undefined)
+  assert.equal(restarted.participants[0].pendingFallDamage, undefined)
+  assert.equal(restarted.participants[0].pendingDivineProtectionDamage, undefined)
+})
+
 test('card movement partner guard uses the preloaded Digimon record', async () => {
   const participants = [unit('tamer', { type: 'tamer', entityId: 'owner' }), unit('source')]
   const f = fixture({ participants, map: false })
