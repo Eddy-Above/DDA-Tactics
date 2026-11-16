@@ -73,7 +73,7 @@ const filteredLog = computed(() => {
 
     if (/^failed to digivolve(?: to .+)?$/i.test(e.action)) {
       return { ...e, action: 'failed to digivolve', target: null,
-        result: e.result.replace(/^Willpower check failed \(rolled (.+) vs DC (.+)\)\.?$/, 'Wilpower check failed (rolled $1 vs DC $2).') }
+        result: e.result.replace(/^Willpower check failed \(rolled (.+) vs DC (.+)\)\.?$/, 'Willpower check failed (rolled $1 vs DC $2).') }
     }
 
     const isNpcAction = props.npcEntityIds.has(e.actorId)
