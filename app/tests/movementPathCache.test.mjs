@@ -93,9 +93,8 @@ test('destroyed-wall, changed origin and changed occupied-footprint contexts nev
   assert.ok(movement.computePath(point(5), point(3), walking, map))
   assert.equal(calls.astar, 2)
   const occupied = new Map([['enemy', { pos: point(3), size: 'large', isEnemy: true }]])
-  const detour = movement.computePath(point(0), point(5), walking, map, new Set(['wall']), occupied)
-  assert.ok(detour, 'the new edge rule permits a detour beside the platform')
-  assert.ok(detour.every(p => !(p.x >= 3 && p.x <= 4 && p.z >= 0 && p.z <= 1)), 'the refreshed path avoids the occupied footprint')
+  assert.equal(movement.computePath(point(0), point(5), walking, map, new Set(['wall']), occupied), null,
+    'the refreshed search cannot bypass the occupied footprint by walking along unsupported cells')
   assert.equal(calls.astar, 3)
 })
 

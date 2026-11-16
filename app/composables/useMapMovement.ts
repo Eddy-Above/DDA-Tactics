@@ -57,7 +57,7 @@ export function useMapMovement() {
       createJumpTraversal(origin, caps, queryMap, costProfile, destroyedStructures, blocked)) : null
     const search = jumpSearch ?? searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
       if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
-      return canPassThrough(from, to, caps, queryMap, destroyedStructures, origin)
+      return canPassThrough(from, to, caps, queryMap, destroyedStructures, origin, costProfile?.cellAt(to, queryMap))
     }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined)
 
     // Small allows passage only; Tiny allows sharing. Check the complete mover footprint.
@@ -136,7 +136,7 @@ export function useMapMovement() {
       createJumpTraversal(from, caps, queryMap, costProfile, destroyedStructures, blocked)) : null
     const path = jumpSearch ? jumpSearch.pathTo(to) : findPath(from, to, (f, t) => {
       if (blockedPositions.size && getFootprintCells(t, moverDims).some(cell => blockedPositions.has(vec3Key(cell)))) return false
-      return canPassThrough(f, t, caps, queryMap, destroyedStructures, from)
+      return canPassThrough(f, t, caps, queryMap, destroyedStructures, from, costProfile?.cellAt(t, queryMap))
     }, costProfile ? Infinity : 200, costProfile ? (f, t, spent) => costProfile.stepCost(f, t, queryMap, spent) : undefined)
     if (path && jumpSearch) {
       const launch = jumpSearch.stateTo(to)

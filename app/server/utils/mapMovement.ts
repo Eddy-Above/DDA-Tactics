@@ -89,7 +89,7 @@ export function getMovementReachability(
   }
   const search = searchReachable(origin, costProfile?.budget ?? budget, (from, to) => {
     if (blockedPositions.size && getFootprintCells(to, moverDims).some(cell => blockedPositions.has(key(cell)))) return false
-    return canPassThrough(from, to, caps, queryMap, destroyed, origin)
+    return canPassThrough(from, to, caps, queryMap, destroyed, origin, costProfile?.cellAt(to, queryMap))
   }, costProfile ? (from, to, spent) => costProfile.stepCost(from, to, queryMap, spent) : undefined)
   return { ...search, launchOriginTo: () => origin }
 }

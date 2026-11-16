@@ -4,6 +4,7 @@ function key(v: Vec3) { return `${v.x},${v.y},${v.z}` }
 
 // Accepted edges cost at least one. Arriving with less spent must preserve every
 // valid continuation, so the cheapest arrival at a cell also dominates later ones.
+// Costs may be queried before collision checks, including for impassable cells.
 export type MovementStepCost = (from: Vec3, to: Vec3, spent?: number) => number
 
 const COST_EPSILON = 1e-9
@@ -123,7 +124,6 @@ export function findPath(
       const currentKey = key(current.pos)
       if (currentKey === goalKey) return reconstructPath(goalKey, cameFrom)
       for (const nb of neighbours(current.pos)) {
-        if (!canPass(current.pos, nb)) continue
         // Every accepted edge costs at least one, keeping the Chebyshev
         // heuristic admissible for horizontal and vertical movement.
         const edgeCost = stepCost(current.pos, nb, current.cost)
@@ -133,6 +133,9 @@ export function findPath(
         const diagonalSteps = current.diagonalSteps + diagonalStep(current.pos, nb)
         const nbKey = key(nb)
         if (!improvesScore(cost, verticalSteps, diagonalSteps, scores.get(nbKey))) continue
+        // Terrain allowance and an already better arrival can reject an edge
+        // before its wall, ceiling and body-clearance checks.
+        if (!canPass(current.pos, nb)) continue
         scores.set(nbKey, { cost, verticalSteps, diagonalSteps })
         cameFrom.set(nbKey, currentKey)
         open.push({ pos: nb, cost, priority: cost + chebyshev(nb, goal), verticalSteps, diagonalSteps, order: order++ })
@@ -270,7 +273,6 @@ export function searchReachable(
       if (stopAt?.(current.pos)) break
       if (current.cost >= budget - COST_EPSILON) continue
       for (const nb of neighbours(current.pos)) {
-        if (!canPass(current.pos, nb)) continue
         const edgeCost = stepCost(current.pos, nb, current.cost)
         if (!Number.isFinite(edgeCost) || edgeCost < 1) continue
         const cost = current.cost + edgeCost
@@ -279,6 +281,7 @@ export function searchReachable(
         const diagonalSteps = current.diagonalSteps + diagonalStep(current.pos, nb)
         const nbKey = key(nb)
         if (!improvesScore(cost, verticalSteps, diagonalSteps, visited.get(nbKey))) continue
+        if (!canPass(current.pos, nb)) continue
         visited.set(nbKey, { cost, verticalSteps, diagonalSteps })
         cameFrom.set(nbKey, key(current.pos))
         queue.push({ pos: nb, cost, priority: cost, verticalSteps, diagonalSteps, order: order++ })
